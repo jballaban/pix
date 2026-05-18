@@ -1,0 +1,43 @@
+# Pix library state (only meaningful inside a library root, not in this source repo)
+.pix/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+.pytest_cache/
+.mypy_cache/
+.pyright/
+.ruff_cache/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# uv / virtualenv
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+
+# Claude Code local settings (.claude/settings.json is shared; .local.json is per-user)
+.claude/settings.local.json
