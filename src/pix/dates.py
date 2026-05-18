@@ -1,0 +1,161 @@
+"""Date parsing and `DateAuto` derivation.
+
+Implements the ordered candidate list from spec/tags.md → "DateAuto
+derivation". First match wins; returns None if every candidate fails.
+
+The internal datetime representation is naïve (no timezone) — pix treats
+all dates as local time per spec/tags.md. ExifTool date strings sometimes
+include timezone offsets which we strip.
+"""
+
+from __future__ import annotations
+
+import re
+from datetime import datetime
+from pathlib import Path
+
+from pix.metadata import FileMetadata
+
+# Format used in pix:DateAuto, pix:DateOverride, etc. See spec/tags.md.
+PIX_DATETIME_FORMAT: str = "%Y-%m-%d-%H:%M:%S"
+
+
+_EXIFTOOL_DATETIME_RE = re.compile(
+    r"^(\d{4})[:\-](\d{2})[:\-](\d{2})[\sT](\d{2}):(\d{2}):(\d{2})"
+)
+
+
+def parse_exiftool_datetime(value: str) -> datetime | None:
+    """Parse an ExifTool date string (`2023:08:15 14:32:05[+05:00]`).
+
+    Tolerates `:` or `-` as date separators and ` ` or `T` between date and
+    time. Ignores subseconds and timezone offsets. Returns None if the
+    string doesn't match.
+    """
+    m = _EXIFTOOL_DATETIME_RE.match(value)
+    if m is None:
+        return None
+    try:
+        year, month, day, hour, minute, second = (int(g) for g in m.groups())
+        return datetime(year, month, day, hour, minute, second)
+    except ValueError:
+        return None
+
+
+def format_pix_datetime(dt: datetime) -> str:
+    """Render a datetime as a pix-spec datetime string."""
+    return dt.strftime(PIX_DATETIME_FORMAT)
+
+
+# Candidate keys per spec/tags.md → "DateAuto derivation".
+# Group-prefixed exiftool keys (family 0).
+_PHOTO_DATE_KEYS: tuple[str, ...] = (
+    "EXIF:DateTimeOriginal",
+    "EXIF:CreateDate",
+    "EXIF:DateTimeDigitized",
+    "XMP:DateCreated",
+    "XMP:CreateDate",
+    "IPTC:DateCreated",
+)
+_VIDEO_DATE_KEYS: tuple[str, ...] = (
+    "QuickTime:CreateDate",
+    "QuickTime:MediaCreateDate",
+    "XMP:CreateDate",
+)
+_MTIME_KEY: str = "File:FileModifyDate"
+
+
+# Filename patterns. Each matches `YYYY MM DD HH MM SS` in some shape.
+_FILENAME_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # YYYY-MM-DD_HHMMSS or YYYY-MM-DD-HHMMSS (pix canonical, similar)
+    re.compile(r"(\d{4})-(\d{2})-(\d{2})[_\-](\d{2})(\d{2})(\d{2})"),
+    # IMG_YYYYMMDD_HHMMSS, PXL_YYYYMMDD_HHMMSSsss, YYYYMMDD_HHMMSS
+    re.compile(r"(?:^|[_\-])(\d{4})(\d{2})(\d{2})[_\-](\d{2})(\d{2})(\d{2})"),
+)
+
+# Folder-name patterns: date only (no time required).
+_FOLDER_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?:^|[_\- ])(\d{4})-(\d{2})-(\d{2})(?:$|[_\- ])"),
+    re.compile(r"(?:^|[_\- ])(\d{4})(\d{2})(\d{2})(?:$|[_\- ])"),
+)
+
+
+_VIDEO_EXTENSIONS: frozenset[str] = frozenset(
+    {"mp4", "mov", "m4v", "3gp", "mkv", "wmv", "webm", "avi"}
+)
+
+
+def _is_video(path: Path) -> bool:
+    return path.suffix.lower().lstrip(".") in _VIDEO_EXTENSIONS
+
+
+def derive_date_auto(meta: FileMetadata) -> datetime | None:
+    """Derive `DateAuto` per the spec's ordered candidate list.
+
+    Order (first match wins):
+    1. Metadata-recorded datetime (EXIF/QuickTime/XMP/IPTC depending on
+       photo vs video).
+    2. Filename pattern match (e.g. `IMG_20230815_143205.jpg`).
+    3. Parent-folder pattern match (e.g. `2023-08-15-trip/`).
+    4. File modify time (`File:FileModifyDate`) — least trustworthy.
+
+    Returns None when every candidate fails.
+    """
+    candidates = (
+        _VIDEO_DATE_KEYS if _is_video(meta.path) else _PHOTO_DATE_KEYS
+    )
+    for key in candidates:
+        value = meta.get_str(key)
+        if value:
+            dt = parse_exiftool_datetime(value)
+            if dt is not None:
+                return dt
+
+    # Filename pattern
+    name_match = _match_first(_FILENAME_PATTERNS, meta.path.name)
+    if name_match is not None:
+        return name_match
+
+    # Parent-folder pattern (date-only, time defaults to midnight)
+    folder_match = _match_folder(meta.path.parent.name)
+    if folder_match is not None:
+        return folder_match
+
+    # FS mtime fallback
+    mtime = meta.get_str(_MTIME_KEY)
+    if mtime:
+        dt = parse_exiftool_datetime(mtime)
+        if dt is not None:
+            return dt
+
+    return None
+
+
+def _match_first(
+    patterns: tuple[re.Pattern[str], ...], text: str
+) -> datetime | None:
+    for pattern in patterns:
+        m = pattern.search(text)
+        if m is None:
+            continue
+        try:
+            year, month, day, hour, minute, second = (
+                int(g) for g in m.groups()
+            )
+            return datetime(year, month, day, hour, minute, second)
+        except ValueError:
+            continue
+    return None
+
+
+def _match_folder(name: str) -> datetime | None:
+    for pattern in _FOLDER_PATTERNS:
+        m = pattern.search(name)
+        if m is None:
+            continue
+        try:
+            year, month, day = (int(g) for g in m.groups()[:3])
+            return datetime(year, month, day, 0, 0, 0)
+        except ValueError:
+            continue
+    return None
