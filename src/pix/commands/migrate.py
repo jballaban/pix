@@ -22,7 +22,7 @@ from pix.metadata import (
     FileMetadata,
     build_cache,
 )
-from pix.plan import Action, generate_plan, lookup_policy
+from pix.plan import Action, PlanLine, generate_plan, lookup_policy
 from pix.root import NoLibraryRoot, resolve as resolve_root
 from pix.scan import walk_source_files
 
@@ -82,19 +82,10 @@ def migrate_folder(
     plan_path = runs_dir / "plan.txt"
     plan_path.write_text(plan.to_text(), encoding="utf-8")
 
-    counts = plan.counts()
-    convert = counts[Action.CONVERT_RENAME_TAG]
-    rename = counts[Action.RENAME] + counts[Action.RENAME_TAG]
-    tag = counts[Action.TAG] + counts[Action.RENAME_TAG] + convert
-    delete = counts[Action.DELETE]
-
     typer.echo(f"Library root: {root}")
     typer.echo(f"Source:       {folder}")
     typer.echo(f"Plan written: {plan_path}")
-    typer.echo(
-        f"Summary: {len(plan.lines)} plan line(s) — "
-        f"{convert} CONVERT, {rename} RENAME, {tag} TAG, {delete} DELETE."
-    )
+    typer.echo(f"Summary: {_summarize(plan.lines)}")
 
     if len(plan.lines) == 0:
         typer.echo("Nothing to do.")
@@ -106,15 +97,16 @@ def migrate_folder(
 
     edited_text = plan_path.read_text(encoding="utf-8")
     kept_line_ids = parse_kept_line_ids(edited_text)
+    kept_lines = [ln for ln in plan.lines if ln.line_id in kept_line_ids]
 
-    if not kept_line_ids:
+    if not kept_lines:
         typer.echo("Plan empty after edit; nothing to apply.")
         return
 
     if not yes:
-        confirmed = typer.confirm(
-            f"Apply {len(kept_line_ids)} action(s)?", default=False
-        )
+        typer.echo("")
+        typer.echo(f"After edit: {_summarize(kept_lines)}")
+        confirmed = typer.confirm("Apply?", default=False)
         if not confirmed:
             typer.echo("Aborted; plan file left in place.")
             return
@@ -134,6 +126,21 @@ def migrate_folder(
     typer.echo(
         f"Applied {completed} action(s)"
         f"{f', skipped {skipped}' if skipped else ''}."
+    )
+
+
+def _summarize(lines: list[PlanLine]) -> str:
+    """Render `N plan line(s) — X CONVERT, Y RENAME, Z TAG, W DELETE`."""
+    counts: dict[Action, int] = {a: 0 for a in Action}
+    for ln in lines:
+        counts[ln.action] += 1
+    convert = counts[Action.CONVERT_RENAME_TAG]
+    rename = counts[Action.RENAME] + counts[Action.RENAME_TAG]
+    tag = counts[Action.TAG] + counts[Action.RENAME_TAG] + convert
+    delete = counts[Action.DELETE]
+    return (
+        f"{len(lines)} plan line(s) — "
+        f"{convert} CONVERT, {rename} RENAME, {tag} TAG, {delete} DELETE."
     )
 
 
