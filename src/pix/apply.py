@@ -126,23 +126,24 @@ def _apply_one(
 
 def _apply_delete(ln: PlanLine, run_dir: Path) -> None:
     """Move the file into the run folder. Single atomic rename = capture+remove."""
-    capture_path = run_dir / f"{ln.line_id}_{ln.abs_path.name}"
-    ln.abs_path.rename(capture_path)
+    if ln.capture_path is None:
+        raise ApplyError(f"{ln.line_id}: DELETE missing capture_path")
+    ln.abs_path.rename(ln.capture_path)
 
 
 def _apply_rename(ln: PlanLine) -> None:
     """Rename the file to its canonical name within the same folder."""
-    if ln.target_filename is None:
+    if ln.target_path is None:
         raise ApplyError(
-            f"{ln.line_id}: RENAME requires a target_filename but none "
-            f"was computed (no effective date?)"
+            f"{ln.line_id}: RENAME missing target_path (no effective date?)"
         )
-    target = ln.abs_path.parent / ln.target_filename
+    target = ln.target_path
     src_name = ln.abs_path.name
+    target_name = target.name
 
     if (
-        src_name != ln.target_filename
-        and src_name.lower() == ln.target_filename.lower()
+        src_name != target_name
+        and src_name.lower() == target_name.lower()
     ):
         # Case-only rename on a case-insensitive filesystem (NTFS, HFS+,
         # APFS-default). A direct `os.rename` can silently no-op because
@@ -192,20 +193,18 @@ def _apply_tag(
     ln: PlanLine, run_dir: Path, exiftool: ExifToolSession
 ) -> None:
     """Capture prior XMP, then write the new pix:* fields in place."""
+    if ln.sidecar_path is None:
+        raise ApplyError(f"{ln.line_id}: TAG missing sidecar_path")
+
     # Capture sidecar with prior XMP contents before mutating.
-    sidecar = run_dir / f"{ln.line_id}_{ln.abs_path.name}.xmp"
-    exiftool.export_xmp_sidecar(ln.abs_path, sidecar)
+    exiftool.export_xmp_sidecar(ln.abs_path, ln.sidecar_path)
 
     writes = dict(ln.pix_writes)
-    if ln.needs_original_path:
-        # Stored as the source path at the time of first migrate. We use
-        # the absolute path before any rename in this same line.
-        writes["XMP:OriginalPath"] = str(ln.abs_path)
     if ln.needs_content_hash:
-        # Compute on the current in-place file *before* the ExifTool
-        # write. Format-aware framing makes the hash invariant under
-        # the metadata edit that's about to happen — so the value we
-        # compute here is the same value the next migrate would compute.
+        # The only value we compute here rather than at plan-gen: format-
+        # aware hashing requires a full-file scan, deliberately deferred
+        # to apply (per spec/migrate.md → Metadata cache) so an aborted
+        # plan doesn't waste hashing time on thousands of files.
         writes["XMP:ContentHash"] = compute_content_hash(ln.abs_path)
 
     if writes:
@@ -229,27 +228,34 @@ def _apply_convert(
     3. **Capture original**: move source into `runs/<run-id>/`.
     4. **Finalize**: rename the marker to its canonical name.
 
-    Each step after (1) is a single same-volume rename. Crash recovery is
-    handled by `pix.cleanup` on the next migrate.
+    All paths are pre-computed by plan-gen and stored on the PlanLine. The
+    `run_dir` and `staging_dir` params are kept for signature uniformity
+    with the other handlers but unused here.
     """
-    if ln.target_filename is None:
+    del run_dir, staging_dir  # paths are on `ln`
+
+    if (
+        ln.staging_path is None
+        or ln.marker_path is None
+        or ln.capture_path is None
+        or ln.target_path is None
+    ):
         raise ApplyError(
-            f"{ln.line_id}: CONVERT requires a target_filename"
+            f"{ln.line_id}: CONVERT missing one or more pre-computed paths"
         )
 
     src = ln.abs_path
-    target_ext = ln.target_filename.rsplit(".", 1)[-1].lower()
+    target_ext = ln.target_path.suffix.lstrip(".").lower()
 
     # Step 1: off-library conversion + metadata copy + pix:* writes
-    staging_path = staging_dir / f"{ln.line_id}_{src.stem}.{target_ext}"
-    if staging_path.exists():
-        staging_path.unlink()
+    if ln.staging_path.exists():
+        ln.staging_path.unlink()
 
     try:
         if target_ext == "jpg":
-            convert_to_jpg(src, staging_path)
+            convert_to_jpg(src, ln.staging_path)
         elif target_ext == "mp4":
-            convert_to_mp4(src, staging_path)
+            convert_to_mp4(src, ln.staging_path)
         else:
             raise ApplyError(
                 f"{ln.line_id}: unsupported CONVERT target extension "
@@ -260,40 +266,28 @@ def _apply_convert(
             f"{ln.line_id}: conversion failed: {e}"
         ) from e
 
-    # Copy all source metadata onto the converted file + write pix:* tags.
     writes = dict(ln.pix_writes)
-    if ln.needs_original_path:
-        writes["XMP:OriginalPath"] = str(src)
     if ln.needs_content_hash:
-        # Hash the freshly-converted bytes in staging. Same as TAG: the
-        # format-aware hash is invariant under the metadata layer-up
-        # that happens in the next exiftool call.
-        writes["XMP:ContentHash"] = compute_content_hash(staging_path)
+        writes["XMP:ContentHash"] = compute_content_hash(ln.staging_path)
     exiftool.copy_metadata_and_write_tags(
-        source=src, dest=staging_path, tags=writes
+        source=src, dest=ln.staging_path, tags=writes
     )
 
-    # Step 2: bring into source as marker. Marker name per spec/migrate.md
-    # → Marker conventions: `{full-source-name}.__migrate__.{new-ext}`.
-    marker_path = src.parent / f"{src.name}.__migrate__.{target_ext}"
-    if marker_path.exists():
+    # Step 2: bring into source as marker.
+    if ln.marker_path.exists():
         raise ApplyError(
-            f"{ln.line_id}: marker {marker_path.name} already exists "
+            f"{ln.line_id}: marker {ln.marker_path.name} already exists "
             f"(leftover from a prior crash?)"
         )
-    staging_path.rename(marker_path)
+    ln.staging_path.rename(ln.marker_path)
 
     # Step 3: capture original into the run folder.
-    capture_path = run_dir / f"{ln.line_id}_{src.name}"
-    src.rename(capture_path)
+    src.rename(ln.capture_path)
 
     # Step 4: finalize marker to canonical name.
-    target = src.parent / ln.target_filename
-    if target.exists():
-        # Shouldn't happen — collision resolution ran during plan-gen.
-        # But fail clearly rather than overwrite something unrelated.
+    if ln.target_path.exists():
         raise ApplyError(
-            f"{ln.line_id}: target {target.name} already exists at "
-            f"finalize step"
+            f"{ln.line_id}: target {ln.target_path.name} already exists "
+            f"at finalize step"
         )
-    marker_path.rename(target)
+    ln.marker_path.rename(ln.target_path)

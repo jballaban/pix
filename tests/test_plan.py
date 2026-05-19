@@ -117,6 +117,8 @@ def test_plan_first_migrate_convert(tmp_path: Path) -> None:
         cache=cache,
         config=cfg,
         run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
     )
 
     assert len(plan.lines) == 1
@@ -143,6 +145,8 @@ def test_plan_delete_for_junk(tmp_path: Path) -> None:
         cache=cache,
         config=cfg,
         run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
     )
 
     assert len(plan.lines) == 1
@@ -173,6 +177,8 @@ def test_plan_already_canonical_keeps_file_with_no_line(tmp_path: Path) -> None:
         cache=cache,
         config=cfg,
         run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
     )
     assert plan.lines == []
 
@@ -200,6 +206,8 @@ def test_plan_pure_rename_for_non_canonical_name(tmp_path: Path) -> None:
         cache=cache,
         config=cfg,
         run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
     )
 
     assert len(plan.lines) == 1
@@ -230,6 +238,8 @@ def test_plan_rename_plus_tag_for_first_migrate_canonical_format(
         cache=cache,
         config=cfg,
         run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
     )
 
     assert len(plan.lines) == 1
@@ -267,6 +277,8 @@ def test_plan_drift_detection_writes_new_date_auto(tmp_path: Path) -> None:
         cache=cache,
         config=cfg,
         run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
     )
 
     assert len(plan.lines) == 1
@@ -305,6 +317,8 @@ def test_plan_no_drift_no_action_when_stored_matches_derivation(
         cache=cache,
         config=cfg,
         run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
     )
     assert plan.lines == []
 
@@ -334,6 +348,8 @@ def test_plan_tag_only_for_missing_hash_on_already_migrated(
         cache=cache,
         config=cfg,
         run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
     )
 
     assert len(plan.lines) == 1
@@ -361,6 +377,8 @@ def test_plan_line_ids_are_sequential(tmp_path: Path) -> None:
         cache=cache,
         config=cfg,
         run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
     )
     assert [ln.line_id for ln in plan.lines] == ["L001", "L002", "L003"]
 
@@ -393,6 +411,8 @@ def test_plan_collision_suffixes_competing_rename_targets(
         cache=cache,
         config=cfg,
         run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
     )
 
     assert len(plan.lines) == 2
@@ -431,6 +451,8 @@ def test_plan_collision_already_at_canonical_name_keeps_bare_slot(
         cache=cache,
         config=cfg,
         run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
     )
 
     challenger_line = next(
@@ -464,6 +486,8 @@ def test_plan_collision_three_way(tmp_path: Path) -> None:
         cache=cache,
         config=cfg,
         run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
     )
 
     targets = sorted(ln.target_filename for ln in plan.lines if ln.target_filename)
@@ -492,6 +516,8 @@ def test_plan_to_text_includes_header_and_summary(tmp_path: Path) -> None:
         cache=cache,
         config=cfg,
         run_id="2026-05-18_17-00-00",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
         now=datetime(2026, 5, 18, 17, 0, 0),
     )
 

@@ -96,6 +96,7 @@ def migrate_folder(
     run_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     runs_dir = root / ".pix" / "runs" / run_id
     runs_dir.mkdir(parents=True)
+    staging_dir = root / ".pix" / "staging"
 
     debug_ctx = debug.enabled() if debug_enabled else contextlib.nullcontext()
     with debug_ctx:
@@ -104,6 +105,8 @@ def migrate_folder(
             cache=cache,
             config=config,
             run_id=run_id,
+            run_dir=runs_dir,
+            staging_dir=staging_dir,
         )
         if debug_enabled:
             line_id_by_path = {ln.abs_path: ln.line_id for ln in plan.lines}
@@ -141,7 +144,6 @@ def migrate_folder(
         typer.echo("Aborted; plan file left in place.")
         return
 
-    staging_dir = root / ".pix" / "staging"
     try:
         completed, skipped = apply_plan(
             plan=plan,

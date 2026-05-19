@@ -66,8 +66,16 @@ class PlanLine:
 
     Plan line carries:
     - `details`: human-readable summary for the plan.txt the user reviews.
-    - structured fields the apply loop consumes (`abs_path`,
-      `target_filename`, `pix_writes`, the `needs_*` flags).
+    - structured fields the apply loop consumes directly.
+
+    Apply is a pure executor: all paths it needs (target / sidecar /
+    capture / staging / marker) are pre-computed by plan-gen, and all
+    pix:* field values it writes (DateAuto, OriginalPath, ...) are already
+    in `pix_writes`. The one exception is `pix:ContentHash` — the value
+    requires a full-file scan that we deliberately defer to apply (so an
+    aborted plan doesn't waste hashing time on thousands of files); when
+    `needs_content_hash` is True, apply computes the hash on the
+    appropriate file and writes it alongside the other `pix_writes`.
 
     User edits to `details` in the editor are ignored at apply time; only
     line deletions (removing whole lines) affect what gets applied.
@@ -82,7 +90,14 @@ class PlanLine:
     target_filename: str | None = None
     pix_writes: dict[str, str] = field(default_factory=lambda: {})
     needs_content_hash: bool = False
-    needs_original_path: bool = False
+
+    # Pre-computed paths (filled in post-plan-gen via `_attach_paths`).
+    # All absolute. None for actions that don't use the given path.
+    target_path: Path | None = None
+    sidecar_path: Path | None = None
+    capture_path: Path | None = None
+    staging_path: Path | None = None
+    marker_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -180,9 +195,16 @@ def generate_plan(
     cache: dict[Path, FileMetadata],
     config: Config,
     run_id: str,
+    run_dir: Path,
+    staging_dir: Path,
     now: datetime | None = None,
 ) -> Plan:
-    """Build a Plan from the metadata cache and extension policy."""
+    """Build a Plan from the metadata cache and extension policy.
+
+    `run_dir` and `staging_dir` are the destinations for run-folder
+    captures and staging conversions respectively. Plan-gen uses them to
+    pre-compute every path apply will need, so apply is a pure executor.
+    """
     generated_at = now or datetime.now()
     lines: list[PlanLine] = []
 
@@ -192,27 +214,72 @@ def generate_plan(
         if line is None:
             continue
         lines.append(
-            PlanLine(
-                line_id=f"L{len(lines) + 1:03d}",
-                action=line.action,
-                rel_path=line.rel_path,
-                details=line.details,
-                abs_path=line.abs_path,
-                is_first_migrate=line.is_first_migrate,
-                target_filename=line.target_filename,
-                pix_writes=line.pix_writes,
-                needs_content_hash=line.needs_content_hash,
-                needs_original_path=line.needs_original_path,
-            )
+            dataclasses.replace(line, line_id=f"L{len(lines) + 1:03d}")
         )
 
     lines = _resolve_collisions(cache, lines)
+    lines = [attach_paths(ln, run_dir, staging_dir) for ln in lines]
 
     return Plan(
         source=source,
         run_id=run_id,
         generated_at=generated_at,
         lines=lines,
+    )
+
+
+def attach_paths(
+    ln: PlanLine, run_dir: Path, staging_dir: Path
+) -> PlanLine:
+    """Pre-compute every path apply will need for this plan line.
+
+    Apply consumes these directly — no path derivation at apply time.
+    """
+    sidecar_path: Path | None = None
+    capture_path: Path | None = None
+    target_path: Path | None = None
+    staging_path: Path | None = None
+    marker_path: Path | None = None
+
+    base = f"{ln.line_id}_{ln.abs_path.name}"
+
+    if ln.action == Action.DELETE:
+        capture_path = run_dir / base
+    elif ln.action == Action.RENAME:
+        if ln.target_filename is None:
+            raise ValueError(
+                f"{ln.line_id}: RENAME without target_filename"
+            )
+        target_path = ln.abs_path.parent / ln.target_filename
+    elif ln.action == Action.TAG:
+        sidecar_path = run_dir / f"{base}.xmp"
+    elif ln.action == Action.RENAME_TAG:
+        if ln.target_filename is None:
+            raise ValueError(
+                f"{ln.line_id}: RENAME+TAG without target_filename"
+            )
+        sidecar_path = run_dir / f"{base}.xmp"
+        target_path = ln.abs_path.parent / ln.target_filename
+    elif ln.action == Action.CONVERT_RENAME_TAG:
+        if ln.target_filename is None:
+            raise ValueError(
+                f"{ln.line_id}: CONVERT without target_filename"
+            )
+        target_ext = ln.target_filename.rsplit(".", 1)[-1].lower()
+        staging_path = staging_dir / f"{ln.line_id}_{ln.abs_path.stem}.{target_ext}"
+        marker_path = (
+            ln.abs_path.parent / f"{ln.abs_path.name}.__migrate__.{target_ext}"
+        )
+        capture_path = run_dir / base
+        target_path = ln.abs_path.parent / ln.target_filename
+
+    return dataclasses.replace(
+        ln,
+        target_path=target_path,
+        sidecar_path=sidecar_path,
+        capture_path=capture_path,
+        staging_path=staging_path,
+        marker_path=marker_path,
     )
 
 
@@ -418,6 +485,7 @@ def _plan_convert(
     if is_first_migrate:
         details_parts.append("original_path init")
         details_parts.append("content_hash compute")
+        pix_writes["XMP:OriginalPath"] = str(path)
 
     date_auto = derive_date_auto(meta)
     if date_auto is not None and is_first_migrate:
@@ -443,7 +511,6 @@ def _plan_convert(
         target_filename=canonical_name,
         pix_writes=pix_writes,
         needs_content_hash=True,
-        needs_original_path=is_first_migrate,
     )
 
 
@@ -557,6 +624,7 @@ def _plan_keep(
     if is_first_migrate:
         details_parts.append("original_path init")
         details_parts.append("content_hash compute")
+        pix_writes["XMP:OriginalPath"] = str(path)
         needs_tag = True
         needs_hash = True
         if new_auto is not None:
@@ -611,7 +679,6 @@ def _plan_keep(
         target_filename=canonical_name if needs_rename else None,
         pix_writes=pix_writes,
         needs_content_hash=needs_hash,
-        needs_original_path=is_first_migrate,
     )
 
 

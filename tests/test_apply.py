@@ -21,6 +21,7 @@ from pix.plan import (
     Action,
     Plan,
     PlanLine,
+    attach_paths,
 )
 
 
@@ -31,13 +32,20 @@ needs_exiftool = pytest.mark.skipif(
 
 
 def _make_plan(
-    source: Path, lines: list[PlanLine], run_id: str = "test-run"
+    source: Path,
+    lines: list[PlanLine],
+    run_dir: Path,
+    staging_dir: Path,
+    run_id: str = "test-run",
 ) -> Plan:
+    """Build a Plan and run `attach_paths` on each line — mirroring what
+    `generate_plan` does — so apply has all the pre-computed paths it
+    expects."""
     return Plan(
         source=source,
         run_id=run_id,
         generated_at=datetime(2026, 5, 18, 19, 0, 0),
-        lines=lines,
+        lines=[attach_paths(ln, run_dir, staging_dir) for ln in lines],
     )
 
 
@@ -61,6 +69,8 @@ def test_apply_delete_moves_file_into_run_dir(tmp_path: Path) -> None:
                 abs_path=junk.resolve(),
             )
         ],
+        run_dir=run_dir,
+        staging_dir=tmp_path / "staging",
     )
     plan_path = run_dir / "plan.txt"
     plan_path.write_text(plan.to_text(), encoding="utf-8")
@@ -101,6 +111,8 @@ def test_apply_rename_within_same_folder(tmp_path: Path) -> None:
                 target_filename="2023-08-15_143612.jpg",
             )
         ],
+        run_dir=run_dir,
+        staging_dir=tmp_path / "staging",
     )
     plan_path = run_dir / "plan.txt"
     plan_path.write_text(plan.to_text(), encoding="utf-8")
@@ -144,6 +156,8 @@ def test_apply_rename_case_only_difference(tmp_path: Path) -> None:
                 target_filename="DSC_0042.jpg",
             )
         ],
+        run_dir=run_dir,
+        staging_dir=tmp_path / "staging",
     )
     plan_path = run_dir / "plan.txt"
     plan_path.write_text(plan.to_text(), encoding="utf-8")
@@ -191,6 +205,8 @@ def test_apply_skips_lines_not_in_kept_set(tmp_path: Path) -> None:
                 abs_path=skip.resolve(),
             ),
         ],
+        run_dir=run_dir,
+        staging_dir=tmp_path / "staging",
     )
     plan_path = run_dir / "plan.txt"
     plan_path.write_text(plan.to_text(), encoding="utf-8")
@@ -229,11 +245,15 @@ def test_apply_tag_writes_pix_field_and_creates_sidecar(
                 details="date_auto null→2023-08-15-14:32:05; original_path init",
                 abs_path=jpg.resolve(),
                 is_first_migrate=True,
-                pix_writes={PIX_DATE_AUTO: "2023-08-15-14:32:05"},
+                pix_writes={
+                    PIX_DATE_AUTO: "2023-08-15-14:32:05",
+                    "XMP:OriginalPath": str(jpg.resolve()),
+                },
                 needs_content_hash=True,
-                needs_original_path=True,
             )
         ],
+        run_dir=run_dir,
+        staging_dir=tmp_path / "staging",
     )
     plan_path = run_dir / "plan.txt"
     plan_path.write_text(plan.to_text(), encoding="utf-8")
@@ -291,11 +311,15 @@ def test_apply_convert_png_to_jpg_end_to_end(tmp_path: Path) -> None:
                 abs_path=png.resolve(),
                 is_first_migrate=True,
                 target_filename="2023-08-15_143205.jpg",
-                pix_writes={PIX_DATE_AUTO: "2023-08-15-14:32:05"},
+                pix_writes={
+                    PIX_DATE_AUTO: "2023-08-15-14:32:05",
+                    "XMP:OriginalPath": str(png.resolve()),
+                },
                 needs_content_hash=True,
-                needs_original_path=True,
             )
         ],
+        run_dir=run_dir,
+        staging_dir=staging,
     )
     plan_path = run_dir / "plan.txt"
     plan_path.write_text(plan.to_text(), encoding="utf-8")
