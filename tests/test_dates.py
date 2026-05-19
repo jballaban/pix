@@ -124,3 +124,42 @@ def test_derive_uses_mtime_as_last_resort() -> None:
 def test_derive_returns_none_when_nothing_matches() -> None:
     meta = _meta("F:/src/unrecognized-name.jpg")
     assert derive_date_auto(meta) is None
+
+
+def test_derive_prefers_original_path_filename_over_current(
+    tmp_path: Path,
+) -> None:
+    """Once migrated, the canonical current name is circular — OriginalPath wins."""
+    # Current name is canonical, so the current-filename matcher would just
+    # echo the stored value (2025-01-01). The original name has the truth.
+    meta = _meta(
+        "F:/library/2025-01-01_000000.jpg",
+        **{"XMP:OriginalPath": "F:/source/IMG_20231013073558000.JPG"},
+    )
+    # Original-name parser wins → 2023-10-13 from the IMG_... name.
+    assert derive_date_auto(meta) == datetime(2023, 10, 13, 7, 35, 58)
+
+
+def test_derive_falls_back_to_current_when_original_path_has_no_pattern(
+    tmp_path: Path,
+) -> None:
+    """If OriginalPath name doesn't match any pattern, fall through to current."""
+    meta = _meta(
+        "F:/library/2025-01-01_000000.jpg",
+        **{"XMP:OriginalPath": "F:/source/random_name.jpg"},  # no pattern
+    )
+    # Current name is canonical → falls back and matches its own canonical form.
+    assert derive_date_auto(meta) == datetime(2025, 1, 1, 0, 0, 0)
+
+
+def test_derive_uses_original_parent_folder(tmp_path: Path) -> None:
+    """OriginalPath parent folder also gets a shot before current parent."""
+    meta = _meta(
+        "F:/library/2025-01-01_000000.jpg",
+        **{
+            "XMP:OriginalPath": "F:/source/2023-08-15-trip/IMG_001.HEIC",
+            # No EXIF, no filename pattern match on IMG_001.HEIC.
+        },
+    )
+    # Original parent "2023-08-15-trip" matches folder pattern.
+    assert derive_date_auto(meta) == datetime(2023, 8, 15, 0, 0, 0)

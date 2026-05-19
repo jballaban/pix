@@ -70,18 +70,22 @@ The field's presence is the dirty flag. Migrate itself doesn't surface dirty fil
 3. `XMP:DateCreated`
 4. `XMP:CreateDate`
 5. `IPTC:DateCreated`
-6. Filename pattern match (e.g. `IMG_YYYYMMDD_HHMMSS`, `YYYY-MM-DD_HHMMSS`, `PXL_YYYYMMDD_HHMMSSsss`).
-7. Parent-folder name pattern match (e.g. `2023-08-15-trip/`).
-8. `File:ModifyDate` / NTFS mtime (least trustworthy — copies, archive extractions, and sync clients all clobber this).
+6. **Filename pattern on `pix:OriginalPath`** (if set) — e.g. `IMG_YYYYMMDD_HHMMSS`, `PXL_YYYYMMDD_HHMMSSsss`. Once a file has been migrated its current filename is just our canonical output (`YYYY-MM-DD_HHMMSS.ext`) and re-deriving from it is circular; the original name is the surviving filesystem-side signal.
+7. **Parent-folder pattern on `pix:OriginalPath` parent** (if set) — e.g. `2023-08-15-trip/`.
+8. Filename pattern on the current name (matches first-migrate files where `pix:OriginalPath` isn't set yet, and any case where the user hand-renamed a migrated file).
+9. Parent-folder pattern on the current parent.
+10. `File:ModifyDate` / NTFS mtime (least trustworthy — copies, archive extractions, and sync clients all clobber this).
 
 **Videos:**
 
 1. `QuickTime:CreateDate` (timezone-normalized)
 2. `QuickTime:MediaCreateDate`
 3. `XMP:CreateDate`
-4. Filename pattern match
-5. Parent-folder pattern match
-6. NTFS mtime (least trustworthy)
+4. Filename pattern on `pix:OriginalPath` (if set)
+5. Parent-folder pattern on `pix:OriginalPath` parent (if set)
+6. Filename pattern on current name
+7. Parent-folder pattern on current parent
+8. NTFS mtime (least trustworthy)
 
 The same candidate list is re-consulted on every migrate, so improving the heuristics (recognizing more filename patterns, smarter folder-name parsing, etc.) produces drift in stored `DateAuto` values on the next run — which is exactly what `*AutoPrevious` is designed to flag when an override is in play (see [Auto-previous fields](#auto-previous-fields-dirty-flagging)).
 
