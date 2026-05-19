@@ -86,6 +86,29 @@ class ExifToolSession:
         args.append(str(file))
         self.execute(*args)
 
+    def copy_metadata_and_write_tags(
+        self,
+        source: Path,
+        dest: Path,
+        tags: dict[str, str],
+    ) -> None:
+        """Copy all metadata from `source` to `dest` and write `tags` in one call.
+
+        Used by the CONVERT step (pixel/container conversion happens via
+        Pillow/ffmpeg without metadata; this call then layers the source's
+        EXIF/XMP/IPTC into the converted file alongside the pix:* writes).
+        """
+        args: list[str] = [
+            "-tagsFromFile",
+            str(source),
+            "-all:all",  # copy every readable tag from source
+        ]
+        for key, value in tags.items():
+            args.append(f"-{key}={value}")
+        args.append("-overwrite_original")
+        args.append(str(dest))
+        self.execute(*args)
+
     def export_xmp_sidecar(
         self, file: Path, sidecar_path: Path
     ) -> None:

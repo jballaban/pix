@@ -1,21 +1,34 @@
 """Source-folder cleanup pass run at the start of every `pix migrate`.
 
 Handles orphan files left behind by atomic operations that crashed
-mid-flight in a prior run. Currently:
+mid-flight in a prior run:
 
 - `*.__pixrename__` — intermediate from an interrupted case-only rename
   (see `pix.apply._apply_rename`). Revert to the original name so the
   next plan re-proposes the rename.
+- `*.__migrate__.*` — marker from an interrupted CONVERT step (see
+  `pix.apply._apply_convert`). Resolve per spec/migrate.md → Marker
+  cleanup: if the original is still in source, delete the marker (the
+  new plan re-proposes the convert); if the original is already captured
+  (marker only), finalize the marker to its canonical name.
 
-Phase 4 will extend this for `*.__migrate__.*` markers from interrupted
-CONVERT / TAG operations (see spec/migrate.md → Marker cleanup).
+See spec/migrate.md → Marker cleanup for the full state diagram.
 """
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
+from pix.dates import parse_exiftool_datetime
+from pix.exiftool_session import ExifToolSession
+
 _RENAME_SUFFIX: str = ".__pixrename__"
+_MIGRATE_INFIX: str = ".__migrate__."
+
+
+class CleanupError(Exception):
+    """Raised when a marker can't be safely resolved during cleanup."""
 
 
 def cleanup_rename_orphans(folder: Path) -> list[Path]:
@@ -33,9 +46,7 @@ def cleanup_rename_orphans(folder: Path) -> list[Path]:
     for path in folder.rglob(f"*{_RENAME_SUFFIX}"):
         if not path.is_file():
             continue
-        # Skip pix's own state directory — these orphans only ever live in
-        # the user's source folder.
-        if any(part == ".pix" for part in path.parts):
+        if _under_pix_dir(path):
             continue
 
         original_name = path.name[: -len(_RENAME_SUFFIX)]
@@ -46,3 +57,113 @@ def cleanup_rename_orphans(folder: Path) -> list[Path]:
             path.rename(original)
         resolved.append(original)
     return resolved
+
+
+def cleanup_migrate_markers(folder: Path) -> list[str]:
+    """Resolve any `*.__migrate__.*` markers from interrupted CONVERT runs.
+
+    For each marker `{original-name}.__migrate__.{new-ext}`:
+    - If `{original-name}` is still in source → original survived; delete
+      the marker (next plan re-proposes the CONVERT).
+    - Else → original was already captured to a prior run folder. Read the
+      marker's `pix:DateAuto`, compute its canonical filename, and rename
+      the marker to it.
+
+    Opens a short-lived ExifTool session only if markers are found. Raises
+    `CleanupError` if a marker can't be safely resolved (e.g. malformed
+    name, missing pix:DateAuto, canonical-name collision).
+    """
+    markers = [
+        p
+        for p in folder.rglob(f"*{_MIGRATE_INFIX}*")
+        if p.is_file() and not _under_pix_dir(p)
+    ]
+    if not markers:
+        return []
+
+    notes: list[str] = []
+    with ExifToolSession() as session:
+        for marker in markers:
+            try:
+                original_name, new_ext = _split_marker_name(marker.name)
+            except ValueError as e:
+                raise CleanupError(
+                    f"unrecognized marker filename {marker.name!r}: {e}"
+                ) from e
+
+            original_path = marker.parent / original_name
+            if original_path.exists():
+                marker.unlink()
+                notes.append(
+                    f"deleted marker {marker.name} (original still present)"
+                )
+                continue
+
+            target = _finalize_convert_marker(marker, new_ext, session)
+            notes.append(
+                f"finalized marker {marker.name} -> {target.name}"
+            )
+
+    return notes
+
+
+def _split_marker_name(name: str) -> tuple[str, str]:
+    """Split `{original}.__migrate__.{new-ext}` into (original, new-ext)."""
+    idx = name.rfind(_MIGRATE_INFIX)
+    if idx < 0:
+        raise ValueError("missing __migrate__ infix")
+    original = name[:idx]
+    new_ext = name[idx + len(_MIGRATE_INFIX):]
+    if not original or not new_ext:
+        raise ValueError("empty original or extension component")
+    if "." in new_ext:
+        # New extension shouldn't itself contain `.`; reject to avoid
+        # accidentally picking up nested suffixes.
+        raise ValueError(f"new-ext {new_ext!r} contains a `.`")
+    return original, new_ext
+
+
+def _finalize_convert_marker(
+    marker: Path, new_ext: str, session: ExifToolSession
+) -> Path:
+    """Read marker's pix:DateAuto, compute canonical name, rename."""
+    # Read just the value of pix:DateAuto. `-s3` strips tag name + group.
+    output = session.execute(
+        "-s3", "-XMP-pix:DateAuto", str(marker)
+    )
+    date_auto_str = output.strip()
+    if not date_auto_str:
+        raise CleanupError(
+            f"marker {marker.name}: no pix:DateAuto stored, can't compute "
+            f"canonical filename (manual recovery needed; original is in a "
+            f"prior runs/<run-id>/ folder)"
+        )
+
+    dt = _parse_pix_dt(date_auto_str) or parse_exiftool_datetime(date_auto_str)
+    if dt is None:
+        raise CleanupError(
+            f"marker {marker.name}: pix:DateAuto={date_auto_str!r} "
+            f"unparseable"
+        )
+
+    canonical_stem = dt.strftime("%Y-%m-%d_%H%M%S")
+    canonical_name = f"{canonical_stem}.{new_ext.lower()}"
+    target = marker.parent / canonical_name
+    if target.exists():
+        raise CleanupError(
+            f"marker {marker.name}: finalize target {canonical_name} "
+            f"already exists"
+        )
+    marker.rename(target)
+    return target
+
+
+def _parse_pix_dt(value: str) -> datetime | None:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d-%H:%M:%S")
+    except ValueError:
+        return None
+
+
+def _under_pix_dir(path: Path) -> bool:
+    return any(part == ".pix" for part in path.parts)

@@ -206,44 +206,6 @@ def test_apply_skips_lines_not_in_kept_set(tmp_path: Path) -> None:
     assert skip.exists()  # untouched
 
 
-def test_apply_warns_and_skips_convert_lines(tmp_path: Path) -> None:
-    src = tmp_path / "src"
-    src.mkdir()
-    heic = src / "IMG_001.HEIC"
-    heic.write_bytes(b"")
-
-    run_dir = tmp_path / "runs" / "test-run"
-    run_dir.mkdir(parents=True)
-
-    plan = _make_plan(
-        src,
-        [
-            PlanLine(
-                line_id="L001",
-                action=Action.CONVERT_RENAME_TAG,
-                rel_path="IMG_001.HEIC",
-                details="→x.jpg",
-                abs_path=heic.resolve(),
-                target_filename="x.jpg",
-            ),
-        ],
-    )
-    plan_path = run_dir / "plan.txt"
-    plan_path.write_text(plan.to_text(), encoding="utf-8")
-
-    completed, skipped = apply_plan(
-        plan=plan,
-        plan_path=plan_path,
-        run_dir=run_dir,
-        kept_line_ids={"L001"},
-    )
-    assert (completed, skipped) == (0, 1)
-    assert heic.exists()  # untouched
-
-    updated = plan_path.read_text(encoding="utf-8")
-    assert "[skipped: CONVERT not yet implemented]" in updated
-
-
 @needs_exiftool
 def test_apply_tag_writes_pix_field_and_creates_sidecar(
     tmp_path: Path,
@@ -295,6 +257,65 @@ def test_apply_tag_writes_pix_field_and_creates_sidecar(
     meta = cache[jpg.resolve()]
     assert meta.get_str(PIX_DATE_AUTO) == "2023-08-15-14:32:05"
     assert meta.get_str("XMP:OriginalPath") == str(jpg.resolve())
+
+
+@needs_exiftool
+def test_apply_convert_png_to_jpg_end_to_end(tmp_path: Path) -> None:
+    """CONVERT renames PNG to canonical JPG with pix:* fields written."""
+    from PIL import Image
+
+    src = tmp_path / "src"
+    src.mkdir()
+    png = src / "IMG_001.png"
+    Image.new("RGB", (50, 50), color="red").save(png, "PNG")
+
+    run_dir = tmp_path / "runs" / "test-run"
+    run_dir.mkdir(parents=True)
+    staging = tmp_path / "staging"
+
+    plan = _make_plan(
+        src,
+        [
+            PlanLine(
+                line_id="L001",
+                action=Action.CONVERT_RENAME_TAG,
+                rel_path="IMG_001.png",
+                details="→2023-08-15_143205.jpg; original_path init; "
+                "date_auto null→2023-08-15-14:32:05",
+                abs_path=png.resolve(),
+                is_first_migrate=True,
+                target_filename="2023-08-15_143205.jpg",
+                pix_writes={PIX_DATE_AUTO: "2023-08-15-14:32:05"},
+                needs_original_path=True,
+            )
+        ],
+    )
+    plan_path = run_dir / "plan.txt"
+    plan_path.write_text(plan.to_text(), encoding="utf-8")
+
+    completed, _ = apply_plan(
+        plan=plan,
+        plan_path=plan_path,
+        run_dir=run_dir,
+        kept_line_ids={"L001"},
+        staging_dir=staging,
+    )
+    assert completed == 1
+
+    # Source folder now has the canonical JPG, no PNG.
+    on_disk = sorted(p.name for p in src.iterdir())
+    assert on_disk == ["2023-08-15_143205.jpg"]
+
+    # Original captured to runs/.
+    assert (run_dir / "L001_IMG_001.png").exists()
+
+    # Converted file has pix:* fields.
+    from pix.metadata import build_cache
+
+    cache = build_cache(src)
+    converted = cache[(src / "2023-08-15_143205.jpg").resolve()]
+    assert converted.get_str(PIX_DATE_AUTO) == "2023-08-15-14:32:05"
+    assert "IMG_001.png" in (converted.get_str("XMP:OriginalPath") or "")
 
 
 def _minimal_jpeg() -> bytes:

@@ -5,9 +5,10 @@ Each destructive operation captures the data it replaces into the run
 folder before destroying anything. Plan.txt is updated in place with
 `[time Started]` / `[time Completed]` annotations as each line progresses.
 
-Phase 3 scope: handles RENAME, DELETE, TAG, RENAME+TAG. CONVERT(+RENAME+TAG)
-lines are detected up-front and reported as skipped (Phase 4 lands the
-conversion implementations).
+Handles RENAME, DELETE, TAG, RENAME+TAG, and (since v0.1.8) CONVERT+
+RENAME+TAG. CONVERT uses the 4-step marker sequence from
+spec/migrate.md → Atomicity to keep the source folder recoverable
+through any crash point.
 """
 
 from __future__ import annotations
@@ -15,8 +16,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-import typer
-
+from pix.convert import ConvertFailed, convert_to_jpg, convert_to_mp4
 from pix.exiftool_session import ExifToolSession
 from pix.plan import Action, Plan, PlanLine
 
@@ -30,51 +30,43 @@ def apply_plan(
     plan_path: Path,
     run_dir: Path,
     kept_line_ids: set[str],
+    staging_dir: Path | None = None,
 ) -> tuple[int, int]:
     """Apply the plan, updating plan.txt in place.
 
     Returns `(completed, skipped)`. Raises `ApplyError` if any action fails.
     """
-    selected = [
+    runnable = [
         ln for ln in plan.lines if ln.line_id in kept_line_ids
     ]
 
-    convert_lines = [
-        ln for ln in selected if ln.action == Action.CONVERT_RENAME_TAG
-    ]
-    runnable = [
-        ln for ln in selected if ln.action != Action.CONVERT_RENAME_TAG
-    ]
-
-    if convert_lines:
-        typer.echo(
-            f"Warning: {len(convert_lines)} CONVERT line(s) skipped — "
-            "format conversion lands in Phase 4. The following files will "
-            "remain unchanged:"
-        )
-        for ln in convert_lines:
-            typer.echo(f"  {ln.line_id} {ln.rel_path}")
+    needs_exiftool = any(
+        ln.action
+        in (Action.TAG, Action.RENAME_TAG, Action.CONVERT_RENAME_TAG)
+        for ln in runnable
+    )
+    needs_staging = any(
+        ln.action == Action.CONVERT_RENAME_TAG for ln in runnable
+    )
 
     annotations: dict[str, str] = {}
-    for ln in convert_lines:
-        annotations[ln.line_id] = "[skipped: CONVERT not yet implemented]"
-    if annotations:
-        # Persist the skip annotations even if there are no runnable lines.
-        _write_plan(plan, plan_path, annotations)
-
-    needs_exiftool = any(
-        ln.action in (Action.TAG, Action.RENAME_TAG) for ln in runnable
-    )
     exiftool: ExifToolSession | None = None
     try:
         if needs_exiftool:
             exiftool = ExifToolSession()
+        if needs_staging:
+            if staging_dir is None:
+                raise ApplyError(
+                    "CONVERT actions require a staging directory but none "
+                    "was provided"
+                )
+            staging_dir.mkdir(parents=True, exist_ok=True)
         completed = 0
         for ln in runnable:
             annotations[ln.line_id] = _stamp("Started")
             _write_plan(plan, plan_path, annotations)
             try:
-                _apply_one(ln, run_dir, exiftool)
+                _apply_one(ln, run_dir, exiftool, staging_dir)
             except Exception as e:
                 annotations[ln.line_id] = _stamp(f"Failed: {e}")
                 _write_plan(plan, plan_path, annotations)
@@ -88,7 +80,7 @@ def apply_plan(
         if exiftool is not None:
             exiftool.close()
 
-    return completed, len(convert_lines)
+    return completed, 0
 
 
 def _stamp(state: str) -> str:
@@ -102,7 +94,10 @@ def _write_plan(
 
 
 def _apply_one(
-    ln: PlanLine, run_dir: Path, exiftool: ExifToolSession | None
+    ln: PlanLine,
+    run_dir: Path,
+    exiftool: ExifToolSession | None,
+    staging_dir: Path | None,
 ) -> None:
     """Dispatch one plan line to its action handler."""
     if ln.action == Action.DELETE:
@@ -120,9 +115,12 @@ def _apply_one(
         assert exiftool is not None, "RENAME+TAG requires an ExifTool session"
         _apply_tag(ln, run_dir, exiftool)
         _apply_rename(ln)
+    elif ln.action == Action.CONVERT_RENAME_TAG:
+        assert exiftool is not None, "CONVERT requires an ExifTool session"
+        assert staging_dir is not None, "CONVERT requires a staging directory"
+        _apply_convert(ln, run_dir, exiftool, staging_dir)
     else:
-        # CONVERT cases are filtered out before we get here.
-        raise ApplyError(f"action {ln.action.value} not supported in this phase")
+        raise ApplyError(f"action {ln.action.value} not supported")
 
 
 def _apply_delete(ln: PlanLine, run_dir: Path) -> None:
@@ -203,9 +201,90 @@ def _apply_tag(
         # the absolute path before any rename in this same line.
         writes["XMP:OriginalPath"] = str(ln.abs_path)
     # `needs_content_hash` is honored in Phase 5 (blake3 + format-aware
-    # framing). Phase 3 deliberately skips it; the next migrate will
-    # re-propose `content_hash compute` for any file still missing the
-    # hash.
+    # framing). Until then the next migrate will re-propose
+    # `content_hash compute` for any file still missing the hash.
 
     if writes:
         exiftool.write_tags(ln.abs_path, writes)
+
+
+def _apply_convert(
+    ln: PlanLine,
+    run_dir: Path,
+    exiftool: ExifToolSession,
+    staging_dir: Path,
+) -> None:
+    """Execute the 4-step CONVERT sequence (spec/migrate.md → Atomicity).
+
+    1. **Off-library work**: decode source, encode to target format in
+       `.pix/staging/`. ExifTool then layers source metadata + pix:* tags
+       into the converted file. If any step fails, the staging file is
+       discarded; the source is untouched.
+    2. **Bring into source as marker**: rename the staging file next to
+       the original as `<original-name>.__migrate__.<new-ext>`.
+    3. **Capture original**: move source into `runs/<run-id>/`.
+    4. **Finalize**: rename the marker to its canonical name.
+
+    Each step after (1) is a single same-volume rename. Crash recovery is
+    handled by `pix.cleanup` on the next migrate.
+    """
+    if ln.target_filename is None:
+        raise ApplyError(
+            f"{ln.line_id}: CONVERT requires a target_filename"
+        )
+
+    src = ln.abs_path
+    target_ext = ln.target_filename.rsplit(".", 1)[-1].lower()
+
+    # Step 1: off-library conversion + metadata copy + pix:* writes
+    staging_path = staging_dir / f"{ln.line_id}_{src.stem}.{target_ext}"
+    if staging_path.exists():
+        staging_path.unlink()
+
+    try:
+        if target_ext == "jpg":
+            convert_to_jpg(src, staging_path)
+        elif target_ext == "mp4":
+            convert_to_mp4(src, staging_path)
+        else:
+            raise ApplyError(
+                f"{ln.line_id}: unsupported CONVERT target extension "
+                f"{target_ext!r}"
+            )
+    except ConvertFailed as e:
+        raise ApplyError(
+            f"{ln.line_id}: conversion failed: {e}"
+        ) from e
+
+    # Copy all source metadata onto the converted file + write pix:* tags.
+    writes = dict(ln.pix_writes)
+    if ln.needs_original_path:
+        writes["XMP:OriginalPath"] = str(src)
+    exiftool.copy_metadata_and_write_tags(
+        source=src, dest=staging_path, tags=writes
+    )
+
+    # Step 2: bring into source as marker. Marker name per spec/migrate.md
+    # → Marker conventions: `{full-source-name}.__migrate__.{new-ext}`.
+    marker_path = src.parent / f"{src.name}.__migrate__.{target_ext}"
+    if marker_path.exists():
+        raise ApplyError(
+            f"{ln.line_id}: marker {marker_path.name} already exists "
+            f"(leftover from a prior crash?)"
+        )
+    staging_path.rename(marker_path)
+
+    # Step 3: capture original into the run folder.
+    capture_path = run_dir / f"{ln.line_id}_{src.name}"
+    src.rename(capture_path)
+
+    # Step 4: finalize marker to canonical name.
+    target = src.parent / ln.target_filename
+    if target.exists():
+        # Shouldn't happen — collision resolution ran during plan-gen.
+        # But fail clearly rather than overwrite something unrelated.
+        raise ApplyError(
+            f"{ln.line_id}: target {target.name} already exists at "
+            f"finalize step"
+        )
+    marker_path.rename(target)

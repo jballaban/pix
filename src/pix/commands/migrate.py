@@ -16,7 +16,11 @@ import typer
 
 from pix import debug
 from pix.apply import ApplyError, apply_plan
-from pix.cleanup import cleanup_rename_orphans
+from pix.cleanup import (
+    CleanupError,
+    cleanup_migrate_markers,
+    cleanup_rename_orphans,
+)
 from pix.config import Config
 from pix.editor import open_in_editor, parse_kept_line_ids
 from pix.metadata import (
@@ -54,13 +58,21 @@ def migrate_folder(
 
     config = Config.load(root / ".pix" / "config.yaml")
 
-    # Recover any intermediates from a prior crashed case-only rename
-    # before walking the source.
+    # Recover any orphans from prior crashed runs before walking the
+    # source. Order matters: rename intermediates first (they're simple
+    # path-only ops); then CONVERT markers (which may need ExifTool reads).
     reverted = cleanup_rename_orphans(folder)
     if reverted:
         typer.echo(
             f"Recovered {len(reverted)} rename intermediate(s) from a prior run."
         )
+    try:
+        marker_notes = cleanup_migrate_markers(folder)
+    except CleanupError as e:
+        typer.echo(f"Error: marker cleanup failed: {e}", err=True)
+        raise typer.Exit(code=1) from e
+    for note in marker_notes:
+        typer.echo(f"  {note}")
 
     source_files = walk_source_files(folder)
 
@@ -129,12 +141,14 @@ def migrate_folder(
         typer.echo("Aborted; plan file left in place.")
         return
 
+    staging_dir = root / ".pix" / "staging"
     try:
         completed, skipped = apply_plan(
             plan=plan,
             plan_path=plan_path,
             run_dir=runs_dir,
             kept_line_ids=kept_line_ids,
+            staging_dir=staging_dir,
         )
     except ApplyError as e:
         typer.echo(f"Error: apply failed: {e}", err=True)
