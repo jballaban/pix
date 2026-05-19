@@ -16,6 +16,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+from pix.content_hash import compute_content_hash
 from pix.convert import ConvertFailed, convert_to_jpg, convert_to_mp4
 from pix.exiftool_session import ExifToolSession
 from pix.plan import Action, Plan, PlanLine
@@ -200,9 +201,12 @@ def _apply_tag(
         # Stored as the source path at the time of first migrate. We use
         # the absolute path before any rename in this same line.
         writes["XMP:OriginalPath"] = str(ln.abs_path)
-    # `needs_content_hash` is honored in Phase 5 (blake3 + format-aware
-    # framing). Until then the next migrate will re-propose
-    # `content_hash compute` for any file still missing the hash.
+    if ln.needs_content_hash:
+        # Compute on the current in-place file *before* the ExifTool
+        # write. Format-aware framing makes the hash invariant under
+        # the metadata edit that's about to happen — so the value we
+        # compute here is the same value the next migrate would compute.
+        writes["XMP:ContentHash"] = compute_content_hash(ln.abs_path)
 
     if writes:
         exiftool.write_tags(ln.abs_path, writes)
@@ -260,6 +264,11 @@ def _apply_convert(
     writes = dict(ln.pix_writes)
     if ln.needs_original_path:
         writes["XMP:OriginalPath"] = str(src)
+    if ln.needs_content_hash:
+        # Hash the freshly-converted bytes in staging. Same as TAG: the
+        # format-aware hash is invariant under the metadata layer-up
+        # that happens in the next exiftool call.
+        writes["XMP:ContentHash"] = compute_content_hash(staging_path)
     exiftool.copy_metadata_and_write_tags(
         source=src, dest=staging_path, tags=writes
     )

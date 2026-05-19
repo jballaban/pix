@@ -230,6 +230,7 @@ def test_apply_tag_writes_pix_field_and_creates_sidecar(
                 abs_path=jpg.resolve(),
                 is_first_migrate=True,
                 pix_writes={PIX_DATE_AUTO: "2023-08-15-14:32:05"},
+                needs_content_hash=True,
                 needs_original_path=True,
             )
         ],
@@ -257,6 +258,11 @@ def test_apply_tag_writes_pix_field_and_creates_sidecar(
     meta = cache[jpg.resolve()]
     assert meta.get_str(PIX_DATE_AUTO) == "2023-08-15-14:32:05"
     assert meta.get_str("XMP:OriginalPath") == str(jpg.resolve())
+    # Content hash is 64 hex chars of BLAKE3.
+    content_hash = meta.get_str("XMP:ContentHash")
+    assert content_hash is not None
+    assert len(content_hash) == 64
+    assert all(c in "0123456789abcdef" for c in content_hash)
 
 
 @needs_exiftool
@@ -286,6 +292,7 @@ def test_apply_convert_png_to_jpg_end_to_end(tmp_path: Path) -> None:
                 is_first_migrate=True,
                 target_filename="2023-08-15_143205.jpg",
                 pix_writes={PIX_DATE_AUTO: "2023-08-15-14:32:05"},
+                needs_content_hash=True,
                 needs_original_path=True,
             )
         ],
@@ -309,13 +316,15 @@ def test_apply_convert_png_to_jpg_end_to_end(tmp_path: Path) -> None:
     # Original captured to runs/.
     assert (run_dir / "L001_IMG_001.png").exists()
 
-    # Converted file has pix:* fields.
+    # Converted file has pix:* fields, including the content hash.
     from pix.metadata import build_cache
 
     cache = build_cache(src)
     converted = cache[(src / "2023-08-15_143205.jpg").resolve()]
     assert converted.get_str(PIX_DATE_AUTO) == "2023-08-15-14:32:05"
     assert "IMG_001.png" in (converted.get_str("XMP:OriginalPath") or "")
+    content_hash = converted.get_str("XMP:ContentHash")
+    assert content_hash is not None and len(content_hash) == 64
 
 
 def _minimal_jpeg() -> bytes:
