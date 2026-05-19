@@ -59,14 +59,6 @@ def migrate(
             envvar="PIX_ROOT",
         ),
     ] = None,
-    yes: Annotated[
-        bool,
-        typer.Option(
-            "--yes",
-            "-y",
-            help="Skip the editor + confirmation prompt; apply the original plan as-is.",
-        ),
-    ] = False,
 ) -> None:
     """Normalize files in <folder> per the library's policy (in-place, per-file)."""
-    migrate_folder(folder=folder, root_override=root, yes=yes)
+    migrate_folder(folder=folder, root_override=root)

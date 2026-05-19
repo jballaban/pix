@@ -31,13 +31,8 @@ from pix.scan import walk_source_files
 def migrate_folder(
     folder: Path,
     root_override: Path | None,
-    yes: bool = False,
 ) -> None:
-    """End-to-end migrate: plan, edit, confirm, apply.
-
-    `yes=True` skips both the editor and the Apply? prompt — used by tests
-    and non-interactive runs. The original generated plan is applied as-is.
-    """
+    """End-to-end migrate: plan, edit, confirm, apply."""
     try:
         root = resolve_root(override=root_override)
     except NoLibraryRoot as e:
@@ -100,9 +95,8 @@ def migrate_folder(
         typer.echo("Nothing to do.")
         return
 
-    if not yes:
-        typer.echo("")
-        open_in_editor(plan_path)
+    typer.echo("")
+    open_in_editor(plan_path)
 
     edited_text = plan_path.read_text(encoding="utf-8")
     kept_line_ids = parse_kept_line_ids(edited_text)
@@ -112,13 +106,12 @@ def migrate_folder(
         typer.echo("Plan empty after edit; nothing to apply.")
         return
 
-    if not yes:
-        typer.echo("")
-        typer.echo(f"After edit: {_summarize(kept_lines)}")
-        confirmed = typer.confirm("Apply?", default=False)
-        if not confirmed:
-            typer.echo("Aborted; plan file left in place.")
-            return
+    typer.echo("")
+    typer.echo(f"After edit: {_summarize(kept_lines)}")
+    confirmed = typer.confirm("Apply?", default=False)
+    if not confirmed:
+        typer.echo("Aborted; plan file left in place.")
+        return
 
     try:
         completed, skipped = apply_plan(
