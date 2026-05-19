@@ -12,6 +12,7 @@ text is presentational; the structured data is the source of truth.
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -203,12 +204,88 @@ def generate_plan(
             )
         )
 
+    lines = _resolve_collisions(cache, lines)
+
     return Plan(
         source=source,
         run_id=run_id,
         generated_at=generated_at,
         lines=lines,
     )
+
+
+def _resolve_collisions(
+    cache: dict[Path, FileMetadata], lines: list[PlanLine]
+) -> list[PlanLine]:
+    """Apply `_NNN` suffixes when multiple files map to the same canonical name.
+
+    Per spec/library.md → Collision handling. The first file in a colliding
+    group keeps the bare name; the rest get `_001`, `_002`, ... suffixes
+    inserted before the extension.
+
+    Tiebreaker for Phase 3: files already at the bare canonical name win it
+    unconditionally; other files in the group sort by source filename
+    ascending. (Spec's content-hash tiebreaker lands in Phase 5; for now
+    source-filename is a stable proxy.)
+    """
+    line_by_src: dict[Path, PlanLine] = {ln.abs_path: ln for ln in lines}
+
+    members_by_dest: dict[Path, list[Path]] = {}
+    for src_path in cache.keys():
+        ln = line_by_src.get(src_path)
+        if ln is not None and ln.target_filename is not None:
+            dest = src_path.parent / ln.target_filename
+        else:
+            dest = src_path
+        members_by_dest.setdefault(dest, []).append(src_path)
+
+    occupied: set[Path] = set()
+    updates: dict[Path, str] = {}  # src_path -> new target filename
+
+    for dest, srcs in members_by_dest.items():
+        if len(srcs) <= 1:
+            occupied.add(dest)
+            continue
+        # Already-at-bare-name wins, then source-name ASC.
+        srcs.sort(key=lambda p: (0 if p == dest else 1, p.name))
+        occupied.add(dest)  # first member keeps the bare slot
+        suffix_idx = 1
+        for src_path in srcs[1:]:
+            # Skip suffix values already taken (in case prior groups
+            # claimed `_001` etc. at the same canonical destination).
+            while True:
+                stem = dest.stem
+                ext = dest.suffix
+                suffixed_name = f"{stem}_{suffix_idx:03d}{ext}"
+                suffixed_path = src_path.parent / suffixed_name
+                if suffixed_path not in occupied:
+                    break
+                suffix_idx += 1
+            occupied.add(suffixed_path)
+            updates[src_path] = suffixed_name
+            suffix_idx += 1
+
+    if not updates:
+        return lines
+
+    result: list[PlanLine] = []
+    for ln in lines:
+        new_target = updates.get(ln.abs_path)
+        if new_target is None:
+            result.append(ln)
+            continue
+        old_target = ln.target_filename or ""
+        new_details = (
+            ln.details.replace(f"→{old_target}", f"→{new_target}")
+            if old_target
+            else ln.details
+        )
+        result.append(
+            dataclasses.replace(
+                ln, target_filename=new_target, details=new_details
+            )
+        )
+    return result
 
 
 _EXT_ALIASES: dict[str, str] = {

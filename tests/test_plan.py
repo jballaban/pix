@@ -297,6 +297,115 @@ def test_plan_line_ids_are_sequential(tmp_path: Path) -> None:
     assert [ln.line_id for ln in plan.lines] == ["L001", "L002", "L003"]
 
 
+def test_plan_collision_suffixes_competing_rename_targets(
+    tmp_path: Path,
+) -> None:
+    """Two files deriving to the same canonical name get _001 on the second."""
+    src = tmp_path / "src"
+    src.mkdir()
+    a = src / "burst-a.jpg"
+    b = src / "burst-b.jpg"
+    a.write_bytes(b"")
+    b.write_bytes(b"")
+
+    cfg = _config(jpg="keep")
+    cache = {
+        a.resolve(): _meta(
+            str(a),
+            **{"EXIF:DateTimeOriginal": "2023:08:15 14:32:05"},
+        ),
+        b.resolve(): _meta(
+            str(b),
+            **{"EXIF:DateTimeOriginal": "2023:08:15 14:32:05"},
+        ),
+    }
+
+    plan = generate_plan(
+        source=src.resolve(),
+        cache=cache,
+        config=cfg,
+        run_id="test-run",
+    )
+
+    assert len(plan.lines) == 2
+    targets = sorted(ln.target_filename for ln in plan.lines if ln.target_filename)
+    assert targets == ["2023-08-15_143205.jpg", "2023-08-15_143205_001.jpg"]
+    # Lex-first source ("burst-a.jpg") gets the bare slot.
+    burst_a_line = next(ln for ln in plan.lines if ln.abs_path == a.resolve())
+    assert burst_a_line.target_filename == "2023-08-15_143205.jpg"
+
+
+def test_plan_collision_already_at_canonical_name_keeps_bare_slot(
+    tmp_path: Path,
+) -> None:
+    """A file already at the canonical bare name wins it; competitors get suffixes."""
+    src = tmp_path / "src"
+    src.mkdir()
+    occupant = src / "2023-08-15_143205.jpg"
+    challenger = src / "IMG_20230815_143205.jpg"
+    occupant.write_bytes(b"")
+    challenger.write_bytes(b"")
+
+    cfg = _config(jpg="keep")
+    cache = {
+        occupant.resolve(): _meta(
+            str(occupant),
+            **{"EXIF:DateTimeOriginal": "2023:08:15 14:32:05"},
+        ),
+        challenger.resolve(): _meta(
+            str(challenger),
+            **{"EXIF:DateTimeOriginal": "2023:08:15 14:32:05"},
+        ),
+    }
+
+    plan = generate_plan(
+        source=src.resolve(),
+        cache=cache,
+        config=cfg,
+        run_id="test-run",
+    )
+
+    challenger_line = next(
+        ln for ln in plan.lines if ln.abs_path == challenger.resolve()
+    )
+    # Occupant was already canonical → keeps bare slot. Challenger gets _001.
+    assert challenger_line.target_filename == "2023-08-15_143205_001.jpg"
+    assert f"→2023-08-15_143205_001.jpg" in challenger_line.details
+
+
+def test_plan_collision_three_way(tmp_path: Path) -> None:
+    """Three files colliding produce bare, _001, _002."""
+    src = tmp_path / "src"
+    src.mkdir()
+    files: list[Path] = []
+    for name in ("a.jpg", "b.jpg", "c.jpg"):
+        p = src / name
+        p.write_bytes(b"")
+        files.append(p)
+
+    cfg = _config(jpg="keep")
+    cache = {
+        f.resolve(): _meta(
+            str(f), **{"EXIF:DateTimeOriginal": "2023:08:15 14:32:05"}
+        )
+        for f in files
+    }
+
+    plan = generate_plan(
+        source=src.resolve(),
+        cache=cache,
+        config=cfg,
+        run_id="test-run",
+    )
+
+    targets = sorted(ln.target_filename for ln in plan.lines if ln.target_filename)
+    assert targets == [
+        "2023-08-15_143205.jpg",
+        "2023-08-15_143205_001.jpg",
+        "2023-08-15_143205_002.jpg",
+    ]
+
+
 def test_plan_to_text_includes_header_and_summary(tmp_path: Path) -> None:
     src = tmp_path / "src"
     src.mkdir()

@@ -69,8 +69,10 @@ _MTIME_KEY: str = "File:FileModifyDate"
 _FILENAME_PATTERNS: tuple[re.Pattern[str], ...] = (
     # YYYY-MM-DD_HHMMSS or YYYY-MM-DD-HHMMSS (pix canonical, similar)
     re.compile(r"(\d{4})-(\d{2})-(\d{2})[_\-](\d{2})(\d{2})(\d{2})"),
-    # IMG_YYYYMMDD_HHMMSS, PXL_YYYYMMDD_HHMMSSsss, YYYYMMDD_HHMMSS
-    re.compile(r"(?:^|[_\-])(\d{4})(\d{2})(\d{2})[_\-](\d{2})(\d{2})(\d{2})"),
+    # IMG_YYYYMMDD_HHMMSS, PXL_YYYYMMDD_HHMMSSsss, YYYYMMDDHHMMSS,
+    # YYYYMMDDHHMMSSsss — separator between date and time is optional so
+    # Synology-style burst exports (`20251013073558000.JPG`) match.
+    re.compile(r"(?:^|[_\-])(\d{4})(\d{2})(\d{2})[_\-]?(\d{2})(\d{2})(\d{2})"),
 )
 
 # Folder-name patterns: date only (no time required).

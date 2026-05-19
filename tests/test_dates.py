@@ -96,6 +96,18 @@ def test_derive_falls_back_to_canonical_filename_pattern() -> None:
     assert derive_date_auto(meta) == datetime(2023, 8, 15, 14, 32, 5)
 
 
+def test_derive_handles_synology_style_no_separator() -> None:
+    """`YYYYMMDDHHMMSS[NNN]` with no date-time separator (Synology bursts)."""
+    meta = _meta("F:/src/20251013073558000.JPG")
+    assert derive_date_auto(meta) == datetime(2025, 10, 13, 7, 35, 58)
+
+
+def test_derive_handles_yyyymmdd_with_separator() -> None:
+    """`IMG_YYYYMMDD_HHMMSS` (Android-style) still works."""
+    meta = _meta("F:/src/IMG_20230815_143205.jpg")
+    assert derive_date_auto(meta) == datetime(2023, 8, 15, 14, 32, 5)
+
+
 def test_derive_falls_back_to_parent_folder() -> None:
     meta = _meta("F:/src/2023-08-15-trip/photo.jpg")
     assert derive_date_auto(meta) == datetime(2023, 8, 15, 0, 0, 0)
