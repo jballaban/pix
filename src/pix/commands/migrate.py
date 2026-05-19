@@ -139,7 +139,10 @@ def migrate_folder(
 
 
 def _summarize(lines: list[PlanLine]) -> str:
-    """Render `N plan line(s) — X CONVERT, Y RENAME, Z TAG, W DELETE`."""
+    """Render `N plan line(s) — X CONVERT, Y RENAME, Z TAG, W DELETE`.
+
+    Zero-count action types are omitted from the comma list.
+    """
     counts: dict[Action, int] = {a: 0 for a in Action}
     for ln in lines:
         counts[ln.action] += 1
@@ -147,10 +150,20 @@ def _summarize(lines: list[PlanLine]) -> str:
     rename = counts[Action.RENAME] + counts[Action.RENAME_TAG]
     tag = counts[Action.TAG] + counts[Action.RENAME_TAG] + convert
     delete = counts[Action.DELETE]
-    return (
-        f"{len(lines)} plan line(s) — "
-        f"{convert} CONVERT, {rename} RENAME, {tag} TAG, {delete} DELETE."
-    )
+
+    parts: list[str] = []
+    if convert:
+        parts.append(f"{convert} CONVERT")
+    if rename:
+        parts.append(f"{rename} RENAME")
+    if tag:
+        parts.append(f"{tag} TAG")
+    if delete:
+        parts.append(f"{delete} DELETE")
+
+    if not parts:
+        return f"{len(lines)} plan line(s)."
+    return f"{len(lines)} plan line(s) — " + ", ".join(parts) + "."
 
 
 def _validate_extensions(

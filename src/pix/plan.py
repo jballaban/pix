@@ -149,13 +149,22 @@ class Plan:
             body.append(line)
 
         counts = self.counts()
-        summary_parts = [
-            f"{counts[Action.CONVERT_RENAME_TAG]} CONVERT",
-            f"{counts[Action.RENAME] + counts[Action.RENAME_TAG]} RENAME",
-            f"{counts[Action.TAG] + counts[Action.RENAME_TAG] + counts[Action.CONVERT_RENAME_TAG]} TAG",
-            f"{counts[Action.DELETE]} DELETE",
-        ]
-        summary = "# Summary: " + ", ".join(summary_parts)
+        convert = counts[Action.CONVERT_RENAME_TAG]
+        rename = counts[Action.RENAME] + counts[Action.RENAME_TAG]
+        tag = counts[Action.TAG] + counts[Action.RENAME_TAG] + convert
+        delete = counts[Action.DELETE]
+        summary_parts: list[str] = []
+        if convert:
+            summary_parts.append(f"{convert} CONVERT")
+        if rename:
+            summary_parts.append(f"{rename} RENAME")
+        if tag:
+            summary_parts.append(f"{tag} TAG")
+        if delete:
+            summary_parts.append(f"{delete} DELETE")
+        summary = "# Summary: " + (
+            ", ".join(summary_parts) if summary_parts else "nothing to do"
+        )
 
         return "\n".join(header + body + ["", summary, ""])
 
