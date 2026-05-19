@@ -241,6 +241,74 @@ def test_plan_rename_plus_tag_for_first_migrate_canonical_format(
     assert "content_hash compute" in line.details
 
 
+def test_plan_drift_detection_writes_new_date_auto(tmp_path: Path) -> None:
+    """If re-derived DateAuto differs from stored, a TAG action is proposed."""
+    src = tmp_path / "src"
+    src.mkdir()
+    f = src / "2020-01-01_000000.jpg"  # canonical name matches OLD stored auto
+    f.write_bytes(b"")
+
+    cfg = _config(jpg="keep")
+    cache = {
+        f.resolve(): _meta(
+            str(f),
+            **{
+                # Stored DateAuto is stale (2020); EXIF says 2023 — drift!
+                PIX_DATE_AUTO: "2020-01-01-00:00:00",
+                PIX_ORIGINAL_PATH: "F:/old/source.jpg",
+                PIX_CONTENT_HASH: "deadbeef",
+                "EXIF:DateTimeOriginal": "2023:08:15 14:32:05",
+            },
+        )
+    }
+
+    plan = generate_plan(
+        source=src.resolve(),
+        cache=cache,
+        config=cfg,
+        run_id="test-run",
+    )
+
+    assert len(plan.lines) == 1
+    line = plan.lines[0]
+    # Drift: stored 2020 → re-derived 2023. Needs new auto + rename.
+    assert line.action == Action.RENAME_TAG
+    assert line.target_filename == "2023-08-15_143205.jpg"
+    assert line.pix_writes.get(PIX_DATE_AUTO) == "2023-08-15-14:32:05"
+    assert "date_auto 2020-01-01-00:00:00→2023-08-15-14:32:05" in line.details
+
+
+def test_plan_no_drift_no_action_when_stored_matches_derivation(
+    tmp_path: Path,
+) -> None:
+    """When re-derivation produces the same value as stored, no plan line."""
+    src = tmp_path / "src"
+    src.mkdir()
+    f = src / "2023-08-15_143205.jpg"
+    f.write_bytes(b"")
+
+    cfg = _config(jpg="keep")
+    cache = {
+        f.resolve(): _meta(
+            str(f),
+            **{
+                PIX_DATE_AUTO: "2023-08-15-14:32:05",
+                PIX_ORIGINAL_PATH: "F:/old/source.jpg",
+                PIX_CONTENT_HASH: "deadbeef",
+                # Filename pattern would derive the same value — no drift.
+            },
+        )
+    }
+
+    plan = generate_plan(
+        source=src.resolve(),
+        cache=cache,
+        config=cfg,
+        run_id="test-run",
+    )
+    assert plan.lines == []
+
+
 def test_plan_tag_only_for_missing_hash_on_already_migrated(
     tmp_path: Path,
 ) -> None:

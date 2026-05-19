@@ -452,18 +452,96 @@ def _plan_keep(
     rel_str: str,
     is_first_migrate: bool,
 ) -> PlanLine | None:
-    canonical_ext = _canonical_extension(path.suffix)
-    canonical_name = _canonical_filename(meta=meta, ext=canonical_ext)
-    needs_rename = (
-        canonical_name is not None and canonical_name != path.name
+    # --- DateAuto drift check ---
+    # Per spec/tags.md → DateAuto derivation, the candidate list is
+    # re-consulted on every migrate. Improving heuristics can change the
+    # derived value relative to what's stored; we detect that drift and
+    # schedule a TAG write to bring the stored value up to date.
+    stored_raw = meta.get_str(PIX_DATE_AUTO)
+    stored_auto: datetime | None = None
+    if stored_raw:
+        stored_auto = parse_exiftool_datetime(
+            stored_raw
+        ) or _parse_pix_datetime(stored_raw)
+
+    re_derived = derive_date_auto(meta)
+
+    # The DateAuto value we'll have after this migrate: prefer the re-derived
+    # value; fall back to stored only if re-derivation now returns nothing
+    # (don't lose a previously-stored value if heuristics regress).
+    new_auto = re_derived if re_derived is not None else stored_auto
+
+    debug.section("DateAuto drift check")
+    debug.log(f"  Stored pix:DateAuto: {stored_raw or '(absent)'}")
+    debug.log(
+        f"  Re-derived:          "
+        f"{re_derived.isoformat() if re_derived else '(none)'}"
     )
+
+    needs_date_auto_write = False
+    if not is_first_migrate and new_auto is not None:
+        if stored_auto is None:
+            needs_date_auto_write = True
+            debug.log(
+                "  Drift: stored DateAuto absent — writing re-derived value."
+            )
+        elif stored_auto != new_auto:
+            needs_date_auto_write = True
+            debug.log(
+                f"  Drift: stored {stored_auto.isoformat()} differs from "
+                f"re-derived {new_auto.isoformat()} — writing new value."
+            )
+        else:
+            debug.log("  No drift (stored DateAuto matches re-derived).")
+    elif new_auto is None and stored_raw:
+        debug.log("  Re-derive returned nothing; keeping stored DateAuto.")
+
+    # --- Effective date (auto + optional override) for canonical filename ---
+    debug.section("Effective date")
+    if new_auto is None:
+        effective: datetime | None = None
+        debug.log("  Effective date: (none — no auto available)")
+    else:
+        override = meta.get_str(PIX_DATE_OVERRIDE)
+        if override is None:
+            effective = new_auto
+            debug.log("  pix:DateOverride: (absent)")
+            debug.log(
+                f"  Effective date: {new_auto.isoformat()} (auto only)"
+            )
+        else:
+            patched = _apply_override(new_auto, override)
+            if patched is None:
+                effective = new_auto
+                debug.log(
+                    f"  pix:DateOverride: {override!r} (unparseable, ignored)"
+                )
+                debug.log(
+                    f"  Effective date: {new_auto.isoformat()} (auto only)"
+                )
+            else:
+                effective = patched
+                debug.log(f"  pix:DateOverride: {override!r}")
+                debug.log(
+                    f"  Effective date: {patched.isoformat()} (override-patched)"
+                )
+
+    # --- Canonical filename ---
+    canonical_ext = _canonical_extension(path.suffix)
+    canonical_name = (
+        f"{effective.strftime('%Y-%m-%d_%H%M%S')}.{canonical_ext}"
+        if effective is not None
+        else None
+    )
+    needs_rename = canonical_name is not None and canonical_name != path.name
 
     debug.section("Rename check")
     debug.log(f"  Canonical extension: .{canonical_ext}")
-    debug.log(f"  Canonical filename: {canonical_name or '<unknown>'}")
-    debug.log(f"  Current filename:   {path.name}")
+    debug.log(f"  Canonical filename:  {canonical_name or '<no date>'}")
+    debug.log(f"  Current filename:    {path.name}")
     debug.log(f"  Needs rename: {needs_rename}")
 
+    # --- Decide ---
     details_parts: list[str] = []
     pix_writes: dict[str, str] = {}
     if needs_rename and canonical_name is not None:
@@ -476,18 +554,26 @@ def _plan_keep(
         details_parts.append("content_hash compute")
         needs_tag = True
         needs_hash = True
-        date_auto = derive_date_auto(meta)
-        if date_auto is not None:
-            formatted = format_pix_datetime(date_auto)
+        if new_auto is not None:
+            formatted = format_pix_datetime(new_auto)
             details_parts.append(f"date_auto null→{formatted}")
             pix_writes[PIX_DATE_AUTO] = formatted
-    elif meta.get_str(PIX_CONTENT_HASH) is None:
-        debug.log("  Hash check: pix:ContentHash absent — needs compute")
-        details_parts.append("content_hash compute")
-        needs_tag = True
-        needs_hash = True
     else:
-        debug.log("  Hash check: pix:ContentHash present — no recompute needed")
+        if needs_date_auto_write and new_auto is not None:
+            formatted = format_pix_datetime(new_auto)
+            stored_display = stored_raw or "null"
+            details_parts.append(f"date_auto {stored_display}→{formatted}")
+            pix_writes[PIX_DATE_AUTO] = formatted
+            needs_tag = True
+        if meta.get_str(PIX_CONTENT_HASH) is None:
+            details_parts.append("content_hash compute")
+            needs_tag = True
+            needs_hash = True
+            debug.log("  Hash check: pix:ContentHash absent — needs compute")
+        else:
+            debug.log(
+                "  Hash check: pix:ContentHash present — no recompute needed"
+            )
 
     debug.section("Decision")
     if not needs_rename and not needs_tag:
