@@ -1,0 +1,43 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from pix.scan import walk_source_files
+
+
+def test_walk_skips_pix_state_directory(tmp_path: Path) -> None:
+    """Migrate must never iterate `.pix/` even when run from inside a library root."""
+    root = tmp_path / "library"
+    root.mkdir()
+
+    # The library's own state directory.
+    pix_dir = root / ".pix"
+    (pix_dir / "runs" / "2026-05-18_18-00-00").mkdir(parents=True)
+    (pix_dir / "runs" / "2026-05-18_18-00-00" / "plan.txt").write_text("x")
+    (pix_dir / "staging").mkdir()
+    (pix_dir / "staging" / "scratch.tmp").write_text("x")
+    (pix_dir / "config.yaml").write_text("extensions: {}")
+
+    # Real source files that should be picked up.
+    (root / "photo.jpg").write_bytes(b"")
+    (root / "trip").mkdir()
+    (root / "trip" / "another.jpg").write_bytes(b"")
+
+    files = walk_source_files(root)
+
+    found = {p.relative_to(root.resolve()).as_posix() for p in files}
+    assert found == {"photo.jpg", "trip/another.jpg"}
+
+
+def test_walk_skips_nested_pix_dirs(tmp_path: Path) -> None:
+    """A `.pix/` at any depth is skipped — even if the user has stray state."""
+    root = tmp_path / "src"
+    root.mkdir()
+    (root / "good.jpg").write_bytes(b"")
+    (root / "subdir" / ".pix").mkdir(parents=True)
+    (root / "subdir" / ".pix" / "weird.txt").write_text("x")
+    (root / "subdir" / "alsogood.jpg").write_bytes(b"")
+
+    files = walk_source_files(root)
+    found = {p.relative_to(root.resolve()).as_posix() for p in files}
+    assert found == {"good.jpg", "subdir/alsogood.jpg"}

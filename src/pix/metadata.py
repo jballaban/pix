@@ -73,6 +73,8 @@ def build_cache(
             "-j",  # JSON output
             "-r",  # recursive
             "-G:0",  # group-prefixed keys (family 0: EXIF, XMP, IPTC, QuickTime, File, ...)
+            "-i",
+            ".pix",  # skip pix's own state directory at any depth
             "-charset",
             "filename=utf8",
             "-api",

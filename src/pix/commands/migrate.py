@@ -21,6 +21,7 @@ from pix.metadata import (
 )
 from pix.plan import Action, generate_plan, lookup_policy
 from pix.root import NoLibraryRoot, resolve as resolve_root
+from pix.scan import walk_source_files
 
 
 def migrate_folder(folder: Path, root_override: Path | None) -> None:
@@ -42,7 +43,7 @@ def migrate_folder(folder: Path, root_override: Path | None) -> None:
 
     config = Config.load(root / ".pix" / "config.yaml")
 
-    source_files = [p.resolve() for p in folder.rglob("*") if p.is_file()]
+    source_files = walk_source_files(folder)
 
     _validate_extensions(source_files, config)
 
