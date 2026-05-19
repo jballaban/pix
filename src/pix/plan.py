@@ -35,6 +35,7 @@ from pix.metadata import FileMetadata
 # We register `pix` as an XMP namespace in a later phase; for now this just
 # reads existing fields if they're already on the file.
 PIX_DATE_AUTO: str = "XMP:DateAuto"
+PIX_DATE_AUTO_PREVIOUS: str = "XMP:DateAutoPrevious"
 PIX_DATE_OVERRIDE: str = "XMP:DateOverride"
 PIX_ORIGINAL_PATH: str = "XMP:OriginalPath"
 PIX_CONTENT_HASH: str = "XMP:ContentHash"
@@ -568,6 +569,26 @@ def _plan_keep(
     elif new_auto is None and stored_raw:
         debug.log("  Re-derive returned nothing; keeping stored DateAuto.")
 
+    # AutoPrevious: per spec/tags.md → Auto-previous fields, if the auto
+    # value is actually changing AND a DateOverride is pinning some
+    # component, capture the prior auto value as a dirty flag for future
+    # "review drift" workflows. Spec rationale: when there's no override,
+    # the auto change is already visible (filename + canonical name shift);
+    # when there IS an override, the change is invisibly masked, which is
+    # exactly what we want to flag.
+    needs_date_auto_previous = False
+    if (
+        needs_date_auto_write
+        and stored_raw
+        and stored_auto is not None
+        and _override_has_pinning(meta.get_str(PIX_DATE_OVERRIDE))
+    ):
+        needs_date_auto_previous = True
+        debug.log(
+            f"  pix:DateOverride is pinning at least one component — "
+            f"writing pix:DateAutoPrevious = {stored_raw!r} (drift flag)."
+        )
+
     # --- Effective date (auto + optional override) for canonical filename ---
     debug.section("Effective date")
     if new_auto is None:
@@ -638,6 +659,10 @@ def _plan_keep(
             details_parts.append(f"date_auto {stored_display}→{formatted}")
             pix_writes[PIX_DATE_AUTO] = formatted
             needs_tag = True
+        if needs_date_auto_previous and stored_raw:
+            pix_writes[PIX_DATE_AUTO_PREVIOUS] = stored_raw
+            details_parts.append(f"date_auto_previous→{stored_raw}")
+            needs_tag = True
         if meta.get_str(PIX_CONTENT_HASH) is None:
             details_parts.append("content_hash compute")
             needs_tag = True
@@ -688,6 +713,20 @@ _OVERRIDE_RE = re.compile(
     r"^(?P<Y>\*|\d{4})-(?P<M>\*|\d{2})-(?P<D>\*|\d{2})-"
     r"(?P<h>\*|\d{2}):(?P<m>\*|\d{2}):(?P<s>\*|\d{2})$"
 )
+
+
+def _override_has_pinning(override: str | None) -> bool:
+    """True if `override` actually pins at least one date component.
+
+    A `DateOverride` of all `*` slots (e.g. `*-*-*-*:*:*`) is equivalent to
+    no override and should never be stored (tag-editing clears it). This
+    helper is defensive: if such a string IS on disk, treat it as
+    "no pinning" so we don't flag drift as masked.
+    """
+    if not override:
+        return False
+    # Any digit means at least one slot has a real value.
+    return any(c.isdigit() for c in override)
 
 
 def _apply_override(auto: datetime, override: str) -> datetime | None:

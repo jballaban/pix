@@ -290,6 +290,128 @@ def test_plan_drift_detection_writes_new_date_auto(tmp_path: Path) -> None:
     assert "date_auto 2020-01-01-00:00:00→2023-08-15-14:32:05" in line.details
 
 
+def test_plan_drift_with_override_writes_date_auto_previous(
+    tmp_path: Path,
+) -> None:
+    """Drift detected while override pins → DateAutoPrevious is written."""
+    src = tmp_path / "src"
+    src.mkdir()
+    # File is at 2022-... canonical because override pins year=2022.
+    f = src / "2022-08-15_143205.jpg"
+    f.write_bytes(b"")
+
+    cfg = _config(jpg="keep")
+    cache = {
+        f.resolve(): _meta(
+            str(f),
+            **{
+                PIX_DATE_AUTO: "2023-08-15-14:32:05",  # stored
+                PIX_DATE_OVERRIDE: "2022-*-*-*:*:*",  # pins year
+                PIX_ORIGINAL_PATH: "F:/old/source.jpg",
+                PIX_CONTENT_HASH: "deadbeef",
+                # New EXIF says 2024 → re-derive will produce drift.
+                "EXIF:DateTimeOriginal": "2024:08:15 14:32:05",
+            },
+        )
+    }
+
+    plan = generate_plan(
+        source=src.resolve(),
+        cache=cache,
+        config=cfg,
+        run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
+    )
+
+    assert len(plan.lines) == 1
+    line = plan.lines[0]
+    # Stored auto changes from 2023 → 2024. Override pins year=2022 so
+    # effective year stays 2022; filename doesn't change.
+    assert line.action == Action.TAG
+    assert line.target_filename is None  # no rename: effective date unchanged
+    assert line.pix_writes.get(PIX_DATE_AUTO) == "2024-08-15-14:32:05"
+    # Previous = stored DateAuto (the value about to be replaced).
+    assert (
+        line.pix_writes.get("XMP:DateAutoPrevious")
+        == "2023-08-15-14:32:05"
+    )
+    assert "date_auto_previous→2023-08-15-14:32:05" in line.details
+
+
+def test_plan_drift_without_override_does_not_write_previous(
+    tmp_path: Path,
+) -> None:
+    """Drift without an override → no Previous (change is visible to user)."""
+    src = tmp_path / "src"
+    src.mkdir()
+    f = src / "2023-08-15_143205.jpg"
+    f.write_bytes(b"")
+
+    cfg = _config(jpg="keep")
+    cache = {
+        f.resolve(): _meta(
+            str(f),
+            **{
+                PIX_DATE_AUTO: "2023-08-15-14:32:05",
+                # No DateOverride.
+                PIX_ORIGINAL_PATH: "F:/old/source.jpg",
+                PIX_CONTENT_HASH: "deadbeef",
+                "EXIF:DateTimeOriginal": "2024:08:15 14:32:05",
+            },
+        )
+    }
+
+    plan = generate_plan(
+        source=src.resolve(),
+        cache=cache,
+        config=cfg,
+        run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
+    )
+
+    assert len(plan.lines) == 1
+    line = plan.lines[0]
+    assert line.action == Action.RENAME_TAG  # new auto changes filename
+    assert "XMP:DateAutoPrevious" not in line.pix_writes
+
+
+def test_plan_all_wildcard_override_is_treated_as_no_override(
+    tmp_path: Path,
+) -> None:
+    """A `*-*-*-*:*:*` override pins nothing → no Previous on drift."""
+    src = tmp_path / "src"
+    src.mkdir()
+    f = src / "2023-08-15_143205.jpg"
+    f.write_bytes(b"")
+
+    cfg = _config(jpg="keep")
+    cache = {
+        f.resolve(): _meta(
+            str(f),
+            **{
+                PIX_DATE_AUTO: "2023-08-15-14:32:05",
+                PIX_DATE_OVERRIDE: "*-*-*-*:*:*",  # all wildcard
+                PIX_ORIGINAL_PATH: "F:/old/source.jpg",
+                PIX_CONTENT_HASH: "deadbeef",
+                "EXIF:DateTimeOriginal": "2024:08:15 14:32:05",
+            },
+        )
+    }
+
+    plan = generate_plan(
+        source=src.resolve(),
+        cache=cache,
+        config=cfg,
+        run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
+    )
+    line = plan.lines[0]
+    assert "XMP:DateAutoPrevious" not in line.pix_writes
+
+
 def test_plan_no_drift_no_action_when_stored_matches_derivation(
     tmp_path: Path,
 ) -> None:
