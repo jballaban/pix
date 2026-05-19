@@ -139,6 +139,26 @@ def _apply_rename(ln: PlanLine) -> None:
             f"was computed (no effective date?)"
         )
     target = ln.abs_path.parent / ln.target_filename
+    src_name = ln.abs_path.name
+
+    if (
+        src_name != ln.target_filename
+        and src_name.lower() == ln.target_filename.lower()
+    ):
+        # Case-only rename on a case-insensitive filesystem (NTFS, HFS+,
+        # APFS-default). A direct `os.rename` can silently no-op because
+        # the OS sees src and dst as the same file. Two-step through an
+        # intermediate name forces the case change to materialize.
+        intermediate = ln.abs_path.parent / f"{src_name}.__pixrename__"
+        if intermediate.exists():
+            raise ApplyError(
+                f"{ln.line_id}: rename intermediate {intermediate.name} "
+                f"already exists (leftover from a prior crash?)"
+            )
+        ln.abs_path.rename(intermediate)
+        intermediate.rename(target)
+        return
+
     if target.exists() and target.resolve() != ln.abs_path.resolve():
         raise ApplyError(
             f"{ln.line_id}: target {target.name} already exists"

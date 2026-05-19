@@ -117,6 +117,51 @@ def test_apply_rename_within_same_folder(tmp_path: Path) -> None:
     assert (src / "2023-08-15_143612.jpg").read_bytes() == b"img"
 
 
+def test_apply_rename_case_only_difference(tmp_path: Path) -> None:
+    """Case-only renames must work on case-insensitive filesystems (NTFS).
+
+    A direct `os.rename("FOO.JPG", "FOO.jpg")` on NTFS can silently no-op
+    because the OS sees them as the same file. The apply layer goes through
+    a temp name to force the case to change.
+    """
+    src = tmp_path / "src"
+    src.mkdir()
+    old = src / "DSC_0042.JPG"
+    old.write_bytes(b"img")
+
+    run_dir = tmp_path / "runs" / "test-run"
+    run_dir.mkdir(parents=True)
+
+    plan = _make_plan(
+        src,
+        [
+            PlanLine(
+                line_id="L001",
+                action=Action.RENAME,
+                rel_path="DSC_0042.JPG",
+                details="→DSC_0042.jpg",
+                abs_path=old.resolve(),
+                target_filename="DSC_0042.jpg",
+            )
+        ],
+    )
+    plan_path = run_dir / "plan.txt"
+    plan_path.write_text(plan.to_text(), encoding="utf-8")
+
+    apply_plan(
+        plan=plan,
+        plan_path=plan_path,
+        run_dir=run_dir,
+        kept_line_ids={"L001"},
+    )
+
+    # Reading via Path.exists() would succeed regardless of case on NTFS,
+    # so verify by listing the directory: the actual on-disk name must be
+    # the lowercase form.
+    on_disk = [p.name for p in src.iterdir()]
+    assert on_disk == ["DSC_0042.jpg"]
+
+
 def test_apply_skips_lines_not_in_kept_set(tmp_path: Path) -> None:
     src = tmp_path / "src"
     src.mkdir()
