@@ -92,6 +92,18 @@ def _is_video(path: Path) -> bool:
     return path.suffix.lower().lstrip(".") in _VIDEO_EXTENSIONS
 
 
+_last_derivation_source: str | None = None
+
+
+def last_derivation_source() -> str | None:
+    """Return the source string identifying where the most recent
+    `derive_date_auto` call got its value (e.g.
+    `"EXIF:DateTimeOriginal = '2023:08:15 14:32:05'"`). None if the
+    last call returned None or hasn't run yet.
+    """
+    return _last_derivation_source
+
+
 def derive_date_auto(meta: FileMetadata) -> datetime | None:
     """Derive `DateAuto` per the spec's ordered candidate list.
 
@@ -102,12 +114,20 @@ def derive_date_auto(meta: FileMetadata) -> datetime | None:
     3. Parent-folder pattern match (e.g. `2023-08-15-trip/`).
     4. File modify time (`File:FileModifyDate`) — least trustworthy.
 
-    Returns None when every candidate fails.
+    Returns None when every candidate fails. Side effect: stores the
+    selected source for `last_derivation_source()` to expose to callers
+    that want to record provenance (debug logs, drift checks, etc.).
     """
+    global _last_derivation_source
+    _last_derivation_source = None
+
     debug.section("DateAuto derivation")
     is_video = _is_video(meta.path)
     candidates = _VIDEO_DATE_KEYS if is_video else _PHOTO_DATE_KEYS
     debug.log(f"  Candidate set: {'video' if is_video else 'photo'}")
+
+    result: datetime | None = None
+    source_summary: str | None = None
 
     for key in candidates:
         value = meta.get_str(key)
@@ -115,51 +135,71 @@ def derive_date_auto(meta: FileMetadata) -> datetime | None:
             dt = parse_exiftool_datetime(value)
             if dt is not None:
                 debug.log(
-                    f"  {key:<32} {value!r} -> {dt.isoformat()} (matched)"
+                    f"  {key:<32} {value!r}  ->  {dt.isoformat()}  ✓ matched"
                 )
-                return dt
-            debug.log(f"  {key:<32} {value!r} -> unparseable")
+                result = dt
+                source_summary = f"{key} = {value!r}"
+                break
+            debug.log(f"  {key:<32} {value!r}  ->  unparseable")
         else:
             debug.log(f"  {key:<32} (absent)")
 
-    debug.log("  (metadata candidates exhausted)")
-
-    # Filename pattern
-    name_match = _match_first(_FILENAME_PATTERNS, meta.path.name)
-    if name_match is not None:
-        debug.log(
-            f"  Filename pattern matched: {name_match.isoformat()}"
-        )
-        return name_match
-    debug.log(f"  Filename pattern: no match ({meta.path.name!r})")
-
-    # Parent-folder pattern (date-only, time defaults to midnight)
-    folder_match = _match_folder(meta.path.parent.name)
-    if folder_match is not None:
-        debug.log(
-            f"  Folder pattern matched: {folder_match.isoformat()}"
-        )
-        return folder_match
-    debug.log(
-        f"  Folder pattern: no match ({meta.path.parent.name!r})"
-    )
-
-    # FS mtime fallback
-    mtime = meta.get_str(_MTIME_KEY)
-    if mtime:
-        dt = parse_exiftool_datetime(mtime)
-        if dt is not None:
+    if result is None:
+        debug.log("  (metadata candidates exhausted)")
+        name_match = _match_first(_FILENAME_PATTERNS, meta.path.name)
+        if name_match is not None:
             debug.log(
-                f"  File:FileModifyDate {mtime!r} -> {dt.isoformat()} "
-                f"(last-resort fallback)"
+                f"  Filename pattern matched: {name_match.isoformat()}  ✓"
             )
-            return dt
-        debug.log(f"  File:FileModifyDate {mtime!r} -> unparseable")
-    else:
-        debug.log("  File:FileModifyDate (absent)")
+            result = name_match
+            source_summary = f"filename pattern on {meta.path.name!r}"
+        else:
+            debug.log(f"  Filename pattern: no match ({meta.path.name!r})")
 
-    debug.log("  No date source matched -> DateAuto is null")
-    return None
+    if result is None:
+        folder_match = _match_folder(meta.path.parent.name)
+        if folder_match is not None:
+            debug.log(
+                f"  Folder pattern matched: {folder_match.isoformat()}  ✓"
+            )
+            result = folder_match
+            source_summary = (
+                f"parent-folder pattern on {meta.path.parent.name!r}"
+            )
+        else:
+            debug.log(
+                f"  Folder pattern: no match ({meta.path.parent.name!r})"
+            )
+
+    if result is None:
+        mtime = meta.get_str(_MTIME_KEY)
+        if mtime:
+            dt = parse_exiftool_datetime(mtime)
+            if dt is not None:
+                debug.log(
+                    f"  File:FileModifyDate {mtime!r}  ->  "
+                    f"{dt.isoformat()}  ✓ (last-resort fallback)"
+                )
+                result = dt
+                source_summary = (
+                    f"File:FileModifyDate = {mtime!r} (last-resort mtime fallback)"
+                )
+            else:
+                debug.log(f"  File:FileModifyDate {mtime!r}  ->  unparseable")
+        else:
+            debug.log("  File:FileModifyDate (absent)")
+
+    # Summary block so the chosen source is impossible to miss when
+    # scanning a debug log.
+    debug.log("")
+    if result is not None:
+        debug.log(f"  >>> DateAuto = {result.isoformat()}")
+        debug.log(f"  >>> Source:   {source_summary}")
+    else:
+        debug.log("  >>> DateAuto = (none — no date source matched)")
+
+    _last_derivation_source = source_summary
+    return result
 
 
 def _match_first(

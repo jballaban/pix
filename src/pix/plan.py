@@ -25,6 +25,7 @@ from pix.dates import (
     PIX_DATETIME_FORMAT,
     derive_date_auto,
     format_pix_datetime,
+    last_derivation_source,
     parse_exiftool_datetime,
 )
 from pix.metadata import FileMetadata
@@ -465,6 +466,7 @@ def _plan_keep(
         ) or _parse_pix_datetime(stored_raw)
 
     re_derived = derive_date_auto(meta)
+    re_derived_source = last_derivation_source()
 
     # The DateAuto value we'll have after this migrate: prefer the re-derived
     # value; fall back to stored only if re-derivation now returns nothing
@@ -473,10 +475,13 @@ def _plan_keep(
 
     debug.section("DateAuto drift check")
     debug.log(f"  Stored pix:DateAuto: {stored_raw or '(absent)'}")
-    debug.log(
-        f"  Re-derived:          "
-        f"{re_derived.isoformat() if re_derived else '(none)'}"
-    )
+    if re_derived is not None:
+        debug.log(
+            f"  Re-derived:          {re_derived.isoformat()}  "
+            f"(source: {re_derived_source})"
+        )
+    else:
+        debug.log("  Re-derived:          (none)")
 
     needs_date_auto_write = False
     if not is_first_migrate and new_auto is not None:
