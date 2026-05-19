@@ -59,6 +59,19 @@ def migrate(
             envvar="PIX_ROOT",
         ),
     ] = None,
+    debug: Annotated[
+        bool,
+        typer.Option(
+            "--debug",
+            help=(
+                "Write a detailed plan-generation audit log per file into "
+                "`<run-dir>/debug/<rel-path>.log`. Includes every date "
+                "candidate considered, effective-date derivation, "
+                "canonical-filename computation, collision resolution, "
+                "and the final decision (including no-action cases)."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Normalize files in <folder> per the library's policy (in-place, per-file)."""
-    migrate_folder(folder=folder, root_override=root)
+    migrate_folder(folder=folder, root_override=root, debug_enabled=debug)

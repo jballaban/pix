@@ -19,6 +19,7 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
+from pix import debug
 from pix.config import Config, ExtensionAction
 from pix.dates import (
     PIX_DATETIME_FORMAT,
@@ -250,6 +251,7 @@ def _resolve_collisions(
         srcs.sort(key=lambda p: (0 if p == dest else 1, p.name))
         occupied.add(dest)  # first member keeps the bare slot
         suffix_idx = 1
+        new_targets: dict[Path, str] = {}
         for src_path in srcs[1:]:
             # Skip suffix values already taken (in case prior groups
             # claimed `_001` etc. at the same canonical destination).
@@ -263,7 +265,24 @@ def _resolve_collisions(
                 suffix_idx += 1
             occupied.add(suffixed_path)
             updates[src_path] = suffixed_name
+            new_targets[src_path] = suffixed_name
             suffix_idx += 1
+
+        # Annotate every member's debug log with the collision context.
+        for src_path in srcs:
+            with debug.for_file(src_path):
+                debug.section("Collision resolution")
+                debug.log(f"  Canonical destination: {dest.name}")
+                debug.log(f"  Competing members ({len(srcs)}):")
+                for member in srcs:
+                    marker = " <-- this file" if member == src_path else ""
+                    debug.log(f"    {member.name}{marker}")
+                if src_path == srcs[0]:
+                    debug.log("  Result: keeps bare canonical name.")
+                else:
+                    debug.log(
+                        f"  Result: gets suffix → {new_targets[src_path]}"
+                    )
 
     if not updates:
         return lines
@@ -333,38 +352,53 @@ def _plan_one(
     rel = path.relative_to(source)
     rel_str = str(rel)
 
-    policy = lookup_policy(path.name, config.extensions)
-    if policy is None:
-        # Shouldn't happen — caller validates extensions before plan-gen.
-        return None
+    with debug.for_file(path):
+        policy = lookup_policy(path.name, config.extensions)
+        debug.section("Extension policy")
+        debug.log(f"  Lookup key: {path.name.lower()}")
+        debug.log(f"  Action: {policy or '(no match — unreachable)'}")
 
-    if policy == "delete":
-        return PlanLine(
-            line_id="",
-            action=Action.DELETE,
-            rel_path=rel_str,
-            details="extension policy: delete",
-            abs_path=path,
+        if policy is None:
+            debug.section("Decision")
+            debug.log("  No policy match — no action.")
+            return None
+
+        if policy == "delete":
+            debug.section("Decision")
+            debug.log("  DELETE per extension policy.")
+            return PlanLine(
+                line_id="",
+                action=Action.DELETE,
+                rel_path=rel_str,
+                details="extension policy: delete",
+                abs_path=path,
+            )
+
+        target_ext = _action_for_policy(policy)
+        original_path_value = meta.get_str(PIX_ORIGINAL_PATH)
+        is_first_migrate = original_path_value is None
+        debug.section("First-migrate detection")
+        debug.log(
+            f"  pix:OriginalPath: "
+            f"{'(absent)' if is_first_migrate else repr(original_path_value)}"
         )
+        debug.log(f"  First migrate: {'yes' if is_first_migrate else 'no'}")
 
-    target_ext = _action_for_policy(policy)
-    is_first_migrate = meta.get_str(PIX_ORIGINAL_PATH) is None
+        if target_ext is not None:
+            return _plan_convert(
+                meta=meta,
+                path=path,
+                rel_str=rel_str,
+                target_ext=target_ext,
+                is_first_migrate=is_first_migrate,
+            )
 
-    if target_ext is not None:
-        return _plan_convert(
+        return _plan_keep(
             meta=meta,
             path=path,
             rel_str=rel_str,
-            target_ext=target_ext,
             is_first_migrate=is_first_migrate,
         )
-
-    return _plan_keep(
-        meta=meta,
-        path=path,
-        rel_str=rel_str,
-        is_first_migrate=is_first_migrate,
-    )
 
 
 def _plan_convert(
@@ -389,6 +423,14 @@ def _plan_convert(
         formatted = format_pix_datetime(date_auto)
         details_parts.append(f"date_auto null→{formatted}")
         pix_writes[PIX_DATE_AUTO] = formatted
+
+    debug.section("Decision")
+    debug.log(f"  Action: CONVERT+RENAME+TAG (→ .{target_ext})")
+    debug.log(f"  Target filename: {canonical_name or '<unknown>'}")
+    debug.log(f"  pix:* writes: {pix_writes or '(none)'}")
+    debug.log(
+        f"  Content hash: compute (always written on CONVERT)"
+    )
 
     return PlanLine(
         line_id="",
@@ -416,6 +458,12 @@ def _plan_keep(
         canonical_name is not None and canonical_name != path.name
     )
 
+    debug.section("Rename check")
+    debug.log(f"  Canonical extension: .{canonical_ext}")
+    debug.log(f"  Canonical filename: {canonical_name or '<unknown>'}")
+    debug.log(f"  Current filename:   {path.name}")
+    debug.log(f"  Needs rename: {needs_rename}")
+
     details_parts: list[str] = []
     pix_writes: dict[str, str] = {}
     if needs_rename and canonical_name is not None:
@@ -423,24 +471,27 @@ def _plan_keep(
 
     needs_tag = False
     needs_hash = False
-    needs_op = False
     if is_first_migrate:
         details_parts.append("original_path init")
         details_parts.append("content_hash compute")
         needs_tag = True
         needs_hash = True
-        needs_op = True
         date_auto = derive_date_auto(meta)
         if date_auto is not None:
             formatted = format_pix_datetime(date_auto)
             details_parts.append(f"date_auto null→{formatted}")
             pix_writes[PIX_DATE_AUTO] = formatted
     elif meta.get_str(PIX_CONTENT_HASH) is None:
+        debug.log("  Hash check: pix:ContentHash absent — needs compute")
         details_parts.append("content_hash compute")
         needs_tag = True
         needs_hash = True
+    else:
+        debug.log("  Hash check: pix:ContentHash present — no recompute needed")
 
+    debug.section("Decision")
     if not needs_rename and not needs_tag:
+        debug.log("  No action — file already canonical with all expected tags.")
         return None
 
     if needs_rename and needs_tag:
@@ -450,8 +501,14 @@ def _plan_keep(
     else:
         action = Action.RENAME
 
-    # silence unused-var; `needs_op` is preserved for future readers
-    _ = needs_op
+    debug.log(f"  Action: {action.value}")
+    debug.log(
+        f"  Target filename: "
+        f"{canonical_name if needs_rename else '(no rename)'}"
+    )
+    debug.log(f"  pix:* writes: {pix_writes or '(none)'}")
+    debug.log(f"  Needs content hash: {needs_hash}")
+    debug.log(f"  Needs OriginalPath: {is_first_migrate}")
 
     return PlanLine(
         line_id="",
@@ -500,22 +557,41 @@ def _apply_override(auto: datetime, override: str) -> datetime | None:
 
 
 def effective_date(meta: FileMetadata) -> datetime | None:
+    debug.section("Effective date")
     stored_auto = meta.get_str(PIX_DATE_AUTO)
     if stored_auto is not None:
         auto = parse_exiftool_datetime(stored_auto) or _parse_pix_datetime(
             stored_auto
         )
+        debug.log(
+            f"  pix:DateAuto (stored): {stored_auto!r} -> "
+            f"{auto.isoformat() if auto else 'unparseable'}"
+        )
     else:
+        debug.log("  pix:DateAuto: (absent) — re-deriving")
         auto = derive_date_auto(meta)
 
     if auto is None:
+        debug.log("  Effective date: (none)")
         return None
 
     override = meta.get_str(PIX_DATE_OVERRIDE)
     if override is None:
+        debug.log("  pix:DateOverride: (absent)")
+        debug.log(f"  Effective date: {auto.isoformat()} (auto, no override)")
         return auto
     patched = _apply_override(auto, override)
-    return patched if patched is not None else auto
+    if patched is None:
+        debug.log(
+            f"  pix:DateOverride: {override!r} (unparseable, ignored)"
+        )
+        debug.log(f"  Effective date: {auto.isoformat()} (auto)")
+        return auto
+    debug.log(f"  pix:DateOverride: {override!r}")
+    debug.log(
+        f"  Effective date: {patched.isoformat()} (auto + override)"
+    )
+    return patched
 
 
 def _parse_pix_datetime(value: str) -> datetime | None:

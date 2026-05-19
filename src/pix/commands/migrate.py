@@ -8,11 +8,13 @@ detected and skipped with a warning; Phase 4 lands the conversion code.
 
 from __future__ import annotations
 
+import contextlib
 from datetime import datetime
 from pathlib import Path
 
 import typer
 
+from pix import debug
 from pix.apply import ApplyError, apply_plan
 from pix.cleanup import cleanup_rename_orphans
 from pix.config import Config
@@ -31,8 +33,14 @@ from pix.scan import walk_source_files
 def migrate_folder(
     folder: Path,
     root_override: Path | None,
+    debug_enabled: bool = False,
 ) -> None:
-    """End-to-end migrate: plan, edit, confirm, apply."""
+    """End-to-end migrate: plan, edit, confirm, apply.
+
+    `debug_enabled=True` activates per-file plan-generation debug logging
+    (see `pix.debug`); logs are dumped to `<run-dir>/debug/` after plan
+    generation, before the editor opens.
+    """
     try:
         root = resolve_root(override=root_override)
     except NoLibraryRoot as e:
@@ -74,21 +82,29 @@ def migrate_folder(
             )
 
     run_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    plan = generate_plan(
-        source=folder,
-        cache=cache,
-        config=config,
-        run_id=run_id,
-    )
-
     runs_dir = root / ".pix" / "runs" / run_id
     runs_dir.mkdir(parents=True)
+
+    debug_ctx = debug.enabled() if debug_enabled else contextlib.nullcontext()
+    with debug_ctx:
+        plan = generate_plan(
+            source=folder,
+            cache=cache,
+            config=config,
+            run_id=run_id,
+        )
+        if debug_enabled:
+            line_id_by_path = {ln.abs_path: ln.line_id for ln in plan.lines}
+            debug.dump_to(runs_dir, folder, line_id_by_path)
+
     plan_path = runs_dir / "plan.txt"
     plan_path.write_text(plan.to_text(), encoding="utf-8")
 
     typer.echo(f"Library root: {root}")
     typer.echo(f"Source:       {folder}")
     typer.echo(f"Plan written: {plan_path}")
+    if debug_enabled:
+        typer.echo(f"Debug logs:   {runs_dir / 'debug'}")
     typer.echo(f"Summary: {_summarize(plan.lines)}")
 
     if len(plan.lines) == 0:

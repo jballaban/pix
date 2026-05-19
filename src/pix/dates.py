@@ -14,6 +14,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+from pix import debug
 from pix.metadata import FileMetadata
 
 # Format used in pix:DateAuto, pix:DateOverride, etc. See spec/tags.md.
@@ -103,33 +104,61 @@ def derive_date_auto(meta: FileMetadata) -> datetime | None:
 
     Returns None when every candidate fails.
     """
-    candidates = (
-        _VIDEO_DATE_KEYS if _is_video(meta.path) else _PHOTO_DATE_KEYS
-    )
+    debug.section("DateAuto derivation")
+    is_video = _is_video(meta.path)
+    candidates = _VIDEO_DATE_KEYS if is_video else _PHOTO_DATE_KEYS
+    debug.log(f"  Candidate set: {'video' if is_video else 'photo'}")
+
     for key in candidates:
         value = meta.get_str(key)
         if value:
             dt = parse_exiftool_datetime(value)
             if dt is not None:
+                debug.log(
+                    f"  {key:<32} {value!r} -> {dt.isoformat()} (matched)"
+                )
                 return dt
+            debug.log(f"  {key:<32} {value!r} -> unparseable")
+        else:
+            debug.log(f"  {key:<32} (absent)")
+
+    debug.log("  (metadata candidates exhausted)")
 
     # Filename pattern
     name_match = _match_first(_FILENAME_PATTERNS, meta.path.name)
     if name_match is not None:
+        debug.log(
+            f"  Filename pattern matched: {name_match.isoformat()}"
+        )
         return name_match
+    debug.log(f"  Filename pattern: no match ({meta.path.name!r})")
 
     # Parent-folder pattern (date-only, time defaults to midnight)
     folder_match = _match_folder(meta.path.parent.name)
     if folder_match is not None:
+        debug.log(
+            f"  Folder pattern matched: {folder_match.isoformat()}"
+        )
         return folder_match
+    debug.log(
+        f"  Folder pattern: no match ({meta.path.parent.name!r})"
+    )
 
     # FS mtime fallback
     mtime = meta.get_str(_MTIME_KEY)
     if mtime:
         dt = parse_exiftool_datetime(mtime)
         if dt is not None:
+            debug.log(
+                f"  File:FileModifyDate {mtime!r} -> {dt.isoformat()} "
+                f"(last-resort fallback)"
+            )
             return dt
+        debug.log(f"  File:FileModifyDate {mtime!r} -> unparseable")
+    else:
+        debug.log("  File:FileModifyDate (absent)")
 
+    debug.log("  No date source matched -> DateAuto is null")
     return None
 
 
