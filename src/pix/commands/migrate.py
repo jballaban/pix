@@ -1,8 +1,9 @@
-"""Implementation of `pix migrate` (Phase 2: plan generation only).
+"""Implementation of `pix migrate`.
 
-The full flow (cleanup pass → run folder → metadata cache → plan → editor →
-confirm → apply) is specified in spec/migrate.md. This file implements
-through the plan-generation step; editor open and apply land in Phase 3.
+End-to-end flow per spec/migrate.md: cleanup → metadata cache → plan-gen →
+editor → confirm → apply. Phase 3 lands editor + confirm + apply for the
+non-CONVERT cases (RENAME, DELETE, TAG, RENAME+TAG). CONVERT lines are
+detected and skipped with a warning; Phase 4 lands the conversion code.
 """
 
 from __future__ import annotations
@@ -12,7 +13,9 @@ from pathlib import Path
 
 import typer
 
+from pix.apply import ApplyError, apply_plan
 from pix.config import Config
+from pix.editor import open_in_editor, parse_kept_line_ids
 from pix.metadata import (
     ExifToolFailed,
     ExifToolNotFound,
@@ -24,11 +27,15 @@ from pix.root import NoLibraryRoot, resolve as resolve_root
 from pix.scan import walk_source_files
 
 
-def migrate_folder(folder: Path, root_override: Path | None) -> None:
-    """Generate a plan for migrating `folder` against the resolved library root.
+def migrate_folder(
+    folder: Path,
+    root_override: Path | None,
+    yes: bool = False,
+) -> None:
+    """End-to-end migrate: plan, edit, confirm, apply.
 
-    Does not apply. Writes plan.txt under `<library-root>/.pix/runs/<run-id>/`
-    and prints the path + a summary.
+    `yes=True` skips both the editor and the Apply? prompt — used by tests
+    and non-interactive runs. The original generated plan is applied as-is.
     """
     try:
         root = resolve_root(override=root_override)
@@ -56,10 +63,6 @@ def migrate_folder(folder: Path, root_override: Path | None) -> None:
         typer.echo(f"Error: exiftool failed.\n{e}", err=True)
         raise typer.Exit(code=1) from e
 
-    # ExifTool only returns entries for files it recognizes (images, videos,
-    # PDFs, ...). Files marked with `delete` policy like Thumbs.db or
-    # .DS_Store are skipped. Fill in bare entries so every source file gets
-    # considered during plan generation.
     for path in source_files:
         if path not in cache:
             cache[path] = FileMetadata(
@@ -92,10 +95,45 @@ def migrate_folder(folder: Path, root_override: Path | None) -> None:
         f"Summary: {len(plan.lines)} plan line(s) — "
         f"{convert} CONVERT, {rename} RENAME, {tag} TAG, {delete} DELETE."
     )
+
+    if len(plan.lines) == 0:
+        typer.echo("Nothing to do.")
+        return
+
+    if not yes:
+        typer.echo("")
+        open_in_editor(plan_path)
+
+    edited_text = plan_path.read_text(encoding="utf-8")
+    kept_line_ids = parse_kept_line_ids(edited_text)
+
+    if not kept_line_ids:
+        typer.echo("Plan empty after edit; nothing to apply.")
+        return
+
+    if not yes:
+        confirmed = typer.confirm(
+            f"Apply {len(kept_line_ids)} action(s)?", default=False
+        )
+        if not confirmed:
+            typer.echo("Aborted; plan file left in place.")
+            return
+
+    try:
+        completed, skipped = apply_plan(
+            plan=plan,
+            plan_path=plan_path,
+            run_dir=runs_dir,
+            kept_line_ids=kept_line_ids,
+        )
+    except ApplyError as e:
+        typer.echo(f"Error: apply failed: {e}", err=True)
+        raise typer.Exit(code=1) from e
+
     typer.echo("")
     typer.echo(
-        "Phase 2 generates plans only; review with your editor. Apply lands "
-        "in Phase 3."
+        f"Applied {completed} action(s)"
+        f"{f', skipped {skipped}' if skipped else ''}."
     )
 
 
@@ -103,7 +141,7 @@ def _validate_extensions(
     source_files: list[Path], config: Config
 ) -> None:
     """Fail-fast on unknown extensions per spec/migrate.md."""
-    unknown: dict[str, Path] = {}  # ext (or filename) -> first example
+    unknown: dict[str, Path] = {}
     for path in source_files:
         if lookup_policy(path.name, config.extensions) is None:
             key = path.suffix.lower().lstrip(".") or path.name.lower()

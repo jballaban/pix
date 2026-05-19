@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from pix import exiftool_config_path
+
 
 class ExifToolNotFound(Exception):
     """Raised when the `exiftool` binary can't be located on PATH."""
@@ -70,6 +72,8 @@ def build_cache(
     proc = subprocess.run(
         [
             exe,
+            "-config",
+            str(exiftool_config_path()),
             "-j",  # JSON output
             "-r",  # recursive
             "-G:0",  # group-prefixed keys (family 0: EXIF, XMP, IPTC, QuickTime, File, ...)

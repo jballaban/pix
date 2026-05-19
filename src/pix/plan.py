@@ -4,15 +4,16 @@ Walks the metadata cache, decides the action for each file (per the
 extension policy and existing pix:* state), and emits a `Plan` that can be
 serialized to the plan.txt format from spec/migrate.md.
 
-Phase 2 scope: plan generation only. Apply, marker handling, content-hash
-computation, AutoPrevious side-effects, and editor integration land in
-later phases.
+`PlanLine` carries both a human-readable `details` string (for the plan.txt
+the user reviews) AND structured fields (`target_filename`, `pix_writes`,
+the various `needs_*` flags) that the apply loop consumes directly. The
+text is presentational; the structured data is the source of truth.
 """
 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -52,20 +53,33 @@ class Action(str, Enum):
     RENAME = "RENAME"
 
 
-# Width to which action labels are right-padded in plan.txt. Equals the
-# longest label so columns line up.
+# Width to which action labels are right-padded in plan.txt.
 _ACTION_WIDTH: int = max(len(a.value) for a in Action)
 
 
 @dataclass(frozen=True)
 class PlanLine:
-    """One line of plan.txt — all operations on a single file."""
+    """One line of plan.txt — all operations on a single file.
+
+    Plan line carries:
+    - `details`: human-readable summary for the plan.txt the user reviews.
+    - structured fields the apply loop consumes (`abs_path`,
+      `target_filename`, `pix_writes`, the `needs_*` flags).
+
+    User edits to `details` in the editor are ignored at apply time; only
+    line deletions (removing whole lines) affect what gets applied.
+    """
 
     line_id: str
     action: Action
     rel_path: str
     details: str
-    is_first_migrate: bool = False  # True if `original_path init` is in details
+    abs_path: Path
+    is_first_migrate: bool = False
+    target_filename: str | None = None
+    pix_writes: dict[str, str] = field(default_factory=lambda: {})
+    needs_content_hash: bool = False
+    needs_original_path: bool = False
 
 
 @dataclass(frozen=True)
@@ -86,7 +100,15 @@ class Plan:
     def first_migrate_count(self) -> int:
         return sum(1 for ln in self.lines if ln.is_first_migrate)
 
-    def to_text(self) -> str:
+    def to_text(
+        self, annotations: dict[str, str] | None = None
+    ) -> str:
+        """Serialize to the plan.txt format.
+
+        `annotations` maps line_id -> annotation suffix (e.g. `[14:32:01
+        Started]`). Used during apply to update plan.txt in place.
+        """
+        annot = annotations or {}
         path_width = max(
             (len(ln.rel_path) for ln in self.lines), default=10
         )
@@ -113,15 +135,18 @@ class Plan:
             ]
         )
 
-        body = [
-            (
+        body: list[str] = []
+        for ln in self.lines:
+            line = (
                 f"{ln.line_id} | "
                 f"{ln.action.value.ljust(_ACTION_WIDTH)} | "
                 f"{ln.rel_path.ljust(path_width)} | "
                 f"{ln.details}"
             )
-            for ln in self.lines
-        ]
+            suffix = annot.get(ln.line_id)
+            if suffix:
+                line = f"{line}    {suffix}"
+            body.append(line)
 
         counts = self.counts()
         summary_parts = [
@@ -154,14 +179,18 @@ def generate_plan(
         line = _plan_one(path=path, meta=meta, source=source, config=config)
         if line is None:
             continue
-        # Stamp line_id sequentially over lines we actually emit.
         lines.append(
             PlanLine(
                 line_id=f"L{len(lines) + 1:03d}",
                 action=line.action,
                 rel_path=line.rel_path,
                 details=line.details,
+                abs_path=line.abs_path,
                 is_first_migrate=line.is_first_migrate,
+                target_filename=line.target_filename,
+                pix_writes=line.pix_writes,
+                needs_content_hash=line.needs_content_hash,
+                needs_original_path=line.needs_original_path,
             )
         )
 
@@ -173,7 +202,6 @@ def generate_plan(
     )
 
 
-# Extension canonicalization, per spec/migrate.md.
 _EXT_ALIASES: dict[str, str] = {
     "jpeg": "jpg",
 }
@@ -185,10 +213,7 @@ def _canonical_extension(ext: str) -> str:
 
 
 def _action_for_policy(action: ExtensionAction) -> str | None:
-    """Map an extension-policy action to the target canonical extension.
-
-    Returns the new extension (for convert_to_*), or None for keep/delete.
-    """
+    """Map an extension-policy action to the target canonical extension."""
     if action == "convert_to_jpg":
         return "jpg"
     if action == "convert_to_mp4":
@@ -233,57 +258,103 @@ def _plan_one(
             action=Action.DELETE,
             rel_path=rel_str,
             details="extension policy: delete",
+            abs_path=path,
         )
 
     target_ext = _action_for_policy(policy)
     is_first_migrate = meta.get_str(PIX_ORIGINAL_PATH) is None
 
     if target_ext is not None:
-        # CONVERT case — always implies +RENAME, always +TAG on first migrate.
-        canonical_name = _canonical_filename(meta=meta, ext=target_ext)
-        details_parts: list[str] = [f"→{canonical_name}"]
-        if is_first_migrate:
-            details_parts.append("original_path init")
-            details_parts.append("content_hash compute")
-        date_auto = derive_date_auto(meta)
-        if date_auto is not None and is_first_migrate:
-            details_parts.append(
-                f"date_auto null→{format_pix_datetime(date_auto)}"
-            )
-        return PlanLine(
-            line_id="",
-            action=Action.CONVERT_RENAME_TAG,
-            rel_path=rel_str,
-            details="; ".join(details_parts),
+        return _plan_convert(
+            meta=meta,
+            path=path,
+            rel_str=rel_str,
+            target_ext=target_ext,
             is_first_migrate=is_first_migrate,
         )
 
-    # `keep` case: figure out what (if anything) needs to change.
+    return _plan_keep(
+        meta=meta,
+        path=path,
+        rel_str=rel_str,
+        is_first_migrate=is_first_migrate,
+    )
+
+
+def _plan_convert(
+    meta: FileMetadata,
+    path: Path,
+    rel_str: str,
+    target_ext: str,
+    is_first_migrate: bool,
+) -> PlanLine:
+    canonical_name = _canonical_filename(meta=meta, ext=target_ext)
+    details_parts: list[str] = [
+        f"→{canonical_name}" if canonical_name else "→<unknown-date>"
+    ]
+    pix_writes: dict[str, str] = {}
+
+    if is_first_migrate:
+        details_parts.append("original_path init")
+        details_parts.append("content_hash compute")
+
+    date_auto = derive_date_auto(meta)
+    if date_auto is not None and is_first_migrate:
+        formatted = format_pix_datetime(date_auto)
+        details_parts.append(f"date_auto null→{formatted}")
+        pix_writes[PIX_DATE_AUTO] = formatted
+
+    return PlanLine(
+        line_id="",
+        action=Action.CONVERT_RENAME_TAG,
+        rel_path=rel_str,
+        details="; ".join(details_parts),
+        abs_path=path,
+        is_first_migrate=is_first_migrate,
+        target_filename=canonical_name,
+        pix_writes=pix_writes,
+        needs_content_hash=True,
+        needs_original_path=is_first_migrate,
+    )
+
+
+def _plan_keep(
+    meta: FileMetadata,
+    path: Path,
+    rel_str: str,
+    is_first_migrate: bool,
+) -> PlanLine | None:
     canonical_ext = _canonical_extension(path.suffix)
     canonical_name = _canonical_filename(meta=meta, ext=canonical_ext)
-    needs_rename = canonical_name is not None and canonical_name != path.name
+    needs_rename = (
+        canonical_name is not None and canonical_name != path.name
+    )
 
     details_parts: list[str] = []
+    pix_writes: dict[str, str] = {}
     if needs_rename and canonical_name is not None:
         details_parts.append(f"→{canonical_name}")
 
     needs_tag = False
+    needs_hash = False
+    needs_op = False
     if is_first_migrate:
         details_parts.append("original_path init")
         details_parts.append("content_hash compute")
         needs_tag = True
+        needs_hash = True
+        needs_op = True
         date_auto = derive_date_auto(meta)
         if date_auto is not None:
-            details_parts.append(
-                f"date_auto null→{format_pix_datetime(date_auto)}"
-            )
+            formatted = format_pix_datetime(date_auto)
+            details_parts.append(f"date_auto null→{formatted}")
+            pix_writes[PIX_DATE_AUTO] = formatted
     elif meta.get_str(PIX_CONTENT_HASH) is None:
-        # Previously-migrated file predating the hash feature.
         details_parts.append("content_hash compute")
         needs_tag = True
+        needs_hash = True
 
     if not needs_rename and not needs_tag:
-        # File is already canonical; no plan line.
         return None
 
     if needs_rename and needs_tag:
@@ -293,31 +364,33 @@ def _plan_one(
     else:
         action = Action.RENAME
 
+    # silence unused-var; `needs_op` is preserved for future readers
+    _ = needs_op
+
     return PlanLine(
         line_id="",
         action=action,
         rel_path=rel_str,
         details="; ".join(details_parts),
+        abs_path=path,
         is_first_migrate=is_first_migrate,
+        target_filename=canonical_name if needs_rename else None,
+        pix_writes=pix_writes,
+        needs_content_hash=needs_hash,
+        needs_original_path=is_first_migrate,
     )
 
 
-# --- canonical filename ---
+# --- canonical filename + override math ---
 
-# Override slot patterns: YYYY-MM-DD-HH:MM:SS with `*` allowed in any field.
 _OVERRIDE_RE = re.compile(
     r"^(?P<Y>\*|\d{4})-(?P<M>\*|\d{2})-(?P<D>\*|\d{2})-"
     r"(?P<h>\*|\d{2}):(?P<m>\*|\d{2}):(?P<s>\*|\d{2})$"
 )
 
 
-def _apply_override(
-    auto: datetime, override: str
-) -> datetime | None:
-    """Patch the `auto` datetime with non-`*` slots from `override`.
-
-    Returns None if the override string doesn't parse.
-    """
+def _apply_override(auto: datetime, override: str) -> datetime | None:
+    """Patch the `auto` datetime with non-`*` slots from `override`."""
     m = _OVERRIDE_RE.match(override)
     if m is None:
         return None
@@ -341,12 +414,6 @@ def _apply_override(
 
 
 def effective_date(meta: FileMetadata) -> datetime | None:
-    """Compute the effective `date` for a file (auto patched by override).
-
-    Reads `pix:DateAuto` and `pix:DateOverride` from the file's metadata if
-    present; falls back to re-deriving `DateAuto` from EXIF/XMP/filename/etc.
-    if not stored.
-    """
     stored_auto = meta.get_str(PIX_DATE_AUTO)
     if stored_auto is not None:
         auto = parse_exiftool_datetime(stored_auto) or _parse_pix_datetime(
@@ -373,12 +440,7 @@ def _parse_pix_datetime(value: str) -> datetime | None:
 
 
 def _canonical_filename(meta: FileMetadata, ext: str) -> str | None:
-    """Compute the canonical filename for a file given its target extension.
-
-    Returns None if no effective date can be derived (file lands in
-    null-date territory; spec says it goes into `null/` for date-based
-    templates, but there's no canonical name we can compute).
-    """
+    """Compute the canonical filename for a file given its target extension."""
     effective = effective_date(meta)
     if effective is None:
         return None
