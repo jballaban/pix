@@ -149,14 +149,37 @@ def _apply_rename(ln: PlanLine) -> None:
         # APFS-default). A direct `os.rename` can silently no-op because
         # the OS sees src and dst as the same file. Two-step through an
         # intermediate name forces the case change to materialize.
+        #
+        # Failure semantics:
+        # - Each os.rename is itself atomic, so the file bytes are never
+        #   lost — at any point in time the file exists at exactly one of
+        #   {src, intermediate, target}.
+        # - If step B raises in-process, we attempt a best-effort rollback
+        #   of step A. If rollback also fails, the file is left at the
+        #   intermediate name and we error out clearly.
+        # - On hard crash (process killed) between steps A and B, the file
+        #   sits at the intermediate name. The next `pix migrate` run
+        #   recovers it via `pix.cleanup.cleanup_rename_orphans`.
         intermediate = ln.abs_path.parent / f"{src_name}.__pixrename__"
         if intermediate.exists():
             raise ApplyError(
                 f"{ln.line_id}: rename intermediate {intermediate.name} "
-                f"already exists (leftover from a prior crash?)"
+                f"already exists (leftover from a prior crash; "
+                f"re-run migrate to recover)"
             )
-        ln.abs_path.rename(intermediate)
-        intermediate.rename(target)
+        ln.abs_path.rename(intermediate)  # step A
+        try:
+            intermediate.rename(target)  # step B
+        except Exception as e:
+            try:
+                intermediate.rename(ln.abs_path)
+            except Exception as rollback_err:
+                raise ApplyError(
+                    f"{ln.line_id}: rename failed and rollback failed; "
+                    f"file is at {intermediate.name} "
+                    f"(original error: {e}; rollback error: {rollback_err})"
+                ) from e
+            raise
         return
 
     if target.exists() and target.resolve() != ln.abs_path.resolve():

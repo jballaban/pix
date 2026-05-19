@@ -14,6 +14,7 @@ from pathlib import Path
 import typer
 
 from pix.apply import ApplyError, apply_plan
+from pix.cleanup import cleanup_rename_orphans
 from pix.config import Config
 from pix.editor import open_in_editor, parse_kept_line_ids
 from pix.metadata import (
@@ -49,6 +50,14 @@ def migrate_folder(
         raise typer.Exit(code=1)
 
     config = Config.load(root / ".pix" / "config.yaml")
+
+    # Recover any intermediates from a prior crashed case-only rename
+    # before walking the source.
+    reverted = cleanup_rename_orphans(folder)
+    if reverted:
+        typer.echo(
+            f"Recovered {len(reverted)} rename intermediate(s) from a prior run."
+        )
 
     source_files = walk_source_files(folder)
 
