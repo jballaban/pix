@@ -9,6 +9,7 @@ detected and skipped with a warning; Phase 4 lands the conversion code.
 from __future__ import annotations
 
 import contextlib
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -58,6 +59,10 @@ def migrate_folder(
 
     config = Config.load(root / ".pix" / "config.yaml")
 
+    typer.echo(f"Library root: {root}")
+    typer.echo(f"Source:       {folder}")
+    typer.echo("")
+
     # Recover any orphans from prior crashed runs before walking the
     # source. Order matters: rename intermediates first (they're simple
     # path-only ops); then CONVERT markers (which may need ExifTool reads).
@@ -74,10 +79,21 @@ def migrate_folder(
     for note in marker_notes:
         typer.echo(f"  {note}")
 
+    t0 = time.monotonic()
+    typer.echo("Walking source folder...")
     source_files = walk_source_files(folder)
+    typer.echo(
+        f"  Found {len(source_files)} files in "
+        f"{time.monotonic() - t0:.1f}s."
+    )
 
     _validate_extensions(source_files, config)
 
+    t0 = time.monotonic()
+    typer.echo(
+        f"Reading metadata from {len(source_files)} files "
+        f"(one ExifTool call; can take a while on large folders)..."
+    )
     try:
         cache = build_cache(folder)
     except ExifToolNotFound as e:
@@ -86,6 +102,9 @@ def migrate_folder(
     except ExifToolFailed as e:
         typer.echo(f"Error: exiftool failed.\n{e}", err=True)
         raise typer.Exit(code=1) from e
+    typer.echo(
+        f"  Read {len(cache)} files in {time.monotonic() - t0:.1f}s."
+    )
 
     for path in source_files:
         if path not in cache:
@@ -98,6 +117,8 @@ def migrate_folder(
     runs_dir.mkdir(parents=True)
     staging_dir = root / ".pix" / "staging"
 
+    t0 = time.monotonic()
+    typer.echo("Generating plan...")
     debug_ctx = debug.enabled() if debug_enabled else contextlib.nullcontext()
     with debug_ctx:
         plan = generate_plan(
@@ -111,12 +132,11 @@ def migrate_folder(
         if debug_enabled:
             line_id_by_path = {ln.abs_path: ln.line_id for ln in plan.lines}
             debug.dump_to(runs_dir, folder, line_id_by_path)
+    typer.echo(f"  Plan generated in {time.monotonic() - t0:.1f}s.")
 
     plan_path = runs_dir / "plan.txt"
     plan_path.write_text(plan.to_text(), encoding="utf-8")
 
-    typer.echo(f"Library root: {root}")
-    typer.echo(f"Source:       {folder}")
     typer.echo(f"Plan written: {plan_path}")
     if debug_enabled:
         typer.echo(f"Debug logs:   {runs_dir / 'debug'}")

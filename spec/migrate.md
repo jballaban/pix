@@ -20,7 +20,10 @@ Migrate honors the spec-wide metadata-preservation invariants: **CONVERT carries
 
 `plan.txt` is **immutable once written.** Generation populates it; the editor pass may shrink it (line deletions); apply reads it but never writes back to it. Progress is streamed to a separate `runs\<run-id>\apply.log` opened in append mode — one line per state transition (`Started` / `Completed` / `Failed`). A crash leaves an `apply.log` truncated to whatever was flushed; the missing tail is the work that didn't finish. Both files are **for reference only** — the next `migrate` run replans from current filesystem state.
 
-During the long phases (plan-gen and apply), the CLI also shows a live one-line progress bar — `NN% - L042 ACTION path (Xs)` — rewritten in place via `\r` once per second so the elapsed-time counter ticks during a long single action. On clean exit the line wraps to `100%`. Auto-disabled when stdout isn't a TTY (tests, redirects).
+Status output during a migrate run is layered:
+
+1. **Phase headers** announce each long-running step (source walk, metadata bulk read, plan-gen, apply) with an elapsed time on completion. The metadata bulk read in particular is one silent ExifTool subprocess that can take minutes on TB-scale folders; the header tells the user it's running and roughly how long it took.
+2. **Per-item live progress** during plan-gen and apply: `NN% - L042 ACTION path (Xs)`, rewritten in place via `\r` once per second so the elapsed counter ticks during a long single action. The `(Xs)` suffix is omitted while the per-action elapsed is below 1s (most files finish faster than that; `(0s)` everywhere would just be noise). On clean exit the line wraps to `100%`. Auto-disabled when stdout isn't a TTY (tests, redirects).
 
 No folder lock — single-user, single-active-run assumption.
 

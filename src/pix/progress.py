@@ -116,9 +116,11 @@ class LiveProgress:
                 else 100
             )
             elapsed = int(time.monotonic() - self._action_start)
-            line = (
-                f"{pct:02d}% - {self._label} {self._path} ({elapsed}s)"
-            )
+            # Most per-file actions finish in well under a second; only
+            # surface the elapsed counter once it's worth showing. The
+            # 1s thread tick keeps it updated for long-running actions.
+            suffix = f" ({elapsed}s)" if elapsed >= 1 else ""
+            line = f"{pct:02d}% - {self._label} {self._path}{suffix}"
             # Clip to terminal width minus one (avoid wrapping into a
             # second row — `\r` only resets the cursor on the current
             # row, so a wrap leaves the upper row stranded).
