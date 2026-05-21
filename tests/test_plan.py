@@ -9,6 +9,8 @@ from pix.plan import (
     PIX_CONTENT_HASH,
     PIX_DATE_AUTO,
     PIX_DATE_OVERRIDE,
+    PIX_EVENT_AUTO,
+    PIX_EVENT_OVERRIDE,
     PIX_ORIGINAL_PATH,
     Action,
     effective_date,
@@ -166,7 +168,9 @@ def test_plan_already_canonical_keeps_file_with_no_line(tmp_path: Path) -> None:
             str(f),
             **{
                 PIX_DATE_AUTO: "2023-08-15-14:32:05",
-                PIX_ORIGINAL_PATH: "F:/old/source.jpg",
+                # Date-only parent → no EventAuto derivation, so the
+                # test stays focused on the no-action case.
+                PIX_ORIGINAL_PATH: "F:/2023-08/source.jpg",
                 PIX_CONTENT_HASH: "deadbeef",
             },
         )
@@ -195,7 +199,9 @@ def test_plan_pure_rename_for_non_canonical_name(tmp_path: Path) -> None:
             str(f),
             **{
                 PIX_DATE_AUTO: "2023-08-15-14:36:12",
-                PIX_ORIGINAL_PATH: "F:/old/source.jpg",
+                # Date-only parent → no EventAuto derivation, so the
+                # test stays focused on the pure-rename case.
+                PIX_ORIGINAL_PATH: "F:/2023-08/source.jpg",
                 PIX_CONTENT_HASH: "deadbeef",
             },
         )
@@ -265,7 +271,7 @@ def test_plan_drift_detection_writes_new_date_auto(tmp_path: Path) -> None:
             **{
                 # Stored DateAuto is stale (2020); EXIF says 2023 — drift!
                 PIX_DATE_AUTO: "2020-01-01-00:00:00",
-                PIX_ORIGINAL_PATH: "F:/old/source.jpg",
+                PIX_ORIGINAL_PATH: "F:/2023-08/source.jpg",
                 PIX_CONTENT_HASH: "deadbeef",
                 "EXIF:DateTimeOriginal": "2023:08:15 14:32:05",
             },
@@ -307,7 +313,7 @@ def test_plan_drift_with_override_writes_date_auto_previous(
             **{
                 PIX_DATE_AUTO: "2023-08-15-14:32:05",  # stored
                 PIX_DATE_OVERRIDE: "2022-*-*-*:*:*",  # pins year
-                PIX_ORIGINAL_PATH: "F:/old/source.jpg",
+                PIX_ORIGINAL_PATH: "F:/2023-08/source.jpg",
                 PIX_CONTENT_HASH: "deadbeef",
                 # New EXIF says 2024 → re-derive will produce drift.
                 "EXIF:DateTimeOriginal": "2024:08:15 14:32:05",
@@ -355,7 +361,7 @@ def test_plan_drift_without_override_does_not_write_previous(
             **{
                 PIX_DATE_AUTO: "2023-08-15-14:32:05",
                 # No DateOverride.
-                PIX_ORIGINAL_PATH: "F:/old/source.jpg",
+                PIX_ORIGINAL_PATH: "F:/2023-08/source.jpg",
                 PIX_CONTENT_HASH: "deadbeef",
                 "EXIF:DateTimeOriginal": "2024:08:15 14:32:05",
             },
@@ -393,7 +399,7 @@ def test_plan_all_wildcard_override_is_treated_as_no_override(
             **{
                 PIX_DATE_AUTO: "2023-08-15-14:32:05",
                 PIX_DATE_OVERRIDE: "*-*-*-*:*:*",  # all wildcard
-                PIX_ORIGINAL_PATH: "F:/old/source.jpg",
+                PIX_ORIGINAL_PATH: "F:/2023-08/source.jpg",
                 PIX_CONTENT_HASH: "deadbeef",
                 "EXIF:DateTimeOriginal": "2024:08:15 14:32:05",
             },
@@ -427,7 +433,7 @@ def test_plan_no_drift_no_action_when_stored_matches_derivation(
             str(f),
             **{
                 PIX_DATE_AUTO: "2023-08-15-14:32:05",
-                PIX_ORIGINAL_PATH: "F:/old/source.jpg",
+                PIX_ORIGINAL_PATH: "F:/2023-08/source.jpg",
                 PIX_CONTENT_HASH: "deadbeef",
                 # Filename pattern would derive the same value — no drift.
             },
@@ -459,7 +465,7 @@ def test_plan_tag_only_for_missing_hash_on_already_migrated(
             str(f),
             **{
                 PIX_DATE_AUTO: "2021-12-25-09:00:15",
-                PIX_ORIGINAL_PATH: "F:/old/source.jpg",
+                PIX_ORIGINAL_PATH: "F:/2023-08/source.jpg",
                 # PIX_CONTENT_HASH intentionally missing.
             },
         )
@@ -650,3 +656,180 @@ def test_plan_to_text_includes_header_and_summary(tmp_path: Path) -> None:
     assert "L001 | CONVERT+RENAME+TAG" in text
     assert "# Summary:" in text
     assert "1 CONVERT" in text
+
+
+# --- EventAuto derivation in plan-gen ---
+
+
+def test_plan_first_migrate_derives_event_from_parent_folder(
+    tmp_path: Path,
+) -> None:
+    """First migrate: parent folder `2023-08-Hawaii` → EventAuto='Hawaii'."""
+    src = tmp_path / "2023-08-Hawaii"
+    src.mkdir()
+    f = src / "IMG_001.jpg"
+    f.write_bytes(b"")
+
+    cfg = _config(jpg="keep")
+    cache = {
+        f.resolve(): _meta(
+            str(f), **{"EXIF:DateTimeOriginal": "2023:08:15 14:32:05"}
+        )
+    }
+
+    plan = generate_plan(
+        source=src.resolve(),
+        cache=cache,
+        config=cfg,
+        run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
+    )
+
+    assert len(plan.lines) == 1
+    line = plan.lines[0]
+    assert line.pix_writes[PIX_EVENT_AUTO] == "Hawaii"
+    assert "event_auto null→Hawaii" in line.details
+
+
+def test_plan_first_migrate_skips_event_when_folder_is_date_only(
+    tmp_path: Path,
+) -> None:
+    """Date-only parent (`2023-08`) → no EventAuto written."""
+    src = tmp_path / "2023-08"
+    src.mkdir()
+    f = src / "IMG_001.jpg"
+    f.write_bytes(b"")
+
+    cfg = _config(jpg="keep")
+    cache = {
+        f.resolve(): _meta(
+            str(f), **{"EXIF:DateTimeOriginal": "2023:08:15 14:32:05"}
+        )
+    }
+
+    plan = generate_plan(
+        source=src.resolve(),
+        cache=cache,
+        config=cfg,
+        run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
+    )
+
+    assert len(plan.lines) == 1
+    line = plan.lines[0]
+    assert PIX_EVENT_AUTO not in line.pix_writes
+    assert "event_auto" not in line.details
+
+
+def test_plan_re_migrate_writes_event_drift(tmp_path: Path) -> None:
+    """File moved to a new event folder updates pix:EventAuto on re-migrate."""
+    src = tmp_path / "src"
+    src.mkdir()
+    f = src / "2023-08-15_143205.jpg"
+    f.write_bytes(b"")
+
+    cfg = _config(jpg="keep")
+    cache = {
+        f.resolve(): _meta(
+            str(f),
+            **{
+                PIX_DATE_AUTO: "2023-08-15-14:32:05",
+                # File originally lived under a `Wedding` folder; now
+                # OriginalPath points at a `Birthday` folder (user moved it).
+                PIX_ORIGINAL_PATH: "F:/source/2023-08-Birthday/img.jpg",
+                PIX_EVENT_AUTO: "Wedding",
+                PIX_CONTENT_HASH: "deadbeef",
+            },
+        )
+    }
+
+    plan = generate_plan(
+        source=src.resolve(),
+        cache=cache,
+        config=cfg,
+        run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
+    )
+
+    assert len(plan.lines) == 1
+    line = plan.lines[0]
+    assert line.action == Action.TAG
+    assert line.pix_writes[PIX_EVENT_AUTO] == "Birthday"
+    assert "event_auto Wedding→Birthday" in line.details
+
+
+def test_plan_re_migrate_writes_event_previous_when_override_set(
+    tmp_path: Path,
+) -> None:
+    """Drift while EventOverride is active → writes pix:EventAutoPrevious."""
+    src = tmp_path / "src"
+    src.mkdir()
+    f = src / "2023-08-15_143205.jpg"
+    f.write_bytes(b"")
+
+    cfg = _config(jpg="keep")
+    cache = {
+        f.resolve(): _meta(
+            str(f),
+            **{
+                PIX_DATE_AUTO: "2023-08-15-14:32:05",
+                PIX_ORIGINAL_PATH: "F:/source/2023-08-Birthday/img.jpg",
+                PIX_EVENT_AUTO: "Wedding",
+                PIX_EVENT_OVERRIDE: "Reception",
+                PIX_CONTENT_HASH: "deadbeef",
+            },
+        )
+    }
+
+    plan = generate_plan(
+        source=src.resolve(),
+        cache=cache,
+        config=cfg,
+        run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
+    )
+
+    assert len(plan.lines) == 1
+    line = plan.lines[0]
+    from pix.plan import PIX_EVENT_AUTO_PREVIOUS
+
+    assert line.pix_writes[PIX_EVENT_AUTO] == "Birthday"
+    assert line.pix_writes[PIX_EVENT_AUTO_PREVIOUS] == "Wedding"
+
+
+def test_plan_re_migrate_no_action_when_event_matches(
+    tmp_path: Path,
+) -> None:
+    """Stored EventAuto matches re-derived → no plan line for event alone."""
+    src = tmp_path / "src"
+    src.mkdir()
+    f = src / "2023-08-15_143205.jpg"
+    f.write_bytes(b"")
+
+    cfg = _config(jpg="keep")
+    cache = {
+        f.resolve(): _meta(
+            str(f),
+            **{
+                PIX_DATE_AUTO: "2023-08-15-14:32:05",
+                PIX_ORIGINAL_PATH: "F:/source/2023-08-Hawaii/img.jpg",
+                PIX_EVENT_AUTO: "Hawaii",
+                PIX_CONTENT_HASH: "deadbeef",
+            },
+        )
+    }
+
+    plan = generate_plan(
+        source=src.resolve(),
+        cache=cache,
+        config=cfg,
+        run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
+    )
+
+    assert plan.lines == []

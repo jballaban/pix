@@ -89,7 +89,36 @@ The field's presence is the dirty flag. Migrate itself doesn't surface dirty fil
 
 The same candidate list is re-consulted on every migrate, so improving the heuristics (recognizing more filename patterns, smarter folder-name parsing, etc.) produces drift in stored `DateAuto` values on the next run — which is exactly what `*AutoPrevious` is designed to flag when an override is in play (see [Auto-previous fields](#auto-previous-fields-dirty-flagging)).
 
-`EventAuto` derivation is **deferred** — likely sourced from parent-folder names or user-set folder labels in early versions. Sketched in [organize.md](organize.md) and not yet specified.
+### `EventAuto` derivation
+
+`pix:EventAuto` is set by migrate from the **immediate parent folder name** of `pix:OriginalPath` (or, when OriginalPath isn't set yet — first migrate — the file's current parent folder).
+
+The folder name is processed as:
+
+1. Strip a leading run of digits and common separators (`-`, `_`, `.`, space). Regex: `^[\d\-_. ]+`.
+2. Trim trailing whitespace.
+3. If the result is empty OR contains no alphabetic character, `EventAuto` stays absent.
+4. Otherwise `EventAuto` = the cleaned string. Case and internal separators are preserved.
+
+| Parent folder | EventAuto |
+|---|---|
+| `2023-01-Party` | `Party` |
+| `2023_01_Party` | `Party` |
+| `2023 01 Party` | `Party` |
+| `20230101_Party` | `Party` |
+| `2023.08.15-Birthday` | `Birthday` |
+| `2023-08-Hawaii Trip` | `Hawaii Trip` |
+| `Hawaii Trip` (no date prefix) | `Hawaii Trip` |
+| `misc` | `misc` |
+| `Birthday-Party` (no leading date) | `Birthday-Party` |
+| `Party-2023` (date at end is preserved) | `Party-2023` |
+| `2023-03` (date-only) | (none) |
+| `2023` | (none) |
+| `2023-08-15` | (none) |
+
+Like `DateAuto`, `EventAuto` is re-consulted on every migrate. Improving the heuristics, or moving a file to a new folder, updates the stored value. When `EventOverride` is set and the re-derived `EventAuto` differs from stored, `pix:EventAutoPrevious` is written as the dirty flag (see [Auto-previous fields](#auto-previous-fields-dirty-flagging)).
+
+If re-derivation now returns nothing (e.g., the file was moved into a date-only folder), the stored `EventAuto` is left alone — same conservative behavior as `DateAuto`. Don't lose a previously-stored value just because the heuristics regressed.
 
 ### Structured metadata: face regions
 

@@ -28,6 +28,7 @@ from pix.dates import (
     last_derivation_source,
     parse_exiftool_datetime,
 )
+from pix.events import derive_event_auto
 from pix.metadata import FileMetadata
 from pix.progress import LiveProgress
 
@@ -41,6 +42,7 @@ PIX_DATE_OVERRIDE: str = "XMP:DateOverride"
 PIX_ORIGINAL_PATH: str = "XMP:OriginalPath"
 PIX_CONTENT_HASH: str = "XMP:ContentHash"
 PIX_EVENT_AUTO: str = "XMP:EventAuto"
+PIX_EVENT_AUTO_PREVIOUS: str = "XMP:EventAutoPrevious"
 PIX_EVENT_OVERRIDE: str = "XMP:EventOverride"
 
 
@@ -508,6 +510,12 @@ def _plan_convert(
         details_parts.append(f"date_auto null→{formatted}")
         pix_writes[PIX_DATE_AUTO] = formatted
 
+    if is_first_migrate:
+        event_auto = derive_event_auto(meta)
+        if event_auto is not None:
+            details_parts.append(f"event_auto null→{event_auto}")
+            pix_writes[PIX_EVENT_AUTO] = event_auto
+
     debug.section("Decision")
     debug.log(f"  Action: CONVERT+RENAME+TAG (→ .{target_ext})")
     debug.log(f"  Target filename: {canonical_name or '<unknown>'}")
@@ -603,6 +611,31 @@ def _plan_keep(
             f"writing pix:DateAutoPrevious = {stored_raw!r} (drift flag)."
         )
 
+    # --- EventAuto drift check ---
+    # Same pattern as DateAuto: re-derive on every migrate; write when
+    # stored differs from re-derived (or stored is absent and we have a
+    # value); flag drift via EventAutoPrevious when EventOverride is set.
+    stored_event = meta.get_str(PIX_EVENT_AUTO)
+    re_derived_event = derive_event_auto(meta)
+    new_event = (
+        re_derived_event if re_derived_event is not None else stored_event
+    )
+
+    needs_event_auto_write = False
+    if not is_first_migrate and new_event is not None:
+        if stored_event is None:
+            needs_event_auto_write = True
+        elif stored_event != new_event:
+            needs_event_auto_write = True
+
+    needs_event_auto_previous = False
+    if (
+        needs_event_auto_write
+        and stored_event
+        and meta.get_str(PIX_EVENT_OVERRIDE)
+    ):
+        needs_event_auto_previous = True
+
     # --- Effective date (auto + optional override) for canonical filename ---
     debug.section("Effective date")
     if new_auto is None:
@@ -666,6 +699,9 @@ def _plan_keep(
             formatted = format_pix_datetime(new_auto)
             details_parts.append(f"date_auto null→{formatted}")
             pix_writes[PIX_DATE_AUTO] = formatted
+        if re_derived_event is not None:
+            details_parts.append(f"event_auto null→{re_derived_event}")
+            pix_writes[PIX_EVENT_AUTO] = re_derived_event
     else:
         if needs_date_auto_write and new_auto is not None:
             formatted = format_pix_datetime(new_auto)
@@ -676,6 +712,15 @@ def _plan_keep(
         if needs_date_auto_previous and stored_raw:
             pix_writes[PIX_DATE_AUTO_PREVIOUS] = stored_raw
             details_parts.append(f"date_auto_previous→{stored_raw}")
+            needs_tag = True
+        if needs_event_auto_write and new_event is not None:
+            stored_display = stored_event or "null"
+            details_parts.append(f"event_auto {stored_display}→{new_event}")
+            pix_writes[PIX_EVENT_AUTO] = new_event
+            needs_tag = True
+        if needs_event_auto_previous and stored_event:
+            pix_writes[PIX_EVENT_AUTO_PREVIOUS] = stored_event
+            details_parts.append(f"event_auto_previous→{stored_event}")
             needs_tag = True
         if meta.get_str(PIX_CONTENT_HASH) is None:
             details_parts.append("content_hash compute")
