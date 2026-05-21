@@ -206,11 +206,11 @@ def generate_plan(
         plan_log_path.open("a", encoding="utf-8") as plan_log,
         LiveProgress(total=len(paths)) as progress,
     ):
-        # One label/timer for the whole plan-gen phase; the per-file
-        # detail goes to plan.log, not the console (plan-gen iterates
-        # in sub-ms per file and a flickering path is just noise).
-        progress.begin("planning")
         for path in paths:
+            # Console gets the % style line with the per-file path
+            # (rewritten in place via \r); the verbose per-file
+            # decision goes to plan.log so the console stays terse.
+            progress.begin("planning", str(path))
             meta = cache[path]
             line = _plan_one(
                 path=path, meta=meta, source=source, config=config
