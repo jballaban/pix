@@ -171,7 +171,7 @@ runs/<run-id>/
   apply.log         # per-MOVE Started/Completed transitions
 ```
 
-No `data/` (nothing destroyed; no captures). No `debug/` unless we add `--debug` for organize too (deferred — migrate's debug exists because its plan-gen reasoning is non-trivial; organize's per-file decision is trivially "render template, compare path").
+No `data/` (nothing destroyed; no captures). No `debug.log` unless we extend the streaming debug log to organize (deferred — organize's per-file decision is trivially "render template, compare path", so the reasoning trace is far less interesting than migrate's).
 
 ## Rollback (deferred)
 

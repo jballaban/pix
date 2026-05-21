@@ -36,6 +36,7 @@ Status output during a migrate run keeps the console quiet — phase headers, fi
 
 3. **Log files** in the run folder capture everything the console doesn't show:
    - `plan.log` — every phase header (`Library root: ...`, `Walking source folder...`, `Found N files in Xs`, `Reading metadata from N files...`, `Read N files in Xs`, `Generating plan...`, `Plan generated in Xs`) plus one line per file considered (`<ISO timestamp> <abs-path> -> <L###> <ACTION>` or `... -> (skip)`). Captures the full enumeration, including skips that don't appear in `plan.txt`.
+   - `debug.log` — verbose per-file reasoning for every file plan-gen considered: extension policy lookup, date-candidate trace, effective-date computation, first-migrate detection, collision resolution, final decision. Streamed during plan-gen (constant memory regardless of library size). Sections separated by `=== <path> ===` headers and labeled with `--- Section name ---` sub-headings. Always written, no flag.
    - `apply.log` — one line per Started/Completed/Failed transition during apply.
 
 Errors and aborts still print directly to stderr — those interrupt the user and need to be visible.
@@ -268,7 +269,7 @@ Every destructive operation in a plan line writes the data it replaces into the 
 | `TAG` only (or `TAG` + `RENAME`) | Export current XMP via ExifTool → `runs\<run-id>\data\L<NNN>_<original-filename>.xmp`. The file itself stays in place; only its metadata changes. |
 | `RENAME` only | No capture — reversible from the plan line alone. |
 
-`L<NNN>` is the plan line ID; `<original-filename>` is the file's name as it was on disk. Captures live in a `data\` subfolder of the run dir (sibling to `debug\` from `--debug` runs), separating preserved file data from the run's logs (`plan.txt`, `plan.log`, `apply.log`).
+`L<NNN>` is the plan line ID; `<original-filename>` is the file's name as it was on disk. Captures live in a `data\` subfolder of the run dir, separating preserved file data from the run's logs (`plan.txt`, `plan.log`, `apply.log`, `debug.log`).
 
 **Conservation law**: a `migrate` run never destroys data without preserving what it destroyed. State is reconstructible (modulo rollback code being written) from current state + run folders walked in reverse order. The data sufficient for `pix rollback <run-id>` is guaranteed present even though the rollback command itself is deferred.
 

@@ -8,7 +8,6 @@ detected and skipped with a warning; Phase 4 lands the conversion code.
 
 from __future__ import annotations
 
-import contextlib
 import time
 from datetime import datetime
 from pathlib import Path
@@ -39,13 +38,11 @@ from pix.schema import SCHEMA_VERSION, SchemaTooNew
 def migrate_folder(
     folder: Path,
     root_override: Path | None,
-    debug_enabled: bool = False,
 ) -> None:
     """End-to-end migrate: plan, edit, confirm, apply.
 
-    `debug_enabled=True` activates per-file plan-generation debug logging
-    (see `pix.debug`); logs are dumped to `<run-dir>/debug/` after plan
-    generation, before the editor opens.
+    Per-file plan-generation reasoning streams to `<run-dir>/debug.log`
+    on every run (see `pix.debug`). Constant memory; no flag.
     """
     try:
         root, schema = resolve_root(override=root_override)
@@ -138,8 +135,7 @@ def migrate_folder(
 
     t0 = time.monotonic()
     _plog(plan_log_path, "Generating plan...")
-    debug_ctx = debug.enabled() if debug_enabled else contextlib.nullcontext()
-    with debug_ctx:
+    with debug.writing_to(runs_dir):
         plan = generate_plan(
             source=folder,
             cache=cache,
@@ -148,9 +144,6 @@ def migrate_folder(
             run_dir=runs_dir,
             staging_dir=staging_dir,
         )
-        if debug_enabled:
-            line_id_by_path = {ln.abs_path: ln.line_id for ln in plan.lines}
-            debug.dump_to(runs_dir, folder, line_id_by_path)
     _plog(
         plan_log_path,
         f"Plan generated in {time.monotonic() - t0:.1f}s.",
@@ -160,8 +153,6 @@ def migrate_folder(
     plan_path.write_text(plan.to_text(), encoding="utf-8")
 
     typer.echo(f"Plan written: {plan_path}")
-    if debug_enabled:
-        typer.echo(f"Debug logs:   {runs_dir / 'debug'}")
     typer.echo(f"Summary: {_summarize(plan.lines)}")
 
     if len(plan.lines) == 0:
