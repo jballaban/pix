@@ -20,13 +20,21 @@ Migrate honors the spec-wide metadata-preservation invariants: **CONVERT carries
 
 `plan.txt` is **immutable once written.** Generation populates it; the editor pass may shrink it (line deletions); apply reads it but never writes back to it. Progress is streamed to a separate `runs\<run-id>\apply.log` opened in append mode — one line per state transition (`Started` / `Completed` / `Failed`). A crash leaves an `apply.log` truncated to whatever was flushed; the missing tail is the work that didn't finish. Both files are **for reference only** — the next `migrate` run replans from current filesystem state.
 
-Status output during a migrate run is layered:
+Status output during a migrate run keeps the console quiet — phase headers, file counts, and per-file detail all go to log files in the run folder; the console gets only the single rewriting progress line and the user-facing prompts (plan summary, `Apply? [Y/n]`, "Applied N actions").
 
-1. **Phase headers** announce each long-running step (source walk, metadata bulk read, plan-gen, apply) with an elapsed time on completion. The metadata bulk read in particular is one silent ExifTool subprocess that can take minutes on TB-scale folders; the header tells the user it's running and roughly how long it took.
-2. **Per-item live progress** during plan-gen and apply, in the same visual format: `NN% - L042 ACTION path (Xs)` for apply, `NN% - planning path (Xs)` for plan-gen. Rewritten in place via `\r` once per second so the elapsed counter ticks during a long single action. The `(Xs)` suffix is omitted while the per-action elapsed is below 1s (most files finish faster than that; `(0s)` everywhere would just be noise). On clean exit the line wraps to `100%`. Auto-disabled when stdout isn't a TTY (tests, redirects). The full per-file decision (with timestamp and resulting action or `(skip)`) is captured to `plan.log` — the console line stays a single rewritten row.
-3. **Per-file logs** in the run folder:
-   - `plan.log` — one line per file considered during plan-gen, in the form `<ISO timestamp> <abs-path> -> <L###> <ACTION>` for actionable files or `<ISO timestamp> <abs-path> -> (skip)` for files plan-gen decided to leave alone. Captures the full enumeration, including skips that don't appear in `plan.txt`.
-   - `apply.log` — one line per Started/Completed/Failed transition during apply, as described above.
+1. **Console during plan-gen and apply** — exactly one line, rewritten in place via `\r` once per second:
+   - `NN% - L042 ACTION path (Xs)` during apply
+   - `NN% - planning path (Xs)` during plan-gen
+
+   The `(Xs)` suffix is omitted while the per-action elapsed is below 1s (most files finish faster than that; `(0s)` everywhere would be noise). On clean exit the line wraps to `100%`. Auto-disabled when stdout isn't a TTY (tests, redirects).
+
+2. **Console after plan-gen** — the user-relevant transition lines: `Plan written: <path>`, `Summary: ...`, the editor opens, `After edit: ...`, `Apply? [Y/n]`. These are post-planning, action-relevant; they stay on the console where the user is actively making decisions.
+
+3. **Log files** in the run folder capture everything the console doesn't show:
+   - `plan.log` — every phase header (`Library root: ...`, `Walking source folder...`, `Found N files in Xs`, `Reading metadata from N files...`, `Read N files in Xs`, `Generating plan...`, `Plan generated in Xs`) plus one line per file considered (`<ISO timestamp> <abs-path> -> <L###> <ACTION>` or `... -> (skip)`). Captures the full enumeration, including skips that don't appear in `plan.txt`.
+   - `apply.log` — one line per Started/Completed/Failed transition during apply.
+
+Errors and aborts still print directly to stderr — those interrupt the user and need to be visible.
 
 No folder lock — single-user, single-active-run assumption.
 

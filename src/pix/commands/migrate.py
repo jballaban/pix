@@ -59,17 +59,28 @@ def migrate_folder(
 
     config = Config.load(root / ".pix" / "config.yaml")
 
-    typer.echo(f"Library root: {root}")
-    typer.echo(f"Source:       {folder}")
-    typer.echo("")
+    # Create the run dir up front so plan.log exists from the very
+    # start of the planning phase. Plan-phase status (Library root,
+    # source walk timing, bulk-read timing, etc.) all goes to plan.log
+    # so the console stays quiet — only the single rewriting `\r`
+    # progress line shows during plan-gen.
+    run_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    runs_dir = root / ".pix" / "runs" / run_id
+    runs_dir.mkdir(parents=True)
+    plan_log_path = runs_dir / "plan.log"
+    staging_dir = root / ".pix" / "staging"
+
+    _plog(plan_log_path, f"Library root: {root}")
+    _plog(plan_log_path, f"Source: {folder}")
 
     # Recover any orphans from prior crashed runs before walking the
     # source. Order matters: rename intermediates first (they're simple
     # path-only ops); then CONVERT markers (which may need ExifTool reads).
     reverted = cleanup_rename_orphans(folder)
     if reverted:
-        typer.echo(
-            f"Recovered {len(reverted)} rename intermediate(s) from a prior run."
+        _plog(
+            plan_log_path,
+            f"Recovered {len(reverted)} rename intermediate(s) from a prior run.",
         )
     try:
         marker_notes = cleanup_migrate_markers(folder)
@@ -77,22 +88,22 @@ def migrate_folder(
         typer.echo(f"Error: marker cleanup failed: {e}", err=True)
         raise typer.Exit(code=1) from e
     for note in marker_notes:
-        typer.echo(f"  {note}")
+        _plog(plan_log_path, note)
 
     t0 = time.monotonic()
-    typer.echo("Walking source folder...")
+    _plog(plan_log_path, "Walking source folder...")
     source_files = walk_source_files(folder)
-    typer.echo(
-        f"  Found {len(source_files)} files in "
-        f"{time.monotonic() - t0:.1f}s."
+    _plog(
+        plan_log_path,
+        f"Found {len(source_files)} files in {time.monotonic() - t0:.1f}s.",
     )
 
     _validate_extensions(source_files, config)
 
     t0 = time.monotonic()
-    typer.echo(
-        f"Reading metadata from {len(source_files)} files "
-        f"(one ExifTool call; can take a while on large folders)..."
+    _plog(
+        plan_log_path,
+        f"Reading metadata from {len(source_files)} files (one ExifTool call)...",
     )
     try:
         cache = build_cache(folder)
@@ -102,8 +113,9 @@ def migrate_folder(
     except ExifToolFailed as e:
         typer.echo(f"Error: exiftool failed.\n{e}", err=True)
         raise typer.Exit(code=1) from e
-    typer.echo(
-        f"  Read {len(cache)} files in {time.monotonic() - t0:.1f}s."
+    _plog(
+        plan_log_path,
+        f"Read {len(cache)} files in {time.monotonic() - t0:.1f}s.",
     )
 
     for path in source_files:
@@ -112,13 +124,8 @@ def migrate_folder(
                 path=path, raw={"SourceFile": str(path)}
             )
 
-    run_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    runs_dir = root / ".pix" / "runs" / run_id
-    runs_dir.mkdir(parents=True)
-    staging_dir = root / ".pix" / "staging"
-
     t0 = time.monotonic()
-    typer.echo("Generating plan...")
+    _plog(plan_log_path, "Generating plan...")
     debug_ctx = debug.enabled() if debug_enabled else contextlib.nullcontext()
     with debug_ctx:
         plan = generate_plan(
@@ -132,7 +139,10 @@ def migrate_folder(
         if debug_enabled:
             line_id_by_path = {ln.abs_path: ln.line_id for ln in plan.lines}
             debug.dump_to(runs_dir, folder, line_id_by_path)
-    typer.echo(f"  Plan generated in {time.monotonic() - t0:.1f}s.")
+    _plog(
+        plan_log_path,
+        f"Plan generated in {time.monotonic() - t0:.1f}s.",
+    )
 
     plan_path = runs_dir / "plan.txt"
     plan_path.write_text(plan.to_text(), encoding="utf-8")
@@ -181,6 +191,18 @@ def migrate_folder(
         f"Applied {completed} action(s)"
         f"{f', skipped {skipped}' if skipped else ''}."
     )
+
+
+def _plog(plan_log_path: Path, msg: str) -> None:
+    """Append one timestamped line to plan.log.
+
+    Used for the phase headers and per-step timings that previously
+    went to the console. Keeps the planning-phase console output to
+    just the single rewriting progress line.
+    """
+    ts = datetime.now().isoformat(timespec="seconds")
+    with plan_log_path.open("a", encoding="utf-8") as f:
+        f.write(f"{ts} {msg}\n")
 
 
 def _summarize(lines: list[PlanLine]) -> str:
