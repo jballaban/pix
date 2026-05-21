@@ -14,13 +14,17 @@ Migrate honors the spec-wide metadata-preservation invariants: **CONVERT carries
 2. **Allocate run folder.** Create `<library-root>\.pix\runs\<run-id>\` where `<run-id>` is a timestamp like `2026-05-16_14-32-01`. The run-id is just a folder name on disk — no code reads it back, no marker carries it.
 3. **Build metadata cache.** Bulk-extract metadata for every file in `<folder>` into an in-memory cache (see [Metadata cache](#metadata-cache)). One ExifTool invocation reads thousands of files in a single subprocess; per-file `pyexiftool` calls would be ~100× slower at TB scale.
 4. **Generate plan.** Walk the cache and write the migration plan to `runs\<run-id>\plan.txt`. Plan generation never reads file metadata directly — it consults the cache.
-5. **Edit.** CLI opens the plan file in `$EDITOR` / `%EDITOR%` (fallback: notepad on Windows, vi on POSIX).
-6. **Confirm.** Whatever the editor leaves on disk — unchanged, edited, or fully emptied — CLI shows a summary of the resulting plan (counts per action type) and prompts: `Apply? [Y/n]`. The prompt **defaults to Y** — pressing Enter applies the plan, since the user has already reviewed it in the editor and is most often confirming. An empty plan summarizes as `0 actions — Apply? [Y/n]` and is a no-op confirmation. The prompt is uniform; the editor-close behavior never branches.
-7. **Apply.** `y` → process plan lines sequentially. Each destructive operation captures the data it replaces into the run folder (see [conservation captures](#conservation-captures)) before destroying anything. TAG writes are per-file ExifTool calls; the cache is updated in-memory after each write but isn't strictly needed (apply executes the fixed plan and doesn't re-read). Anything other than `y` → abort, the plan file stays on disk as-is and nothing else changes.
+5. **Confirm.** CLI shows a summary of the generated plan (counts per action type) and prompts: `Apply? [Y/e/n]`. The prompt **defaults to Y** — pressing Enter applies the plan directly. Editing is opt-in:
+    - `y` (or Enter) → proceed to apply.
+    - `e` → open the plan file in `$EDITOR` / `%EDITOR%` (fallback: notepad on Windows, vi on POSIX), wait for save+close, re-read the (possibly edited) plan, show the new summary, and re-prompt. The user can loop through edit cycles as many times as they want.
+    - `n` → abort. The plan file stays on disk as-is and nothing else changes.
+
+   An empty plan after edit is still a valid `Apply? [Y/e/n]` state — `y` becomes a no-op apply; `e` lets the user undo their over-zealous deletions by re-editing (if they had a backup or the prior content in memory).
+6. **Apply.** Process plan lines sequentially. Each destructive operation captures the data it replaces into the run folder (see [conservation captures](#conservation-captures)) before destroying anything. TAG writes are per-file ExifTool calls; the cache is updated in-memory after each write but isn't strictly needed (apply executes the fixed plan and doesn't re-read).
 
 `plan.txt` is **immutable once written.** Generation populates it; the editor pass may shrink it (line deletions); apply reads it but never writes back to it. Progress is streamed to a separate `runs\<run-id>\apply.log` opened in append mode — one line per state transition (`Started` / `Completed` / `Failed`). A crash leaves an `apply.log` truncated to whatever was flushed; the missing tail is the work that didn't finish. Both files are **for reference only** — the next `migrate` run replans from current filesystem state.
 
-Status output during a migrate run keeps the console quiet — phase headers, file counts, and per-file detail all go to log files in the run folder; the console gets only the single rewriting progress line and the user-facing prompts (plan summary, `Apply? [Y/n]`, "Applied N actions").
+Status output during a migrate run keeps the console quiet — phase headers, file counts, and per-file detail all go to log files in the run folder; the console gets only the single rewriting progress line and the user-facing prompts (plan summary, `Apply? [Y/e/n]`, "Applied N actions").
 
 1. **Console during plan-gen and apply** — exactly one line, rewritten in place via `\r` once per second:
    - `NN% - L042 ACTION path (Xs)` during apply
@@ -28,7 +32,7 @@ Status output during a migrate run keeps the console quiet — phase headers, fi
 
    The `(Xs)` suffix is omitted while the per-action elapsed is below 1s (most files finish faster than that; `(0s)` everywhere would be noise). On clean exit the line wraps to `100%`. Auto-disabled when stdout isn't a TTY (tests, redirects).
 
-2. **Console after plan-gen** — the user-relevant transition lines: `Plan written: <path>`, `Summary: ...`, the editor opens, `After edit: ...`, `Apply? [Y/n]`. These are post-planning, action-relevant; they stay on the console where the user is actively making decisions.
+2. **Console after plan-gen** — the user-relevant transition lines: `Plan written: <path>`, `Summary: ...`, `Apply? [Y/e/n]`. If the user picks `e`, the editor opens, then on close: `After edit: ...` and re-prompt. These are post-planning, action-relevant; they stay on the console where the user is actively making decisions.
 
 3. **Log files** in the run folder capture everything the console doesn't show:
    - `plan.log` — every phase header (`Library root: ...`, `Walking source folder...`, `Found N files in Xs`, `Reading metadata from N files...`, `Read N files in Xs`, `Generating plan...`, `Plan generated in Xs`) plus one line per file considered (`<ISO timestamp> <abs-path> -> <L###> <ACTION>` or `... -> (skip)`). Captures the full enumeration, including skips that don't appear in `plan.txt`.

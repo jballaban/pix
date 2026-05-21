@@ -168,23 +168,27 @@ def migrate_folder(
         typer.echo("Nothing to do.")
         return
 
-    typer.echo("")
-    open_in_editor(plan_path)
-
-    edited_text = plan_path.read_text(encoding="utf-8")
-    kept_line_ids = parse_kept_line_ids(edited_text)
-    kept_lines = [ln for ln in plan.lines if ln.line_id in kept_line_ids]
-
-    if not kept_lines:
-        typer.echo("Plan empty after edit; nothing to apply.")
-        return
-
-    typer.echo("")
-    typer.echo(f"After edit: {_summarize(kept_lines)}")
-    confirmed = typer.confirm("Apply?", default=True)
-    if not confirmed:
-        typer.echo("Aborted; plan file left in place.")
-        return
+    # The editor pass is opt-in. By default we trust the generated plan
+    # and apply directly; the user can pick `e` to review/edit and
+    # re-prompt as many times as they want.
+    kept_line_ids = {ln.line_id for ln in plan.lines}
+    while True:
+        typer.echo("")
+        choice = _prompt_apply()
+        if choice == "n":
+            typer.echo("Aborted; plan file left in place.")
+            return
+        if choice == "e":
+            open_in_editor(plan_path)
+            edited_text = plan_path.read_text(encoding="utf-8")
+            kept_line_ids = parse_kept_line_ids(edited_text)
+            kept_lines = [
+                ln for ln in plan.lines if ln.line_id in kept_line_ids
+            ]
+            typer.echo("")
+            typer.echo(f"After edit: {_summarize(kept_lines)}")
+            continue
+        break  # 'y' — apply
 
     try:
         completed, skipped = apply_plan(
@@ -203,6 +207,27 @@ def migrate_folder(
         f"Applied {completed} action(s)"
         f"{f', skipped {skipped}' if skipped else ''}."
     )
+
+
+def _prompt_apply() -> str:
+    """Prompt `Apply? [Y/e/n]` and return one of `'y'`, `'e'`, `'n'`.
+
+    Pressing Enter accepts the default (`y`, apply). Unknown input
+    re-prompts. `'e'` is the caller's signal to open the editor; the
+    caller loops back to this prompt after the editor closes.
+    """
+    while True:
+        raw = typer.prompt(
+            "Apply? [Y/e/n]", default="y", show_default=False
+        )
+        ans = raw.strip().lower()
+        if ans in ("y", "yes"):
+            return "y"
+        if ans in ("e", "edit"):
+            return "e"
+        if ans in ("n", "no"):
+            return "n"
+        typer.echo("Please answer Y (apply), e (edit), or n (abort).")
 
 
 def _plog(plan_log_path: Path, msg: str) -> None:
