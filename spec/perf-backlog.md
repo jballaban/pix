@@ -47,3 +47,8 @@ Already flagged in `spec/migrate.md` → "Future". Under `.pix/cache/`, keyed on
 
 ### 11. Trim `FileMetadata.raw` to consumed fields
 `src/pix/metadata.py:FileMetadata` — keeps the full parsed dict alive per file. Disappears for free if #4 lands. Otherwise: project to a slim struct after parsing.
+
+## Non-perf items parked here
+
+### 12. Config evolution: existing libraries don't pick up new default extensions
+`src/pix/config.py` + `src/pix/commands/init.py` — `DEFAULT_CONFIG_YAML` is only written on first `pix init`. When we add a new extension to the default (e.g. `mts` in v0.1.12), existing libraries' `.pix/config.yaml` is stale and the new extension fails the unknown-extension check. Surfaced when migrating `G:\pix` after the mts addition. Possible directions: (a) merge-on-read — when loading config, log any default extensions missing from the user's file and suggest the additions; (b) `pix config sync` command that diff/merges; (c) leave it manual and just document the change in release notes. No design pick yet.

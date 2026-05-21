@@ -5,7 +5,7 @@
 Design TBD. Sketch of what it needs:
 
 - **Read pre-computed hashes; don't recompute.** Migrate ensures every migrated file has `pix:ContentHash` (format-aware BLAKE3 — for JPEG, hash everything except APP-marker metadata; for MP4 and other ISO BMFF containers, hash only the concatenated `mdat` box payloads. See [tags.md → System fields](tags.md#system-fields)). Dedupe pulls the hashes from the metadata cache (the same bulk-read pattern as migrate) and groups by hash. No need for `pix dedupe` to scan file content — that work is already done. Files lacking a hash (e.g. content modified externally since last migrate) need to be re-hashed; an unmigrated file shouldn't reach dedupe.
-- **Plan / apply pattern.** Same git-commit-style workflow as migrate — plan in editor, summary, `Apply? [y/N]`. Run folder under `.pix/runs/` with captures of every deleted duplicate (see [library.md](library.md#file-layout)).
+- **Plan / apply pattern.** Same git-commit-style workflow as migrate — plan in editor, summary, `Apply? [Y/n]` (defaults to Y; the editor pass is the review step). Run folder under `.pix/runs/` with captures of every deleted duplicate (see [library.md](library.md#file-layout)).
 - **Keeper selection.** When N files share a content hash, deterministic and explainable. Likely: lex-smallest path wins; user can edit the plan to change keepers per-line.
 - **Operates library-wide, not per-folder.** Migrate is folder-scoped; dedupe is library-scoped because content dups span folders.
 - **Deferred:** perceptual hashing (tier-2), near-dup detection, burst clustering, quality-winner heuristics. Additive; today's confident-only design doesn't preclude them.

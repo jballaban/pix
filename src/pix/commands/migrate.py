@@ -139,7 +139,7 @@ def migrate_folder(
 
     typer.echo("")
     typer.echo(f"After edit: {_summarize(kept_lines)}")
-    confirmed = typer.confirm("Apply?", default=False)
+    confirmed = typer.confirm("Apply?", default=True)
     if not confirmed:
         typer.echo("Aborted; plan file left in place.")
         return
