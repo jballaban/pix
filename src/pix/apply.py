@@ -21,6 +21,7 @@ from pix.content_hash import compute_content_hash
 from pix.convert import ConvertFailed, convert_to_jpg, convert_to_mp4
 from pix.exiftool_session import ExifToolSession
 from pix.plan import Action, Plan, PlanLine
+from pix.progress import LiveProgress
 
 
 class ApplyError(Exception):
@@ -58,7 +59,10 @@ def apply_plan(
     log_path = run_dir / "apply.log"
     exiftool: ExifToolSession | None = None
     completed = 0
-    with log_path.open("a", encoding="utf-8") as log:
+    with (
+        log_path.open("a", encoding="utf-8") as log,
+        LiveProgress(total=len(runnable)) as progress,
+    ):
         try:
             if needs_exiftool:
                 exiftool = ExifToolSession()
@@ -70,6 +74,9 @@ def apply_plan(
                     )
                 staging_dir.mkdir(parents=True, exist_ok=True)
             for ln in runnable:
+                progress.begin(
+                    f"{ln.line_id} {ln.action.value}", str(ln.abs_path)
+                )
                 _log(log, ln, "Started")
                 try:
                     _apply_one(ln, run_dir, exiftool, staging_dir)
@@ -79,6 +86,7 @@ def apply_plan(
                         f"{ln.line_id} ({ln.rel_path}): {e}"
                     ) from e
                 _log(log, ln, "Completed")
+                progress.advance()
                 completed += 1
         finally:
             if exiftool is not None:

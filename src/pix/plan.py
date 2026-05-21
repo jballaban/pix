@@ -29,6 +29,7 @@ from pix.dates import (
     parse_exiftool_datetime,
 )
 from pix.metadata import FileMetadata
+from pix.progress import LiveProgress
 
 
 # pix:* tag keys (group-prefixed, family-0, as exiftool reports them).
@@ -198,14 +199,21 @@ def generate_plan(
     generated_at = now or datetime.now()
     lines: list[PlanLine] = []
 
-    for path in sorted(cache.keys()):
-        meta = cache[path]
-        line = _plan_one(path=path, meta=meta, source=source, config=config)
-        if line is None:
-            continue
-        lines.append(
-            dataclasses.replace(line, line_id=f"L{len(lines) + 1:03d}")
-        )
+    paths = sorted(cache.keys())
+    with LiveProgress(total=len(paths)) as progress:
+        for path in paths:
+            progress.begin("planning", str(path))
+            meta = cache[path]
+            line = _plan_one(
+                path=path, meta=meta, source=source, config=config
+            )
+            if line is not None:
+                lines.append(
+                    dataclasses.replace(
+                        line, line_id=f"L{len(lines) + 1:03d}"
+                    )
+                )
+            progress.advance()
 
     lines = _resolve_collisions(cache, lines)
     lines = [attach_paths(ln, run_dir, staging_dir) for ln in lines]

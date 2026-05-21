@@ -20,6 +20,8 @@ Migrate honors the spec-wide metadata-preservation invariants: **CONVERT carries
 
 `plan.txt` is **immutable once written.** Generation populates it; the editor pass may shrink it (line deletions); apply reads it but never writes back to it. Progress is streamed to a separate `runs\<run-id>\apply.log` opened in append mode — one line per state transition (`Started` / `Completed` / `Failed`). A crash leaves an `apply.log` truncated to whatever was flushed; the missing tail is the work that didn't finish. Both files are **for reference only** — the next `migrate` run replans from current filesystem state.
 
+During the long phases (plan-gen and apply), the CLI also shows a live one-line progress bar — `NN% - L042 ACTION path (Xs)` — rewritten in place via `\r` once per second so the elapsed-time counter ticks during a long single action. On clean exit the line wraps to `100%`. Auto-disabled when stdout isn't a TTY (tests, redirects).
+
 No folder lock — single-user, single-active-run assumption.
 
 If apply crashes or is interrupted, the partial run folder stays on disk as a historical record. The next `migrate` invocation does not try to resume it; its cleanup pass simply removes/finalizes any in-flight markers in the source folder, then plans fresh from current state. Old run folders accumulate until the user manually deletes them.
