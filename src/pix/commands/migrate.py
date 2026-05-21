@@ -22,7 +22,7 @@ from pix.cleanup import (
     cleanup_rename_orphans,
 )
 from pix.config import Config
-from pix.editor import open_in_editor, parse_kept_line_ids
+from pix.editor import open_in_editor, parse_kept_line_ids, prompt_apply
 from pix.metadata import (
     ExifToolFailed,
     ExifToolNotFound,
@@ -165,7 +165,7 @@ def migrate_folder(
     kept_line_ids = {ln.line_id for ln in plan.lines}
     while True:
         typer.echo("")
-        choice = _prompt_apply()
+        choice = prompt_apply()
         if choice == "n":
             typer.echo("Aborted; plan file left in place.")
             return
@@ -198,27 +198,6 @@ def migrate_folder(
         f"Applied {completed} action(s)"
         f"{f', skipped {skipped}' if skipped else ''}."
     )
-
-
-def _prompt_apply() -> str:
-    """Prompt `Apply? [Y/e/n]` and return one of `'y'`, `'e'`, `'n'`.
-
-    Pressing Enter accepts the default (`y`, apply). Unknown input
-    re-prompts. `'e'` is the caller's signal to open the editor; the
-    caller loops back to this prompt after the editor closes.
-    """
-    while True:
-        raw = typer.prompt(
-            "Apply? [Y/e/n]", default="y", show_default=False
-        )
-        ans = raw.strip().lower()
-        if ans in ("y", "yes"):
-            return "y"
-        if ans in ("e", "edit"):
-            return "e"
-        if ans in ("n", "no"):
-            return "n"
-        typer.echo("Please answer Y (apply), e (edit), or n (abort).")
 
 
 def _plog(plan_log_path: Path, msg: str) -> None:

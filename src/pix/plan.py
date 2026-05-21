@@ -51,6 +51,7 @@ class Action(str, Enum):
 
     Compound labels (CONVERT+RENAME+TAG, RENAME+TAG) are first-class — the
     spec treats the bundle of operations on a file as a single atomic line.
+    `MOVE` is organize-only; migrate's apply loop rejects it and vice versa.
     """
 
     DELETE = "DELETE"
@@ -58,6 +59,7 @@ class Action(str, Enum):
     RENAME_TAG = "RENAME+TAG"
     TAG = "TAG"
     RENAME = "RENAME"
+    MOVE = "MOVE"
 
 
 # Width to which action labels are right-padded in plan.txt.

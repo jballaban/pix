@@ -1,0 +1,214 @@
+"""Implementation of `pix organize <template>`.
+
+End-to-end flow per spec/organize.md: parse template → check CWD →
+walk library → bulk-read metadata → generate plan → editor/apply
+prompt → apply → persist active template.
+"""
+
+from __future__ import annotations
+
+import time
+from datetime import datetime
+from pathlib import Path
+
+import typer
+
+from pix import debug
+from pix.config import Config, set_organize_template
+from pix.editor import open_in_editor, parse_kept_line_ids, prompt_apply
+from pix.metadata import (
+    ExifToolFailed,
+    ExifToolNotFound,
+    FileMetadata,
+    build_cache,
+)
+from pix.organize import (
+    CwdInsideLibraryError,
+    OrganizeApplyError,
+    OrganizeError,
+    UnmigratedFilesError,
+    apply_plan,
+    check_cwd_not_inside,
+    generate_plan,
+    parse_template,
+)
+from pix.plan import PlanLine
+from pix.root import NoLibraryRoot, resolve as resolve_root
+from pix.scan import walk_source_files
+from pix.schema import SCHEMA_VERSION, SchemaTooNew
+
+
+def organize_library(
+    template_str: str,
+    root_override: Path | None,
+) -> None:
+    """End-to-end organize: parse, plan, edit, confirm, apply."""
+    try:
+        root, schema = resolve_root(override=root_override)
+    except NoLibraryRoot as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+    except SchemaTooNew as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+
+    if schema.archived_from is not None:
+        typer.echo(
+            f"Library schema was v{schema.archived_from}; this pix expects "
+            f"v{SCHEMA_VERSION}. Archived prior .pix/ contents to "
+            f".pix/archive/v{schema.archived_from}/ and reset to defaults. "
+            f"Inspect that folder to recover any customizations."
+        )
+
+    try:
+        check_cwd_not_inside(root)
+    except CwdInsideLibraryError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+
+    try:
+        template = parse_template(template_str)
+    except OrganizeError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+
+    config_path = root / ".pix" / "config.yaml"
+    Config.load(config_path)  # validates current config; parsed value not used here
+
+    run_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    runs_dir = root / ".pix" / "runs" / run_id
+    runs_dir.mkdir(parents=True)
+    plan_log_path = runs_dir / "plan.log"
+
+    _plog(plan_log_path, f"Library root: {root}")
+    _plog(plan_log_path, f"Template: {template_str}")
+
+    t0 = time.monotonic()
+    _plog(plan_log_path, "Walking library...")
+    library_files = walk_source_files(root)
+    _plog(
+        plan_log_path,
+        f"Found {len(library_files)} file(s) in "
+        f"{time.monotonic() - t0:.1f}s.",
+    )
+
+    if not library_files:
+        typer.echo("Library is empty; nothing to organize.")
+        return
+
+    t0 = time.monotonic()
+    _plog(
+        plan_log_path,
+        f"Reading metadata from {len(library_files)} file(s) (one "
+        f"ExifTool call)...",
+    )
+    try:
+        cache = build_cache(root)
+    except ExifToolNotFound as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+    except ExifToolFailed as e:
+        typer.echo(f"Error: exiftool failed.\n{e}", err=True)
+        raise typer.Exit(code=1) from e
+    for path in library_files:
+        if path not in cache:
+            cache[path] = FileMetadata(
+                path=path, raw={"SourceFile": str(path)}
+            )
+    _plog(
+        plan_log_path,
+        f"Read {len(cache)} file(s) in {time.monotonic() - t0:.1f}s.",
+    )
+
+    t0 = time.monotonic()
+    _plog(plan_log_path, "Generating plan...")
+    try:
+        with (
+            debug.writing_to(runs_dir),
+            plan_log_path.open("a", encoding="utf-8") as plan_log,
+        ):
+            plan = generate_plan(
+                library_root=root,
+                template=template,
+                cache=cache,
+                run_id=run_id,
+                run_dir=runs_dir,
+                plan_log=plan_log,
+            )
+    except UnmigratedFilesError as e:
+        typer.echo(f"Error: {e}", err=True)
+        for p in e.paths:
+            typer.echo(f"  {p}", err=True)
+        typer.echo(
+            f"Run `pix migrate {root}` (or the relevant subfolder) first.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from e
+    _plog(
+        plan_log_path,
+        f"Plan generated in {time.monotonic() - t0:.1f}s.",
+    )
+
+    plan_path = runs_dir / "plan.txt"
+    plan_path.write_text(plan.to_text(), encoding="utf-8")
+
+    typer.echo(f"Plan written: {plan_path}")
+    typer.echo(f"Template:     {template_str}")
+    typer.echo(f"Summary: {_summarize(plan.lines)}")
+
+    if len(plan.lines) == 0:
+        typer.echo("Library already matches the template; nothing to do.")
+        # Even a no-op run persists the active template so commit's
+        # auto-trigger knows what shape the user intends.
+        set_organize_template(config_path, template_str)
+        return
+
+    kept_line_ids = {ln.line_id for ln in plan.lines}
+    while True:
+        typer.echo("")
+        choice = prompt_apply()
+        if choice == "n":
+            typer.echo("Aborted; plan file left in place.")
+            return
+        if choice == "e":
+            open_in_editor(plan_path)
+            edited_text = plan_path.read_text(encoding="utf-8")
+            kept_line_ids = parse_kept_line_ids(edited_text)
+            kept_lines = [
+                ln for ln in plan.lines if ln.line_id in kept_line_ids
+            ]
+            typer.echo("")
+            typer.echo(f"After edit: {_summarize(kept_lines)}")
+            continue
+        break  # 'y'
+
+    try:
+        completed = apply_plan(
+            plan=plan,
+            kept_line_ids=kept_line_ids,
+            run_dir=runs_dir,
+            library_root=root,
+        )
+    except OrganizeApplyError as e:
+        typer.echo(f"Error: apply failed: {e}", err=True)
+        raise typer.Exit(code=1) from e
+
+    # Persist the active template now that apply succeeded.
+    set_organize_template(config_path, template_str)
+
+    typer.echo("")
+    typer.echo(f"Organized {completed} file(s).")
+
+
+def _plog(plan_log_path: Path, msg: str) -> None:
+    """Append one timestamped line to plan.log."""
+    ts = datetime.now().isoformat(timespec="seconds")
+    with plan_log_path.open("a", encoding="utf-8") as f:
+        f.write(f"{ts} {msg}\n")
+
+
+def _summarize(lines: list[PlanLine]) -> str:
+    """Render `N plan line(s) — N MOVE` (organize has only one action type)."""
+    if not lines:
+        return "0 plan line(s)."
+    return f"{len(lines)} plan line(s) — {len(lines)} MOVE."

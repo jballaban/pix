@@ -1,9 +1,9 @@
-"""Editor invocation for the migrate plan review step.
+"""Editor invocation and the shared `Apply? [Y/e/n]` prompt.
 
-Per spec/migrate.md → Workflow step 4: the CLI opens plan.txt in the user's
-configured editor (`$EDITOR` / `%EDITOR%`, falling back to notepad on Windows,
-vi on POSIX). The editor invocation blocks until the editor closes; the
-user's edits are then visible to the apply step.
+Both `migrate` and `organize` use the same plan/edit/confirm flow:
+generate a plan, show a summary, prompt the user. The prompt accepts
+`y` (apply), `e` (open the plan in `$EDITOR` / `%EDITOR%`, fallback
+notepad/vi, then re-prompt), or `n` (abort). Editing is opt-in.
 """
 
 from __future__ import annotations
@@ -12,6 +12,8 @@ import os
 import re
 import subprocess
 from pathlib import Path
+
+import typer
 
 
 _LINE_ID_RE = re.compile(r"^(L\d+)\s*\|")
@@ -35,6 +37,27 @@ def open_in_editor(path: Path) -> None:
     # simple cases str.split() suffices on both platforms.
     cmd = editor.split() + [str(path)]
     subprocess.run(cmd, check=False)
+
+
+def prompt_apply() -> str:
+    """Prompt `Apply? [Y/e/n]` and return one of `'y'`, `'e'`, `'n'`.
+
+    Pressing Enter accepts the default (`y`, apply). Unknown input
+    re-prompts. `'e'` is the caller's signal to open the editor; the
+    caller loops back to this prompt after the editor closes.
+    """
+    while True:
+        raw = typer.prompt(
+            "Apply? [Y/e/n]", default="y", show_default=False
+        )
+        ans = raw.strip().lower()
+        if ans in ("y", "yes"):
+            return "y"
+        if ans in ("e", "edit"):
+            return "e"
+        if ans in ("n", "no"):
+            return "n"
+        typer.echo("Please answer Y (apply), e (edit), or n (abort).")
 
 
 def parse_kept_line_ids(plan_text: str) -> set[str]:

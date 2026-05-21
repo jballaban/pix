@@ -18,7 +18,7 @@ Eight top-level operations. `init` and `migrate` are implemented; the rest are s
 | `migrate <folder>` | Per-file **in-place** normalization: convert formats, rename, re-derive `_auto` tags, write tags into files. | [migrate.md](migrate.md) | **v1 implemented** (face detection deferred — see [Open decisions](#open-decisions)) |
 | `dedupe` | Find duplicates by content hash across the library and remove redundant copies. | [dedupe.md](dedupe.md) | Sketched |
 | `merge <src> <dst>` | Combine two already-migrated trees; reuses `dedupe`. | — | Deferred (after dedupe) |
-| `organize <template>` | Physically rearrange files per a template. Single-valued tags only. | [organize.md](organize.md) | Sketched |
+| `organize <template>` | Physically rearrange files per a template. Single-valued tags only. | [organize.md](organize.md) | **v1 implemented** |
 | `checkout <template>` / `commit` | Tag editing via folder-shuffle. | [tag-editing.md](tag-editing.md) | Sketched |
 | `export <template>` | Produce a copy/link-based derived view at a separate path. Read-only. | [export.md](export.md) | Sketched |
 

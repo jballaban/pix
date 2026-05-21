@@ -31,9 +31,10 @@ extensions:
 
 @dataclass(frozen=True)
 class Config:
-    """Parsed pix configuration. Currently extension policy only."""
+    """Parsed pix configuration."""
 
     extensions: dict[str, ExtensionAction]
+    organize_template: str | None = None
 
     @classmethod
     def load(cls, path: Path) -> Config:
@@ -46,7 +47,57 @@ class Config:
                 f"got {type(loaded).__name__}"
             )
         data = cast("dict[str, object]", loaded)
-        return cls(extensions=_parse_extensions(path, data.get("extensions")))
+        return cls(
+            extensions=_parse_extensions(path, data.get("extensions")),
+            organize_template=_parse_organize_template(
+                path, data.get("organize")
+            ),
+        )
+
+
+def set_organize_template(path: Path, template: str) -> None:
+    """Persist `template` to `config.yaml` under `organize.template`.
+
+    Round-trips the full YAML file; comments and key ordering are not
+    preserved (yaml.safe_dump output). The default config has no
+    user-customized comments to lose at v1.
+    """
+    with path.open(encoding="utf-8") as f:
+        loaded: object = yaml.safe_load(f) or {}
+    if not isinstance(loaded, dict):
+        raise ValueError(
+            f"{path}: top-level must be a mapping, "
+            f"got {type(loaded).__name__}"
+        )
+    data = cast("dict[str, object]", loaded)
+    organize = data.get("organize")
+    if not isinstance(organize, dict):
+        organize = {}
+    cast("dict[str, object]", organize)["template"] = template
+    data["organize"] = organize
+    path.write_text(
+        yaml.safe_dump(data, default_flow_style=False, sort_keys=False),
+        encoding="utf-8",
+    )
+
+
+def _parse_organize_template(path: Path, raw: object | None) -> str | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"{path}: 'organize' must be a mapping, "
+            f"got {type(raw).__name__}"
+        )
+    template = cast("dict[str, object]", raw).get("template")
+    if template is None:
+        return None
+    if not isinstance(template, str):
+        raise ValueError(
+            f"{path}: 'organize.template' must be a string, "
+            f"got {type(template).__name__}"
+        )
+    return template
 
 
 def _parse_extensions(

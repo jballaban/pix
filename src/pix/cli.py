@@ -10,6 +10,7 @@ import typer
 from pix import __version__
 from pix.commands.init import init_library
 from pix.commands.migrate import migrate_folder
+from pix.commands.organize import organize_library
 
 app: typer.Typer = typer.Typer(
     name="pix",
@@ -62,3 +63,28 @@ def migrate(
 ) -> None:
     """Normalize files in <folder> per the library's policy (in-place, per-file)."""
     migrate_folder(folder=folder, root_override=root)
+
+
+@app.command("organize")
+def organize(
+    template: Annotated[
+        str,
+        typer.Argument(
+            help=(
+                "Folder template, e.g. '{year}/{month}/{event}'. Tokens: "
+                "{year}, {month}, {day}, {date}, {event}. Levels separated "
+                "by `/`. Persisted as the active template on successful apply."
+            ),
+        ),
+    ],
+    root: Annotated[
+        Path | None,
+        typer.Option(
+            "--root",
+            help="Override library-root resolution.",
+            envvar="PIX_ROOT",
+        ),
+    ] = None,
+) -> None:
+    """Re-shape the library to match a folder template (library-wide MOVE)."""
+    organize_library(template_str=template, root_override=root)

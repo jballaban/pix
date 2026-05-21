@@ -30,6 +30,18 @@ PIX_ORIGINAL_PATH: str = "XMP:OriginalPath"
 _DATE_PREFIX_RE = re.compile(r"^[\d\-_. ]+")
 
 
+def effective_event(meta: FileMetadata) -> str | None:
+    """Return the effective `event` value for `meta`, or None.
+
+    `pix:EventOverride` wins if set; otherwise `pix:EventAuto`.
+    See spec/tags.md → Effective value computation.
+    """
+    override = meta.get_str(PIX_EVENT_OVERRIDE)
+    if override:
+        return override
+    return meta.get_str(PIX_EVENT_AUTO)
+
+
 def derive_event_auto(meta: FileMetadata) -> str | None:
     """Return the derived `pix:EventAuto` value for `meta`, or None.
 

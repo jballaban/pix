@@ -4,6 +4,22 @@
 
 Like migrate, organize is a single blocking, sequential command: plan → edit → confirm → apply. The same console/log split applies (silent during plan-gen except a single rewriting progress line; full per-file detail in `plan.log`).
 
+## Scope
+
+Organize is **library-wide**. `pix organize <template>` resolves the library root (walking up from CWD looking for `.pix/`) and operates on every file under that root, regardless of which subfolder the user invoked the command from. CWD only helps locate the root; it doesn't scope the operation.
+
+There is no subfolder-scoped organize, and no per-path templates — the library has exactly one canonical shape. If the user wants a staging area that doesn't get re-shaped (an `imports/`, an `inbox/`, an `unsorted/`), the correct pattern is to **keep that folder outside the library root** and run migrate against it without ever organizing. Once a file is inside the library, the active template owns its location.
+
+This is a deliberate simplicity trade. Multiple-shapes-per-library is a real use case but the design surface (cross-scope moves, prefix-precedence rules, commit's auto-trigger picking the right template) is enough complexity that we'd rather force the user to maintain separate roots if they really need different shapes.
+
+### CWD constraint
+
+The user must invoke `pix organize` either **from the library root itself** or **from a location outside the library**. Running from a strict subfolder of the library is rejected up front, because the empty-folder cleanup at the end of apply (see [Empty-folder cleanup](#empty-folder-cleanup)) can't remove a folder that's currently a process's working directory — Windows holds a handle on it. We refuse before doing any work rather than fail partway through cleanup.
+
+Error message: `Refusing to organize while CWD is a subfolder of the library. cd to <library-root> (or any directory outside the library) and re-run.` Exit non-zero, no plan written, no state changes.
+
+The library root itself is fine as CWD — organize never removes the root, and `.pix/` keeps it non-empty regardless.
+
 ## Workflow
 
 1. **Validate prerequisites.** Walk the library; if any file lacks `pix:OriginalPath`, abort before generating any plan. Surface the offending paths and tell the user to run migrate first. (Organize templates read effective tag values; un-migrated files have no values to read.)
