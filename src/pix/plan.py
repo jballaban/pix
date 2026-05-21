@@ -200,19 +200,35 @@ def generate_plan(
     lines: list[PlanLine] = []
 
     paths = sorted(cache.keys())
-    with LiveProgress(total=len(paths)) as progress:
+    run_dir.mkdir(parents=True, exist_ok=True)
+    plan_log_path = run_dir / "plan.log"
+    with (
+        plan_log_path.open("a", encoding="utf-8") as plan_log,
+        LiveProgress(total=len(paths)) as progress,
+    ):
+        # One label/timer for the whole plan-gen phase; the per-file
+        # detail goes to plan.log, not the console (plan-gen iterates
+        # in sub-ms per file and a flickering path is just noise).
+        progress.begin("planning")
         for path in paths:
-            progress.begin("planning", str(path))
             meta = cache[path]
             line = _plan_one(
                 path=path, meta=meta, source=source, config=config
             )
+            ts = datetime.now().isoformat(timespec="seconds")
             if line is not None:
                 lines.append(
                     dataclasses.replace(
                         line, line_id=f"L{len(lines) + 1:03d}"
                     )
                 )
+                plan_log.write(
+                    f"{ts} {path} -> {lines[-1].line_id} "
+                    f"{lines[-1].action.value}\n"
+                )
+            else:
+                plan_log.write(f"{ts} {path} -> (skip)\n")
+            plan_log.flush()
             progress.advance()
 
     lines = _resolve_collisions(cache, lines)
@@ -240,9 +256,10 @@ def attach_paths(
     marker_path: Path | None = None
 
     base = f"{ln.line_id}_{ln.abs_path.name}"
+    data_dir = run_dir / "data"
 
     if ln.action == Action.DELETE:
-        capture_path = run_dir / base
+        capture_path = data_dir / base
     elif ln.action == Action.RENAME:
         if ln.target_filename is None:
             raise ValueError(
@@ -250,13 +267,13 @@ def attach_paths(
             )
         target_path = ln.abs_path.parent / ln.target_filename
     elif ln.action == Action.TAG:
-        sidecar_path = run_dir / f"{base}.xmp"
+        sidecar_path = data_dir / f"{base}.xmp"
     elif ln.action == Action.RENAME_TAG:
         if ln.target_filename is None:
             raise ValueError(
                 f"{ln.line_id}: RENAME+TAG without target_filename"
             )
-        sidecar_path = run_dir / f"{base}.xmp"
+        sidecar_path = data_dir / f"{base}.xmp"
         target_path = ln.abs_path.parent / ln.target_filename
     elif ln.action == Action.CONVERT_RENAME_TAG:
         if ln.target_filename is None:
@@ -268,7 +285,7 @@ def attach_paths(
         marker_path = (
             ln.abs_path.parent / f"{ln.abs_path.name}.__migrate__.{target_ext}"
         )
-        capture_path = run_dir / base
+        capture_path = data_dir / base
         target_path = ln.abs_path.parent / ln.target_filename
 
     return dataclasses.replace(

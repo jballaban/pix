@@ -82,11 +82,13 @@ class LiveProgress:
         self._stream.write("\n")
         self._stream.flush()
 
-    def begin(self, label: str, path: str) -> None:
+    def begin(self, label: str, path: str = "") -> None:
         """Mark the start of a new item; resets the per-action timer.
 
         `label` is the human-readable descriptor that follows `NN% - `,
         e.g. `L042 RENAME+TAG` (apply) or `planning` (plan-gen).
+        `path` is optional — omit for phases where per-file paths
+        flicker too fast to read (plan-gen iterates in sub-ms).
         """
         with self._lock:
             self._label = label
@@ -120,7 +122,8 @@ class LiveProgress:
             # surface the elapsed counter once it's worth showing. The
             # 1s thread tick keeps it updated for long-running actions.
             suffix = f" ({elapsed}s)" if elapsed >= 1 else ""
-            line = f"{pct:02d}% - {self._label} {self._path}{suffix}"
+            mid = f" {self._path}" if self._path else ""
+            line = f"{pct:02d}% - {self._label}{mid}{suffix}"
             # Clip to terminal width minus one (avoid wrapping into a
             # second row — `\r` only resets the cursor on the current
             # row, so a wrap leaves the upper row stranded).

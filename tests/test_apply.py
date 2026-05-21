@@ -83,7 +83,7 @@ def test_apply_delete_moves_file_into_run_dir(tmp_path: Path) -> None:
     )
     assert (completed, skipped) == (1, 0)
     assert not junk.exists()
-    assert (run_dir / "L001_Thumbs.db").exists()
+    assert (run_dir / "data" / "L001_Thumbs.db").exists()
 
     # plan.txt is immutable from apply's perspective; progress goes to apply.log.
     assert plan_path.read_text(encoding="utf-8") == plan.to_text()
@@ -270,7 +270,7 @@ def test_apply_tag_writes_pix_field_and_creates_sidecar(
     assert jpg.exists()  # in-place TAG; file stays
 
     # Sidecar captured prior XMP.
-    sidecar = run_dir / "L001_2023-08-15_143205.jpg.xmp"
+    sidecar = run_dir / "data" / "L001_2023-08-15_143205.jpg.xmp"
     assert sidecar.exists()
 
     # Verify the pix:* fields actually landed on the file by re-reading.
@@ -340,7 +340,7 @@ def test_apply_convert_png_to_jpg_end_to_end(tmp_path: Path) -> None:
     assert on_disk == ["2023-08-15_143205.jpg"]
 
     # Original captured to runs/.
-    assert (run_dir / "L001_IMG_001.png").exists()
+    assert (run_dir / "data" / "L001_IMG_001.png").exists()
 
     # Converted file has pix:* fields, including the content hash.
     from pix.metadata import build_cache

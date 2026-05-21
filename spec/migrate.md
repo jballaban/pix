@@ -23,7 +23,10 @@ Migrate honors the spec-wide metadata-preservation invariants: **CONVERT carries
 Status output during a migrate run is layered:
 
 1. **Phase headers** announce each long-running step (source walk, metadata bulk read, plan-gen, apply) with an elapsed time on completion. The metadata bulk read in particular is one silent ExifTool subprocess that can take minutes on TB-scale folders; the header tells the user it's running and roughly how long it took.
-2. **Per-item live progress** during plan-gen and apply: `NN% - L042 ACTION path (Xs)`, rewritten in place via `\r` once per second so the elapsed counter ticks during a long single action. The `(Xs)` suffix is omitted while the per-action elapsed is below 1s (most files finish faster than that; `(0s)` everywhere would just be noise). On clean exit the line wraps to `100%`. Auto-disabled when stdout isn't a TTY (tests, redirects).
+2. **Per-item live progress** during plan-gen and apply: `NN% - L042 ACTION path (Xs)` for apply, `NN% - planning (Xs)` for plan-gen (plan-gen iterates in sub-ms per file, so a flickering per-file path on the console is noise — the per-file decisions go to `plan.log` instead). Rewritten in place via `\r` once per second so the elapsed counter ticks during a long single action. The `(Xs)` suffix is omitted while the per-action elapsed is below 1s (most files finish faster than that; `(0s)` everywhere would just be noise). On clean exit the line wraps to `100%`. Auto-disabled when stdout isn't a TTY (tests, redirects).
+3. **Per-file logs** in the run folder:
+   - `plan.log` — one line per file considered during plan-gen, in the form `<ISO timestamp> <abs-path> -> <L###> <ACTION>` for actionable files or `<ISO timestamp> <abs-path> -> (skip)` for files plan-gen decided to leave alone. Captures the full enumeration, including skips that don't appear in `plan.txt`.
+   - `apply.log` — one line per Started/Completed/Failed transition during apply, as described above.
 
 No folder lock — single-user, single-active-run assumption.
 
@@ -214,7 +217,7 @@ For a CONVERT+TAG+RENAME line (the hardest case), the sequence is:
 
 1. **Off-library work** — convert + write tags + validate in `<library-root>\.pix\staging\`. Crash here: temp orphan, deleted by the next run's cleanup. No source-folder impact.
 2. **Bring into source as marker** — single rename of the temp file into the source folder as e.g. `IMG_001.HEIC.__migrate__.jpg` next to `IMG_001.HEIC`. The marker filename encodes "this replaces `IMG_001.HEIC`."
-3. **Capture original** — rename `IMG_001.HEIC` → `<library-root>\.pix\runs\<run-id>\L<NNN>_IMG_001.HEIC` (see [conservation captures](#conservation-captures)).
+3. **Capture original** — rename `IMG_001.HEIC` → `<library-root>\.pix\runs\<run-id>\data\L<NNN>_IMG_001.HEIC` (see [conservation captures](#conservation-captures)).
 4. **Finalize name** — rename `IMG_001.HEIC.__migrate__.jpg` to its canonical name (e.g. `2023-08-15_143205.jpg`).
 
 Each step is one same-volume rename. The marker's existence is the only thing the next run needs to know about.
@@ -248,12 +251,12 @@ Every destructive operation in a plan line writes the data it replaces into the 
 
 | Action | Capture |
 |---|---|
-| `CONVERT` (± TAG, ± RENAME) | Move original file → `runs\<run-id>\L<NNN>_<original-filename>`. The file's XMP travels inside the file. |
-| `DELETE` | Move file → `runs\<run-id>\L<NNN>_<original-filename>`. |
-| `TAG` only (or `TAG` + `RENAME`) | Export current XMP via ExifTool → `runs\<run-id>\L<NNN>_<original-filename>.xmp`. The file itself stays in place; only its metadata changes. |
+| `CONVERT` (± TAG, ± RENAME) | Move original file → `runs\<run-id>\data\L<NNN>_<original-filename>`. The file's XMP travels inside the file. |
+| `DELETE` | Move file → `runs\<run-id>\data\L<NNN>_<original-filename>`. |
+| `TAG` only (or `TAG` + `RENAME`) | Export current XMP via ExifTool → `runs\<run-id>\data\L<NNN>_<original-filename>.xmp`. The file itself stays in place; only its metadata changes. |
 | `RENAME` only | No capture — reversible from the plan line alone. |
 
-`L<NNN>` is the plan line ID; `<original-filename>` is the file's name as it was on disk. Captures live alongside `plan.txt` in the same run folder.
+`L<NNN>` is the plan line ID; `<original-filename>` is the file's name as it was on disk. Captures live in a `data\` subfolder of the run dir (sibling to `debug\` from `--debug` runs), separating preserved file data from the run's logs (`plan.txt`, `plan.log`, `apply.log`).
 
 **Conservation law**: a `migrate` run never destroys data without preserving what it destroyed. State is reconstructible (modulo rollback code being written) from current state + run folders walked in reverse order. The data sufficient for `pix rollback <run-id>` is guaranteed present even though the rollback command itself is deferred.
 
@@ -289,7 +292,7 @@ L042 | CONVERT+RENAME+TAG | IMG_4821.HEIC | →2023-08-15_143205.jpg; original_p
 
 1. Decode HEIC, re-encode as JPG, compute BLAKE3 of the new JPG's non-metadata bytes, write `pix:DateAuto` + `pix:OriginalPath` + `pix:ContentHash` into the JPG, validate by re-reading metadata. Result lands at `F:\photos\.pix\staging\IMG_4821.HEIC.tmp.jpg`.
 2. Rename `F:\photos\.pix\staging\IMG_4821.HEIC.tmp.jpg` → `F:\source\trip-2023\IMG_4821.HEIC.__migrate__.jpg`. (Marker is now next to original.)
-3. Rename `F:\source\trip-2023\IMG_4821.HEIC` → `F:\photos\.pix\runs\2026-05-16_14-32-01\L042_IMG_4821.HEIC`. (Original captured.)
+3. Rename `F:\source\trip-2023\IMG_4821.HEIC` → `F:\photos\.pix\runs\2026-05-16_14-32-01\data\L042_IMG_4821.HEIC`. (Original captured.)
 4. Rename `F:\source\trip-2023\IMG_4821.HEIC.__migrate__.jpg` → `F:\source\trip-2023\2023-08-15_143205.jpg`. (Canonical name.)
 
 **Post-state:**
@@ -297,9 +300,11 @@ L042 | CONVERT+RENAME+TAG | IMG_4821.HEIC | →2023-08-15_143205.jpg; original_p
 F:\source\trip-2023\
   2023-08-15_143205.jpg
 F:\photos\.pix\runs\2026-05-16_14-32-01\
-  L042_IMG_4821.HEIC
   plan.txt
+  plan.log
   apply.log
+  data\
+    L042_IMG_4821.HEIC
 ```
 
 **Crash recovery:**
@@ -357,7 +362,7 @@ L055 | TAG | 2023-08-15_143612.jpg | event_auto null→birthday
 
 **Apply ops:**
 
-1. Export current XMP via ExifTool → `F:\photos\.pix\runs\2026-05-16_14-32-01\L055_2023-08-15_143612.jpg.xmp`. (Sidecar capture; file untouched.)
+1. Export current XMP via ExifTool → `F:\photos\.pix\runs\2026-05-16_14-32-01\data\L055_2023-08-15_143612.jpg.xmp`. (Sidecar capture; file untouched.)
 2. Call ExifTool with `-overwrite_original` to write the new tags directly into `F:\source\trip-2023\2023-08-15_143612.jpg`. ExifTool internally writes to `2023-08-15_143612.jpg_exiftool_tmp`, then atomically renames it over the original. From pix's perspective the call either succeeds (new metadata in place) or fails (original untouched).
 
 No pix-managed marker is needed; ExifTool's own protocol provides atomicity.
@@ -367,8 +372,11 @@ No pix-managed marker is needed; ExifTool's own protocol provides atomicity.
 F:\source\trip-2023\
   2023-08-15_143612.jpg     # pix:EventAuto = "birthday"
 F:\photos\.pix\runs\2026-05-16_14-32-01\
-  L055_2023-08-15_143612.jpg.xmp
   plan.txt
+  plan.log
+  apply.log
+  data\
+    L055_2023-08-15_143612.jpg.xmp
 ```
 
 The image bytes are unchanged; only XMP differs. The sidecar in the run folder holds the prior XMP, which is enough to roll back the TAG change.
@@ -396,15 +404,18 @@ L007 | DELETE | Thumbs.db | extension policy: delete
 
 **Apply ops:**
 
-1. Rename `F:\source\trip-2023\Thumbs.db` → `F:\photos\.pix\runs\2026-05-16_14-32-01\L007_Thumbs.db`. (One atomic rename; this is both the capture and the removal.)
+1. Rename `F:\source\trip-2023\Thumbs.db` → `F:\photos\.pix\runs\2026-05-16_14-32-01\data\L007_Thumbs.db`. (One atomic rename; this is both the capture and the removal.)
 
 **Post-state:**
 ```
 F:\source\trip-2023\
   (Thumbs.db gone)
 F:\photos\.pix\runs\2026-05-16_14-32-01\
-  L007_Thumbs.db
   plan.txt
+  plan.log
+  apply.log
+  data\
+    L007_Thumbs.db
 ```
 
 **Crash recovery:** Rename is atomic; the file is either in source or in the run folder. Nothing to clean up.
@@ -427,7 +438,7 @@ L088 | TAG | 2022-08-15_143205.jpg | date_auto 2023-08-15-14:32:05→2024-08-15-
 
 **Apply ops:** (same shape as Example 3)
 
-1. Export current XMP via ExifTool → `F:\photos\.pix\runs\2026-05-16_14-32-01\L088_2022-08-15_143205.jpg.xmp`. (Sidecar capture.)
+1. Export current XMP via ExifTool → `F:\photos\.pix\runs\2026-05-16_14-32-01\data\L088_2022-08-15_143205.jpg.xmp`. (Sidecar capture.)
 2. Call ExifTool with `-overwrite_original` to write the new `pix:DateAuto` AND the new `pix:DateAutoPrevious` (set to the prior `DateAuto` value `2023-08-15-14:32:05`) in a single ExifTool invocation.
 
 **Post-state:**
@@ -437,8 +448,11 @@ F:\source\trip-2023\
                             # pix:DateAutoPrevious = 2023-08-15-14:32:05
                             # pix:DateOverride = 2022-*-*-*:*:* (unchanged)
 F:\photos\.pix\runs\2026-05-16_14-32-01\
-  L088_2022-08-15_143205.jpg.xmp
   plan.txt
+  plan.log
+  apply.log
+  data\
+    L088_2022-08-15_143205.jpg.xmp
 ```
 
 The filename is unchanged because the effective `date`'s year is still 2022 (override pins it). `DateAutoPrevious` now flags this file for future review — a `pix` workflow can surface "files whose `_auto` drifted while masked by an override" by looking for the presence of this field.

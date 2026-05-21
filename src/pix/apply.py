@@ -55,6 +55,12 @@ def apply_plan(
     needs_staging = any(
         ln.action == Action.CONVERT_RENAME_TAG for ln in runnable
     )
+    # Any action other than a pure RENAME captures something into
+    # `<run-dir>/data/`. Create it lazily — RENAME-only plans don't
+    # need it.
+    needs_data = any(ln.action != Action.RENAME for ln in runnable)
+    if needs_data:
+        (run_dir / "data").mkdir(parents=True, exist_ok=True)
 
     log_path = run_dir / "apply.log"
     exiftool: ExifToolSession | None = None
