@@ -85,9 +85,11 @@ def test_apply_delete_moves_file_into_run_dir(tmp_path: Path) -> None:
     assert not junk.exists()
     assert (run_dir / "L001_Thumbs.db").exists()
 
-    # Plan was updated with completion annotation.
-    updated = plan_path.read_text(encoding="utf-8")
-    assert "Completed]" in updated
+    # plan.txt is immutable from apply's perspective; progress goes to apply.log.
+    assert plan_path.read_text(encoding="utf-8") == plan.to_text()
+    log = (run_dir / "apply.log").read_text(encoding="utf-8")
+    assert "L001 Started" in log
+    assert "L001 Completed" in log
 
 
 def test_apply_rename_within_same_folder(tmp_path: Path) -> None:

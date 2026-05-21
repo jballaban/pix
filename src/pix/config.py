@@ -23,6 +23,7 @@ extensions:
   png:     convert_to_jpg
   mov:     convert_to_mp4
   avi:     convert_to_mp4
+  mts:     convert_to_mp4   # AVCHD camcorder MPEG-TS; usually H.264, remuxes cheaply
   ds_store: delete    # macOS system junk
   thumbs.db: delete   # Windows system junk
 """

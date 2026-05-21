@@ -18,7 +18,7 @@ Migrate honors the spec-wide metadata-preservation invariants: **CONVERT carries
 6. **Confirm.** Whatever the editor leaves on disk — unchanged, edited, or fully emptied — CLI shows a summary of the resulting plan (counts per action type) and prompts: `Apply? [y/N]`. An empty plan summarizes as `0 actions — Apply? [y/N]` and is a no-op confirmation. The prompt is uniform; the editor-close behavior never branches.
 7. **Apply.** `y` → process plan lines sequentially. Each destructive operation captures the data it replaces into the run folder (see [conservation captures](#conservation-captures)) before destroying anything. TAG writes are per-file ExifTool calls; the cache is updated in-memory after each write but isn't strictly needed (apply executes the fixed plan and doesn't re-read). Anything other than `y` → abort, the plan file stays on disk as-is and nothing else changes.
 
-During apply, the plan file doubles as the run log. After each operation, the file is rewritten in place: the active row is annotated `[{time} Started]`, and rows that finish flip to `[{time} Completed]`. Persisted after every step so a crash leaves a readable record up to that point. The annotated file is **for reference only** — the next `migrate` run replans from current filesystem state and ignores any prior annotations.
+`plan.txt` is **immutable once written.** Generation populates it; the editor pass may shrink it (line deletions); apply reads it but never writes back to it. Progress is streamed to a separate `runs\<run-id>\apply.log` opened in append mode — one line per state transition (`Started` / `Completed` / `Failed`). A crash leaves an `apply.log` truncated to whatever was flushed; the missing tail is the work that didn't finish. Both files are **for reference only** — the next `migrate` run replans from current filesystem state.
 
 No folder lock — single-user, single-active-run assumption.
 
@@ -73,18 +73,22 @@ L006 | TAG                | 2021-12-25_090015.jpg | content_hash compute
 
 L005 is a `date_auto` re-derivation on a file whose `pix:DateOverride` pins year=2022. The plan line shows the user-visible `_auto` change; the filename doesn't change (the override masks year, which is the only changed component). As a side effect of this TAG write, migrate also writes `pix:DateAutoPrevious = 2023-08-15-14:32:05` — the dirty flag for future review (see [tags.md](tags.md#auto-previous-fields-dirty-flagging)).
 
-Mid-apply the same file looks like:
+During apply, progress streams to a sibling `apply.log` in the same run folder, append-only, one line per state transition:
 
 ```
-L001 | CONVERT+RENAME+TAG | IMG_001.HEIC      | →2023-08-15_143205.jpg; original_path init; content_hash compute; date_auto null→2023-08-15-14:32:05    [14:32:01 Completed]
-L002 | RENAME             | DSC_0042.JPG      | →2023-08-15_143612.jpg                          [14:32:04 Started]
-L003 | DELETE              | Thumbs.db         | extension policy: delete
-L004 | TAG                | 2023-08-15_143612.jpg | event_auto null→birthday
-L005 | TAG                | 2022-08-15_143205.jpg | date_auto 2023-08-15-14:32:05→2024-08-15-14:32:05
-L006 | TAG                | 2021-12-25_090015.jpg | content_hash compute
+2026-05-16T14:32:01 L001 Started   CONVERT+RENAME+TAG  IMG_001.HEIC
+2026-05-16T14:32:07 L001 Completed CONVERT+RENAME+TAG  IMG_001.HEIC
+2026-05-16T14:32:07 L002 Started   RENAME              DSC_0042.JPG
+2026-05-16T14:32:07 L002 Completed RENAME              DSC_0042.JPG
+2026-05-16T14:32:07 L003 Started   DELETE              Thumbs.db
+2026-05-16T14:32:07 L003 Completed DELETE              Thumbs.db
+2026-05-16T14:32:08 L004 Started   TAG                 2023-08-15_143612.jpg
+2026-05-16T14:32:08 L004 Failed    TAG                 2023-08-15_143612.jpg: exiftool exited 1
 ```
 
-Line IDs (`L001`, `L002`, …) are assigned at plan generation. They're stable for the duration of the run and tie each plan line to its capture file in the run folder. Users who delete lines from the plan during edit leave gaps in the numbering — that's fine, the survivors keep their IDs.
+`plan.txt` itself is never rewritten. A `Started` line with no matching `Completed`/`Failed` is the line that was active when the process died.
+
+Line IDs (`L001`, `L002`, …) are assigned at plan generation. They're stable for the duration of the run and tie each plan line to its `apply.log` entries and its capture file in the run folder. Users who delete lines from the plan during edit leave gaps in the numbering — that's fine, the survivors keep their IDs.
 
 Behaviors:
 
@@ -159,6 +163,7 @@ extensions:
   png:     convert_to_jpg
   mov:     convert_to_mp4
   avi:     convert_to_mp4
+  mts:     convert_to_mp4   # AVCHD camcorder MPEG-TS; usually H.264, remuxes cheaply
   ds_store: delete    # macOS system junk
   thumbs.db: delete   # Windows system junk
 ```
@@ -166,7 +171,7 @@ extensions:
 Notable omissions — user must opt in by adding the extension:
 - RAW formats (`.cr2`, `.nef`, `.arw`, `.dng`, `.raf`, `.rw2`, `.orf`, `.pef`) — likely `keep`.
 - `.webp`, `.bmp`, `.tiff`/`.tif` — likely `convert_to_jpg`.
-- `.mkv`, `.wmv`, `.3gp`, `.webm` — likely `convert_to_mp4`.
+- `.mkv`, `.wmv`, `.3gp`, `.webm`, `.m2ts` — likely `convert_to_mp4`.
 - Sidecar/metadata files (`.aae`, `.lrcat`, `.xmp`) — likely `delete`.
 
 ### Fail-fast on unknown extensions
@@ -251,7 +256,7 @@ Every destructive operation in a plan line writes the data it replaces into the 
 
 ### Other consequences
 
-- **Plan annotations are best-effort.** Each step persists `[Started]` → `[Completed]` back to the plan file, but a crash mid-write may leave a row mis-annotated or unannotated. Source-folder state is the source of truth, not the plan file. The next `migrate` run replans from filesystem state and ignores prior annotations.
+- **`apply.log` is best-effort.** Each transition appends a line and flushes, but a crash mid-write may leave the log truncated. Source-folder state is the source of truth, not the log. The next `migrate` run replans from filesystem state and never consults the prior run's log.
 - **No resume.** Re-run migrate after a crash; the cleanup pass tidies leftover markers and the new plan covers what's left as a fresh plan against current state.
 
 ## Worked examples
@@ -288,7 +293,8 @@ F:\source\trip-2023\
   2023-08-15_143205.jpg
 F:\photos\.pix\runs\2026-05-16_14-32-01\
   L042_IMG_4821.HEIC
-  plan.txt (annotated [14:32:07 Completed])
+  plan.txt
+  apply.log
 ```
 
 **Crash recovery:**
@@ -322,6 +328,7 @@ F:\source\trip-2023\
   2023-08-15_143612.jpg
 F:\photos\.pix\runs\2026-05-16_14-32-01\
   plan.txt
+  apply.log
 ```
 
 No capture file — RENAME is reversible from the plan-line text alone.

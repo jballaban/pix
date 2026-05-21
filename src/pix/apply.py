@@ -2,19 +2,20 @@
 
 Per spec/migrate.md → Workflow step 7: process plan lines sequentially.
 Each destructive operation captures the data it replaces into the run
-folder before destroying anything. Plan.txt is updated in place with
-`[time Started]` / `[time Completed]` annotations as each line progresses.
+folder before destroying anything.
 
-Handles RENAME, DELETE, TAG, RENAME+TAG, and (since v0.1.8) CONVERT+
-RENAME+TAG. CONVERT uses the 4-step marker sequence from
-spec/migrate.md → Atomicity to keep the source folder recoverable
-through any crash point.
+`plan.txt` is immutable once written — apply reads it but never mutates
+it. Progress streams to a sibling `apply.log` opened in append mode: one
+line per state transition (`Started` / `Completed` / `Failed`). A crash
+truncates the log to whatever was flushed; the tail of missing lines is
+the work that didn't finish.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from typing import IO
 
 from pix.content_hash import compute_content_hash
 from pix.convert import ConvertFailed, convert_to_jpg, convert_to_mp4
@@ -33,10 +34,14 @@ def apply_plan(
     kept_line_ids: set[str],
     staging_dir: Path | None = None,
 ) -> tuple[int, int]:
-    """Apply the plan, updating plan.txt in place.
+    """Apply the plan, streaming progress to `<run_dir>/apply.log`.
 
     Returns `(completed, skipped)`. Raises `ApplyError` if any action fails.
+    `plan_path` is unused here — kept in the signature so callers can pass
+    the same paths they pass elsewhere; plan.txt is never rewritten.
     """
+    del plan_path  # plan.txt is immutable from apply's perspective
+
     runnable = [
         ln for ln in plan.lines if ln.line_id in kept_line_ids
     ]
@@ -50,48 +55,52 @@ def apply_plan(
         ln.action == Action.CONVERT_RENAME_TAG for ln in runnable
     )
 
-    annotations: dict[str, str] = {}
+    log_path = run_dir / "apply.log"
     exiftool: ExifToolSession | None = None
-    try:
-        if needs_exiftool:
-            exiftool = ExifToolSession()
-        if needs_staging:
-            if staging_dir is None:
-                raise ApplyError(
-                    "CONVERT actions require a staging directory but none "
-                    "was provided"
-                )
-            staging_dir.mkdir(parents=True, exist_ok=True)
-        completed = 0
-        for ln in runnable:
-            annotations[ln.line_id] = _stamp("Started")
-            _write_plan(plan, plan_path, annotations)
-            try:
-                _apply_one(ln, run_dir, exiftool, staging_dir)
-            except Exception as e:
-                annotations[ln.line_id] = _stamp(f"Failed: {e}")
-                _write_plan(plan, plan_path, annotations)
-                raise ApplyError(
-                    f"{ln.line_id} ({ln.rel_path}): {e}"
-                ) from e
-            annotations[ln.line_id] = _stamp("Completed")
-            _write_plan(plan, plan_path, annotations)
-            completed += 1
-    finally:
-        if exiftool is not None:
-            exiftool.close()
+    completed = 0
+    with log_path.open("a", encoding="utf-8") as log:
+        try:
+            if needs_exiftool:
+                exiftool = ExifToolSession()
+            if needs_staging:
+                if staging_dir is None:
+                    raise ApplyError(
+                        "CONVERT actions require a staging directory but "
+                        "none was provided"
+                    )
+                staging_dir.mkdir(parents=True, exist_ok=True)
+            for ln in runnable:
+                _log(log, ln, "Started")
+                try:
+                    _apply_one(ln, run_dir, exiftool, staging_dir)
+                except Exception as e:
+                    _log(log, ln, "Failed", detail=str(e))
+                    raise ApplyError(
+                        f"{ln.line_id} ({ln.rel_path}): {e}"
+                    ) from e
+                _log(log, ln, "Completed")
+                completed += 1
+        finally:
+            if exiftool is not None:
+                exiftool.close()
 
     return completed, 0
 
 
-def _stamp(state: str) -> str:
-    return f"[{datetime.now().strftime('%H:%M:%S')} {state}]"
-
-
-def _write_plan(
-    plan: Plan, plan_path: Path, annotations: dict[str, str]
+def _log(
+    log: IO[str],
+    ln: PlanLine,
+    state: str,
+    detail: str | None = None,
 ) -> None:
-    plan_path.write_text(plan.to_text(annotations), encoding="utf-8")
+    """Append one transition line to apply.log and flush."""
+    ts = datetime.now().isoformat(timespec="seconds")
+    suffix = f": {detail}" if detail else ""
+    log.write(
+        f"{ts} {ln.line_id} {state:<9} {ln.action.value:<18}  "
+        f"{ln.rel_path}{suffix}\n"
+    )
+    log.flush()
 
 
 def _apply_one(

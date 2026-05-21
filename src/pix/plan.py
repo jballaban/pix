@@ -119,15 +119,8 @@ class Plan:
     def first_migrate_count(self) -> int:
         return sum(1 for ln in self.lines if ln.is_first_migrate)
 
-    def to_text(
-        self, annotations: dict[str, str] | None = None
-    ) -> str:
-        """Serialize to the plan.txt format.
-
-        `annotations` maps line_id -> annotation suffix (e.g. `[14:32:01
-        Started]`). Used during apply to update plan.txt in place.
-        """
-        annot = annotations or {}
+    def to_text(self) -> str:
+        """Serialize to the plan.txt format."""
         path_width = max(
             (len(ln.rel_path) for ln in self.lines), default=10
         )
@@ -156,16 +149,12 @@ class Plan:
 
         body: list[str] = []
         for ln in self.lines:
-            line = (
+            body.append(
                 f"{ln.line_id} | "
                 f"{ln.action.value.ljust(_ACTION_WIDTH)} | "
                 f"{ln.rel_path.ljust(path_width)} | "
                 f"{ln.details}"
             )
-            suffix = annot.get(ln.line_id)
-            if suffix:
-                line = f"{line}    {suffix}"
-            body.append(line)
 
         counts = self.counts()
         convert = counts[Action.CONVERT_RENAME_TAG]
