@@ -50,5 +50,5 @@ Already flagged in `spec/migrate.md` → "Future". Under `.pix/cache/`, keyed on
 
 ## Non-perf items parked here
 
-### 12. Config evolution: existing libraries don't pick up new default extensions
-`src/pix/config.py` + `src/pix/commands/init.py` — `DEFAULT_CONFIG_YAML` is only written on first `pix init`. When we add a new extension to the default (e.g. `mts` in v0.1.12), existing libraries' `.pix/config.yaml` is stale and the new extension fails the unknown-extension check. Surfaced when migrating `G:\pix` after the mts addition. Possible directions: (a) merge-on-read — when loading config, log any default extensions missing from the user's file and suggest the additions; (b) `pix config sync` command that diff/merges; (c) leave it manual and just document the change in release notes. No design pick yet.
+### 12. Config evolution: existing libraries don't pick up new default extensions — **superseded in v0.1.20**
+Subsumed by the schema-versioning system (see [spec/library.md → Schema versioning](library.md#schema-versioning)). When a future release bumps `SCHEMA_VERSION`, existing libraries get archive-and-reset; users can recover any customizations from `.pix/archive/v<old>/`. The original `mts`-on-existing-libraries problem (v0.1.12) wasn't a schema break — it was just an addition to defaults — so libraries created before v0.1.12 still need the manual edit. From v0.1.20 onward, any change that *requires* updated config will be paired with a `SCHEMA_VERSION` bump.

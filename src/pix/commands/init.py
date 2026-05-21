@@ -11,6 +11,7 @@ from pathlib import Path
 import typer
 
 from pix.config import DEFAULT_CONFIG_YAML
+from pix.schema import SCHEMA_VERSION
 
 SYNC_REMINDER = """\
 Reminder: exclude .pix/ from any file-sync clients (Synology Drive, OneDrive,
@@ -43,6 +44,9 @@ def init_library(path: Path | None) -> None:
     target.mkdir(parents=True, exist_ok=True)
     pix_dir.mkdir()
     (pix_dir / "config.yaml").write_text(DEFAULT_CONFIG_YAML, encoding="utf-8")
+    (pix_dir / "state.yaml").write_text(
+        f"schema_version: {SCHEMA_VERSION}\n", encoding="utf-8"
+    )
 
     typer.echo(f"Initialized pix library root at {target}")
     typer.echo()

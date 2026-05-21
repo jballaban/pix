@@ -26,6 +26,29 @@ When any `pix <op>` is invoked, the library root is resolved by:
 
 Each library is independent. Two libraries on the same machine (e.g., `F:\personal\` and `F:\work\`) each have their own `.pix\` and share no state. Cross-library moves are an explicit, deferred operation.
 
+## Schema versioning
+
+`.pix/state.yaml` carries a single integer:
+
+```yaml
+schema_version: 1
+```
+
+The constant `SCHEMA_VERSION` in `src/pix/schema.py` tracks the version this build of pix understands. Every pix command (except `init`) compares the two after resolving the root:
+
+| On-disk vs. running | Action |
+|---|---|
+| `state.yaml` missing | Bootstrap — write a fresh `state.yaml` at `SCHEMA_VERSION`. Nothing else touched. (Lets pre-versioning libraries adopt the system without losing their custom config.) |
+| Equal | No-op. |
+| On-disk lower | Archive-and-reset: everything in `.pix/` (except `archive/`) is moved into `.pix/archive/v<old>/`, then a fresh default `config.yaml` and `state.yaml` are created. One-line console notice, no prompt. The user can recover any customizations by inspecting `archive/v<old>/`. |
+| On-disk higher | Refuse. A newer pix touched this library; we don't know what we'd break. |
+
+The reset is **not** a migration — there's no per-version logic, no field mapping, no schema-aware merge. It's a deliberate trade: rather than maintain a migration framework for a rarely-changing surface, we accept the cost of forcing the user to manually re-apply customizations after a schema bump. The archive folder is the safety net.
+
+Bump `SCHEMA_VERSION` only when something **material** in `.pix/` changes — a new mandatory config field, a renamed subfolder, a removed file format. Most pix releases don't touch persisted state and should not bump it. Past bumps are recorded in `src/pix/schema.py`'s module docstring so we have a written history of what each version meant.
+
+Per-file `pix:*` XMP fields are **out of scope** for this system. Schema changes there are absorbed lazily by migrate's existing re-derivation (`DateAuto`, `EventAuto`, etc. re-derive every run). Run folders are also out of scope — they're frozen historical records, and rollback (when built) will be responsible for handling whatever layout each one was written in.
+
 ### Source vs library root
 
 `pix migrate <source>` normalizes the files inside `<source>` **in place** — converting formats, applying the canonical filename, writing `_auto` tag values into metadata. Files never leave `<source>` during migrate; only `organize` rearranges folders. The library identified by the resolved root provides the `.pix\` directory where the run record and captured originals live. The source folder doesn't need to live inside the library root — anywhere on the same volume works (same-volume rename / hard-link constraint still applies).
@@ -35,8 +58,10 @@ Each library is independent. Two libraries on the same machine (e.g., `F:\person
 - **Library** — real, human-readable, **media only**. Whatever shape the active organize template produces (e.g. `<library-root>/2023/2023-08/2023-08-15_143205.jpg`). No tool scaffolding lives inside the library — `organize` rewrites the tree freely.
 - **`<library-root>/.pix/`** — all scaffolding:
   - `config.yaml` — extension policy + other settings.
+  - `state.yaml` — library-state schema version (see [Schema versioning](#schema-versioning)).
   - `runs/<run-id>/` — per-run state. Contains `plan.txt` plus `L<NNN>_<original-filename>` captures for files destroyed during the run (CONVERT/DELETE originals) and `L<NNN>_<original-filename>.xmp` sidecars for TAG-only mutations. Each run folder is independently rollback-able. Run folders accumulate across runs until the user manually deletes them. Run-id is just a folder name on disk; no code reads it back, no marker carries it.
   - `staging/` — shared scratch space for off-library conversions during the current migrate apply. Wiped at the start of every migrate.
+  - `archive/v<N>/` — created automatically when a schema-version reset happens; holds the prior `.pix/` contents (everything except `archive/` itself). See [Schema versioning](#schema-versioning).
   - `faces/` — face crop cache + embeddings DB.
   - `checkouts/<id>/` — active tag-editing workspaces.
   - Other caches (hash index, EXIF cache, organize-template state).

@@ -26,6 +26,10 @@ def test_init_creates_pix_dir_and_default_config(tmp_path: Path) -> None:
     assert "mov:" in config_text
     assert "thumbs.db" in config_text
 
+    state_path = target / ".pix" / "state.yaml"
+    assert state_path.is_file()
+    assert "schema_version:" in state_path.read_text(encoding="utf-8")
+
 
 def test_init_fails_if_already_initialized(tmp_path: Path) -> None:
     target = tmp_path / "library"

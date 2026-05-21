@@ -33,6 +33,7 @@ from pix.metadata import (
 from pix.plan import Action, PlanLine, generate_plan, lookup_policy
 from pix.root import NoLibraryRoot, resolve as resolve_root
 from pix.scan import walk_source_files
+from pix.schema import SCHEMA_VERSION, SchemaTooNew
 
 
 def migrate_folder(
@@ -47,10 +48,21 @@ def migrate_folder(
     generation, before the editor opens.
     """
     try:
-        root = resolve_root(override=root_override)
+        root, schema = resolve_root(override=root_override)
     except NoLibraryRoot as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
+    except SchemaTooNew as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+
+    if schema.archived_from is not None:
+        typer.echo(
+            f"Library schema was v{schema.archived_from}; this pix expects "
+            f"v{SCHEMA_VERSION}. Archived prior .pix/ contents to "
+            f".pix/archive/v{schema.archived_from}/ and reset to defaults. "
+            f"Inspect that folder to recover any customizations."
+        )
 
     folder = folder.resolve()
     if not folder.is_dir():
