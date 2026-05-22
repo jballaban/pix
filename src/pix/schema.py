@@ -145,15 +145,17 @@ class SchemaTooNew(Exception):
 class SchemaUpgradeRequired(Exception):
     """Library schema is older than this pix; user must run `pix upgrade`.
 
-    The default message is just the short headline (e.g. "Pix upgrade
-    required v2=>v7."); commands append a "Run pix upgrade <path>"
+    The default message is just the short headline — explicitly says
+    "schema" to disambiguate from pix's own tool version (those are
+    independent counters). Commands append a "Run pix upgrade <path>"
     suggestion using whatever path the user actually typed, so the
     suggestion stays copy-paste friendly.
     """
 
     def __init__(self, library_version: int, root: Path) -> None:
         super().__init__(
-            f"Pix upgrade required v{library_version}=>v{SCHEMA_VERSION}."
+            f"Pix schema upgrade required: library at schema v"
+            f"{library_version}, this pix expects v{SCHEMA_VERSION}."
         )
         self.library_version = library_version
         self.root = root

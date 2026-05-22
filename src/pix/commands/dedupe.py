@@ -33,7 +33,7 @@ from pix.metadata import (
 from pix.organize import CwdInsideLibraryError, check_cwd_not_inside
 from pix.root import NoLibraryRoot, resolve as resolve_root
 from pix.scan import walk_source_files
-from pix.schema import SchemaTooNew, SchemaUpgradeRequired
+from pix.schema import SCHEMA_VERSION, SchemaTooNew, SchemaUpgradeRequired
 
 
 def dedupe_library(path: Path) -> None:
@@ -48,6 +48,8 @@ def dedupe_library(path: Path) -> None:
     except (NoLibraryRoot, SchemaTooNew) as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
+
+    typer.echo(f"Library schema: v{SCHEMA_VERSION}")
 
     try:
         check_cwd_not_inside(root)
