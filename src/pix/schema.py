@@ -38,7 +38,12 @@ from pix.config import DEFAULT_CONFIG_YAML
 # what each version meant.
 #
 # v1 — Initial schema. .pix/{config.yaml, state.yaml, runs/, staging/}.
-SCHEMA_VERSION: int = 1
+# v2 — Added `stash` extension action and the `.pix/stash/` subfolder
+#      (created lazily on first stash). Default config gains
+#      dng/insp/insv → stash. Existing libraries archive-and-reset to
+#      pick up the new defaults; users restore prior customizations
+#      from .pix/archive/v1/.
+SCHEMA_VERSION: int = 2
 
 
 class SchemaTooNew(Exception):

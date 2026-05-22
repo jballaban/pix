@@ -61,6 +61,7 @@ class Action(str, Enum):
     RENAME = "RENAME"
     MOVE = "MOVE"
     DEDUP = "DEDUP"
+    STASH = "STASH"
 
 
 # Width to which action labels are right-padded in plan.txt.
@@ -265,6 +266,10 @@ def attach_paths(
 
     if ln.action == Action.DELETE:
         capture_path = data_dir / base
+    elif ln.action == Action.STASH:
+        # Apply may turn this into a dup-capture or a new stash entry;
+        # only the dup branch uses capture_path.
+        capture_path = data_dir / base
     elif ln.action == Action.RENAME:
         if ln.target_filename is None:
             raise ValueError(
@@ -459,6 +464,17 @@ def _plan_one(
                 action=Action.DELETE,
                 rel_path=rel_str,
                 details="extension policy: delete",
+                abs_path=path,
+            )
+
+        if policy == "stash":
+            debug.section("Decision")
+            debug.log("  STASH per extension policy.")
+            return PlanLine(
+                line_id="",
+                action=Action.STASH,
+                rel_path=rel_str,
+                details="extension policy: stash",
                 abs_path=path,
             )
 

@@ -155,6 +155,7 @@ Every source extension must have an explicit action in `<library-root>\.pix\conf
 | `convert_to_jpg` | Decode + re-encode as JPG (quality 95). Pillow + pillow-heif. EXIF/XMP preserved. |
 | `convert_to_mp4` | Container → MP4. Re-mux (`ffmpeg -c copy`) if codec is H.264/H.265; otherwise re-encode `-c:v libx265 -crf 23 -c:a aac -b:a 192k`. Container metadata copied (`-map_metadata 0`). |
 | `delete` | Capture the file into the run folder during migrate, then remove from source. Conservation applies. |
+| `stash` | Move the file into `<library-root>/.pix/stash/` for future processing (RAW formats, proprietary 360 sources, anything we can't canonically process in v1). Whole-file BLAKE3 dedups across stash entries: same content from multiple sources lands once with a multi-origin sidecar. See [Stash action](#stash-action) below. |
 
 Adding a **new target format** (e.g. `convert_to_webp`) requires code changes — new conversion implementation and tag-write support. Adding a new extension to an existing action is config-only.
 
@@ -185,15 +186,44 @@ extensions:
   mov:     convert_to_mp4
   avi:     convert_to_mp4
   mts:     convert_to_mp4   # AVCHD camcorder MPEG-TS; usually H.264, remuxes cheaply
+  dng:     stash            # Adobe Digital Negative — raw sensor data
+  insp:    stash            # Insta360 proprietary photo
+  insv:    stash            # Insta360 proprietary video
   ds_store: delete    # macOS system junk
   thumbs.db: delete   # Windows system junk
 ```
 
 Notable omissions — user must opt in by adding the extension:
-- RAW formats (`.cr2`, `.nef`, `.arw`, `.dng`, `.raf`, `.rw2`, `.orf`, `.pef`) — likely `keep`.
+- Other RAW formats (`.cr2`, `.nef`, `.arw`, `.raf`, `.rw2`, `.orf`, `.pef`) — likely `stash` (same reasoning as `.dng`). Added on demand.
 - `.webp`, `.bmp`, `.tiff`/`.tif` — likely `convert_to_jpg`.
 - `.mkv`, `.wmv`, `.3gp`, `.webm`, `.m2ts` — likely `convert_to_mp4`.
 - Sidecar/metadata files (`.aae`, `.lrcat`, `.xmp`) — likely `delete`.
+
+### Stash action
+
+The `stash` action moves files into `<library-root>/.pix/stash/` for future processing. The library itself only contains files in canonical formats; stash is the holding area for things we can't (or shouldn't) canonicalize in v1: RAW sensor files (`.dng`, etc.), proprietary 360 source files (`.insp`/`.insv`), anything else the user wants set aside.
+
+**Layout**: flat folder, one file per unique-content. A YAML sidecar (`<filename>.stashinfo`) sits next to each stashed file:
+
+```yaml
+hash: 3a1f8b9c2d4e5f...                 # whole-file BLAKE3 hex digest
+origins:
+  - F:\source\trip-2023\IMG_001.dng     # where this content came from
+  - F:\backup\trip-2023\IMG_001.dng     # subsequent dups append here
+original_filename: IMG_001.dng          # present only if stash filename was modified
+```
+
+**Whole-file hash, not format-aware.** Stash assumes the files inside aren't metadata-edited (DNG sensor data, proprietary blobs). The hash is the same BLAKE3 that `compute_content_hash` uses, but for these formats it falls through to the raw-bytes path — no APP-marker stripping, no `mdat` framing.
+
+**Dedup rule.** Before writing, the source's hash is compared against the existing stash index (one map built from all sidecars at apply start). On match: the source is **not** stored again; it's captured to `runs/<run-id>/data/L###_<filename>` (standard conservation), and the existing sidecar's `origins` list gains the new source path.
+
+**Filename collision rule** (different content, same source filename): the new entry's stash filename gets a `_NNN` suffix, same algorithm as the canonical-filename collision rule in [library.md](library.md#collision-handling). The sidecar records the un-suffixed `original_filename` so a reader can tell `IMG_001_001.dng` was renamed-from `IMG_001.dng` (vs. happening to be named that way by the camera).
+
+**Cross-volume**: source on a different volume from the library means the initial move is a copy+delete (via `shutil.move`). Subsequent stashes of the same content from a different source skip this — they're routed to the dup-capture instead. Cost is paid once per unique content.
+
+**Source folder fate**: same as DELETE — migrate doesn't own the source folder, so empty source folders after a stash are left in place.
+
+**Rollback**: deferred. The apply.log records both source path and stash destination per line; rollback would reverse both branches (new-stash → move from stash back to source; dup-stash → restore from `data/` to source, optionally trim sidecar origins).
 
 ### Fail-fast on unknown extensions
 

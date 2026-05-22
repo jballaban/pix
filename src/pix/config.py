@@ -8,9 +8,11 @@ from typing import Literal, cast
 
 import yaml
 
-ExtensionAction = Literal["keep", "convert_to_jpg", "convert_to_mp4", "delete"]
+ExtensionAction = Literal[
+    "keep", "convert_to_jpg", "convert_to_mp4", "delete", "stash"
+]
 VALID_ACTIONS: frozenset[str] = frozenset(
-    {"keep", "convert_to_jpg", "convert_to_mp4", "delete"}
+    {"keep", "convert_to_jpg", "convert_to_mp4", "delete", "stash"}
 )
 
 DEFAULT_CONFIG_YAML: str = """\
@@ -24,6 +26,9 @@ extensions:
   mov:     convert_to_mp4
   avi:     convert_to_mp4
   mts:     convert_to_mp4   # AVCHD camcorder MPEG-TS; usually H.264, remuxes cheaply
+  dng:     stash            # Adobe Digital Negative — raw sensor data; preserved for future processing
+  insp:    stash            # Insta360 proprietary photo
+  insv:    stash            # Insta360 proprietary video
   ds_store: delete    # macOS system junk
   thumbs.db: delete   # Windows system junk
 """
