@@ -39,7 +39,9 @@ from pix.config import DEFAULT_CONFIG_YAML
 # v2 — Added `stash` extension action and the `.pix/stash/` subfolder
 #      (created lazily on first stash). Default config gains
 #      dng/insp/insv → stash.
-SCHEMA_VERSION: int = 2
+# v3 — Default config gains ini/txt/json/gif/webp → delete (Windows
+#      junk sidecars, web-format throwaways, sundry sidecar formats).
+SCHEMA_VERSION: int = 3
 
 
 # --- Upgrades --------------------------------------------------------------
@@ -69,6 +71,19 @@ UPGRADES: dict[int, Upgrade] = {
         description=(
             "Added `stash` extension action; default config gains "
             "dng / insp / insv → stash."
+        ),
+    ),
+    3: Upgrade(
+        add_extensions={
+            "ini": "delete",
+            "txt": "delete",
+            "json": "delete",
+            "gif": "delete",
+            "webp": "delete",
+        },
+        description=(
+            "Default config gains ini / txt / json / gif / webp → "
+            "delete (Windows junk sidecars, web-format throwaways)."
         ),
     ),
 }

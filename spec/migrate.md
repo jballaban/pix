@@ -191,6 +191,11 @@ extensions:
   insv:    stash            # Insta360 proprietary video
   ds_store: delete    # macOS system junk
   thumbs.db: delete   # Windows system junk
+  ini:     delete    # desktop.ini and other Windows config sidecars
+  txt:     delete    # plain text files (notes, release-notes, manifests)
+  json:    delete    # metadata exports, sidecars
+  gif:     delete    # web-format animated images (memes, downloads)
+  webp:    delete    # web image format (downloads, screenshots)
 ```
 
 Notable omissions — user must opt in by adding the extension:
