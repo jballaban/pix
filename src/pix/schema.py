@@ -50,7 +50,12 @@ from pix.config import DEFAULT_CONFIG_YAML
 # v6 — Default config gains mpg / mpeg → convert_to_mp4 (MPEG-1/2
 #      Program Stream; full re-encode to H.265 since MP4 doesn't
 #      carry MPEG-2 video in practice).
-SCHEMA_VERSION: int = 6
+# v7 — Default config gains vob → convert_to_mp4 (DVD-Video object;
+#      same MPEG-2 PS content as .mpg with DVD-specific extras that
+#      get dropped on re-encode). Single-VOB rips convert cleanly;
+#      multi-VOB DVD rips would be split file-by-file (use HandBrake
+#      for those — known limitation, not auto-handled).
+SCHEMA_VERSION: int = 7
 
 
 # --- Upgrades --------------------------------------------------------------
@@ -118,6 +123,13 @@ UPGRADES: dict[int, Upgrade] = {
         description=(
             "Default config gains mpg / mpeg → convert_to_mp4 (MPEG-1/2 "
             "Program Stream; mandatory full re-encode to H.265)."
+        ),
+    ),
+    7: Upgrade(
+        add_extensions={"vob": "convert_to_mp4"},
+        description=(
+            "Default config gains vob → convert_to_mp4 (DVD-Video "
+            "object; same MPEG-2 PS re-encode path as .mpg)."
         ),
     ),
 }
