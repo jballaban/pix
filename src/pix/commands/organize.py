@@ -44,10 +44,14 @@ def organize_library(path: Path, template_str: str) -> None:
     `path` is anywhere inside (or at) the library root. Resolution
     walks up from it to find the `.pix/` directory.
     """
+    user_path = str(path)
     path = path.resolve()
     try:
         root = resolve_root(start=path)
-    except (NoLibraryRoot, SchemaTooNew, SchemaUpgradeRequired) as e:
+    except SchemaUpgradeRequired as e:
+        typer.echo(f"{e} Run `pix upgrade {user_path}`", err=True)
+        raise typer.Exit(code=1) from e
+    except (NoLibraryRoot, SchemaTooNew) as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
 

@@ -38,10 +38,14 @@ from pix.schema import SchemaTooNew, SchemaUpgradeRequired
 
 def dedupe_library(path: Path) -> None:
     """End-to-end dedupe: resolve, plan, edit, confirm, apply."""
+    user_path = str(path)
     path = path.resolve()
     try:
         root = resolve_root(start=path)
-    except (NoLibraryRoot, SchemaTooNew, SchemaUpgradeRequired) as e:
+    except SchemaUpgradeRequired as e:
+        typer.echo(f"{e} Run `pix upgrade {user_path}`", err=True)
+        raise typer.Exit(code=1) from e
+    except (NoLibraryRoot, SchemaTooNew) as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
 

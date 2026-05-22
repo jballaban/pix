@@ -41,10 +41,14 @@ def migrate_folder(folder: Path) -> None:
     Per-file plan-generation reasoning streams to `<run-dir>/debug.log`
     on every run (see `pix.debug`). Constant memory; no flag.
     """
+    user_path = str(folder)
     folder = folder.resolve()
     try:
         root = resolve_root(start=folder)
-    except (NoLibraryRoot, SchemaTooNew, SchemaUpgradeRequired) as e:
+    except SchemaUpgradeRequired as e:
+        typer.echo(f"{e} Run `pix upgrade {user_path}`", err=True)
+        raise typer.Exit(code=1) from e
+    except (NoLibraryRoot, SchemaTooNew) as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
 
