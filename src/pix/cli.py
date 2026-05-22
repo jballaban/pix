@@ -49,24 +49,29 @@ def migrate(
     folder: Annotated[
         Path,
         typer.Argument(
-            help="Folder whose files should be normalized in place.",
+            help=(
+                "Folder whose files should be normalized in place. The "
+                "library is resolved by walking up from this folder, then "
+                "falling back to $PIX_ROOT or CWD."
+            ),
         ),
     ],
-    root: Annotated[
-        Path | None,
-        typer.Option(
-            "--root",
-            help="Override library-root resolution.",
-            envvar="PIX_ROOT",
-        ),
-    ] = None,
 ) -> None:
     """Normalize files in <folder> per the library's policy (in-place, per-file)."""
-    migrate_folder(folder=folder, root_override=root)
+    migrate_folder(folder=folder)
 
 
 @app.command("organize")
 def organize(
+    path: Annotated[
+        Path,
+        typer.Argument(
+            help=(
+                "Path inside (or at) the library root. The library is "
+                "resolved by walking up from this path. `.` for CWD."
+            ),
+        ),
+    ],
     template: Annotated[
         str,
         typer.Argument(
@@ -77,14 +82,6 @@ def organize(
             ),
         ),
     ],
-    root: Annotated[
-        Path | None,
-        typer.Option(
-            "--root",
-            help="Override library-root resolution.",
-            envvar="PIX_ROOT",
-        ),
-    ] = None,
 ) -> None:
     """Re-shape the library to match a folder template (library-wide MOVE)."""
-    organize_library(template_str=template, root_override=root)
+    organize_library(path=path, template_str=template)

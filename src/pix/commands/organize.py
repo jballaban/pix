@@ -38,13 +38,15 @@ from pix.scan import walk_source_files
 from pix.schema import SCHEMA_VERSION, SchemaTooNew
 
 
-def organize_library(
-    template_str: str,
-    root_override: Path | None,
-) -> None:
-    """End-to-end organize: parse, plan, edit, confirm, apply."""
+def organize_library(path: Path, template_str: str) -> None:
+    """End-to-end organize: parse, plan, edit, confirm, apply.
+
+    `path` is anywhere inside (or at) the library root. Resolution
+    walks up from it to find the `.pix/` directory.
+    """
+    path = path.resolve()
     try:
-        root, schema = resolve_root(override=root_override)
+        root, schema = resolve_root(start=path)
     except NoLibraryRoot as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e

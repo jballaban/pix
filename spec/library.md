@@ -14,9 +14,12 @@ Every `pix` command operates against a **library root** — a folder containing 
 
 When any `pix <op>` is invoked, the library root is resolved by:
 
-1. Walking up from CWD looking for a `.pix\` directory. First match wins.
-2. If nothing found → fail with: `No pix library root found. Run 'pix init <path>' to establish one.`
-3. Override: `--root <path>` flag or `PIX_ROOT` env var.
+1. Walk up from the command's path argument (migrate's `<folder>`, organize's `<path>`) looking for a `.pix\` directory. First match wins.
+2. `PIX_ROOT` env var, if set — must point at a directory containing `.pix\`.
+3. Walk up from CWD as a last-resort interactive fallback.
+4. If nothing found → fail with: `No pix library root found. Pass a path inside a library, set PIX_ROOT, or run 'pix init <path>' to establish one.`
+
+There is no `--root` flag. The path argument every command takes is the explicit resolution input; the env var covers scripted contexts; CWD walk-up covers the common "I'm sitting inside my library" case.
 
 ### Establishing a root
 

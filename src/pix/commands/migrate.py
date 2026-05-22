@@ -35,17 +35,15 @@ from pix.scan import walk_source_files
 from pix.schema import SCHEMA_VERSION, SchemaTooNew
 
 
-def migrate_folder(
-    folder: Path,
-    root_override: Path | None,
-) -> None:
+def migrate_folder(folder: Path) -> None:
     """End-to-end migrate: plan, edit, confirm, apply.
 
     Per-file plan-generation reasoning streams to `<run-dir>/debug.log`
     on every run (see `pix.debug`). Constant memory; no flag.
     """
+    folder = folder.resolve()
     try:
-        root, schema = resolve_root(override=root_override)
+        root, schema = resolve_root(start=folder)
     except NoLibraryRoot as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
@@ -61,7 +59,6 @@ def migrate_folder(
             f"Inspect that folder to recover any customizations."
         )
 
-    folder = folder.resolve()
     if not folder.is_dir():
         typer.echo(f"Error: {folder} is not a directory.", err=True)
         raise typer.Exit(code=1)
