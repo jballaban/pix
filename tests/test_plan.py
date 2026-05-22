@@ -223,6 +223,42 @@ def test_plan_pure_rename_for_non_canonical_name(tmp_path: Path) -> None:
     assert "→2023-08-15_143612.jpg" in line.details
 
 
+def test_plan_m4v_renames_to_mp4_via_extension_alias(tmp_path: Path) -> None:
+    """`.m4v` is Apple-branded MP4 — canonical extension is `.mp4` via the
+    alias, so a `keep`-policy m4v gets renamed to .mp4 with no conversion."""
+    src = tmp_path / "src"
+    src.mkdir()
+    f = src / "00008-1.m4v"
+    f.write_bytes(b"")
+
+    cfg = _config(m4v="keep")
+    cache = {
+        f.resolve(): _meta(
+            str(f),
+            **{
+                PIX_DATE_AUTO: "2015-06-12-19:30:00",
+                PIX_ORIGINAL_PATH: "F:/2015-06/source.m4v",
+                PIX_CONTENT_HASH: "deadbeef",
+            },
+        )
+    }
+
+    plan = generate_plan(
+        source=src.resolve(),
+        cache=cache,
+        config=cfg,
+        run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
+    )
+
+    assert len(plan.lines) == 1
+    line = plan.lines[0]
+    # Pure RENAME (no conversion) — bytes don't change.
+    assert line.action == Action.RENAME
+    assert "→2015-06-12_193000.mp4" in line.details
+
+
 def test_plan_rename_plus_tag_for_first_migrate_canonical_format(
     tmp_path: Path,
 ) -> None:

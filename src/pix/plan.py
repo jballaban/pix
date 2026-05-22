@@ -413,6 +413,7 @@ def _resolve_collisions(
 
 _EXT_ALIASES: dict[str, str] = {
     "jpeg": "jpg",
+    "m4v": "mp4",
 }
 
 

@@ -43,7 +43,11 @@ from pix.config import DEFAULT_CONFIG_YAML
 #      junk sidecars, web-format throwaways, sundry sidecar formats).
 # v4 — Default config gains jwt → delete (MSAL broker manifests
 #      synced by OneDrive into media-backup folders).
-SCHEMA_VERSION: int = 4
+# v5 — Default config gains m4v → keep, with `m4v` aliased to `mp4`
+#      for canonical extension. M4V is functionally identical to MP4
+#      (Apple-branded ISO BMFF); renames are free byte-preserving
+#      moves rather than ffmpeg work.
+SCHEMA_VERSION: int = 5
 
 
 # --- Upgrades --------------------------------------------------------------
@@ -93,6 +97,14 @@ UPGRADES: dict[int, Upgrade] = {
         description=(
             "Default config gains jwt → delete (MSAL broker trust "
             "manifests that OneDrive backup syncs alongside media)."
+        ),
+    ),
+    5: Upgrade(
+        add_extensions={"m4v": "keep"},
+        description=(
+            "Default config gains m4v → keep; canonical extension "
+            "alias makes them rename to .mp4 (Apple-branded MP4, "
+            "same bytes)."
         ),
     ),
 }

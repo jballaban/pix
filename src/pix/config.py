@@ -20,6 +20,7 @@ extensions:
   jpg:     keep
   jpeg:    keep
   mp4:     keep
+  m4v:     keep            # Apple-branded MP4; same bytes, different extension
   heic:    convert_to_jpg
   heif:    convert_to_jpg
   png:     convert_to_jpg

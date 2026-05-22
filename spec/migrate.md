@@ -166,6 +166,7 @@ The canonical extension is always lowercase, and certain aliases collapse to a s
 | Source | Canonical |
 |---|---|
 | `.jpeg`, `.JPG`, `.JPEG` | `.jpg` |
+| `.m4v`, `.M4V` | `.mp4` (Apple-branded MP4; byte-identical container) |
 | `.mp4`, `.MP4` | `.mp4` |
 | (any other) | lowercase of source |
 
@@ -180,6 +181,7 @@ extensions:
   jpg:     keep
   jpeg:    keep
   mp4:     keep
+  m4v:     keep            # Apple-branded MP4; same bytes, different extension
   heic:    convert_to_jpg
   heif:    convert_to_jpg
   png:     convert_to_jpg
