@@ -22,6 +22,7 @@ from pix.metadata import (
     FileMetadata,
     build_cache,
 )
+from pix.progress import LiveProgress
 from pix.organize import (
     CwdInsideLibraryError,
     OrganizeApplyError,
@@ -82,42 +83,42 @@ def organize_library(path: Path, template_str: str) -> None:
     _plog(plan_log_path, f"Library root: {root}")
     _plog(plan_log_path, f"Template: {template_str}")
 
-    t0 = time.monotonic()
-    _plog(plan_log_path, "Walking library...")
-    library_files = walk_source_files(root)
-    _plog(
-        plan_log_path,
-        f"Found {len(library_files)} file(s) in "
-        f"{time.monotonic() - t0:.1f}s.",
-    )
+    with LiveProgress() as silent_progress:
+        t0 = time.monotonic()
+        silent_progress.begin("Walking library...")
+        library_files = walk_source_files(root)
+        _plog(
+            plan_log_path,
+            f"Found {len(library_files)} file(s) in "
+            f"{time.monotonic() - t0:.1f}s.",
+        )
 
-    if not library_files:
-        typer.echo("Library is empty; nothing to organize.")
-        return
+        if not library_files:
+            typer.echo("Library is empty; nothing to organize.")
+            return
 
-    t0 = time.monotonic()
-    _plog(
-        plan_log_path,
-        f"Reading metadata from {len(library_files)} file(s) (one "
-        f"ExifTool call)...",
-    )
-    try:
-        cache = build_cache(root)
-    except ExifToolNotFound as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(code=1) from e
-    except ExifToolFailed as e:
-        typer.echo(f"Error: exiftool failed.\n{e}", err=True)
-        raise typer.Exit(code=1) from e
-    for path in library_files:
-        if path not in cache:
-            cache[path] = FileMetadata(
-                path=path, raw={"SourceFile": str(path)}
-            )
-    _plog(
-        plan_log_path,
-        f"Read {len(cache)} file(s) in {time.monotonic() - t0:.1f}s.",
-    )
+        t0 = time.monotonic()
+        silent_progress.begin(
+            f"Reading metadata from {len(library_files)} file(s) "
+            f"(one ExifTool call; can take a while)..."
+        )
+        try:
+            cache = build_cache(root)
+        except ExifToolNotFound as e:
+            typer.echo(f"Error: {e}", err=True)
+            raise typer.Exit(code=1) from e
+        except ExifToolFailed as e:
+            typer.echo(f"Error: exiftool failed.\n{e}", err=True)
+            raise typer.Exit(code=1) from e
+        for path in library_files:
+            if path not in cache:
+                cache[path] = FileMetadata(
+                    path=path, raw={"SourceFile": str(path)}
+                )
+        _plog(
+            plan_log_path,
+            f"Read {len(cache)} file(s) in {time.monotonic() - t0:.1f}s.",
+        )
 
     t0 = time.monotonic()
     _plog(plan_log_path, "Generating plan...")

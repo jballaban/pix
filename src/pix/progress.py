@@ -1,14 +1,22 @@
 """Live one-line progress display for migrate's long phases.
 
-Format: `NN% - LABEL path (Xs)` rewritten in place via `\\r` once per
-second. A background thread re-renders on a 1s tick so the elapsed
-counter advances during a single long action (a multi-GB MP4 convert
-can take minutes).
+Two modes:
 
-The line is clipped to the terminal width so a long path can't wrap
-onto a second row and break the `\\r` rewrite. When successive lines
-have different lengths, the trailing chars from the previous line are
-overwritten with spaces so no artifact is left behind.
+- **Determinate** (`total=N`): `NN% - LABEL path (Xs)`. Caller calls
+  `begin(label, path)` to set the current item then `advance()` to
+  bump the percent. Used by plan-gen and apply where the total
+  iteration count is known up front.
+- **Indeterminate** (`total=None`): `LABEL (Xs)`. No percent, just a
+  ticking elapsed-time counter. Used for phases where the underlying
+  work gives no progress feedback (the bulk ExifTool read, the
+  source walk). Caller just calls `begin(label)` and lets the
+  background thread tick the elapsed counter once per second.
+
+Single rewriting line via `\\r` either way. Line is clipped to the
+terminal width so a long path can't wrap and break the `\\r` rewrite.
+When successive lines have different lengths, the trailing chars from
+the previous line are overwritten with spaces so no artifact is left
+behind.
 
 Auto-disabled when stdout isn't a TTY — pytest captures and CI logs
 get nothing rather than a flapping `\\r` mess.
@@ -27,26 +35,39 @@ from typing import IO
 class LiveProgress:
     """Context-managed live progress line.
 
-    Usage:
+    Determinate usage (known total):
         with LiveProgress(total=len(items)) as progress:
             for item in items:
                 progress.begin(label, str(item.path))
                 do_work(item)
                 progress.advance()
 
+    Indeterminate usage (just an elapsed-time ticker):
+        with LiveProgress() as progress:
+            progress.begin("Walking source folder...")
+            walk_source()
+            progress.begin("Reading metadata from N files...")
+            bulk_read()
+
     `begin` resets the per-action elapsed timer and updates the visible
-    label/path. `advance` bumps the completed count (which drives
-    `NN%`). On clean exit the display is forced to `100%`.
+    label (and optionally path). `advance` bumps the completed count
+    (which drives `NN%`); irrelevant in indeterminate mode. On clean
+    exit, determinate mode wraps to `100%`; indeterminate mode just
+    drops a newline and leaves whatever the last rendered label was.
     """
 
     def __init__(
         self,
-        total: int,
+        total: int | None = None,
         stream: IO[str] | None = None,
     ) -> None:
         self._total = total
         self._stream = stream or sys.stdout
-        self._enabled = self._stream.isatty() and total > 0
+        # Determinate with total < 1 is meaningless — disable.
+        if total is not None and total < 1:
+            self._enabled = False
+        else:
+            self._enabled = self._stream.isatty()
         self._idx = 0
         self._label: str = ""
         self._path: str = ""
@@ -73,9 +94,14 @@ class LiveProgress:
         self._stop_event.set()
         if self._thread is not None:
             self._thread.join(timeout=2)
-        # Wrap to 100% on clean exit, even if the caller's iteration
-        # count drifted from `total`.
-        if exc is None and self._total > 0:
+        # Determinate mode: wrap to 100% on clean exit, even if the
+        # caller's iteration count drifted from `total`. Indeterminate
+        # mode: leave the line at whatever the last label was.
+        if (
+            exc is None
+            and self._total is not None
+            and self._total > 0
+        ):
             with self._lock:
                 self._idx = self._total
             self._render()
@@ -112,18 +138,18 @@ class LiveProgress:
         with self._lock:
             if not self._label:
                 return
-            pct = (
-                int(self._idx * 100 / self._total)
-                if self._total > 0
-                else 100
-            )
             elapsed = int(time.monotonic() - self._action_start)
             # Most per-file actions finish in well under a second; only
             # surface the elapsed counter once it's worth showing. The
             # 1s thread tick keeps it updated for long-running actions.
             suffix = f" ({elapsed}s)" if elapsed >= 1 else ""
             mid = f" {self._path}" if self._path else ""
-            line = f"{pct:02d}% - {self._label}{mid}{suffix}"
+            if self._total is None:
+                # Indeterminate — just the label and elapsed timer.
+                line = f"{self._label}{mid}{suffix}"
+            else:
+                pct = int(self._idx * 100 / self._total)
+                line = f"{pct:02d}% - {self._label}{mid}{suffix}"
             # Clip to terminal width minus one (avoid wrapping into a
             # second row — `\r` only resets the cursor on the current
             # row, so a wrap leaves the upper row stranded).

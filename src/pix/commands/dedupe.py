@@ -31,6 +31,7 @@ from pix.metadata import (
     build_cache,
 )
 from pix.organize import CwdInsideLibraryError, check_cwd_not_inside
+from pix.progress import LiveProgress
 from pix.root import NoLibraryRoot, resolve as resolve_root
 from pix.scan import walk_source_files
 from pix.schema import SCHEMA_VERSION, SchemaTooNew, SchemaUpgradeRequired
@@ -66,40 +67,40 @@ def dedupe_library(path: Path) -> None:
 
     _plog(plan_log_path, f"Library root: {root}")
 
-    t0 = time.monotonic()
-    _plog(plan_log_path, "Walking library...")
-    library_files = walk_source_files(root)
-    _plog(
-        plan_log_path,
-        f"Found {len(library_files)} file(s) in "
-        f"{time.monotonic() - t0:.1f}s.",
-    )
+    with LiveProgress() as silent_progress:
+        t0 = time.monotonic()
+        silent_progress.begin("Walking library...")
+        library_files = walk_source_files(root)
+        _plog(
+            plan_log_path,
+            f"Found {len(library_files)} file(s) in "
+            f"{time.monotonic() - t0:.1f}s.",
+        )
 
-    if not library_files:
-        typer.echo("Library is empty; nothing to dedupe.")
-        return
+        if not library_files:
+            typer.echo("Library is empty; nothing to dedupe.")
+            return
 
-    t0 = time.monotonic()
-    _plog(
-        plan_log_path,
-        f"Reading metadata from {len(library_files)} file(s) "
-        f"(one ExifTool call)...",
-    )
-    try:
-        cache = build_cache(root)
-    except ExifToolNotFound as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(code=1) from e
-    except ExifToolFailed as e:
-        typer.echo(f"Error: exiftool failed.\n{e}", err=True)
-        raise typer.Exit(code=1) from e
-    for p in library_files:
-        if p not in cache:
-            cache[p] = FileMetadata(path=p, raw={"SourceFile": str(p)})
-    _plog(
-        plan_log_path,
-        f"Read {len(cache)} file(s) in {time.monotonic() - t0:.1f}s.",
-    )
+        t0 = time.monotonic()
+        silent_progress.begin(
+            f"Reading metadata from {len(library_files)} file(s) "
+            f"(one ExifTool call; can take a while)..."
+        )
+        try:
+            cache = build_cache(root)
+        except ExifToolNotFound as e:
+            typer.echo(f"Error: {e}", err=True)
+            raise typer.Exit(code=1) from e
+        except ExifToolFailed as e:
+            typer.echo(f"Error: exiftool failed.\n{e}", err=True)
+            raise typer.Exit(code=1) from e
+        for p in library_files:
+            if p not in cache:
+                cache[p] = FileMetadata(path=p, raw={"SourceFile": str(p)})
+        _plog(
+            plan_log_path,
+            f"Read {len(cache)} file(s) in {time.monotonic() - t0:.1f}s.",
+        )
 
     t0 = time.monotonic()
     _plog(plan_log_path, "Generating plan...")

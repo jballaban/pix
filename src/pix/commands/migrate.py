@@ -30,6 +30,7 @@ from pix.metadata import (
     build_cache,
 )
 from pix.plan import Action, PlanLine, generate_plan, lookup_policy
+from pix.progress import LiveProgress
 from pix.root import NoLibraryRoot, resolve as resolve_root
 from pix.scan import walk_source_files
 from pix.schema import SCHEMA_VERSION, SchemaTooNew, SchemaUpgradeRequired
@@ -93,33 +94,38 @@ def migrate_folder(folder: Path) -> None:
     for note in marker_notes:
         _plog(plan_log_path, note)
 
-    t0 = time.monotonic()
-    _plog(plan_log_path, "Walking source folder...")
-    source_files = walk_source_files(folder)
-    _plog(
-        plan_log_path,
-        f"Found {len(source_files)} files in {time.monotonic() - t0:.1f}s.",
-    )
+    # Walk + bulk read are silent operations from the user's
+    # perspective (ExifTool gives no progress feedback). Wrap both in
+    # an indeterminate LiveProgress so the line ticks elapsed time and
+    # the user knows pix is working.
+    with LiveProgress() as silent_progress:
+        t0 = time.monotonic()
+        silent_progress.begin("Walking source folder...")
+        source_files = walk_source_files(folder)
+        _plog(
+            plan_log_path,
+            f"Found {len(source_files)} files in {time.monotonic() - t0:.1f}s.",
+        )
 
-    _validate_extensions(source_files, config)
+        _validate_extensions(source_files, config)
 
-    t0 = time.monotonic()
-    _plog(
-        plan_log_path,
-        f"Reading metadata from {len(source_files)} files (one ExifTool call)...",
-    )
-    try:
-        cache = build_cache(folder)
-    except ExifToolNotFound as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(code=1) from e
-    except ExifToolFailed as e:
-        typer.echo(f"Error: exiftool failed.\n{e}", err=True)
-        raise typer.Exit(code=1) from e
-    _plog(
-        plan_log_path,
-        f"Read {len(cache)} files in {time.monotonic() - t0:.1f}s.",
-    )
+        t0 = time.monotonic()
+        silent_progress.begin(
+            f"Reading metadata from {len(source_files)} files "
+            f"(one ExifTool call; can take a while)..."
+        )
+        try:
+            cache = build_cache(folder)
+        except ExifToolNotFound as e:
+            typer.echo(f"Error: {e}", err=True)
+            raise typer.Exit(code=1) from e
+        except ExifToolFailed as e:
+            typer.echo(f"Error: exiftool failed.\n{e}", err=True)
+            raise typer.Exit(code=1) from e
+        _plog(
+            plan_log_path,
+            f"Read {len(cache)} files in {time.monotonic() - t0:.1f}s.",
+        )
 
     for path in source_files:
         if path not in cache:
