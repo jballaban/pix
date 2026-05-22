@@ -47,7 +47,10 @@ from pix.config import DEFAULT_CONFIG_YAML
 #      for canonical extension. M4V is functionally identical to MP4
 #      (Apple-branded ISO BMFF); renames are free byte-preserving
 #      moves rather than ffmpeg work.
-SCHEMA_VERSION: int = 5
+# v6 — Default config gains mpg / mpeg → convert_to_mp4 (MPEG-1/2
+#      Program Stream; full re-encode to H.265 since MP4 doesn't
+#      carry MPEG-2 video in practice).
+SCHEMA_VERSION: int = 6
 
 
 # --- Upgrades --------------------------------------------------------------
@@ -105,6 +108,16 @@ UPGRADES: dict[int, Upgrade] = {
             "Default config gains m4v → keep; canonical extension "
             "alias makes them rename to .mp4 (Apple-branded MP4, "
             "same bytes)."
+        ),
+    ),
+    6: Upgrade(
+        add_extensions={
+            "mpg": "convert_to_mp4",
+            "mpeg": "convert_to_mp4",
+        },
+        description=(
+            "Default config gains mpg / mpeg → convert_to_mp4 (MPEG-1/2 "
+            "Program Stream; mandatory full re-encode to H.265)."
         ),
     ),
 }

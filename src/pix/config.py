@@ -27,6 +27,8 @@ extensions:
   mov:     convert_to_mp4
   avi:     convert_to_mp4
   mts:     convert_to_mp4   # AVCHD camcorder MPEG-TS; usually H.264, remuxes cheaply
+  mpg:     convert_to_mp4   # MPEG-1/MPEG-2 Program Stream; mandatory re-encode to H.265
+  mpeg:    convert_to_mp4   # same format as .mpg with the long extension
   dng:     stash            # Adobe Digital Negative — raw sensor data; preserved for future processing
   insp:    stash            # Insta360 proprietary photo
   insv:    stash            # Insta360 proprietary video
