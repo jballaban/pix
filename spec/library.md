@@ -43,14 +43,28 @@ The constant `SCHEMA_VERSION` in `src/pix/schema.py` tracks the version this bui
 |---|---|
 | `state.yaml` missing | Bootstrap — write a fresh `state.yaml` at `SCHEMA_VERSION`. Nothing else touched. (Lets pre-versioning libraries adopt the system without losing their custom config; no destructive action.) |
 | Equal | No-op. |
-| On-disk lower | **Refuse** with a clear message: `Library at <root> has schema_version=<N>, but this pix expects v<M>. Run `pix upgrade <root>` to migrate (your current .pix/ contents will be archived to .pix/archive/v<N>/ first, then fresh defaults are created).` The command exits non-zero without doing anything. |
+| On-disk lower | **Refuse** with a clear message pointing the user at `pix upgrade <root>`. The command exits non-zero without doing anything. |
 | On-disk higher | Refuse. A newer pix touched this library; we don't know what we'd break. |
 
-**`pix upgrade <path>` is the only command that does the archive-and-reset.** It's run explicitly by the user when they see the upgrade-required message and they're ready. The reasoning: the user may have customizations in `config.yaml` (extension policies, organize templates) that they don't want silently moved to an archive on what they thought was an unrelated command. Forcing an explicit gesture means the archive is deliberate.
+> **Terminology note:** in this spec, "schema upgrade" refers to internal `.pix/` state transitions. It's distinct from `pix migrate`, which is the file-level normalization command. The English word "migration" colloquially means either; the codebase deliberately uses **upgrade** for one and **migrate** for the other.
 
-`pix upgrade` resolves the library root with the schema check disabled (otherwise it'd refuse to start), then moves everything in `.pix/` (except `archive/` itself) into `.pix/archive/v<old>/` and writes a fresh `config.yaml` + `state.yaml`. The user restores customizations by copying from the archive folder as needed.
+**`pix upgrade <path>` is the only command that mutates the library state to match a new schema.** It's run explicitly by the user when they see the upgrade-required message and they're ready. The reasoning: the user may have customizations in `config.yaml` (extension policies, organize templates) that they don't want silently changed on what they thought was an unrelated command. Forcing an explicit gesture means the change is deliberate.
 
-The reset is **not** a migration — there's no per-version logic, no field mapping, no schema-aware merge. It's a deliberate trade: rather than maintain a migration framework for a rarely-changing surface, we accept the cost of forcing the user to manually re-apply customizations after a schema bump. The archive folder is the safety net.
+### What `pix upgrade` actually does
+
+1. **Resolves the library root** with the schema check disabled (otherwise it'd refuse to start on the very mismatch it's there to fix).
+2. **Loads the user's existing config** into memory.
+3. **Archives everything** in `.pix/` (except `archive/` itself) into `.pix/archive/v<old>/`. Nothing is ever lost — the prior config, runs, stash entries, etc. all live in the archive folder.
+4. **Walks `UPGRADES[old+1..current]`** — a per-version table of additive / removal changes — and applies them to the loaded config:
+   - **Addition** (a new entry in defaults): if the user doesn't have the key, add it with the new default value. If the user has the key with the *same* value, no-op. If the user has the key with a *different* value, record a conflict.
+   - **Removal** (a key dropped from defaults): if the user has the key, remove it. The archive preserves it.
+5. **Writes the merged config** back to `<root>/.pix/config.yaml`:
+   - If there are no conflicts: clean YAML, ready to use.
+   - If there are conflicts: each conflicted entry is replaced with a git-style marker block (`<<<<<<< current` / `=======` / `>>>>>>> vN default`). The resulting file is **invalid YAML**, which is intentional — pix refuses to operate on a config with markers until the user picks a side and removes them. Config-load detects the markers explicitly and points the user at the right action.
+6. **Updates `state.yaml`** to the new `SCHEMA_VERSION`.
+7. **Reports** what was added, what was removed, and which entries conflicted.
+
+The archive is always the safety net: the user can always look at `.pix/archive/v<old>/` to see exactly what they had before, including comments and original ordering, and copy customizations back manually.
 
 Bump `SCHEMA_VERSION` only when something **material** in `.pix/` changes — a new mandatory config field, a renamed subfolder, a removed file format. Most pix releases don't touch persisted state and should not bump it. Past bumps are recorded in `src/pix/schema.py`'s module docstring so we have a written history of what each version meant.
 

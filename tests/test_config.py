@@ -57,3 +57,20 @@ def test_empty_extensions_section(tmp_path: Path) -> None:
 
     cfg = Config.load(config_path)
     assert cfg.extensions == {}
+
+
+def test_config_refuses_unresolved_upgrade_markers(tmp_path: Path) -> None:
+    """Conflict markers from `pix upgrade` must be resolved before commands run."""
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "extensions:\n"
+        "  jpg: keep\n"
+        "<<<<<<< current\n"
+        "  dng: convert_to_jpg\n"
+        "=======\n"
+        "  dng: stash\n"
+        ">>>>>>> v2 default\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="conflict markers"):
+        Config.load(config_path)

@@ -43,8 +43,21 @@ class Config:
 
     @classmethod
     def load(cls, path: Path) -> Config:
-        with path.open(encoding="utf-8") as f:
-            loaded: object = yaml.safe_load(f)
+        text = path.read_text(encoding="utf-8")
+
+        # An upgrade may have inserted git-style conflict markers when
+        # the user's existing value differed from a new default. Detect
+        # before YAML parses, since markers are not valid YAML and a
+        # generic parse error would be confusing.
+        if "<<<<<<< " in text or "\n=======" in text or ">>>>>>> " in text:
+            raise ValueError(
+                f"{path}: unresolved upgrade conflict markers present. "
+                f"Edit the file to remove `<<<<<<<`, `=======`, and "
+                f"`>>>>>>>` markers, keeping only the line you want for "
+                f"each conflicted entry."
+            )
+
+        loaded: object = yaml.safe_load(text)
 
         if not isinstance(loaded, dict):
             raise ValueError(

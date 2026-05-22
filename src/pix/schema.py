@@ -1,37 +1,32 @@
-"""Library-state schema versioning.
+"""Library-state schema versioning + per-version config upgrades.
 
-Persisted state lives in `<root>/.pix/`. As pix evolves, the shape of
-that state may change (new mandatory config field, new subfolder
-layout, etc.). Rather than building a migration framework, we track a
-single integer `schema_version` in `<root>/.pix/state.yaml`:
+Persisted state lives in `<root>/.pix/`. The single integer
+`schema_version` in `<root>/.pix/state.yaml` records what schema this
+library was last touched at. The constant `SCHEMA_VERSION` below tracks
+what this build of pix expects.
 
-- Library version equal to `SCHEMA_VERSION`: nothing to do.
-- Library version less than `SCHEMA_VERSION`: refuse with
-  `SchemaUpgradeRequired`. The user runs `pix upgrade <path>`
-  explicitly when they're ready; that command archives everything in
-  `.pix/` (except `archive/`) into `.pix/archive/v{old}/`, then
-  recreates fresh defaults. Auto-archiving on every command was
-  rejected because the user may have config customizations that
-  would silently land in the archive on what they thought was an
-  unrelated command.
-- Library version greater than `SCHEMA_VERSION`: refuse with
-  `SchemaTooNew`. A newer pix touched this library; we don't know
-  what we'd break.
-- `state.yaml` missing: write a fresh one at `SCHEMA_VERSION`, no
-  archive. This is the bootstrap path for libraries created before
-  the versioning system existed; it doesn't destroy any customization
-  so it stays silent.
+When a command (other than `init` and `upgrade`) sees a mismatch,
+`ensure_current` raises so the user can decide explicitly. The `pix
+upgrade` command then walks the per-version `UPGRADES` table to apply
+additive / removal changes to the user's *existing* config, keeping
+their customizations intact wherever possible. Conflicts get git-style
+inline markers in the rewritten config; pix refuses to operate on a
+config with unresolved markers until the user picks a side.
 
-Bump `SCHEMA_VERSION` only when something **material** in `.pix/`
-changes shape — a new mandatory config field, a renamed subfolder, a
-removed file format. Most pix releases don't touch persisted state
+Terminology note: schema **upgrades** here are internal `.pix/` state
+transitions. They're distinct from `pix migrate`, which is the user-
+facing file-normalization command. Always say "upgrade" for the former.
+
+Bump `SCHEMA_VERSION` and add a `UPGRADES[N]` entry whenever something
+material in `.pix/` changes — typically a new mandatory config field or
+a renamed/removed default. Most pix releases don't touch persisted state
 and should not bump it.
 """
 
 from __future__ import annotations
 
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 
@@ -40,18 +35,46 @@ import yaml
 from pix.config import DEFAULT_CONFIG_YAML
 
 
-# Bump only when a material change to .pix/ layout or config schema
-# ships. Past bumps are recorded here so we have a written history of
-# what each version meant.
-#
 # v1 — Initial schema. .pix/{config.yaml, state.yaml, runs/, staging/}.
 # v2 — Added `stash` extension action and the `.pix/stash/` subfolder
-#      (created lazily on first stash, holds opaque-named files
-#      `<run-id>_<line-id>.<ext>` with `.stashinfo` sidecars).
-#      Default config gains dng/insp/insv → stash. `pix upgrade`
-#      archives prior contents to .pix/archive/v1/ and creates fresh
-#      defaults; users restore customizations from there as needed.
+#      (created lazily on first stash). Default config gains
+#      dng/insp/insv → stash.
 SCHEMA_VERSION: int = 2
+
+
+# --- Upgrades --------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Upgrade:
+    """Per-version config changes from previous version to this one.
+
+    `add_extensions` and `remove_extensions` both target `extensions`
+    in config.yaml (the only structured section today). Future upgrades
+    may want a richer model; extend then.
+    """
+
+    add_extensions: dict[str, str] = field(default_factory=lambda: {})
+    remove_extensions: list[str] = field(default_factory=lambda: [])
+    description: str = ""
+
+
+UPGRADES: dict[int, Upgrade] = {
+    2: Upgrade(
+        add_extensions={
+            "dng": "stash",
+            "insp": "stash",
+            "insv": "stash",
+        },
+        description=(
+            "Added `stash` extension action; default config gains "
+            "dng / insp / insv → stash."
+        ),
+    ),
+}
+
+
+# --- Exceptions --------------------------------------------------------------
 
 
 class SchemaTooNew(Exception):
@@ -65,32 +88,49 @@ class SchemaUpgradeRequired(Exception):
         super().__init__(
             f"Library at {root} has schema_version={library_version}, "
             f"but this pix expects v{SCHEMA_VERSION}. Run "
-            f"`pix upgrade {root}` to migrate (your current .pix/ "
-            f"contents will be archived to "
-            f".pix/archive/v{library_version}/ first, then fresh "
-            f"defaults are created)."
+            f"`pix upgrade {root}` to migrate (your config.yaml will be "
+            f"merged with the new defaults; current contents are "
+            f"archived to .pix/archive/v{library_version}/ first)."
         )
         self.library_version = library_version
         self.root = root
 
 
+# --- Results -----------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ConflictDetail:
+    """One conflict between user's existing config and a upgrade_step's default."""
+
+    section: str  # e.g., "extensions"
+    key: str  # e.g., "dng"
+    current_value: str
+    new_default: str
+    version: int
+
+
 @dataclass(frozen=True)
 class UpgradeResult:
-    """What `upgrade` did. Returned to the `pix upgrade` command for
-    user-facing reporting."""
+    """What `upgrade` did. Returned to the `pix upgrade` command."""
 
     from_version: int
     to_version: int
     archive_path: Path
+    added: list[str]
+    removed: list[str]
+    conflicts: list[ConflictDetail]
+
+
+# --- Public surface ----------------------------------------------------------
 
 
 def ensure_current(root: Path) -> None:
     """Verify the library schema is current; bootstrap if state is missing.
 
-    Raises `SchemaUpgradeRequired` when the on-disk version is older.
-    Raises `SchemaTooNew` when it's newer. Bootstrapping (writing a
-    fresh `state.yaml` at `SCHEMA_VERSION` when none exists) happens
-    silently — it touches no customizations.
+    Raises `SchemaUpgradeRequired` when older, `SchemaTooNew` when newer.
+    Bootstrapping (writing a fresh `state.yaml` at `SCHEMA_VERSION` when
+    none exists) happens silently — it touches no customizations.
     """
     state_path = root / ".pix" / "state.yaml"
 
@@ -114,26 +154,27 @@ def ensure_current(root: Path) -> None:
 
 
 def upgrade(root: Path) -> UpgradeResult:
-    """Archive prior `.pix/` contents and create fresh defaults.
+    """Apply pending upgrade_steps to the library's config.
 
-    Used by the `pix upgrade` command. Refuses if the library is
-    already current (returns no result; raises `ValueError`). Refuses
-    if the library is newer than this pix (raises `SchemaTooNew`).
+    Always archives prior `.pix/` contents to `.pix/archive/v<old>/`
+    first. Then walks `UPGRADES[old+1..current]`, applying additions
+    and removals to the user's existing config. Conflicts (user has a
+    key with a value that differs from the new default) are written
+    into the new config with git-style markers; pix refuses to operate
+    on the library until the user resolves them.
+
+    Raises `ValueError` if the library is already current or has no
+    state.yaml. Raises `SchemaTooNew` if the library is newer than
+    this pix.
     """
     state_path = root / ".pix" / "state.yaml"
-    if state_path.exists():
-        library_version = _read_version(state_path)
-    else:
-        # Pre-versioning library. Treat as v0 — bumping it through
-        # archive+reset is overkill (the bootstrap path already
-        # handles missing state.yaml without destruction), so refuse
-        # the upgrade and tell the caller to just run any normal
-        # command which will silently bootstrap.
+    if not state_path.exists():
         raise ValueError(
             f"Library at {root} has no state.yaml — there's nothing "
             f"to upgrade. Run any pix command to bootstrap the "
             f"version stamp silently."
         )
+    library_version = _read_version(state_path)
 
     if library_version == SCHEMA_VERSION:
         raise ValueError(
@@ -147,12 +188,160 @@ def upgrade(root: Path) -> UpgradeResult:
             f"Upgrade pix, not the library."
         )
 
-    archive_path = _archive_and_reset(root, from_version=library_version)
+    # Load the user's existing config BEFORE archiving so we have it
+    # in memory to merge against.
+    user_config_path = root / ".pix" / "config.yaml"
+    if user_config_path.exists():
+        user_config: dict[str, object] = _load_config_data(user_config_path)
+    else:
+        user_config = cast(
+            "dict[str, object]",
+            yaml.safe_load(DEFAULT_CONFIG_YAML) or {},
+        )
+
+    # Archive everything (including the soon-to-be-rewritten config.yaml).
+    archive_path = _archive_prior_contents(root, library_version)
+
+    # Apply upgrade_steps in order: library_version+1 .. SCHEMA_VERSION.
+    added: list[str] = []
+    removed: list[str] = []
+    conflicts: list[ConflictDetail] = []
+    for v in range(library_version + 1, SCHEMA_VERSION + 1):
+        upgrade_step = UPGRADES.get(v)
+        if upgrade_step is None:
+            continue
+        _apply_upgrade_step_to_config(
+            config=user_config,
+            upgrade_step=upgrade_step,
+            version=v,
+            added=added,
+            removed=removed,
+            conflicts=conflicts,
+        )
+
+    # Write the merged config — with markers if there are conflicts.
+    if conflicts:
+        text = _render_config_with_markers(user_config, conflicts)
+    else:
+        text = yaml.safe_dump(
+            user_config, default_flow_style=False, sort_keys=False
+        )
+    user_config_path.write_text(text, encoding="utf-8")
+
+    _write_state(state_path, SCHEMA_VERSION)
+
     return UpgradeResult(
         from_version=library_version,
         to_version=SCHEMA_VERSION,
         archive_path=archive_path,
+        added=added,
+        removed=removed,
+        conflicts=conflicts,
     )
+
+
+# --- Internals --------------------------------------------------------------
+
+
+def _apply_upgrade_step_to_config(
+    *,
+    config: dict[str, object],
+    upgrade_step: Upgrade,
+    version: int,
+    added: list[str],
+    removed: list[str],
+    conflicts: list[ConflictDetail],
+) -> None:
+    """Apply one upgrade_step in place to `config`. Appends to the three
+    out-params describing what happened."""
+    extensions_obj = config.setdefault("extensions", {})
+    if not isinstance(extensions_obj, dict):
+        # Malformed config; treat as empty and overwrite.
+        extensions_obj = {}
+        config["extensions"] = extensions_obj
+    extensions = cast("dict[str, object]", extensions_obj)
+
+    for key, default_value in upgrade_step.add_extensions.items():
+        if key not in extensions:
+            extensions[key] = default_value
+            added.append(f"extensions.{key} = {default_value}  (v{version})")
+        elif extensions[key] == default_value:
+            pass  # user already matches the new default — no-op
+        else:
+            conflicts.append(
+                ConflictDetail(
+                    section="extensions",
+                    key=key,
+                    current_value=str(extensions[key]),
+                    new_default=default_value,
+                    version=version,
+                )
+            )
+
+    for key in upgrade_step.remove_extensions:
+        if key in extensions:
+            del extensions[key]
+            removed.append(f"extensions.{key}  (v{version})")
+
+
+def _render_config_with_markers(
+    config: dict[str, object], conflicts: list[ConflictDetail]
+) -> str:
+    """Render YAML with git-style markers replacing conflicted entries.
+
+    Strategy: yaml.safe_dump the merged config (which retains the user's
+    value for each conflicted key), then post-process line-by-line and
+    replace the conflicted entry's line with a marker block.
+    """
+    base = yaml.safe_dump(config, default_flow_style=False, sort_keys=False)
+    conflict_by_key: dict[tuple[str, str], ConflictDetail] = {
+        (c.section, c.key): c for c in conflicts
+    }
+
+    out: list[str] = []
+    current_section: str | None = None
+    for line in base.splitlines():
+        # Top-level section header: zero indent, ends with `:`.
+        if line and not line[0].isspace() and line.rstrip().endswith(":"):
+            current_section = line.rstrip()[:-1]
+            out.append(line)
+            continue
+
+        # Entry under a section: split on the first `:` to get the key.
+        if current_section is not None and ":" in line:
+            stripped = line.lstrip()
+            indent = line[: len(line) - len(stripped)]
+            key = stripped.split(":", 1)[0]
+            detail = conflict_by_key.get((current_section, key))
+            if detail is not None:
+                out.append("<<<<<<< current")
+                out.append(f"{indent}{detail.key}: {detail.current_value}")
+                out.append("=======")
+                out.append(f"{indent}{detail.key}: {detail.new_default}")
+                out.append(f">>>>>>> v{detail.version} default")
+                continue
+
+        out.append(line)
+
+    return "\n".join(out) + "\n"
+
+
+def _archive_prior_contents(root: Path, from_version: int) -> Path:
+    """Move everything in `.pix/` (except `archive/`) into `archive/v<old>/`."""
+    pix_dir = root / ".pix"
+    archive_dir = pix_dir / "archive" / f"v{from_version}"
+    if archive_dir.exists():
+        raise RuntimeError(
+            f"Archive folder {archive_dir} already exists; refusing "
+            f"to overwrite. Move or delete it and re-run."
+        )
+    archive_dir.mkdir(parents=True)
+
+    for item in pix_dir.iterdir():
+        if item.name == "archive":
+            continue
+        shutil.move(str(item), str(archive_dir / item.name))
+    return archive_dir
 
 
 def _read_version(state_path: Path) -> int:
@@ -180,29 +369,9 @@ def _write_state(state_path: Path, version: int) -> None:
     )
 
 
-def _archive_and_reset(root: Path, from_version: int) -> Path:
-    """Move everything in `.pix/` (except `archive/`) into the version
-    archive, then recreate default `config.yaml` and `state.yaml`.
-    Returns the archive path."""
-    pix_dir = root / ".pix"
-    archive_dir = pix_dir / "archive" / f"v{from_version}"
-    if archive_dir.exists():
-        # Shouldn't happen — each version only gets archived once. If
-        # we somehow re-hit the same from_version, refuse rather than
-        # silently merge.
-        raise RuntimeError(
-            f"Archive folder {archive_dir} already exists; refusing "
-            f"to overwrite. Move or delete it and re-run."
-        )
-    archive_dir.mkdir(parents=True)
-
-    for item in pix_dir.iterdir():
-        if item.name == "archive":
-            continue
-        shutil.move(str(item), str(archive_dir / item.name))
-
-    (pix_dir / "config.yaml").write_text(
-        DEFAULT_CONFIG_YAML, encoding="utf-8"
-    )
-    _write_state(pix_dir / "state.yaml", SCHEMA_VERSION)
-    return archive_dir
+def _load_config_data(path: Path) -> dict[str, object]:
+    """Parse config.yaml into a dict (no validation here)."""
+    loaded: object = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(loaded, dict):
+        return {}
+    return cast("dict[str, object]", loaded)
