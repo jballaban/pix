@@ -48,6 +48,22 @@ Already flagged in `spec/migrate.md` → "Future". Under `.pix/cache/`, keyed on
 ### 11. Trim `FileMetadata.raw` to consumed fields
 `src/pix/metadata.py:FileMetadata` — keeps the full parsed dict alive per file. Disappears for free if #4 lands. Otherwise: project to a slim struct after parsing.
 
+## Items added since the original list
+
+### 13. Cache prune for orphaned `.cache` files
+The per-file metadata cache (`pix.metadata_cache.PerFileCache`) writes a sidecar at `<library>/.pix/cache/<absolute-path-mirror>.cache` for each file ExifTool reads. Cache mutations during apply (rename/remove/etc.) are best-effort; on failure the cache file may be left behind even after its media file goes away. Over time these accumulate.
+
+Doable cheaply: organize and dedupe already walk the full library; an additional pass would compare the cache tree to the file tree and `unlink()` any `.cache` file whose corresponding media doesn't exist. Could be implicit (each organize/dedupe sweep) or explicit (`pix cache prune` command).
+
+For migrate, can't auto-prune because migrate's walk only covers a source folder; library files outside that source might be falsely flagged.
+
+Storage impact today is tiny (a few KB per orphan, sub-MB even at TB scale), so this isn't urgent.
+
+### 14. Trim cached metadata to consumed fields (also #4 above, deferred again)
+The per-file cache currently stores ExifTool's full JSON output per file (5–10 KB of tags, MakerNotes, etc., most of which pix never reads). Filtering at the cache layer to just the consumed fields (pix:\*, DateAuto candidates, face regions, file basics) would cut cache size 10–100× and speed up parse on cache hits.
+
+Independent of upstream item #4 (which is about restricting what ExifTool *returns*); this is about what we *store* even if ExifTool gave us everything.
+
 ## Non-perf items parked here
 
 ### 12. Config evolution: existing libraries don't pick up new default extensions — **superseded in v0.1.20**

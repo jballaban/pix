@@ -22,6 +22,7 @@ from pix.metadata import (
     FileMetadata,
     build_cache,
 )
+from pix.metadata_cache import PerFileCache
 from pix.progress import LiveProgress
 from pix.organize import (
     CwdInsideLibraryError,
@@ -98,12 +99,13 @@ def organize_library(path: Path, template_str: str) -> None:
             return
 
         t0 = time.monotonic()
+        meta_cache = PerFileCache.for_library(root)
         silent_progress.begin(
             f"Reading metadata from {len(library_files)} file(s) "
-            f"(one ExifTool call; can take a while)..."
+            f"(per-file cache will speed up subsequent runs)..."
         )
         try:
-            cache = build_cache(root)
+            cache = build_cache(library_files, cache=meta_cache)
         except ExifToolNotFound as e:
             typer.echo(f"Error: {e}", err=True)
             raise typer.Exit(code=1) from e
@@ -192,6 +194,12 @@ def organize_library(path: Path, template_str: str) -> None:
     except OrganizeApplyError as e:
         typer.echo(f"Error: apply failed: {e}", err=True)
         raise typer.Exit(code=1) from e
+
+    # Cache survives organize by following every MOVE: rename the
+    # .cache file alongside its media file. Best-effort.
+    for ln in plan.lines:
+        if ln.line_id in kept_line_ids and ln.target_path is not None:
+            meta_cache.rename(ln.abs_path, ln.target_path)
 
     # Persist the active template now that apply succeeded.
     set_organize_template(config_path, template_str)

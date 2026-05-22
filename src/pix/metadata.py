@@ -1,12 +1,10 @@
-"""Bulk metadata cache, populated via one ExifTool subprocess call.
+"""Metadata extraction for the plan-gen phase.
 
-Per spec/migrate.md → "Metadata cache": plan generation needs the existing
-metadata of every file in the source folder. We bulk-extract via
-`exiftool -j -r -G:0 <folder>` in one subprocess, parse the JSON, and index
-the result by absolute file path.
-
-Apply-phase writes are out of scope here (they use pyexiftool/`-stay_open`
-in a later phase).
+Per spec/migrate.md → "Metadata cache": plan generation needs the
+existing metadata of every file it'll consider. We bulk-extract via
+one ExifTool subprocess and parse the JSON. Now optionally backed by
+a per-file persistent cache (see `pix.metadata_cache`); when present,
+already-cached files skip ExifTool entirely.
 """
 
 from __future__ import annotations
@@ -14,11 +12,13 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
 from pix import exiftool_config_path
+from pix.metadata_cache import PerFileCache
 
 
 class ExifToolNotFound(Exception):
@@ -60,36 +60,99 @@ def require_exiftool() -> str:
 
 
 def build_cache(
-    folder: Path, exiftool: str | None = None
+    paths: list[Path],
+    cache: PerFileCache | None = None,
+    exiftool: str | None = None,
 ) -> dict[Path, FileMetadata]:
-    """Bulk-read metadata for every file under `folder` in one ExifTool call.
+    """Build the in-memory metadata dict for the given list of files.
 
-    Returns a dict keyed by absolute file path. Entries for non-file results
-    (the folder itself, etc.) are dropped.
+    When `cache` is provided, each file is looked up in the per-file
+    persistent cache first; only misses are sent to ExifTool, and
+    fresh reads are written back to the cache. Without a cache, every
+    file is read.
+
+    Returns a dict keyed by absolute file path.
     """
+    if not paths:
+        return {}
+
+    result: dict[Path, FileMetadata] = {}
+    misses: list[Path]
+
+    if cache is not None:
+        misses = []
+        for path in paths:
+            cached = cache.get(path)
+            if cached is not None:
+                result[path] = FileMetadata(path=path, raw=cached)
+            else:
+                misses.append(path)
+    else:
+        misses = list(paths)
+
+    if misses:
+        fresh = _exiftool_bulk_read(misses, exiftool=exiftool)
+        for path, meta in fresh.items():
+            result[path] = meta
+            if cache is not None:
+                cache.add(path, meta.raw)
+
+    return result
+
+
+def _exiftool_bulk_read(
+    paths: list[Path], exiftool: str | None = None
+) -> dict[Path, FileMetadata]:
+    """Run ExifTool against a list of paths via the `-@ <listfile>` flag.
+
+    Avoids both Windows command-line length limits and ExifTool's
+    redundant `-r` walk (the caller has already enumerated the
+    relevant files via `pix.scan.walk_source_files`).
+    """
+    if not paths:
+        return {}
+
     exe = exiftool or require_exiftool()
 
-    proc = subprocess.run(
-        [
-            exe,
-            "-config",
-            str(exiftool_config_path()),
-            "-j",  # JSON output
-            "-r",  # recursive
-            "-G:0",  # group-prefixed keys (family 0: EXIF, XMP, IPTC, QuickTime, File, ...)
-            "-i",
-            ".pix",  # skip pix's own state directory at any depth
-            "-charset",
-            "filename=utf8",
-            "-api",
-            "largefilesupport=1",
-            str(folder),
-        ],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        check=False,
+    listfile = Path(
+        tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix="_pix_paths.txt",
+            delete=False,
+            encoding="utf-8",
+        ).name
     )
+    try:
+        with listfile.open("w", encoding="utf-8") as f:
+            for p in paths:
+                f.write(str(p) + "\n")
+
+        proc = subprocess.run(
+            [
+                exe,
+                "-config",
+                str(exiftool_config_path()),
+                "-j",  # JSON output
+                "-G:0",  # group-prefixed keys (family 0)
+                "-charset",
+                "filename=utf8",
+                "-api",
+                "largefilesupport=1",
+                "-@",
+                str(listfile),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+    finally:
+        try:
+            listfile.unlink()
+        except OSError:
+            pass
+
     # ExifTool exit codes:
     #   0 = success
     #   1 = at least one file had a warning (e.g. "File is empty"); JSON still on stdout
@@ -105,8 +168,8 @@ def build_cache(
 def parse_exiftool_json(stdout: str) -> dict[Path, FileMetadata]:
     """Parse ExifTool's `-j` output into a path-indexed cache.
 
-    Pure function — separated from `build_cache` so tests can drive it with
-    fixture JSON without needing exiftool installed.
+    Pure function — separated so tests can drive it with fixture JSON
+    without needing exiftool installed.
     """
     stripped = stdout.strip()
     if not stripped:

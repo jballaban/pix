@@ -29,7 +29,8 @@ from pix.metadata import (
     FileMetadata,
     build_cache,
 )
-from pix.plan import Action, PlanLine, generate_plan, lookup_policy
+from pix.metadata_cache import PerFileCache
+from pix.plan import Action, Plan, PlanLine, generate_plan, lookup_policy
 from pix.progress import LiveProgress
 from pix.root import NoLibraryRoot, resolve as resolve_root
 from pix.scan import walk_source_files
@@ -110,12 +111,13 @@ def migrate_folder(folder: Path) -> None:
         _validate_extensions(source_files, config)
 
         t0 = time.monotonic()
+        meta_cache = PerFileCache.for_library(root)
         silent_progress.begin(
             f"Reading metadata from {len(source_files)} files "
-            f"(one ExifTool call; can take a while)..."
+            f"(per-file cache will speed up subsequent runs)..."
         )
         try:
-            cache = build_cache(folder)
+            cache = build_cache(source_files, cache=meta_cache)
         except ExifToolNotFound as e:
             typer.echo(f"Error: {e}", err=True)
             raise typer.Exit(code=1) from e
@@ -193,11 +195,55 @@ def migrate_folder(folder: Path) -> None:
         typer.echo(f"Error: apply failed: {e}", err=True)
         raise typer.Exit(code=1) from e
 
+    # Keep the per-file metadata cache in sync with what apply just did.
+    # Best-effort: failures here only mean a slower next-run for that
+    # one file (cache miss → re-read).
+    _post_apply_cache_update(meta_cache, plan, kept_line_ids)
+
     typer.echo("")
     typer.echo(
         f"Applied {completed} action(s)"
         f"{f', skipped {skipped}' if skipped else ''}."
     )
+
+
+def _post_apply_cache_update(
+    cache: PerFileCache,
+    plan: Plan,
+    kept_line_ids: set[str],
+) -> None:
+    """Update the per-file metadata cache to reflect apply's mutations.
+
+    Walks the applied plan lines and:
+    - DELETE / STASH: removes the cache entry.
+    - CONVERT+RENAME+TAG: removes the old entry; the new file's cache
+      will be built on its next read (we don't have the post-convert
+      metadata in hand here).
+    - RENAME: renames the cache file alongside the media rename.
+    - TAG: merges the written pix:* fields into the cached metadata.
+    - RENAME+TAG: both.
+    """
+    for ln in plan.lines:
+        if ln.line_id not in kept_line_ids:
+            continue
+        if ln.action == Action.DELETE:
+            cache.remove(ln.abs_path)
+        elif ln.action == Action.STASH:
+            cache.remove(ln.abs_path)
+        elif ln.action == Action.CONVERT_RENAME_TAG:
+            cache.remove(ln.abs_path)  # old file gone
+            # New file's cache will be (re)built on next read.
+        elif ln.action == Action.RENAME:
+            if ln.target_path is not None:
+                cache.rename(ln.abs_path, ln.target_path)
+        elif ln.action == Action.TAG:
+            if ln.pix_writes:
+                cache.update_metadata(ln.abs_path, dict(ln.pix_writes))
+        elif ln.action == Action.RENAME_TAG:
+            if ln.pix_writes:
+                cache.update_metadata(ln.abs_path, dict(ln.pix_writes))
+            if ln.target_path is not None:
+                cache.rename(ln.abs_path, ln.target_path)
 
 
 def _plog(plan_log_path: Path, msg: str) -> None:

@@ -275,8 +275,9 @@ def test_apply_tag_writes_pix_field_and_creates_sidecar(
 
     # Verify the pix:* fields actually landed on the file by re-reading.
     from pix.metadata import build_cache
+    from pix.scan import walk_source_files
 
-    cache = build_cache(src)
+    cache = build_cache(walk_source_files(src))
     meta = cache[jpg.resolve()]
     assert meta.get_str(PIX_DATE_AUTO) == "2023-08-15-14:32:05"
     assert meta.get_str("XMP:OriginalPath") == str(jpg.resolve())
@@ -344,8 +345,9 @@ def test_apply_convert_png_to_jpg_end_to_end(tmp_path: Path) -> None:
 
     # Converted file has pix:* fields, including the content hash.
     from pix.metadata import build_cache
+    from pix.scan import walk_source_files
 
-    cache = build_cache(src)
+    cache = build_cache(walk_source_files(src))
     converted = cache[(src / "2023-08-15_143205.jpg").resolve()]
     assert converted.get_str(PIX_DATE_AUTO) == "2023-08-15-14:32:05"
     assert "IMG_001.png" in (converted.get_str("XMP:OriginalPath") or "")

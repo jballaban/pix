@@ -30,6 +30,7 @@ from pix.metadata import (
     FileMetadata,
     build_cache,
 )
+from pix.metadata_cache import PerFileCache
 from pix.organize import CwdInsideLibraryError, check_cwd_not_inside
 from pix.progress import LiveProgress
 from pix.root import NoLibraryRoot, resolve as resolve_root
@@ -82,12 +83,13 @@ def dedupe_library(path: Path) -> None:
             return
 
         t0 = time.monotonic()
+        meta_cache = PerFileCache.for_library(root)
         silent_progress.begin(
             f"Reading metadata from {len(library_files)} file(s) "
-            f"(one ExifTool call; can take a while)..."
+            f"(per-file cache will speed up subsequent runs)..."
         )
         try:
-            cache = build_cache(root)
+            cache = build_cache(library_files, cache=meta_cache)
         except ExifToolNotFound as e:
             typer.echo(f"Error: {e}", err=True)
             raise typer.Exit(code=1) from e
@@ -179,6 +181,12 @@ def dedupe_library(path: Path) -> None:
     except DedupeApplyError as e:
         typer.echo(f"Error: apply failed: {e}", err=True)
         raise typer.Exit(code=1) from e
+
+    # Cache mutation: each removed duplicate's cache entry goes away.
+    # Best-effort.
+    for ln in result.plan.lines:
+        if ln.line_id in kept_line_ids:
+            meta_cache.remove(ln.abs_path)
 
     typer.echo("")
     typer.echo(
