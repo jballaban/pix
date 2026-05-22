@@ -39,10 +39,11 @@ from pix.config import DEFAULT_CONFIG_YAML
 #
 # v1 — Initial schema. .pix/{config.yaml, state.yaml, runs/, staging/}.
 # v2 — Added `stash` extension action and the `.pix/stash/` subfolder
-#      (created lazily on first stash). Default config gains
-#      dng/insp/insv → stash. Existing libraries archive-and-reset to
-#      pick up the new defaults; users restore prior customizations
-#      from .pix/archive/v1/.
+#      (created lazily on first stash, holds opaque-named files
+#      `<run-id>_<line-id>.<ext>` with `.stashinfo` sidecars).
+#      Default config gains dng/insp/insv → stash. Existing libraries
+#      archive-and-reset to pick up the new defaults; users restore
+#      prior customizations from .pix/archive/v1/.
 SCHEMA_VERSION: int = 2
 
 

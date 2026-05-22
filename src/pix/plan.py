@@ -267,9 +267,20 @@ def attach_paths(
     if ln.action == Action.DELETE:
         capture_path = data_dir / base
     elif ln.action == Action.STASH:
-        # Apply may turn this into a dup-capture or a new stash entry;
-        # only the dup branch uses capture_path.
-        capture_path = data_dir / base
+        # Opaque filename: <run-id>_<line-id>.<source-ext>. Globally
+        # unique by construction (run-id is a timestamp); no
+        # collision logic. Stash lives at <library>/.pix/stash/;
+        # derive library_root from run_dir (`runs/<id>/` parent
+        # chain: runs/ -> .pix/ -> library).
+        library_root = run_dir.parent.parent.parent
+        run_id = run_dir.name
+        from pix.stash import stash_filename
+        target_path = (
+            library_root
+            / ".pix"
+            / "stash"
+            / stash_filename(run_id, ln.line_id, ln.abs_path)
+        )
     elif ln.action == Action.RENAME:
         if ln.target_filename is None:
             raise ValueError(

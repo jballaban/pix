@@ -1,16 +1,19 @@
-"""Tests for `pix.stash` — sidecar round-trip, index, stash_file."""
+"""Tests for `pix.stash` — purist sidecar + opaque-filename move."""
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
+
+import pytest
 
 from pix.stash import (
     SIDECAR_SUFFIX,
     StashSidecar,
-    load_stash_index,
     read_sidecar,
     sidecar_path_for,
     stash_file,
+    stash_filename,
     write_sidecar,
 )
 
@@ -18,233 +21,134 @@ from pix.stash import (
 # --- Sidecar serialization --------------------------------------------------
 
 
-def test_sidecar_round_trip_minimal() -> None:
-    s = StashSidecar(hash="abc123", origins=["F:/a/b.dng"])
-    text = s.to_yaml()
-    parsed = StashSidecar.from_yaml(text)
-    assert parsed.hash == "abc123"
-    assert parsed.origins == ["F:/a/b.dng"]
-    assert parsed.original_filename is None
-
-
-def test_sidecar_round_trip_with_original_filename() -> None:
+def test_sidecar_round_trip() -> None:
     s = StashSidecar(
-        hash="abc",
-        origins=["F:/a/IMG_001.dng"],
-        original_filename="IMG_001.dng",
+        origin="F:/source/IMG_001.dng", stashed_at="2026-05-22T15:30:00"
     )
     parsed = StashSidecar.from_yaml(s.to_yaml())
-    assert parsed.original_filename == "IMG_001.dng"
+    assert parsed == s
 
 
-def test_sidecar_yaml_omits_original_filename_when_none() -> None:
-    """We only store the field when the stash filename was modified."""
-    s = StashSidecar(hash="abc", origins=["F:/a.dng"])
-    text = s.to_yaml()
-    assert "original_filename" not in text
+def test_sidecar_rejects_missing_origin() -> None:
+    with pytest.raises(ValueError, match="origin"):
+        StashSidecar.from_yaml("stashed_at: 2026-05-22T15:30:00\n")
+
+
+def test_sidecar_rejects_missing_stashed_at() -> None:
+    with pytest.raises(ValueError, match="stashed_at"):
+        StashSidecar.from_yaml("origin: F:/x\n")
+
+
+# --- Sidecar file ops -------------------------------------------------------
 
 
 def test_write_and_read_sidecar(tmp_path: Path) -> None:
-    stash_file_path = tmp_path / "IMG_001.dng"
-    stash_file_path.write_bytes(b"")
-    sidecar = StashSidecar(hash="h", origins=["F:/src.dng"])
-    write_sidecar(stash_file_path, sidecar)
-    assert sidecar_path_for(stash_file_path).exists()
-    loaded = read_sidecar(stash_file_path)
-    assert loaded is not None
-    assert loaded.hash == "h"
+    stash_path = tmp_path / "2026-05-22_15-30-00_L001.dng"
+    stash_path.write_bytes(b"")
+    sidecar = StashSidecar(origin="F:/src.dng", stashed_at="2026-05-22T15:30:00")
+    write_sidecar(stash_path, sidecar)
+    assert sidecar_path_for(stash_path).exists()
+    assert read_sidecar(stash_path) == sidecar
 
 
 def test_read_sidecar_returns_none_when_missing(tmp_path: Path) -> None:
-    assert read_sidecar(tmp_path / "nonexistent.dng") is None
+    assert read_sidecar(tmp_path / "no-such.dng") is None
 
 
 def test_read_sidecar_returns_none_on_malformed_yaml(tmp_path: Path) -> None:
-    stash_file_path = tmp_path / "IMG_001.dng"
-    stash_file_path.write_bytes(b"")
-    sidecar_path_for(stash_file_path).write_text(
-        "not: valid: yaml: at: all", encoding="utf-8"
+    stash_path = tmp_path / "x.dng"
+    stash_path.write_bytes(b"")
+    sidecar_path_for(stash_path).write_text(
+        "not: valid: yaml: tokens", encoding="utf-8"
     )
-    assert read_sidecar(stash_file_path) is None
+    assert read_sidecar(stash_path) is None
 
 
-# --- Index loading ----------------------------------------------------------
+# --- Opaque filename ---------------------------------------------------------
 
 
-def test_load_index_empty_when_dir_missing(tmp_path: Path) -> None:
-    assert load_stash_index(tmp_path / "no-such-dir") == {}
-
-
-def test_load_index_builds_hash_to_path_map(tmp_path: Path) -> None:
-    stash_dir = tmp_path / "stash"
-    stash_dir.mkdir()
-    a = stash_dir / "a.dng"
-    b = stash_dir / "b.dng"
-    a.write_bytes(b"")
-    b.write_bytes(b"")
-    write_sidecar(a, StashSidecar(hash="hash-a", origins=["F:/a.dng"]))
-    write_sidecar(b, StashSidecar(hash="hash-b", origins=["F:/b.dng"]))
-    index = load_stash_index(stash_dir)
-    assert index == {"hash-a": a, "hash-b": b}
-
-
-def test_load_index_skips_orphan_sidecars(tmp_path: Path) -> None:
-    """A sidecar without a matching stash file is ignored."""
-    stash_dir = tmp_path / "stash"
-    stash_dir.mkdir()
-    # Sidecar with no corresponding stash file.
-    (stash_dir / f"missing.dng{SIDECAR_SUFFIX}").write_text(
-        "hash: h\norigins: []\n", encoding="utf-8"
+def test_stash_filename_uses_run_id_line_id_and_ext() -> None:
+    src = Path("F:/source/IMG_001.dng")
+    assert (
+        stash_filename("2026-05-22_15-30-00", "L042", src)
+        == "2026-05-22_15-30-00_L042.dng"
     )
-    assert load_stash_index(stash_dir) == {}
 
 
-# --- stash_file (new entry) -------------------------------------------------
+def test_stash_filename_lowercases_extension() -> None:
+    src = Path("F:/source/IMG.DNG")
+    assert stash_filename("r", "L001", src) == "r_L001.dng"
 
 
-def _make_source(tmp_path: Path, name: str, content: bytes) -> Path:
-    src_dir = tmp_path / "src"
-    src_dir.mkdir(exist_ok=True)
-    p = src_dir / name
-    p.write_bytes(content)
-    return p
+def test_stash_filename_handles_no_extension() -> None:
+    src = Path("F:/source/raw_blob")
+    assert stash_filename("r", "L001", src) == "r_L001"
 
 
-def test_stash_file_new_entry_moves_source_and_writes_sidecar(
-    tmp_path: Path,
-) -> None:
-    source = _make_source(tmp_path, "IMG_001.dng", b"raw-bytes-1")
-    stash_dir = tmp_path / "stash"
-    capture = tmp_path / "runs" / "r" / "data" / "L001_IMG_001.dng"
-    index: dict[str, Path] = {}
+# --- stash_file --------------------------------------------------------------
 
-    was_dup, final = stash_file(
+
+def test_stash_file_moves_source_and_writes_sidecar(tmp_path: Path) -> None:
+    source = tmp_path / "src" / "IMG_001.dng"
+    source.parent.mkdir()
+    source.write_bytes(b"raw-bytes")
+
+    stash_dir = tmp_path / ".pix" / "stash"
+    target = stash_dir / "2026-05-22_15-30-00_L001.dng"
+
+    stash_file(
         source=source,
-        stash_dir=stash_dir,
-        index=index,
-        dup_capture_path=capture,
+        target_path=target,
+        stashed_at=datetime(2026, 5, 22, 15, 30, 0),
     )
 
-    assert was_dup is False
-    assert final == stash_dir / "IMG_001.dng"
     assert not source.exists()
-    assert final.exists()
-    assert final.read_bytes() == b"raw-bytes-1"
-    # Sidecar exists and records origin.
-    info = read_sidecar(final)
-    assert info is not None
-    assert info.origins == [str(source)]
-    assert info.original_filename is None
-    # Index is updated.
-    assert info.hash in index
-    assert index[info.hash] == final
+    assert target.exists()
+    assert target.read_bytes() == b"raw-bytes"
+
+    sidecar = read_sidecar(target)
+    assert sidecar is not None
+    assert sidecar.origin == str(source)
+    assert sidecar.stashed_at == "2026-05-22T15:30:00"
 
 
-# --- stash_file (dup) -------------------------------------------------------
+def test_stash_file_creates_target_dir(tmp_path: Path) -> None:
+    """Stash dir doesn't have to exist yet."""
+    source = tmp_path / "src.dng"
+    source.write_bytes(b"")
+    target = tmp_path / "deeply" / "nested" / "stash" / "x.dng"
+    stash_file(source=source, target_path=target)
+    assert target.exists()
 
 
-def test_stash_file_dup_routes_source_to_capture(tmp_path: Path) -> None:
-    """Two source files with identical content: the second is captured."""
-    first = _make_source(tmp_path, "first.dng", b"same-bytes")
+def test_stash_file_two_different_sources_no_collision(tmp_path: Path) -> None:
+    """With opaque filenames, two stash ops never collide."""
+    src1 = tmp_path / "a" / "IMG_001.dng"
+    src2 = tmp_path / "b" / "IMG_001.dng"  # same basename!
+    for s in (src1, src2):
+        s.parent.mkdir()
+        s.write_bytes(b"")
     stash_dir = tmp_path / "stash"
-    cap1 = tmp_path / "runs" / "r" / "data" / "L001_first.dng"
-    index: dict[str, Path] = {}
 
-    stash_file(
-        source=first, stash_dir=stash_dir, index=index, dup_capture_path=cap1
-    )
-    # Now a second source with the same content.
-    second = _make_source(tmp_path, "second.dng", b"same-bytes")
-    cap2 = tmp_path / "runs" / "r" / "data" / "L002_second.dng"
-    was_dup, final = stash_file(
-        source=second, stash_dir=stash_dir, index=index, dup_capture_path=cap2
-    )
+    stash_file(source=src1, target_path=stash_dir / "r_L001.dng")
+    stash_file(source=src2, target_path=stash_dir / "r_L002.dng")
 
-    assert was_dup is True
-    assert final == stash_dir / "first.dng"  # the keeper stays
-    # Second source moved to dup-capture, not to stash.
-    assert not second.exists()
-    assert cap2.exists()
-    assert cap2.read_bytes() == b"same-bytes"
-    # Sidecar gained the new origin.
-    info = read_sidecar(stash_dir / "first.dng")
-    assert info is not None
-    assert info.origins == [str(first), str(second)]
+    assert (stash_dir / "r_L001.dng").exists()
+    assert (stash_dir / "r_L002.dng").exists()
 
 
-# --- stash_file (filename collision) ----------------------------------------
-
-
-def test_stash_file_filename_collision_suffixes(tmp_path: Path) -> None:
-    """Different content, same source filename → suffix the new entry."""
-    a = _make_source(tmp_path, "IMG_001.dng", b"content-A")
+def test_stash_file_same_content_lands_twice_no_dedup(tmp_path: Path) -> None:
+    """Purist stash doesn't dedup — same content from different sources
+    yields two copies in stash. Future dedupe-stash operation can collapse."""
+    src1 = tmp_path / "a" / "x.dng"
+    src2 = tmp_path / "b" / "y.dng"
+    for s in (src1, src2):
+        s.parent.mkdir()
+        s.write_bytes(b"same-content")
     stash_dir = tmp_path / "stash"
-    index: dict[str, Path] = {}
-    stash_file(
-        source=a,
-        stash_dir=stash_dir,
-        index=index,
-        dup_capture_path=tmp_path / "runs" / "data" / "L001_IMG_001.dng",
-    )
 
-    # A different source folder happens to have IMG_001.dng with
-    # different content. The bytes differ, so no dedup.
-    src2 = tmp_path / "src2"
-    src2.mkdir()
-    b = src2 / "IMG_001.dng"
-    b.write_bytes(b"content-B")
+    stash_file(source=src1, target_path=stash_dir / "r_L001.dng")
+    stash_file(source=src2, target_path=stash_dir / "r_L002.dng")
 
-    was_dup, final = stash_file(
-        source=b,
-        stash_dir=stash_dir,
-        index=index,
-        dup_capture_path=tmp_path / "runs" / "data" / "L002_IMG_001.dng",
-    )
-
-    assert was_dup is False
-    assert final.name == "IMG_001_001.dng"
-    # Original filename recorded.
-    info = read_sidecar(final)
-    assert info is not None
-    assert info.original_filename == "IMG_001.dng"
-
-
-# --- stash_file (corrupt sidecar self-heal) ---------------------------------
-
-
-def test_stash_file_dup_with_corrupt_existing_sidecar(
-    tmp_path: Path,
-) -> None:
-    """When the existing sidecar is corrupt, dup still works: we rebuild
-    a minimal sidecar from the dup's hash and origin."""
-    stash_dir = tmp_path / "stash"
-    stash_dir.mkdir()
-    existing = stash_dir / "a.dng"
-    existing.write_bytes(b"X")
-    # Plant a corrupt sidecar.
-    sidecar_path_for(existing).write_text(
-        "garbage{{{{", encoding="utf-8"
-    )
-    # Index says hash maps to this existing file.
-    index = {"hash-X": existing}
-
-    # Source with the same hash (we pre-seeded index, but the
-    # implementation should still re-hash the source and find the match).
-    source = _make_source(tmp_path, "src.dng", b"X")
-    cap = tmp_path / "runs" / "r" / "data" / "L001_src.dng"
-    # The actual hash of b"X" won't equal "hash-X" — so this test would
-    # falsely take the new-entry branch. Use the real hash for the seed:
-    from pix.content_hash import compute_content_hash
-
-    real_hash = compute_content_hash(existing)
-    index.clear()
-    index[real_hash] = existing
-
-    was_dup, final = stash_file(
-        source=source, stash_dir=stash_dir, index=index, dup_capture_path=cap
-    )
-    assert was_dup is True
-    assert final == existing
-    info = read_sidecar(existing)
-    assert info is not None
-    assert str(source) in info.origins
+    assert (stash_dir / "r_L001.dng").read_bytes() == b"same-content"
+    assert (stash_dir / "r_L002.dng").read_bytes() == b"same-content"

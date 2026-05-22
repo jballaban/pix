@@ -203,27 +203,36 @@ Notable omissions — user must opt in by adding the extension:
 
 The `stash` action moves files into `<library-root>/.pix/stash/` for future processing. The library itself only contains files in canonical formats; stash is the holding area for things we can't (or shouldn't) canonicalize in v1: RAW sensor files (`.dng`, etc.), proprietary 360 source files (`.insp`/`.insv`), anything else the user wants set aside.
 
-**Layout**: flat folder, one file per unique-content. A YAML sidecar (`<filename>.stashinfo`) sits next to each stashed file:
+**Purist design.** Stash does the minimum: preserve the file and record where it came from. No hashing, no dedup, no collision logic at stash time. When the user later decides what to do with their stashed files (collapse duplicates, process the RAWs, stitch the 360 sources), that's a separate operation — a future command will hash and dedup on demand.
 
-```yaml
-hash: 3a1f8b9c2d4e5f...                 # whole-file BLAKE3 hex digest
-origins:
-  - F:\source\trip-2023\IMG_001.dng     # where this content came from
-  - F:\backup\trip-2023\IMG_001.dng     # subsequent dups append here
-original_filename: IMG_001.dng          # present only if stash filename was modified
+**Layout**: flat folder. Each stashed file gets an **opaque on-disk name** plus a tiny YAML sidecar:
+
+```
+.pix/stash/
+  2026-05-22_15-30-00_L001.dng              ← raw bytes from the source
+  2026-05-22_15-30-00_L001.dng.stashinfo    ← YAML sidecar
+  2026-05-22_15-30-00_L002.insv
+  2026-05-22_15-30-00_L002.insv.stashinfo
 ```
 
-**Whole-file hash, not format-aware.** Stash assumes the files inside aren't metadata-edited (DNG sensor data, proprietary blobs). The hash is the same BLAKE3 that `compute_content_hash` uses, but for these formats it falls through to the raw-bytes path — no APP-marker stripping, no `mdat` framing.
+The on-disk filename is `<run-id>_<line-id><source-extension>`. Run-id is the timestamp the run started (e.g., `2026-05-22_15-30-00`); line-id is the plan-line label (e.g., `L042`). The combination is globally unique by construction — no collision logic is ever needed.
 
-**Dedup rule.** Before writing, the source's hash is compared against the existing stash index (one map built from all sidecars at apply start). On match: the source is **not** stored again; it's captured to `runs/<run-id>/data/L###_<filename>` (standard conservation), and the existing sidecar's `origins` list gains the new source path.
+**Sidecar format** (the file's full provenance):
 
-**Filename collision rule** (different content, same source filename): the new entry's stash filename gets a `_NNN` suffix, same algorithm as the canonical-filename collision rule in [library.md](library.md#collision-handling). The sidecar records the un-suffixed `original_filename` so a reader can tell `IMG_001_001.dng` was renamed-from `IMG_001.dng` (vs. happening to be named that way by the camera).
+```yaml
+origin: F:\source\trip-2023\IMG_001.dng
+stashed_at: 2026-05-22T15:30:00
+```
 
-**Cross-volume**: source on a different volume from the library means the initial move is a copy+delete (via `shutil.move`). Subsequent stashes of the same content from a different source skip this — they're routed to the dup-capture instead. Cost is paid once per unique content.
+That's the entire sidecar. The original filename, full source path, and timestamp are all there. No hash, no original_filename field, no origins list. Anything we'd want to compute later (content hash for dedup, source-folder structure, multiple-imports detection) can be derived from these two facts on demand.
+
+**Cross-volume**: source on a different volume from the library means the initial move is a copy+delete (via `shutil.move`). One-time cost per file; no clever dedup avoidance.
 
 **Source folder fate**: same as DELETE — migrate doesn't own the source folder, so empty source folders after a stash are left in place.
 
-**Rollback**: deferred. The apply.log records both source path and stash destination per line; rollback would reverse both branches (new-stash → move from stash back to source; dup-stash → restore from `data/` to source, optionally trim sidecar origins).
+**Rollback**: deferred. The apply.log records source → stash mapping per line; the sidecar carries `origin`. Either is enough to reverse a stash (move file back to its source path).
+
+**Dedup of stashed files**: explicitly **out of scope for stash itself**. The same content imported from two different sources lands twice in `.pix/stash/`. A future operation (likely re-using migrate's plumbing) will scan stashed files, hash them, and propose dedup actions when the user decides to deal with them.
 
 ### Fail-fast on unknown extensions
 

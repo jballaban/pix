@@ -22,7 +22,7 @@ from pix.convert import ConvertFailed, convert_to_jpg, convert_to_mp4
 from pix.exiftool_session import ExifToolSession
 from pix.plan import Action, Plan, PlanLine
 from pix.progress import LiveProgress
-from pix.stash import load_stash_index, stash_file
+from pix.stash import stash_file
 
 
 class ApplyError(Exception):
@@ -35,16 +35,12 @@ def apply_plan(
     run_dir: Path,
     kept_line_ids: set[str],
     staging_dir: Path | None = None,
-    library_root: Path | None = None,
 ) -> tuple[int, int]:
     """Apply the plan, streaming progress to `<run_dir>/apply.log`.
 
     Returns `(completed, skipped)`. Raises `ApplyError` if any action fails.
     `plan_path` is unused here — kept in the signature so callers can pass
     the same paths they pass elsewhere; plan.txt is never rewritten.
-
-    `library_root` is required when the plan contains STASH actions
-    (the stash dir lives at `<library_root>/.pix/stash/`).
     """
     del plan_path  # plan.txt is immutable from apply's perspective
 
@@ -60,23 +56,15 @@ def apply_plan(
     needs_staging = any(
         ln.action == Action.CONVERT_RENAME_TAG for ln in runnable
     )
-    needs_stash = any(ln.action == Action.STASH for ln in runnable)
-    # Any action other than a pure RENAME captures something into
-    # `<run-dir>/data/`. Create it lazily — RENAME-only plans don't
-    # need it.
-    needs_data = any(ln.action != Action.RENAME for ln in runnable)
+    # Any action other than a pure RENAME or STASH captures something
+    # into `<run-dir>/data/`. STASH writes to `.pix/stash/` directly;
+    # no run-folder capture.
+    needs_data = any(
+        ln.action not in (Action.RENAME, Action.STASH)
+        for ln in runnable
+    )
     if needs_data:
         (run_dir / "data").mkdir(parents=True, exist_ok=True)
-
-    stash_dir: Path | None = None
-    stash_index: dict[str, Path] = {}
-    if needs_stash:
-        if library_root is None:
-            raise ApplyError(
-                "STASH actions require a library_root but none was provided"
-            )
-        stash_dir = library_root / ".pix" / "stash"
-        stash_index = load_stash_index(stash_dir)
 
     log_path = run_dir / "apply.log"
     exiftool: ExifToolSession | None = None
@@ -101,14 +89,7 @@ def apply_plan(
                 )
                 _log(log, ln, "Started")
                 try:
-                    _apply_one(
-                        ln,
-                        run_dir,
-                        exiftool,
-                        staging_dir,
-                        stash_dir,
-                        stash_index,
-                    )
+                    _apply_one(ln, run_dir, exiftool, staging_dir)
                 except Exception as e:
                     _log(log, ln, "Failed", detail=str(e))
                     raise ApplyError(
@@ -145,15 +126,12 @@ def _apply_one(
     run_dir: Path,
     exiftool: ExifToolSession | None,
     staging_dir: Path | None,
-    stash_dir: Path | None,
-    stash_index: dict[str, Path],
 ) -> None:
     """Dispatch one plan line to its action handler."""
     if ln.action == Action.DELETE:
         _apply_delete(ln, run_dir)
     elif ln.action == Action.STASH:
-        assert stash_dir is not None, "STASH requires a stash_dir"
-        _apply_stash(ln, stash_dir, stash_index)
+        _apply_stash(ln)
     elif ln.action == Action.RENAME:
         _apply_rename(ln)
     elif ln.action == Action.TAG:
@@ -182,18 +160,11 @@ def _apply_delete(ln: PlanLine, run_dir: Path) -> None:
     ln.abs_path.rename(ln.capture_path)
 
 
-def _apply_stash(
-    ln: PlanLine, stash_dir: Path, stash_index: dict[str, Path]
-) -> None:
-    """Stash the file (or route to dup-capture if its content matches)."""
-    if ln.capture_path is None:
-        raise ApplyError(f"{ln.line_id}: STASH missing capture_path")
-    stash_file(
-        source=ln.abs_path,
-        stash_dir=stash_dir,
-        index=stash_index,
-        dup_capture_path=ln.capture_path,
-    )
+def _apply_stash(ln: PlanLine) -> None:
+    """Move the file to its opaque stash path and write the sidecar."""
+    if ln.target_path is None:
+        raise ApplyError(f"{ln.line_id}: STASH missing target_path")
+    stash_file(source=ln.abs_path, target_path=ln.target_path)
 
 
 def _apply_rename(ln: PlanLine) -> None:
