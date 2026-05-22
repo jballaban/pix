@@ -41,7 +41,9 @@ from pix.config import DEFAULT_CONFIG_YAML
 #      dng/insp/insv → stash.
 # v3 — Default config gains ini/txt/json/gif/webp → delete (Windows
 #      junk sidecars, web-format throwaways, sundry sidecar formats).
-SCHEMA_VERSION: int = 3
+# v4 — Default config gains jwt → delete (MSAL broker manifests
+#      synced by OneDrive into media-backup folders).
+SCHEMA_VERSION: int = 4
 
 
 # --- Upgrades --------------------------------------------------------------
@@ -84,6 +86,13 @@ UPGRADES: dict[int, Upgrade] = {
         description=(
             "Default config gains ini / txt / json / gif / webp → "
             "delete (Windows junk sidecars, web-format throwaways)."
+        ),
+    ),
+    4: Upgrade(
+        add_extensions={"jwt": "delete"},
+        description=(
+            "Default config gains jwt → delete (MSAL broker trust "
+            "manifests that OneDrive backup syncs alongside media)."
         ),
     ),
 }

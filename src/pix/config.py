@@ -36,6 +36,7 @@ extensions:
   json:    delete    # metadata exports, sidecars
   gif:     delete    # web-format animated images (memes, downloads)
   webp:    delete    # web image format (downloads, screenshots)
+  jwt:     delete    # Microsoft auth-broker trust manifests synced by OneDrive
 """
 
 
