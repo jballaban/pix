@@ -14,7 +14,7 @@ from pathlib import Path
 
 import typer
 
-from pix import debug
+from pix import banner, debug
 from pix.apply import ApplyError, apply_plan
 from pix.cleanup import (
     CleanupError,
@@ -46,13 +46,15 @@ def migrate_folder(folder: Path) -> None:
     try:
         root = resolve_root(start=folder)
     except SchemaUpgradeRequired as e:
+        banner()
         typer.echo(f"{e} Run `pix upgrade {user_path}`", err=True)
         raise typer.Exit(code=1) from e
     except (NoLibraryRoot, SchemaTooNew) as e:
+        banner()
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
 
-    typer.echo(f"Library schema: v{SCHEMA_VERSION}")
+    banner(schema_version=SCHEMA_VERSION)
 
     if not folder.is_dir():
         typer.echo(f"Error: {folder} is not a directory.", err=True)

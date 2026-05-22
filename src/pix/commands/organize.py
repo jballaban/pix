@@ -13,7 +13,7 @@ from pathlib import Path
 
 import typer
 
-from pix import debug
+from pix import banner, debug
 from pix.config import Config, set_organize_template
 from pix.editor import open_in_editor, parse_kept_line_ids, prompt_apply
 from pix.metadata import (
@@ -49,13 +49,15 @@ def organize_library(path: Path, template_str: str) -> None:
     try:
         root = resolve_root(start=path)
     except SchemaUpgradeRequired as e:
+        banner()
         typer.echo(f"{e} Run `pix upgrade {user_path}`", err=True)
         raise typer.Exit(code=1) from e
     except (NoLibraryRoot, SchemaTooNew) as e:
+        banner()
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
 
-    typer.echo(f"Library schema: v{SCHEMA_VERSION}")
+    banner(schema_version=SCHEMA_VERSION)
 
     try:
         check_cwd_not_inside(root)

@@ -10,6 +10,7 @@ from pathlib import Path
 
 import typer
 
+from pix import banner
 from pix.config import DEFAULT_CONFIG_YAML
 from pix.schema import SCHEMA_VERSION
 
@@ -22,6 +23,7 @@ run, which would roughly double cloud storage per run.
 
 def init_library(path: Path | None) -> None:
     """Establish a library root at `path` (or CWD)."""
+    banner()
     target = (path or Path.cwd()).resolve()
 
     pix_dir = target / ".pix"
@@ -48,6 +50,6 @@ def init_library(path: Path | None) -> None:
         f"schema_version: {SCHEMA_VERSION}\n", encoding="utf-8"
     )
 
-    typer.echo(f"Initialized pix library root at {target}")
+    typer.echo(f"Initialized pix library root at {target} (schema v{SCHEMA_VERSION}).")
     typer.echo()
     typer.echo(SYNC_REMINDER)

@@ -7,7 +7,6 @@ from typing import Annotated
 
 import typer
 
-from pix import __version__
 from pix.commands.dedupe import dedupe_library
 from pix.commands.init import init_library
 from pix.commands.migrate import migrate_folder
@@ -22,15 +21,9 @@ app: typer.Typer = typer.Typer(
 )
 
 
-@app.callback()
-def _print_version() -> None:  # pyright: ignore[reportUnusedFunction]
-    """Top-level callback — fires before every subcommand.
-
-    Prints the running version as the first line so dev and tester are
-    always certain which build is executing. Doesn't fire for `pix --help`
-    or `pix` with no args (typer short-circuits to the help screen).
-    """
-    typer.echo(f"pix {__version__}")
+# The version banner now lives in each command (via `pix.banner`) so
+# it can be printed as a single line that includes the resolved
+# library's schema version when applicable. See `pix.__init__`.
 
 
 @app.command("init")

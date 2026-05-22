@@ -19,12 +19,14 @@ from pathlib import Path
 
 import typer
 
+from pix import banner
 from pix.root import NoLibraryRoot, resolve as resolve_root
 from pix.schema import SchemaTooNew, upgrade
 
 
 def upgrade_library(path: Path) -> None:
     """Run an explicit schema upgrade against the library at `path`."""
+    banner()
     path = path.resolve()
 
     # `check_schema=False`: this command is the schema fix; refusing to

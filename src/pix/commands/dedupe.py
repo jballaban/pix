@@ -14,7 +14,7 @@ from pathlib import Path
 
 import typer
 
-from pix import debug
+from pix import banner, debug
 from pix.dedupe import (
     DedupeApplyError,
     MissingHashesError,
@@ -43,13 +43,15 @@ def dedupe_library(path: Path) -> None:
     try:
         root = resolve_root(start=path)
     except SchemaUpgradeRequired as e:
+        banner()
         typer.echo(f"{e} Run `pix upgrade {user_path}`", err=True)
         raise typer.Exit(code=1) from e
     except (NoLibraryRoot, SchemaTooNew) as e:
+        banner()
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
 
-    typer.echo(f"Library schema: v{SCHEMA_VERSION}")
+    banner(schema_version=SCHEMA_VERSION)
 
     try:
         check_cwd_not_inside(root)
