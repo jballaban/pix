@@ -37,14 +37,18 @@ Each library is independent. Two libraries on the same machine (e.g., `F:\person
 schema_version: 1
 ```
 
-The constant `SCHEMA_VERSION` in `src/pix/schema.py` tracks the version this build of pix understands. Every pix command (except `init`) compares the two after resolving the root:
+The constant `SCHEMA_VERSION` in `src/pix/schema.py` tracks the version this build of pix understands. Every pix command (except `init` and `upgrade`) compares the two after resolving the root:
 
 | On-disk vs. running | Action |
 |---|---|
-| `state.yaml` missing | Bootstrap — write a fresh `state.yaml` at `SCHEMA_VERSION`. Nothing else touched. (Lets pre-versioning libraries adopt the system without losing their custom config.) |
+| `state.yaml` missing | Bootstrap — write a fresh `state.yaml` at `SCHEMA_VERSION`. Nothing else touched. (Lets pre-versioning libraries adopt the system without losing their custom config; no destructive action.) |
 | Equal | No-op. |
-| On-disk lower | Archive-and-reset: everything in `.pix/` (except `archive/`) is moved into `.pix/archive/v<old>/`, then a fresh default `config.yaml` and `state.yaml` are created. One-line console notice, no prompt. The user can recover any customizations by inspecting `archive/v<old>/`. |
+| On-disk lower | **Refuse** with a clear message: `Library at <root> has schema_version=<N>, but this pix expects v<M>. Run `pix upgrade <root>` to migrate (your current .pix/ contents will be archived to .pix/archive/v<N>/ first, then fresh defaults are created).` The command exits non-zero without doing anything. |
 | On-disk higher | Refuse. A newer pix touched this library; we don't know what we'd break. |
+
+**`pix upgrade <path>` is the only command that does the archive-and-reset.** It's run explicitly by the user when they see the upgrade-required message and they're ready. The reasoning: the user may have customizations in `config.yaml` (extension policies, organize templates) that they don't want silently moved to an archive on what they thought was an unrelated command. Forcing an explicit gesture means the archive is deliberate.
+
+`pix upgrade` resolves the library root with the schema check disabled (otherwise it'd refuse to start), then moves everything in `.pix/` (except `archive/` itself) into `.pix/archive/v<old>/` and writes a fresh `config.yaml` + `state.yaml`. The user restores customizations by copying from the archive folder as needed.
 
 The reset is **not** a migration — there's no per-version logic, no field mapping, no schema-aware merge. It's a deliberate trade: rather than maintain a migration framework for a rarely-changing surface, we accept the cost of forcing the user to manually re-apply customizations after a schema bump. The archive folder is the safety net.
 

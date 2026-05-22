@@ -10,8 +10,9 @@ Resolution order, per spec/library.md:
   3. Walk up from CWD — interactive fallback when the user is inside a
      library and didn't bother to pass a path.
 
-After resolving, the schema version is checked and (if needed) the
-library is reset to current defaults — see `pix.schema`.
+After resolving, the schema version is checked via `pix.schema.ensure_current`
+unless `check_schema=False` (only `pix upgrade` passes False, since
+upgrade is the command that fixes the schema mismatch).
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from pix.schema import SchemaCheckResult, ensure_current
+from pix.schema import ensure_current
 
 
 class NoLibraryRoot(Exception):
@@ -28,19 +29,21 @@ class NoLibraryRoot(Exception):
 
 def resolve(
     start: Path | None = None,
-) -> tuple[Path, SchemaCheckResult]:
-    """Resolve the library root and bring its schema to current.
+    *,
+    check_schema: bool = True,
+) -> Path:
+    """Resolve the library root.
 
-    Returns `(root, schema_result)`. `schema_result.archived_from` is
-    set when the library was reset and the caller may want to surface a
-    user-visible notice. Raises `NoLibraryRoot` if no root is found and
-    `pix.schema.SchemaTooNew` if the on-disk schema is newer than this
-    pix understands.
+    Raises `NoLibraryRoot` if no root is found. When `check_schema=True`
+    (the default), may also raise `pix.schema.SchemaUpgradeRequired`
+    or `pix.schema.SchemaTooNew`.
     """
     if start is not None:
         found = _walk_up(start.resolve())
         if found is not None:
-            return found, ensure_current(found)
+            if check_schema:
+                ensure_current(found)
+            return found
 
     env_root = os.environ.get("PIX_ROOT")
     if env_root:
@@ -50,11 +53,15 @@ def resolve(
                 f"PIX_ROOT={candidate} does not contain a .pix directory. "
                 f"Run 'pix init {candidate}' to establish one."
             )
-        return candidate, ensure_current(candidate)
+        if check_schema:
+            ensure_current(candidate)
+        return candidate
 
     found = _walk_up(Path.cwd().resolve())
     if found is not None:
-        return found, ensure_current(found)
+        if check_schema:
+            ensure_current(found)
+        return found
 
     raise NoLibraryRoot(
         "No pix library root found. Pass a path inside a library, set "

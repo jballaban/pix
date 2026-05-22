@@ -12,6 +12,7 @@ from pix.commands.dedupe import dedupe_library
 from pix.commands.init import init_library
 from pix.commands.migrate import migrate_folder
 from pix.commands.organize import organize_library
+from pix.commands.upgrade import upgrade_library
 
 app: typer.Typer = typer.Typer(
     name="pix",
@@ -102,3 +103,19 @@ def dedupe(
 ) -> None:
     """Remove duplicate files sharing the same `pix:ContentHash` (library-wide)."""
     dedupe_library(path=path)
+
+
+@app.command("upgrade")
+def upgrade(
+    path: Annotated[
+        Path,
+        typer.Argument(
+            help=(
+                "Path inside (or at) the library root to upgrade. The "
+                "library is resolved by walking up from this path."
+            ),
+        ),
+    ],
+) -> None:
+    """Archive the library's prior .pix/ contents and reset to current defaults."""
+    upgrade_library(path=path)

@@ -35,7 +35,7 @@ from pix.organize import (
 from pix.plan import PlanLine
 from pix.root import NoLibraryRoot, resolve as resolve_root
 from pix.scan import walk_source_files
-from pix.schema import SCHEMA_VERSION, SchemaTooNew
+from pix.schema import SchemaTooNew, SchemaUpgradeRequired
 
 
 def organize_library(path: Path, template_str: str) -> None:
@@ -46,21 +46,10 @@ def organize_library(path: Path, template_str: str) -> None:
     """
     path = path.resolve()
     try:
-        root, schema = resolve_root(start=path)
-    except NoLibraryRoot as e:
+        root = resolve_root(start=path)
+    except (NoLibraryRoot, SchemaTooNew, SchemaUpgradeRequired) as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
-    except SchemaTooNew as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(code=1) from e
-
-    if schema.archived_from is not None:
-        typer.echo(
-            f"Library schema was v{schema.archived_from}; this pix expects "
-            f"v{SCHEMA_VERSION}. Archived prior .pix/ contents to "
-            f".pix/archive/v{schema.archived_from}/ and reset to defaults. "
-            f"Inspect that folder to recover any customizations."
-        )
 
     try:
         check_cwd_not_inside(root)
