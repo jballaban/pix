@@ -1,0 +1,17 @@
+# Normalize all text files to LF in the repo, regardless of the user's
+# global core.autocrlf setting. Git auto-detects text vs binary; binary
+# files stay binary. Modern Windows editors handle LF without trouble.
+* text=auto eol=lf
+
+# Explicit text types, mostly redundant with the auto-detect above but
+# documents intent and pins anything Git might mis-detect.
+*.py    text eol=lf
+*.md    text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.toml  text eol=lf
+*.cfg   text eol=lf
+*.txt   text eol=lf
+*.log   text eol=lf
+.gitattributes text eol=lf
+.gitignore     text eol=lf
