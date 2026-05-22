@@ -8,6 +8,7 @@ from typing import Annotated
 import typer
 
 from pix import __version__
+from pix.commands.dedupe import dedupe_library
 from pix.commands.init import init_library
 from pix.commands.migrate import migrate_folder
 from pix.commands.organize import organize_library
@@ -85,3 +86,19 @@ def organize(
 ) -> None:
     """Re-shape the library to match a folder template (library-wide MOVE)."""
     organize_library(path=path, template_str=template)
+
+
+@app.command("dedupe")
+def dedupe(
+    path: Annotated[
+        Path,
+        typer.Argument(
+            help=(
+                "Path inside (or at) the library root. The library is "
+                "resolved by walking up from this path. `.` for CWD."
+            ),
+        ),
+    ],
+) -> None:
+    """Remove duplicate files sharing the same `pix:ContentHash` (library-wide)."""
+    dedupe_library(path=path)

@@ -60,6 +60,7 @@ class Action(str, Enum):
     TAG = "TAG"
     RENAME = "RENAME"
     MOVE = "MOVE"
+    DEDUP = "DEDUP"
 
 
 # Width to which action labels are right-padded in plan.txt.
