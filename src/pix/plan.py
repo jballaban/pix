@@ -344,21 +344,32 @@ def _resolve_collisions(
             dest = src_path
         members_by_dest.setdefault(dest, []).append(src_path)
 
+    # Pre-pass: sort each group's members (so the primary is first), then
+    # populate `occupied` with every group's primary slot. Without this
+    # the original single-loop walk would only learn about a primary slot
+    # when its group was reached in dict iteration order — overflow
+    # assignment in an earlier group could land on a primary slot of a
+    # later group, producing a plan where two files claim the same path.
     occupied: set[Path] = set()
+    for dest, srcs in members_by_dest.items():
+        # Already-at-bare-name wins, then source-name ASC.
+        srcs.sort(key=lambda p: (0 if p == dest else 1, p.name))
+        occupied.add(dest)
+
     updates: dict[Path, str] = {}  # src_path -> new target filename
 
     for dest, srcs in members_by_dest.items():
         if len(srcs) <= 1:
-            occupied.add(dest)
             continue
-        # Already-at-bare-name wins, then source-name ASC.
-        srcs.sort(key=lambda p: (0 if p == dest else 1, p.name))
-        occupied.add(dest)  # first member keeps the bare slot
+        # srcs is already sorted from the pre-pass.
         suffix_idx = 1
         new_targets: dict[Path, str] = {}
         for src_path in srcs[1:]:
-            # Skip suffix values already taken (in case prior groups
-            # claimed `_001` etc. at the same canonical destination).
+            # Skip suffix values already taken — covers both other
+            # collision groups' overflow assignments AND any non-renaming
+            # cached file whose current path happens to be a suffixed
+            # canonical name (its `dest` was its current path, added to
+            # `occupied` in the pre-pass).
             while True:
                 stem = dest.stem
                 ext = dest.suffix

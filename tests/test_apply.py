@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from pix.apply import apply_plan
+from pix.apply import ApplyError, _order_for_apply, apply_plan
 from pix.plan import (
     PIX_DATE_AUTO,
     Action,
@@ -353,6 +353,178 @@ def test_apply_convert_png_to_jpg_end_to_end(tmp_path: Path) -> None:
     assert "IMG_001.png" in (converted.get_str("XMP:OriginalPath") or "")
     content_hash = converted.get_str("XMP:ContentHash")
     assert content_hash is not None and len(content_hash) == 64
+
+
+def test_apply_handles_overlapping_renames_via_topo_sort(
+    tmp_path: Path,
+) -> None:
+    """Two renames where one's target is the other's source must succeed
+    regardless of plan-input order — topo sort vacates first.
+
+    Mirrors the v0.1.47 bug: existing canonical-with-suffix file from a
+    prior partial migration, plus a new file that the collision logic
+    routes to the now-stale suffix slot.
+    """
+    src = tmp_path / "src"
+    src.mkdir()
+    # File that wants the bare canonical slot (its current path will be
+    # vacated for the other file to claim).
+    existing_001 = src / "2024-01-01_000001_001.jpg"
+    existing_001.write_bytes(b"existing")
+    # File that wants the _001 slot the existing file is vacating.
+    challenger = src / "2003-12-31_230000068.jpg"
+    challenger.write_bytes(b"challenger")
+
+    run_dir = tmp_path / "runs" / "test-run"
+    run_dir.mkdir(parents=True)
+
+    # Input order: challenger's line first (lower-numbered L-id), then
+    # existing-001's. Without topo sort, the challenger's rename would
+    # try to claim _001 while existing_001 is still there.
+    plan = _make_plan(
+        src,
+        [
+            PlanLine(
+                line_id="L001",
+                action=Action.RENAME,
+                rel_path="2003-12-31_230000068.jpg",
+                details="→2024-01-01_000001_001.jpg",
+                abs_path=challenger.resolve(),
+                target_filename="2024-01-01_000001_001.jpg",
+            ),
+            PlanLine(
+                line_id="L002",
+                action=Action.RENAME,
+                rel_path="2024-01-01_000001_001.jpg",
+                details="→2024-01-01_000001.jpg",
+                abs_path=existing_001.resolve(),
+                target_filename="2024-01-01_000001.jpg",
+            ),
+        ],
+        run_dir=run_dir,
+        staging_dir=tmp_path / "staging",
+    )
+    plan_path = run_dir / "plan.txt"
+    plan_path.write_text(plan.to_text(), encoding="utf-8")
+
+    completed, _ = apply_plan(
+        plan=plan,
+        plan_path=plan_path,
+        run_dir=run_dir,
+        kept_line_ids={"L001", "L002"},
+    )
+    assert completed == 2
+
+    # End state: both files at their targets. The _001 path is reused
+    # (existing's bytes moved out, challenger's bytes moved in), so we
+    # check by content, not by path-existence.
+    assert not challenger.exists()  # 2003-12-31_...jpg source vacated
+    assert (src / "2024-01-01_000001.jpg").read_bytes() == b"existing"
+    assert (src / "2024-01-01_000001_001.jpg").read_bytes() == b"challenger"
+
+    # apply.log records execution in topo order (L002 before L001).
+    log_lines = (run_dir / "apply.log").read_text(encoding="utf-8").splitlines()
+    l1_started_idx = next(i for i, l in enumerate(log_lines) if "L001 Started" in l)
+    l2_started_idx = next(i for i, l in enumerate(log_lines) if "L002 Started" in l)
+    assert l2_started_idx < l1_started_idx
+
+
+def _rename_line(
+    line_id: str, folder: Path, src_name: str, target_name: str
+) -> PlanLine:
+    """Build a bare PlanLine for topo-sort tests (no FS state needed)."""
+    return PlanLine(
+        line_id=line_id,
+        action=Action.RENAME,
+        rel_path=src_name,
+        details=f"→{target_name}",
+        abs_path=folder / src_name,
+        target_filename=target_name,
+        target_path=folder / target_name,
+    )
+
+
+def test_order_for_apply_topo_sort_vacate_before_claim(tmp_path: Path) -> None:
+    """A rename that vacates a slot another rename wants must run first.
+
+    Two plan lines in input order [claimer, vacater]; output order
+    must be [vacater, claimer].
+    """
+    folder = tmp_path
+    claimer = _rename_line("L178", folder, "newfile.jpg", "target.jpg")
+    vacater = _rename_line("L200", folder, "target.jpg", "elsewhere.jpg")
+
+    ordered = _order_for_apply([claimer, vacater])
+
+    assert [ln.line_id for ln in ordered] == ["L200", "L178"]
+
+
+def test_order_for_apply_chain_of_renames(tmp_path: Path) -> None:
+    """A → B's slot, B → C's slot, C → free slot. Order: C, B, A."""
+    folder = tmp_path
+    a = _rename_line("L1", folder, "a.jpg", "b.jpg")
+    b = _rename_line("L2", folder, "b.jpg", "c.jpg")
+    c = _rename_line("L3", folder, "c.jpg", "d.jpg")
+
+    ordered = _order_for_apply([a, b, c])
+
+    assert [ln.line_id for ln in ordered] == ["L3", "L2", "L1"]
+
+
+def test_order_for_apply_cycle_raises(tmp_path: Path) -> None:
+    """A → B's slot, B → A's slot is a cycle; cannot resolve in v1."""
+    folder = tmp_path
+    a = _rename_line("L1", folder, "a.jpg", "b.jpg")
+    b = _rename_line("L2", folder, "b.jpg", "a.jpg")
+
+    with pytest.raises(ApplyError, match="rename cycle"):
+        _order_for_apply([a, b])
+
+
+def test_order_for_apply_independent_lines_preserve_input_order(
+    tmp_path: Path,
+) -> None:
+    """Lines with no dependencies stay in input order."""
+    folder = tmp_path
+    l1 = _rename_line("L1", folder, "a.jpg", "x.jpg")
+    l2 = _rename_line("L2", folder, "b.jpg", "y.jpg")
+    l3 = _rename_line("L3", folder, "c.jpg", "z.jpg")
+
+    ordered = _order_for_apply([l1, l2, l3])
+
+    assert [ln.line_id for ln in ordered] == ["L1", "L2", "L3"]
+
+
+def test_order_for_apply_non_rename_actions_unaffected(
+    tmp_path: Path,
+) -> None:
+    """DELETE and TAG actions don't claim/vacate; they just stay in order
+    relative to other no-dependency lines."""
+    folder = tmp_path
+    delete = PlanLine(
+        line_id="L1",
+        action=Action.DELETE,
+        rel_path="junk.txt",
+        details="extension policy: delete",
+        abs_path=folder / "junk.txt",
+    )
+    tag = PlanLine(
+        line_id="L2",
+        action=Action.TAG,
+        rel_path="2023-08-15_143205.jpg",
+        details="event_auto null→birthday",
+        abs_path=folder / "2023-08-15_143205.jpg",
+    )
+    rename = _rename_line("L3", folder, "old.jpg", "new.jpg")
+
+    ordered = _order_for_apply([delete, tag, rename])
+
+    # All independent → input order preserved.
+    assert [ln.line_id for ln in ordered] == ["L1", "L2", "L3"]
+
+
+def test_order_for_apply_empty(tmp_path: Path) -> None:
+    assert _order_for_apply([]) == []
 
 
 def _minimal_jpeg() -> bytes:

@@ -9,10 +9,17 @@ it. Progress streams to a sibling `apply.log` opened in append mode: one
 line per state transition (`Started` / `Completed` / `Failed`). A crash
 truncates the log to whatever was flushed; the tail of missing lines is
 the work that didn't finish.
+
+Plan lines are topologically sorted before execution so that a rename
+that vacates a slot another rename wants always runs first. plan.txt
+itself stays in path order (the user's editing view); only the execution
+order is reshuffled. Apply.log's L-id sequence reflects the execution
+order, which may not be numerically ascending.
 """
 
 from __future__ import annotations
 
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import IO
@@ -27,6 +34,14 @@ from pix.stash import stash_file
 
 class ApplyError(Exception):
     """Raised when an action fails mid-apply. Apply halts on this."""
+
+
+# Actions whose plan line claims a `target_path` and whose `abs_path`
+# becomes free at end-of-line. Topo sort orders these so a vacate
+# always runs before any claim of the vacated slot.
+_RENAME_ACTIONS: frozenset[Action] = frozenset(
+    {Action.RENAME, Action.RENAME_TAG, Action.CONVERT_RENAME_TAG}
+)
 
 
 def apply_plan(
@@ -47,6 +62,7 @@ def apply_plan(
     runnable = [
         ln for ln in plan.lines if ln.line_id in kept_line_ids
     ]
+    runnable = _order_for_apply(runnable)
 
     needs_exiftool = any(
         ln.action
@@ -106,6 +122,70 @@ def apply_plan(
                 exiftool.close()
 
     return completed, 0
+
+
+def _order_for_apply(runnable: list[PlanLine]) -> list[PlanLine]:
+    """Topologically order plan lines so vacates happen before claims.
+
+    Dependency: a rename-style line L with `target_path` T depends on any
+    other rename-style line M whose `abs_path` is T. M vacates the slot
+    that L wants to claim, so M must run first. Within independent
+    lines, original order is preserved (Kahn's with FIFO queue).
+
+    Cycles (A → B's slot, B → A's slot) require intermediate-name
+    handling that we don't have in v1; detected and raised as
+    `ApplyError`. The library that triggers one is rare enough to deal
+    with by editing the plan (skip one side of the swap, re-run).
+    """
+    n = len(runnable)
+    if n == 0:
+        return []
+
+    # Map abs_path -> index of the rename-style line sourcing from it.
+    # Only rename-style lines vacate their source.
+    source_to_idx: dict[Path, int] = {}
+    for i, ln in enumerate(runnable):
+        if ln.action in _RENAME_ACTIONS:
+            source_to_idx[ln.abs_path] = i
+
+    indegree = [0] * n
+    # blocks[j] = indices blocked by j (j must run before each of them).
+    blocks: list[list[int]] = [[] for _ in range(n)]
+
+    for i, ln in enumerate(runnable):
+        if ln.action in _RENAME_ACTIONS and ln.target_path is not None:
+            j = source_to_idx.get(ln.target_path)
+            if j is not None and j != i:
+                indegree[i] += 1
+                blocks[j].append(i)
+
+    queue: deque[int] = deque(
+        i for i, deg in enumerate(indegree) if deg == 0
+    )
+    order: list[int] = []
+    while queue:
+        i = queue.popleft()
+        order.append(i)
+        for k in blocks[i]:
+            indegree[k] -= 1
+            if indegree[k] == 0:
+                queue.append(k)
+
+    if len(order) < n:
+        cycle_indices = [i for i in range(n) if indegree[i] > 0]
+        cycle_ids = [runnable[i].line_id for i in cycle_indices[:5]]
+        more = (
+            ""
+            if len(cycle_indices) <= 5
+            else f" (+{len(cycle_indices) - 5} more)"
+        )
+        raise ApplyError(
+            f"rename cycle detected across {len(cycle_indices)} plan "
+            f"line(s): {', '.join(cycle_ids)}{more}. Edit plan.txt to "
+            f"skip one side of the swap and re-run."
+        )
+
+    return [runnable[i] for i in order]
 
 
 def _log(
