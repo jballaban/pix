@@ -90,6 +90,9 @@ def apply_plan(
                 _log(log, ln, "Started")
                 try:
                     _apply_one(ln, run_dir, exiftool, staging_dir)
+                except KeyboardInterrupt:
+                    _log(log, ln, "Interrupted")
+                    raise
                 except Exception as e:
                     _log(log, ln, "Failed", detail=str(e))
                     raise ApplyError(

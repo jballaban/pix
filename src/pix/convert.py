@@ -30,12 +30,21 @@ class ConvertFailed(Exception):
     """Raised when a conversion step fails."""
 
 
+class ConvertTimeout(ConvertFailed):
+    """Raised when an ffmpeg / ffprobe call exceeds its timeout."""
+
+
 class ToolNotFound(Exception):
     """Raised when an external binary (ffmpeg, ffprobe) isn't on PATH."""
 
 
 JPG_QUALITY: int = 95
 H264_HEVC_CODECS: frozenset[str] = frozenset({"h264", "hevc"})
+
+# Subprocess timeouts per spec/implementation.md → Subprocess hardening.
+_FFPROBE_TIMEOUT: float = 30.0       # codec probe; small read, generous margin
+_FFMPEG_REMUX_TIMEOUT: float = 300.0  # 5 min for `-c copy` (cheap; long for safety)
+_FFMPEG_REENCODE_TIMEOUT: float = 3600.0  # 1 hour for libx265 re-encode
 
 
 def convert_to_jpg(src: Path, dst: Path) -> None:
@@ -84,6 +93,7 @@ def convert_to_mp4(src: Path, dst: Path) -> None:
             "+faststart",
             str(dst),
         ]
+        timeout = _FFMPEG_REMUX_TIMEOUT
     else:
         cmd = [
             ffmpeg,
@@ -107,10 +117,22 @@ def convert_to_mp4(src: Path, dst: Path) -> None:
             "+faststart",
             str(dst),
         ]
+        timeout = _FFMPEG_REENCODE_TIMEOUT
 
-    proc = subprocess.run(
-        cmd, capture_output=True, text=True, encoding="utf-8", check=False
-    )
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise ConvertTimeout(
+            f"ffmpeg timed out after {timeout:.0f}s converting {src} to MP4 "
+            f"(codec={codec!r})"
+        ) from e
     if proc.returncode != 0:
         raise ConvertFailed(
             f"ffmpeg failed converting {src} to MP4 "
@@ -121,24 +143,30 @@ def convert_to_mp4(src: Path, dst: Path) -> None:
 def _probe_video_codec(src: Path) -> str:
     """Return the first video stream's codec name (e.g. 'h264', 'hevc')."""
     ffprobe = _require_tool("ffprobe")
-    proc = subprocess.run(
-        [
-            ffprobe,
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream=codec_name",
-            "-of",
-            "csv=p=0",
-            str(src),
-        ],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        check=False,
-    )
+    try:
+        proc = subprocess.run(
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_name",
+                "-of",
+                "csv=p=0",
+                str(src),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+            timeout=_FFPROBE_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise ConvertTimeout(
+            f"ffprobe timed out after {_FFPROBE_TIMEOUT:.0f}s on {src}"
+        ) from e
     if proc.returncode != 0:
         raise ConvertFailed(
             f"ffprobe failed on {src} (exit {proc.returncode}):\n{proc.stderr}"
