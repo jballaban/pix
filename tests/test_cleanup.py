@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pix.cleanup import cleanup_rename_orphans
+from pix.cleanup import (
+    cleanup_exiftool_tmp,
+    cleanup_rename_orphans,
+    wipe_staging,
+)
 
 
 def test_cleanup_reverts_orphan_intermediate(tmp_path: Path) -> None:
@@ -67,3 +71,78 @@ def test_cleanup_handles_nested_subdirectories(tmp_path: Path) -> None:
     cleanup_rename_orphans(src)
     assert not orphan.exists()
     assert (src / "deep" / "nested" / "FILE.JPG").exists()
+
+
+def test_cleanup_exiftool_tmp_deletes_leftovers(tmp_path: Path) -> None:
+    """A `*_exiftool_tmp` orphan from an interrupted TAG write is deleted."""
+    src = tmp_path / "src"
+    src.mkdir()
+    original = src / "photo.jpg"
+    original.write_bytes(b"img")
+    tmp = src / "photo.jpg_exiftool_tmp"
+    tmp.write_bytes(b"half-written-tmp")
+
+    deleted = cleanup_exiftool_tmp(src)
+
+    assert len(deleted) == 1
+    assert not tmp.exists()
+    # Original is untouched (per ExifTool's atomic-write protocol).
+    assert original.exists()
+    assert original.read_bytes() == b"img"
+
+
+def test_cleanup_exiftool_tmp_skips_pix_dir(tmp_path: Path) -> None:
+    """Files under `.pix/` aren't part of the source-folder sweep."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / ".pix").mkdir()
+    in_pix = src / ".pix" / "weird.jpg_exiftool_tmp"
+    in_pix.write_bytes(b"")
+
+    assert cleanup_exiftool_tmp(src) == []
+    assert in_pix.exists()
+
+
+def test_cleanup_exiftool_tmp_nested(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    (src / "a" / "b").mkdir(parents=True)
+    tmp = src / "a" / "b" / "deep.jpg_exiftool_tmp"
+    tmp.write_bytes(b"")
+
+    deleted = cleanup_exiftool_tmp(src)
+    assert deleted == [tmp]
+    assert not tmp.exists()
+
+
+def test_cleanup_exiftool_tmp_returns_empty_when_none(tmp_path: Path) -> None:
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "photo.jpg").write_bytes(b"")
+    assert cleanup_exiftool_tmp(src) == []
+
+
+def test_wipe_staging_removes_contents(tmp_path: Path) -> None:
+    """Wipe deletes everything inside staging, leaves the directory itself."""
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    (staging / "leftover.jpg").write_bytes(b"data")
+    (staging / "subdir").mkdir()
+    (staging / "subdir" / "deep.tmp").write_bytes(b"more")
+
+    count = wipe_staging(staging)
+
+    assert count == 2  # one file + one subdir at top level
+    assert staging.exists()
+    assert list(staging.iterdir()) == []
+
+
+def test_wipe_staging_no_op_when_absent(tmp_path: Path) -> None:
+    staging = tmp_path / "staging-does-not-exist"
+    assert wipe_staging(staging) == 0
+
+
+def test_wipe_staging_no_op_when_empty(tmp_path: Path) -> None:
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    assert wipe_staging(staging) == 0
+    assert staging.exists()

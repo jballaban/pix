@@ -18,8 +18,10 @@ from pix import banner, debug
 from pix.apply import ApplyError, apply_plan
 from pix.cleanup import (
     CleanupError,
+    cleanup_exiftool_tmp,
     cleanup_migrate_markers,
     cleanup_rename_orphans,
+    wipe_staging,
 )
 from pix.config import Config
 from pix.editor import open_in_editor, parse_kept_line_ids, prompt_apply
@@ -80,8 +82,14 @@ def migrate_folder(folder: Path) -> None:
     _plog(plan_log_path, f"Source: {folder}")
 
     # Recover any orphans from prior crashed runs before walking the
-    # source. Order matters: rename intermediates first (they're simple
-    # path-only ops); then CONVERT markers (which may need ExifTool reads).
+    # source. Order matters: wipe staging first (any aborted CONVERT
+    # output is forfeit; the new plan will re-propose); then rename
+    # intermediates (simple path-only ops); then CONVERT markers (which
+    # may need ExifTool reads); then ExifTool's own _exiftool_tmp
+    # leftovers from interrupted TAG writes.
+    wiped = wipe_staging(staging_dir)
+    if wiped:
+        _plog(plan_log_path, f"Wiped {wiped} entr(ies) from staging.")
     reverted = cleanup_rename_orphans(folder)
     if reverted:
         _plog(
@@ -95,6 +103,13 @@ def migrate_folder(folder: Path) -> None:
         raise typer.Exit(code=1) from e
     for note in marker_notes:
         _plog(plan_log_path, note)
+    tmp_deleted = cleanup_exiftool_tmp(folder)
+    if tmp_deleted:
+        _plog(
+            plan_log_path,
+            f"Cleaned up {len(tmp_deleted)} *_exiftool_tmp file(s) from a "
+            f"prior interrupted run.",
+        )
 
     # Walk is silent at the per-file level — show an indeterminate
     # `(Xs)` ticker so the user knows pix is working.

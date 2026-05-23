@@ -11,12 +11,17 @@ mid-flight in a prior run:
   cleanup: if the original is still in source, delete the marker (the
   new plan re-proposes the convert); if the original is already captured
   (marker only), finalize the marker to its canonical name.
+- `*_exiftool_tmp` — leftover from ExifTool's own atomic-write machinery
+  if a TAG write was interrupted. Per ExifTool's protocol the original
+  file is untouched whenever the `_exiftool_tmp` is present, so deletion
+  is safe; the new plan will re-propose the TAG.
 
 See spec/migrate.md → Marker cleanup for the full state diagram.
 """
 
 from __future__ import annotations
 
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -25,6 +30,7 @@ from pix.exiftool_session import ExifToolSession
 
 _RENAME_SUFFIX: str = ".__pixrename__"
 _MIGRATE_INFIX: str = ".__migrate__."
+_EXIFTOOL_TMP_SUFFIX: str = "_exiftool_tmp"
 
 
 class CleanupError(Exception):
@@ -163,6 +169,56 @@ def _parse_pix_dt(value: str) -> datetime | None:
         return datetime.strptime(value, "%Y-%m-%d-%H:%M:%S")
     except ValueError:
         return None
+
+
+def cleanup_exiftool_tmp(folder: Path) -> list[Path]:
+    """Delete any `*_exiftool_tmp` leftovers under `folder`.
+
+    These are ExifTool's atomic-write tmp files; if one exists then the
+    original was never replaced (ExifTool's protocol), so deletion is
+    safe. Per spec/migrate.md → Marker cleanup. Returns the list of
+    deleted paths.
+
+    Skips anything under `.pix/` — that's pix-managed working state and
+    not part of source's atomic-write story.
+    """
+    deleted: list[Path] = []
+    for path in folder.rglob(f"*{_EXIFTOOL_TMP_SUFFIX}"):
+        if not path.is_file():
+            continue
+        if _under_pix_dir(path):
+            continue
+        try:
+            path.unlink()
+        except OSError:
+            # Best-effort. If we can't delete it, the next plan will
+            # surface it as an unknown extension and the user can
+            # remove it manually.
+            continue
+        deleted.append(path)
+    return deleted
+
+
+def wipe_staging(staging_dir: Path) -> int:
+    """Wipe `.pix/staging/` contents at the start of a migrate run.
+
+    Per spec/migrate.md → Workflow step 1. Removes everything inside
+    `staging_dir` (but not the directory itself). Returns the count of
+    entries removed. Safe if the directory doesn't exist (returns 0).
+    """
+    if not staging_dir.exists():
+        return 0
+    count = 0
+    for entry in staging_dir.iterdir():
+        if entry.is_dir():
+            shutil.rmtree(entry, ignore_errors=True)
+        else:
+            try:
+                entry.unlink()
+            except OSError:
+                continue
+        count += 1
+    return count
 
 
 def _under_pix_dir(path: Path) -> bool:
