@@ -116,8 +116,18 @@ def migrate_folder(folder: Path) -> None:
             f"Reading metadata from {len(source_files)} files "
             f"(per-file cache will speed up subsequent runs)..."
         )
+
+        def _update_label(done: int, total: int) -> None:
+            silent_progress.set_label(
+                f"Reading metadata {done}/{total} files..."
+            )
+
         try:
-            cache = build_cache(source_files, cache=meta_cache)
+            cache = build_cache(
+                source_files,
+                cache=meta_cache,
+                on_batch=_update_label,
+            )
         except ExifToolNotFound as e:
             typer.echo(f"Error: {e}", err=True)
             raise typer.Exit(code=1) from e

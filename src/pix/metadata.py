@@ -15,10 +15,18 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Callable, cast
 
 from pix import exiftool_config_path
 from pix.metadata_cache import PerFileCache
+
+
+# Misses are read in batches of this size. Picked so a crash mid-bulk-read
+# loses at most ~1000 files' worth of progress (the cache stores completed
+# batches immediately) and so memory stays bounded — one ExifTool call
+# returning JSON for 1000 files is a few MB, vs. tens-to-hundreds of MB
+# for an unbounded library-wide read.
+BATCH_SIZE: int = 1000
 
 
 class ExifToolNotFound(Exception):
@@ -63,13 +71,21 @@ def build_cache(
     paths: list[Path],
     cache: PerFileCache | None = None,
     exiftool: str | None = None,
+    on_batch: Callable[[int, int], None] | None = None,
+    batch_size: int = BATCH_SIZE,
 ) -> dict[Path, FileMetadata]:
     """Build the in-memory metadata dict for the given list of files.
 
     When `cache` is provided, each file is looked up in the per-file
     persistent cache first; only misses are sent to ExifTool, and
-    fresh reads are written back to the cache. Without a cache, every
-    file is read.
+    fresh reads are written back to the cache as each batch
+    completes (incremental persistence — a crash mid-read keeps
+    completed batches).
+
+    ExifTool reads happen in `batch_size`-chunked subprocess calls
+    (default 1000). `on_batch(processed_misses, total_misses)` fires
+    after each batch — callers wire this to a `LiveProgress` label
+    update to show `Reading metadata 3000/4523 files`.
 
     Returns a dict keyed by absolute file path.
     """
@@ -90,12 +106,18 @@ def build_cache(
     else:
         misses = list(paths)
 
-    if misses:
-        fresh = _exiftool_bulk_read(misses, exiftool=exiftool)
+    total = len(misses)
+    processed = 0
+    for i in range(0, total, batch_size):
+        batch = misses[i : i + batch_size]
+        fresh = _exiftool_bulk_read(batch, exiftool=exiftool)
         for path, meta in fresh.items():
             result[path] = meta
             if cache is not None:
                 cache.add(path, meta.raw)
+        processed += len(batch)
+        if on_batch is not None:
+            on_batch(processed, total)
 
     return result
 

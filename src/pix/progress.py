@@ -122,10 +122,20 @@ class LiveProgress:
             self._action_start = time.monotonic()
         self._render()
 
-    def advance(self) -> None:
-        """Mark the completion of the current item."""
+    def advance(self, by: int = 1) -> None:
+        """Mark the completion of `by` items (default 1)."""
         with self._lock:
-            self._idx += 1
+            self._idx += by
+        self._render()
+
+    def set_label(self, label: str) -> None:
+        """Update the label without resetting the elapsed-time counter.
+
+        Useful when a long phase wants to show finer-grained status
+        (e.g., a batch counter) without re-starting its `Xs` timer.
+        """
+        with self._lock:
+            self._label = label
         self._render()
 
     def _loop(self) -> None:
