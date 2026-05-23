@@ -70,21 +70,36 @@ def require_exiftool() -> str:
 def filter_cache_misses(
     paths: list[Path],
     cache: PerFileCache | None,
+    on_batch: Callable[[int], None] | None = None,
+    batch_size: int = BATCH_SIZE,
 ) -> tuple[dict[Path, FileMetadata], list[Path]]:
     """Split `paths` into (cache_hits, misses).
 
     If `cache` is None, every path is a miss.
+
+    `on_batch(batch_size)` fires every `batch_size` files (default
+    1000) so callers can show progress — the lookup itself is ~2 ms
+    per cached file (stat + read + parse), which is fast individually
+    but noticeable in aggregate on TB-scale libraries.
     """
     if cache is None:
         return {}, list(paths)
     hits: dict[Path, FileMetadata] = {}
     misses: list[Path] = []
+    in_batch = 0
     for path in paths:
         cached = cache.get(path)
         if cached is not None:
             hits[path] = FileMetadata(path=path, raw=cached)
         else:
             misses.append(path)
+        in_batch += 1
+        if in_batch >= batch_size:
+            if on_batch is not None:
+                on_batch(in_batch)
+            in_batch = 0
+    if in_batch > 0 and on_batch is not None:
+        on_batch(in_batch)
     return hits, misses
 
 

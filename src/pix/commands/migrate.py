@@ -113,7 +113,18 @@ def migrate_folder(folder: Path) -> None:
     # second pass typically has few misses; only those need ExifTool.
     t0 = time.monotonic()
     meta_cache = PerFileCache.for_library(root)
-    hits, misses = filter_cache_misses(source_files, meta_cache)
+
+    with LiveProgress(total=len(source_files)) as check_progress:
+        check_progress.begin("checking cache")
+
+        def _on_check_batch(batch_size: int) -> None:
+            check_progress.advance(by=batch_size)
+            check_progress.reset_timer()
+
+        hits, misses = filter_cache_misses(
+            source_files, meta_cache, on_batch=_on_check_batch
+        )
+
     fresh: dict[Path, FileMetadata] = {}
     if misses:
         try:
