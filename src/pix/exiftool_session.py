@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import queue
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -209,15 +210,28 @@ class ExifToolSession:
         self.execute("-o", str(sidecar_path), str(file))
 
     def close(self) -> None:
-        """Shut down the ExifTool subprocess cleanly."""
+        """Shut down the ExifTool subprocess.
+
+        Normal path: send `-stay_open\nFalse\n`, wait for clean exit. If
+        we're called during exception unwinding (KeyboardInterrupt,
+        ExifToolTimeout, …) stdin is in an unknown state — a half-written
+        command may have left the subprocess processing garbage, and a
+        further write can fail with OSError(EINVAL) on Windows. In that
+        case skip the polite handshake and just kill.
+        """
         if self._proc.poll() is not None:
+            return
+        if sys.exc_info()[0] is not None:
+            # Exception is in flight. Don't try to be polite.
+            self._kill()
             return
         try:
             self._stdin.write("-stay_open\nFalse\n")
             self._stdin.flush()
             self._stdin.close()
-        except (BrokenPipeError, ValueError):
-            # Subprocess already gone; nothing to do.
+        except (BrokenPipeError, ValueError, OSError):
+            # Subprocess already gone, or pipe in an inconsistent state.
+            # Fall through to wait/kill.
             pass
         try:
             self._proc.wait(timeout=5)

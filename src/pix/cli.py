@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Annotated
 
@@ -19,6 +20,21 @@ app: typer.Typer = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
 )
+
+
+def main() -> None:
+    """Real entry point. Catches Ctrl-C so the user gets a clean exit
+    instead of a multi-frame rich traceback.
+
+    Unix convention: SIGINT exits with code 130. The active line was
+    already logged as `Interrupted` to apply.log by the apply loop, so
+    the user can tail that file to see where we stopped.
+    """
+    try:
+        app()
+    except KeyboardInterrupt:
+        sys.stderr.write("\nInterrupted.\n")
+        sys.exit(130)
 
 
 # The version banner now lives in each command (via `pix.banner`) so

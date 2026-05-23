@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [project.scripts]
-pix = "pix.cli:app"
+pix = "pix.cli:main"
 
 [build-system]
 requires = ["hatchling"]
