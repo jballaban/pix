@@ -91,7 +91,6 @@ def dedupe_library(path: Path) -> None:
 
         def _on_check_batch(batch_size: int) -> None:
             check_progress.advance(by=batch_size)
-            check_progress.reset_timer()
 
         hits, misses = filter_cache_misses(
             library_files, meta_cache, on_batch=_on_check_batch
@@ -105,7 +104,6 @@ def dedupe_library(path: Path) -> None:
 
                 def _on_batch(batch_size: int) -> None:
                     read_progress.advance(by=batch_size)
-                    read_progress.reset_timer()
 
                 fresh = read_metadata_batched(
                     misses, cache=meta_cache, on_batch=_on_batch
