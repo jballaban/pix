@@ -159,7 +159,6 @@ Tag state is persisted in XMP, primarily in a custom `pix` namespace. Standard f
 | Face regions | `XMP-mwg-rs:RegionList` (primary) + `XMP-MP:RegionInfo` (mirror for Windows interop) | ExifTool writes both from one structure. |
 | Per-region confirmed flag | `xmp:pix:FaceConfirmed` (per region) | MWG doesn't define this; pix extends. |
 | Original source path (write-once) | `xmp:pix:OriginalPath` (string) | Set on first migrate, never overwritten. See [library.md](library.md#original-source-path-write-once-provenance). |
-| Format-aware content hash | `xmp:pix:ContentHash` (string, hex-encoded BLAKE3) | Set on first migrate; re-computed only when content changes (i.e. CONVERT). See [System fields](#system-fields). |
 
 ### Effective value computation
 
@@ -173,25 +172,17 @@ Read at any time the tag value is needed (filename derivation, organize template
 
 ### System fields
 
-`pix:OriginalPath` and `pix:ContentHash` are **system fields** — pix-managed metadata that doesn't follow the `_auto`/override/Previous pattern. They have no user-editable surface, no folder representation in checkouts, and no template tokens. Migrate writes them; no other operation does.
+`pix:OriginalPath` is a **system field** — pix-managed metadata that doesn't follow the `_auto`/override/Previous pattern. It has no user-editable surface, no folder representation in checkouts, and no template tokens. It's stored in the custom pix namespace so it travels with the file like any other pix:* field, but conceptually it's provenance, not a tag.
 
-| Field | Lifecycle | Re-derived when |
-|---|---|---|
-| `pix:OriginalPath` | Written once on first migrate. Never overwritten. | Never. Pure historical fact (see [library.md](library.md#original-source-path-write-once-provenance)). |
-| `pix:ContentHash` | Written on first migrate. Re-derived whenever the file content changes. | CONVERT (re-encoded bytes ⇒ new hash). Absent → migrate computes and writes. |
+| Field | Lifecycle | Re-derived when | Writer |
+|---|---|---|---|
+| `pix:OriginalPath` | Written once on first migrate. Never overwritten. | Never. Pure historical fact (see [library.md](library.md#original-source-path-write-once-provenance)). | `pix migrate` |
 
-Both are stored in the custom pix namespace so they travel with the file like any other pix:* field, but conceptually they're identity/integrity metadata rather than tags.
-
-The content hash is **format-aware**: metadata sections are skipped before hashing so that TAG writes (which change the file's bytes inside the EXIF/XMP/IPTC regions) don't invalidate the hash. Concretely:
-
-- **JPEG** — skip APP1 (EXIF and XMP), APP13 (IPTC), and any other APPn metadata segments; BLAKE3 the rest (SOI, DQT, DHT, SOF, SOS + compressed image data, EOI, and any non-metadata APPn like APP2/ICC).
-- **MP4** (and any ISO BMFF container — `.mov`, `.m4v`, `.3gp`) — parse the box tree, concatenate every `mdat` box payload in file order, BLAKE3 the result. The `mdat` is the encoded media; everything else (`ftyp`, `moov`, `udta`, `meta`, `uuid`, `free`, …) is structure or metadata and is excluded. This is robust against any metadata write regardless of where ExifTool places it.
-
-See [dedupe.md](dedupe.md) for how dedupe consumes the stored hash.
+**Content hash is not a tag.** It used to live here as `pix:ContentHash`, but it's now stored in the per-file cache under `.pix/cache/` and computed by [`pix hash`](hash.md). The hash is a derived fact about the file's bytes, not user-curated metadata; the cache layer keys it on `(size, mtime_ns)` so it auto-invalidates, and avoids one ExifTool round-trip per file at TB scale. See [hash.md](hash.md) for the format-aware hashing algorithm and cache schema.
 
 ### Side effect
 
-Files the user has never overridden carry only `DateAuto`, `EventAuto`, `OriginalPath`, `ContentHash`, and any face regions. Override properties (`DateOverride`, `EventOverride`) and Previous fields (`DateAutoPrevious`, `EventAutoPrevious`) appear only on files where they're meaningful.
+Files the user has never overridden carry only `DateAuto`, `EventAuto`, `OriginalPath`, and any face regions. Override properties (`DateOverride`, `EventOverride`) and Previous fields (`DateAutoPrevious`, `EventAutoPrevious`) appear only on files where they're meaningful.
 
 ### Consequence: filename / EXIF dissonance under overrides
 

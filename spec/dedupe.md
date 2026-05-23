@@ -1,6 +1,6 @@
 # Dedupe
 
-`pix dedupe <path>` removes duplicate files from the library, keeping one canonical copy per duplicate group. It runs against an already-normalized library — files have canonical formats, filenames, and content hashes — and consumes those hashes rather than re-computing.
+`pix dedupe <path>` removes duplicate files from the library, keeping one canonical copy per duplicate group. It runs against an already-normalized library — files have canonical formats and filenames, and the [content-hash cache](hash.md) is populated — and consumes the cached hashes rather than re-computing.
 
 Splitting dedupe out of migrate keeps migrate a pure per-file in-place transform and lets dedupe focus on cross-file relational logic. `pix merge` will reuse the same primitive when it lands.
 
@@ -16,16 +16,16 @@ Same rule as organize: the user must invoke `pix dedupe` from the library root o
 
 ## What counts as a duplicate
 
-Two files are duplicates if their `pix:ContentHash` values are equal. Nothing else.
+Two files are duplicates if their cached content-hash values are equal. Nothing else.
 
-The hash is format-aware (see [tags.md → System fields](tags.md#system-fields)): JPEGs strip APP-marker metadata before hashing, MP4s hash only `mdat` payloads. This means metadata changes (TAG writes) don't invalidate the hash, but **format conversions do** — a HEIC and its JPG conversion have different hashes despite sharing a source. Cross-format dedupe is **out of scope for v1**; it would need perceptual hashing or `pix:OriginalPath`-lineage detection, both deferred.
+The hash is format-aware (see [hash.md](hash.md)): JPEGs strip APP-marker metadata before hashing, MP4s hash only `mdat` payloads. This means metadata changes (TAG writes) don't invalidate the hash, but **format conversions do** — a HEIC and its JPG conversion have different hashes despite sharing a source. Cross-format dedupe is **out of scope for v1**; it would need perceptual hashing or `pix:OriginalPath`-lineage detection, both deferred.
 
 ## Prerequisites
 
 Plan-gen refuses if any file in the library has:
 
 - **No `pix:OriginalPath`** (un-migrated file). Migrate hasn't seen it; dedupe shouldn't either. Surface paths, tell user: `Run "pix migrate <library-root>" first.`
-- **No `pix:ContentHash`** (migrated, but predates v0.1.9 or had its hash stripped externally). Surface paths, tell user: `Run "pix migrate <library-root>" to compute missing content hashes, then re-run.` Migrate's existing path computes missing hashes via a `content_hash compute` TAG action; dedupe stays a pure consumer.
+- **Missing or stale cached hash** (file under the library has no `.pix/cache/.../<filename>.hash` entry, or the cached `(size, mtime_ns)` no longer matches). Surface paths, tell user: `Run "pix hash <library-root>" first.` See [hash.md](hash.md) — hash is a separate command precisely so migrate's hot path doesn't pay full-file BLAKE3 cost on every file; dedupe stays a pure consumer.
 
 Both refusals exit non-zero before any plan is written.
 

@@ -19,6 +19,7 @@ Pre-code. The design lives in `spec/`. Treat each `spec/*.md` as authoritative u
 - [`spec/library.md`](spec/library.md) — library root, file layout, canonical filenames, original source path
 - [`spec/tags.md`](spec/tags.md) — tag model, metadata mapping, template grammar
 - [`spec/migrate.md`](spec/migrate.md) — migrate (designed in full)
+- [`spec/hash.md`](spec/hash.md) — `pix hash` command (designed; not yet implemented)
 - [`spec/dedupe.md`](spec/dedupe.md) — dedupe (sketched)
 - [`spec/tag-editing.md`](spec/tag-editing.md) — checkout/commit, face workflow
 - [`spec/organize.md`](spec/organize.md) — organize (sketched)

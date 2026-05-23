@@ -32,6 +32,18 @@ Status output during a migrate run keeps the console quiet — phase headers, fi
 
    The `(Xs)` suffix is omitted while the per-action elapsed is below 1s (most files finish faster than that; `(0s)` everywhere would be noise). On clean exit the line wraps to `100%`. Auto-disabled when stdout isn't a TTY (tests, redirects).
 
+   <a id="duration-format"></a>**Duration format** (applies to all `(Xs)` suffixes in progress lines and to the end-of-phase summaries in `plan.log` / `apply.log`):
+
+   | Elapsed | Format | Examples |
+   |---|---|---|
+   | `< 60s` | `Xs` (integer seconds) | `3s`, `42s` |
+   | `60s – 3599s` | `XmYs` | `1m3s`, `27m08s` |
+   | `≥ 3600s` | `XhYmZs` | `1h3m2s`, `12h45m07s` |
+
+   Post-phase summary lines (e.g. `Found 64000 files in <duration>.`, `Plan generated in <duration>.`) follow the same tiered format, except they may show one decimal place when under 60s — sub-second precision is useful when measuring fast phases. From 60s upward the format is integer-only since sub-second precision is noise at minute/hour scale.
+
+   The tiered format applies to every spec that mentions `(Xs)` (see [hash.md](hash.md), [dedupe.md](dedupe.md), [organize.md](organize.md)). Those specs use the `Xs` shorthand for brevity; the actual rendering follows this table.
+
 2. **Console after plan-gen** — the user-relevant transition lines: `Plan written: <path>`, `Summary: ...`, `Apply? [Y/e/n]`. If the user picks `e`, the editor opens, then on close: `After edit: ...` and re-prompt. These are post-planning, action-relevant; they stay on the console where the user is actively making decisions.
 
 3. **Log files** in the run folder capture everything the console doesn't show:
@@ -54,12 +66,12 @@ Plan generation needs the existing metadata of every file in `<folder>` (current
 **Lifetime.** The cache is in-memory only; it lives for the duration of the migrate process and is rebuilt fresh every run. A crash discards it; the next run rebuilds. No cache file is persisted in v1.
 
 **Contents.** For each source file, the cache holds:
-- All `pix:*` fields currently on the file (used to detect what's changing, including which files are missing `pix:ContentHash` and need it computed).
+- All `pix:*` fields currently on the file (used to detect what's changing).
 - EXIF/XMP/IPTC fields that contribute to [`DateAuto` derivation](tags.md#dateauto-derivation).
 - Face region structures (read once here; not re-fetched during face detection — that's a separate pipeline that consumes its own cache under `.pix/faces/`).
 - File extension and on-disk filename.
 
-The bulk read does **not** compute `pix:ContentHash` — that's a full-file scan deferred to apply (so the user can abort without paying for hashing thousands of files).
+Migrate does not read or write any content hash. Content-hash population lives in [`pix hash`](hash.md), which stores hashes in the `.pix/cache/` layer rather than in file metadata. Migrate and hash are orthogonal.
 
 **Reads.** Plan generation never reads file metadata directly — it consults the cache. The cleanup pass (which may need to read tags from orphan markers to compute their canonical names) is the one exception, and it runs before the cache is built; per-marker reads are acceptable because orphan markers are rare.
 
@@ -80,17 +92,16 @@ One line per source file (atomic unit: all operations on a file bundle on one li
 # Delete a line to skip that file this run. Commented "#" lines are info only.
 # Format: L<line-id> | ACTION | path | details
 
-L001 | CONVERT+RENAME+TAG | IMG_001.HEIC      | →2023-08-15_143205.jpg; original_path init; content_hash compute; date_auto null→2023-08-15-14:32:05
+L001 | CONVERT+RENAME+TAG | IMG_001.HEIC      | →2023-08-15_143205.jpg; original_path init; date_auto null→2023-08-15-14:32:05
 L002 | RENAME             | DSC_0042.JPG      | →2023-08-15_143612.jpg
 L003 | DELETE              | Thumbs.db         | extension policy: delete
 L004 | TAG                | 2023-08-15_143612.jpg | event_auto null→birthday
 L005 | TAG                | 2022-08-15_143205.jpg | date_auto 2023-08-15-14:32:05→2024-08-15-14:32:05
-L006 | TAG                | 2021-12-25_090015.jpg | content_hash compute
 
 # Summary: 4 CONVERT, 12 RENAME, 40 TAG, 5 DELETE
 ```
 
-`original_path init` is shorthand for "this file is migrating for the first time; `pix:OriginalPath` is being set to the current source path." `content_hash compute` is shorthand for "compute and write `pix:ContentHash`" — used both on first migrate (bundled into CONVERT/RENAME+TAG/TAG) and on previously-migrated files predating the hash feature (standalone TAG, like L006).
+`original_path init` is shorthand for "this file is migrating for the first time; `pix:OriginalPath` is being set to the current source path." Migrate plans never contain hash actions — content-hash population is a separate operation; see [hash.md](hash.md).
 
 L005 is a `date_auto` re-derivation on a file whose `pix:DateOverride` pins year=2022. The plan line shows the user-visible `_auto` change; the filename doesn't change (the override masks year, which is the only changed component). As a side effect of this TAG write, migrate also writes `pix:DateAutoPrevious = 2023-08-15-14:32:05` — the dirty flag for future review (see [tags.md](tags.md#auto-previous-fields-dirty-flagging)).
 
@@ -121,9 +132,8 @@ Each `migrate` invocation generates a fresh plan from current state. Prior runs'
 
 - **Conversions** (`CONVERT`) — format changes per [extension policy](#extension-policy).
 - **Renames** (`RENAME`) — apply the canonical filename convention (effective `date` drives the filename; see [library.md](library.md#canonical-filename)), including extension canonicalization (`.jpeg` → `.jpg`, lowercase). RENAME fires only when the **effective** filename changes — an override pinning a component keeps that part of the filename stable even if `_auto` shifts.
-- **Tag updates** (`TAG`) — any pix:* metadata write. Covers `_auto` value changes (whether or not an override masks the effective tag), the first-time write of `pix:OriginalPath`, and the compute-and-write of `pix:ContentHash` when missing (see [tags.md → System fields](tags.md#system-fields)).
+- **Tag updates** (`TAG`) — any pix:* metadata write. Covers `_auto` value changes (whether or not an override masks the effective tag) and the first-time write of `pix:OriginalPath`. Content-hash population is **not** a TAG action; it lives in [`pix hash`](hash.md) and writes to the cache layer rather than file metadata.
   - Plan-line details show the user-visible `_auto` change (e.g. `date_auto 2023-08-15-14:32:05→2024-08-15-14:32:05`). They do not call out override-masking separately — that's bookkeeping the spec handles via the side-effect described below.
-  - For a file missing `pix:ContentHash`, the TAG line shows `content_hash compute` — the actual hash value is computed during apply (full-file BLAKE3 of non-metadata bytes) and isn't shown in the plan since the user can't meaningfully review a hex string anyway.
   - **Side effect on TAG writes:** when `_auto` is changing (not first-time null → value) AND an override is set for that tag, migrate also writes `*AutoPrevious` recording the prior `_auto` value. This is the dirty flag a future workflow uses to surface auto/override conflicts to the user. See [tags.md → Auto-previous fields](tags.md#auto-previous-fields-dirty-flagging). The Previous write is part of the same TAG action — it shares the sidecar capture and atomicity.
 - **Deletes** (`DELETE`) — files whose extension is marked `delete` in config; captured into the run folder.
 
@@ -348,12 +358,12 @@ F:\source\trip-2023\
 
 **Plan line:**
 ```
-L042 | CONVERT+RENAME+TAG | IMG_4821.HEIC | →2023-08-15_143205.jpg; original_path init; content_hash compute; date_auto null→2023-08-15-14:32:05
+L042 | CONVERT+RENAME+TAG | IMG_4821.HEIC | →2023-08-15_143205.jpg; original_path init; date_auto null→2023-08-15-14:32:05
 ```
 
 **Apply ops (each is one same-volume rename, except step 1 which writes a file):**
 
-1. Decode HEIC, re-encode as JPG, compute BLAKE3 of the new JPG's non-metadata bytes, write `pix:DateAuto` + `pix:OriginalPath` + `pix:ContentHash` into the JPG, validate by re-reading metadata. Result lands at `F:\photos\.pix\staging\IMG_4821.HEIC.tmp.jpg`.
+1. Decode HEIC, re-encode as JPG, copy non-format-specific metadata from the source (EXIF/XMP/IPTC), then write `pix:DateAuto` + `pix:OriginalPath` into the JPG, validate by re-reading metadata. Result lands at `F:\photos\.pix\staging\IMG_4821.HEIC.tmp.jpg`.
 2. Rename `F:\photos\.pix\staging\IMG_4821.HEIC.tmp.jpg` → `F:\source\trip-2023\IMG_4821.HEIC.__migrate__.jpg`. (Marker is now next to original.)
 3. Rename `F:\source\trip-2023\IMG_4821.HEIC` → `F:\photos\.pix\runs\2026-05-16_14-32-01\data\L042_IMG_4821.HEIC`. (Original captured.)
 4. Rename `F:\source\trip-2023\IMG_4821.HEIC.__migrate__.jpg` → `F:\source\trip-2023\2023-08-15_143205.jpg`. (Canonical name.)
