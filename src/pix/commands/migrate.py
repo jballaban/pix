@@ -27,7 +27,8 @@ from pix.metadata import (
     ExifToolFailed,
     ExifToolNotFound,
     FileMetadata,
-    build_cache,
+    filter_cache_misses,
+    read_metadata_batched,
 )
 from pix.metadata_cache import PerFileCache
 from pix.plan import Action, Plan, PlanLine, generate_plan, lookup_policy
@@ -95,49 +96,51 @@ def migrate_folder(folder: Path) -> None:
     for note in marker_notes:
         _plog(plan_log_path, note)
 
-    # Walk + bulk read are silent operations from the user's
-    # perspective (ExifTool gives no progress feedback). Wrap both in
-    # an indeterminate LiveProgress so the line ticks elapsed time and
-    # the user knows pix is working.
-    with LiveProgress() as silent_progress:
+    # Walk is silent at the per-file level — show an indeterminate
+    # `(Xs)` ticker so the user knows pix is working.
+    with LiveProgress() as walk_progress:
         t0 = time.monotonic()
-        silent_progress.begin("Walking source folder...")
+        walk_progress.begin("Walking source folder...")
         source_files = walk_source_files(folder)
         _plog(
             plan_log_path,
             f"Found {len(source_files)} files in {time.monotonic() - t0:.1f}s.",
         )
 
-        _validate_extensions(source_files, config)
+    _validate_extensions(source_files, config)
 
-        t0 = time.monotonic()
-        meta_cache = PerFileCache.for_library(root)
-        silent_progress.begin(
-            f"Reading metadata from {len(source_files)} files "
-            f"(per-file cache will speed up subsequent runs)..."
-        )
-
-        def _update_label(done: int, total: int) -> None:
-            silent_progress.set_label(
-                f"Reading metadata {done}/{total} files..."
-            )
-
+    # Cache lookup + ExifTool reads. With the per-file cache, the
+    # second pass typically has few misses; only those need ExifTool.
+    t0 = time.monotonic()
+    meta_cache = PerFileCache.for_library(root)
+    hits, misses = filter_cache_misses(source_files, meta_cache)
+    fresh: dict[Path, FileMetadata] = {}
+    if misses:
         try:
-            cache = build_cache(
-                source_files,
-                cache=meta_cache,
-                on_batch=_update_label,
-            )
+            with LiveProgress(total=len(misses)) as read_progress:
+                read_progress.begin("reading metadata")
+
+                def _on_batch(batch_size: int) -> None:
+                    read_progress.advance(by=batch_size)
+                    read_progress.reset_timer()
+
+                fresh = read_metadata_batched(
+                    misses,
+                    cache=meta_cache,
+                    on_batch=_on_batch,
+                )
         except ExifToolNotFound as e:
             typer.echo(f"Error: {e}", err=True)
             raise typer.Exit(code=1) from e
         except ExifToolFailed as e:
             typer.echo(f"Error: exiftool failed.\n{e}", err=True)
             raise typer.Exit(code=1) from e
-        _plog(
-            plan_log_path,
-            f"Read {len(cache)} files in {time.monotonic() - t0:.1f}s.",
-        )
+    cache = {**hits, **fresh}
+    _plog(
+        plan_log_path,
+        f"Read {len(cache)} files in {time.monotonic() - t0:.1f}s "
+        f"({len(hits)} cache hits, {len(misses)} from ExifTool).",
+    )
 
     for path in source_files:
         if path not in cache:

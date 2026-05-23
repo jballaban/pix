@@ -67,59 +67,85 @@ def require_exiftool() -> str:
     return exe
 
 
-def build_cache(
+def filter_cache_misses(
     paths: list[Path],
+    cache: PerFileCache | None,
+) -> tuple[dict[Path, FileMetadata], list[Path]]:
+    """Split `paths` into (cache_hits, misses).
+
+    If `cache` is None, every path is a miss.
+    """
+    if cache is None:
+        return {}, list(paths)
+    hits: dict[Path, FileMetadata] = {}
+    misses: list[Path] = []
+    for path in paths:
+        cached = cache.get(path)
+        if cached is not None:
+            hits[path] = FileMetadata(path=path, raw=cached)
+        else:
+            misses.append(path)
+    return hits, misses
+
+
+def read_metadata_batched(
+    misses: list[Path],
     cache: PerFileCache | None = None,
     exiftool: str | None = None,
-    on_batch: Callable[[int, int], None] | None = None,
+    on_batch: Callable[[int], None] | None = None,
     batch_size: int = BATCH_SIZE,
 ) -> dict[Path, FileMetadata]:
-    """Build the in-memory metadata dict for the given list of files.
+    """Read metadata for the listed files via batched ExifTool calls.
 
-    When `cache` is provided, each file is looked up in the per-file
-    persistent cache first; only misses are sent to ExifTool, and
-    fresh reads are written back to the cache as each batch
-    completes (incremental persistence — a crash mid-read keeps
-    completed batches).
-
-    ExifTool reads happen in `batch_size`-chunked subprocess calls
-    (default 1000). `on_batch(processed_misses, total_misses)` fires
-    after each batch — callers wire this to a `LiveProgress` label
-    update to show `Reading metadata 3000/4523 files`.
+    Misses are read in `batch_size`-chunked subprocess calls (default
+    1000). Each batch's results are written to `cache` as soon as the
+    batch completes — incremental persistence so a crash mid-read
+    keeps completed batches. `on_batch(batch_size)` fires after each
+    batch; callers wire this to `LiveProgress.advance(by=n)`.
 
     Returns a dict keyed by absolute file path.
     """
-    if not paths:
+    if not misses:
         return {}
-
     result: dict[Path, FileMetadata] = {}
-    misses: list[Path]
-
-    if cache is not None:
-        misses = []
-        for path in paths:
-            cached = cache.get(path)
-            if cached is not None:
-                result[path] = FileMetadata(path=path, raw=cached)
-            else:
-                misses.append(path)
-    else:
-        misses = list(paths)
-
-    total = len(misses)
-    processed = 0
-    for i in range(0, total, batch_size):
+    for i in range(0, len(misses), batch_size):
         batch = misses[i : i + batch_size]
         fresh = _exiftool_bulk_read(batch, exiftool=exiftool)
         for path, meta in fresh.items():
             result[path] = meta
             if cache is not None:
                 cache.add(path, meta.raw)
-        processed += len(batch)
         if on_batch is not None:
-            on_batch(processed, total)
-
+            on_batch(len(batch))
     return result
+
+
+def build_cache(
+    paths: list[Path],
+    cache: PerFileCache | None = None,
+    exiftool: str | None = None,
+    on_batch: Callable[[int], None] | None = None,
+    batch_size: int = BATCH_SIZE,
+) -> dict[Path, FileMetadata]:
+    """Convenience: cache lookup + batched read in one call.
+
+    For commands that want per-batch progress, prefer the lower-level
+    split: `filter_cache_misses` then `read_metadata_batched`, so the
+    caller can put a determinate `LiveProgress` around the read.
+
+    Returns a dict keyed by absolute file path.
+    """
+    if not paths:
+        return {}
+    hits, misses = filter_cache_misses(paths, cache)
+    fresh = read_metadata_batched(
+        misses,
+        cache=cache,
+        exiftool=exiftool,
+        on_batch=on_batch,
+        batch_size=batch_size,
+    )
+    return {**hits, **fresh}
 
 
 def _exiftool_bulk_read(

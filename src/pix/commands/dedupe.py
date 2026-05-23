@@ -28,7 +28,8 @@ from pix.metadata import (
     ExifToolFailed,
     ExifToolNotFound,
     FileMetadata,
-    build_cache,
+    filter_cache_misses,
+    read_metadata_batched,
 )
 from pix.metadata_cache import PerFileCache
 from pix.organize import CwdInsideLibraryError, check_cwd_not_inside
@@ -68,9 +69,9 @@ def dedupe_library(path: Path) -> None:
 
     _plog(plan_log_path, f"Library root: {root}")
 
-    with LiveProgress() as silent_progress:
+    with LiveProgress() as walk_progress:
         t0 = time.monotonic()
-        silent_progress.begin("Walking library...")
+        walk_progress.begin("Walking library...")
         library_files = walk_source_files(root)
         _plog(
             plan_log_path,
@@ -78,41 +79,41 @@ def dedupe_library(path: Path) -> None:
             f"{time.monotonic() - t0:.1f}s.",
         )
 
-        if not library_files:
-            typer.echo("Library is empty; nothing to dedupe.")
-            return
+    if not library_files:
+        typer.echo("Library is empty; nothing to dedupe.")
+        return
 
-        t0 = time.monotonic()
-        meta_cache = PerFileCache.for_library(root)
-        silent_progress.begin(
-            f"Reading metadata from {len(library_files)} file(s) "
-            f"(per-file cache will speed up subsequent runs)..."
-        )
-
-        def _update_label(done: int, total: int) -> None:
-            silent_progress.set_label(
-                f"Reading metadata {done}/{total} file(s)..."
-            )
-
+    t0 = time.monotonic()
+    meta_cache = PerFileCache.for_library(root)
+    hits, misses = filter_cache_misses(library_files, meta_cache)
+    fresh: dict[Path, FileMetadata] = {}
+    if misses:
         try:
-            cache = build_cache(
-                library_files,
-                cache=meta_cache,
-                on_batch=_update_label,
-            )
+            with LiveProgress(total=len(misses)) as read_progress:
+                read_progress.begin("reading metadata")
+
+                def _on_batch(batch_size: int) -> None:
+                    read_progress.advance(by=batch_size)
+                    read_progress.reset_timer()
+
+                fresh = read_metadata_batched(
+                    misses, cache=meta_cache, on_batch=_on_batch
+                )
         except ExifToolNotFound as e:
             typer.echo(f"Error: {e}", err=True)
             raise typer.Exit(code=1) from e
         except ExifToolFailed as e:
             typer.echo(f"Error: exiftool failed.\n{e}", err=True)
             raise typer.Exit(code=1) from e
-        for p in library_files:
-            if p not in cache:
-                cache[p] = FileMetadata(path=p, raw={"SourceFile": str(p)})
-        _plog(
-            plan_log_path,
-            f"Read {len(cache)} file(s) in {time.monotonic() - t0:.1f}s.",
-        )
+    cache = {**hits, **fresh}
+    for p in library_files:
+        if p not in cache:
+            cache[p] = FileMetadata(path=p, raw={"SourceFile": str(p)})
+    _plog(
+        plan_log_path,
+        f"Read {len(cache)} file(s) in {time.monotonic() - t0:.1f}s "
+        f"({len(hits)} cache hits, {len(misses)} from ExifTool).",
+    )
 
     t0 = time.monotonic()
     _plog(plan_log_path, "Generating plan...")

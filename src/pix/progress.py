@@ -138,6 +138,19 @@ class LiveProgress:
             self._label = label
         self._render()
 
+    def reset_timer(self) -> None:
+        """Reset the elapsed-time counter to zero without touching the
+        label or progress count.
+
+        Used between sub-actions of a single phase — e.g. ExifTool
+        batches — so each batch's `Xs` reflects only that batch's
+        runtime, the same way a long-running CONVERT in apply shows
+        its own per-action elapsed.
+        """
+        with self._lock:
+            self._action_start = time.monotonic()
+        self._render()
+
     def _loop(self) -> None:
         while not self._stop_event.wait(1.0):
             self._render()
