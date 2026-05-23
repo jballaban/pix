@@ -13,6 +13,7 @@ import json
 import shutil
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, cast
@@ -27,6 +28,14 @@ from pix.metadata_cache import PerFileCache
 # returning JSON for 1000 files is a few MB, vs. tens-to-hundreds of MB
 # for an unbounded library-wide read.
 BATCH_SIZE: int = 1000
+
+# Cache lookup is I/O-bound (stat + small file read + parse, per file).
+# A thread pool parallelizes the per-file disk operations; on SSD/NVMe
+# this is roughly an order-of-magnitude speedup over sequential, since
+# each stat/read spends most of its time blocked on the disk. 32 keeps
+# us well under typical NTFS handle limits while saturating modern
+# storage.
+CACHE_LOOKUP_WORKERS: int = 32
 
 
 class ExifToolNotFound(Exception):
@@ -72,32 +81,44 @@ def filter_cache_misses(
     cache: PerFileCache | None,
     on_batch: Callable[[int], None] | None = None,
     batch_size: int = BATCH_SIZE,
+    max_workers: int = CACHE_LOOKUP_WORKERS,
 ) -> tuple[dict[Path, FileMetadata], list[Path]]:
     """Split `paths` into (cache_hits, misses).
 
     If `cache` is None, every path is a miss.
 
+    Lookups run in a thread pool (`max_workers` default 32) — each
+    per-file check is I/O-bound (stat + small read + parse) and
+    independent, so concurrent execution on SSD/NVMe pushes the
+    total phase time ~10× lower than sequential.
+
     `on_batch(batch_size)` fires every `batch_size` files (default
-    1000) so callers can show progress — the lookup itself is ~2 ms
-    per cached file (stat + read + parse), which is fast individually
-    but noticeable in aggregate on TB-scale libraries.
+    1000) from the consumer thread (after results are collected in
+    submission order via `ThreadPoolExecutor.map`) — no locking
+    needed for the callback.
     """
     if cache is None:
         return {}, list(paths)
+
     hits: dict[Path, FileMetadata] = {}
     misses: list[Path] = []
     in_batch = 0
-    for path in paths:
-        cached = cache.get(path)
-        if cached is not None:
-            hits[path] = FileMetadata(path=path, raw=cached)
-        else:
-            misses.append(path)
-        in_batch += 1
-        if in_batch >= batch_size:
-            if on_batch is not None:
-                on_batch(in_batch)
-            in_batch = 0
+
+    def check_one(path: Path) -> tuple[Path, dict[str, object] | None]:
+        return path, cache.get(path)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for path, cached in executor.map(check_one, paths):
+            if cached is not None:
+                hits[path] = FileMetadata(path=path, raw=cached)
+            else:
+                misses.append(path)
+            in_batch += 1
+            if in_batch >= batch_size:
+                if on_batch is not None:
+                    on_batch(in_batch)
+                in_batch = 0
+
     if in_batch > 0 and on_batch is not None:
         on_batch(in_batch)
     return hits, misses
