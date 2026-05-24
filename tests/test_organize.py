@@ -10,6 +10,7 @@ import pytest
 from pix.metadata import FileMetadata
 from pix.organize import (
     CwdInsideLibraryError,
+    MissingHashesError,
     OrganizeError,
     UnmigratedFilesError,
     apply_plan,
@@ -22,7 +23,6 @@ from pix.organize import (
     sanitize_folder_name,
 )
 from pix.plan import (
-    PIX_CONTENT_HASH,
     PIX_DATE_AUTO,
     PIX_EVENT_AUTO,
     PIX_EVENT_OVERRIDE,
@@ -247,7 +247,29 @@ def test_plan_refuses_unmigrated_files(tmp_path: Path) -> None:
         )
 
 
-def test_plan_moves_file_to_template_path(tmp_path: Path) -> None:
+def test_plan_refuses_missing_content_hash(tmp_path: Path) -> None:
+    """Files that have OriginalPath but no cached content hash cause refusal."""
+    root = tmp_path / "lib"
+    root.mkdir()
+    p = root / "2023-08-15_143205.jpg"
+    p.write_bytes(b"")
+    cache = {
+        p.resolve(): _meta(p, **{PIX_ORIGINAL_PATH: "F:/source/x.jpg"})
+    }
+    # No hash registered → MissingHashesError.
+    with pytest.raises(MissingHashesError):
+        generate_plan(
+            library_root=root,
+            template=parse_template("{year}"),
+            cache=cache,
+            run_id="test-run",
+            run_dir=tmp_path / "runs",
+        )
+
+
+def test_plan_moves_file_to_template_path(
+    tmp_path: Path, patched_hash_cache: dict[Path, str]
+) -> None:
     root = tmp_path / "lib"
     root.mkdir()
     p = root / "2023-08-15_143205.jpg"
@@ -259,10 +281,11 @@ def test_plan_moves_file_to_template_path(tmp_path: Path) -> None:
                 PIX_ORIGINAL_PATH: "F:/source/2023-08-Hawaii/IMG.jpg",
                 PIX_DATE_AUTO: "2023-08-15-14:32:05",
                 PIX_EVENT_AUTO: "Hawaii",
-                PIX_CONTENT_HASH: "abc",
             },
         )
     }
+    for path in cache:
+        patched_hash_cache[path] = "h"
     plan = generate_plan(
         library_root=root,
         template=parse_template("{year}/{month}/{event}"),
@@ -277,7 +300,9 @@ def test_plan_moves_file_to_template_path(tmp_path: Path) -> None:
     assert line.target_path == root / "2023" / "08" / "Hawaii" / "2023-08-15_143205.jpg"
 
 
-def test_plan_idempotent_when_already_in_place(tmp_path: Path) -> None:
+def test_plan_idempotent_when_already_in_place(
+    tmp_path: Path, patched_hash_cache: dict[Path, str]
+) -> None:
     root = tmp_path / "lib"
     (root / "2023" / "08" / "Hawaii").mkdir(parents=True)
     p = root / "2023" / "08" / "Hawaii" / "2023-08-15_143205.jpg"
@@ -289,10 +314,11 @@ def test_plan_idempotent_when_already_in_place(tmp_path: Path) -> None:
                 PIX_ORIGINAL_PATH: "F:/source/x.jpg",
                 PIX_DATE_AUTO: "2023-08-15-14:32:05",
                 PIX_EVENT_AUTO: "Hawaii",
-                PIX_CONTENT_HASH: "abc",
             },
         )
     }
+    for path in cache:
+        patched_hash_cache[path] = "h"
     plan = generate_plan(
         library_root=root,
         template=parse_template("{year}/{month}/{event}"),
@@ -303,7 +329,9 @@ def test_plan_idempotent_when_already_in_place(tmp_path: Path) -> None:
     assert plan.lines == []
 
 
-def test_plan_drops_stale_collision_suffix(tmp_path: Path) -> None:
+def test_plan_drops_stale_collision_suffix(
+    tmp_path: Path, patched_hash_cache: dict[Path, str]
+) -> None:
     """A file in `imports/2023-08-15_143205_001.jpg` (collision in old folder)
     that has no peer at the target folder drops the `_001` on move."""
     root = tmp_path / "lib"
@@ -317,10 +345,11 @@ def test_plan_drops_stale_collision_suffix(tmp_path: Path) -> None:
                 PIX_ORIGINAL_PATH: "F:/source/x.jpg",
                 PIX_DATE_AUTO: "2023-08-15-14:32:05",
                 PIX_EVENT_AUTO: "Hawaii",
-                PIX_CONTENT_HASH: "abc",
             },
         )
     }
+    for path in cache:
+        patched_hash_cache[path] = "h"
     plan = generate_plan(
         library_root=root,
         template=parse_template("{year}/{event}"),
@@ -333,7 +362,9 @@ def test_plan_drops_stale_collision_suffix(tmp_path: Path) -> None:
     assert line.target_filename == "2023-08-15_143205.jpg"
 
 
-def test_plan_applies_collision_suffix_at_target(tmp_path: Path) -> None:
+def test_plan_applies_collision_suffix_at_target(
+    tmp_path: Path, patched_hash_cache: dict[Path, str]
+) -> None:
     """Two files with same effective date in different sources collide at
     the target folder; second one gets `_001`."""
     root = tmp_path / "lib"
@@ -343,6 +374,8 @@ def test_plan_applies_collision_suffix_at_target(tmp_path: Path) -> None:
     b = root / "imports-b" / "2023-08-15_143205.jpg"
     a.write_bytes(b"")
     b.write_bytes(b"")
+    patched_hash_cache[a.resolve()] = "aaaa"
+    patched_hash_cache[b.resolve()] = "bbbb"
     cache = {
         a.resolve(): _meta(
             a,
@@ -350,7 +383,6 @@ def test_plan_applies_collision_suffix_at_target(tmp_path: Path) -> None:
                 PIX_ORIGINAL_PATH: "F:/source/a.jpg",
                 PIX_DATE_AUTO: "2023-08-15-14:32:05",
                 PIX_EVENT_AUTO: "Hawaii",
-                PIX_CONTENT_HASH: "aaaa",
             },
         ),
         b.resolve(): _meta(
@@ -359,7 +391,6 @@ def test_plan_applies_collision_suffix_at_target(tmp_path: Path) -> None:
                 PIX_ORIGINAL_PATH: "F:/source/b.jpg",
                 PIX_DATE_AUTO: "2023-08-15-14:32:05",
                 PIX_EVENT_AUTO: "Hawaii",
-                PIX_CONTENT_HASH: "bbbb",
             },
         ),
     }
@@ -379,7 +410,9 @@ def test_plan_applies_collision_suffix_at_target(tmp_path: Path) -> None:
     ]
 
 
-def test_plan_event_override_wins_over_event_auto(tmp_path: Path) -> None:
+def test_plan_event_override_wins_over_event_auto(
+    tmp_path: Path, patched_hash_cache: dict[Path, str]
+) -> None:
     """EventOverride determines the target folder, not EventAuto."""
     root = tmp_path / "lib"
     (root / "imports").mkdir(parents=True)
@@ -393,10 +426,11 @@ def test_plan_event_override_wins_over_event_auto(tmp_path: Path) -> None:
                 PIX_DATE_AUTO: "2023-08-15-14:32:05",
                 PIX_EVENT_AUTO: "Hawaii",
                 PIX_EVENT_OVERRIDE: "Wedding",
-                PIX_CONTENT_HASH: "abc",
             },
         )
     }
+    for path in cache:
+        patched_hash_cache[path] = "h"
     plan = generate_plan(
         library_root=root,
         template=parse_template("{event}"),
@@ -411,7 +445,9 @@ def test_plan_event_override_wins_over_event_auto(tmp_path: Path) -> None:
 # --- Apply -------------------------------------------------------------------
 
 
-def test_apply_moves_file_to_target(tmp_path: Path) -> None:
+def test_apply_moves_file_to_target(
+    tmp_path: Path, patched_hash_cache: dict[Path, str]
+) -> None:
     root = tmp_path / "lib"
     (root / "imports").mkdir(parents=True)
     p = root / "imports" / "2023-08-15_143205.jpg"
@@ -423,10 +459,11 @@ def test_apply_moves_file_to_target(tmp_path: Path) -> None:
                 PIX_ORIGINAL_PATH: "F:/source/x.jpg",
                 PIX_DATE_AUTO: "2023-08-15-14:32:05",
                 PIX_EVENT_AUTO: "Hawaii",
-                PIX_CONTENT_HASH: "abc",
             },
         )
     }
+    for path in cache:
+        patched_hash_cache[path] = "h"
     run_dir = tmp_path / "runs" / "test-run"
     run_dir.mkdir(parents=True)
     plan = generate_plan(

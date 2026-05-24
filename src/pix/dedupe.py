@@ -1,10 +1,15 @@
-"""`pix dedupe` — remove duplicate files sharing the same `pix:ContentHash`.
+"""`pix dedupe` — remove duplicate files sharing the same content hash.
 
-See spec/dedupe.md for the full design. This module owns:
+See spec/dedupe.md for the full design. Hashes are read from the per-
+file cache at `.pix/cache/.../<filename>.hash` (populated by
+`pix hash`; see spec/hash.md). Dedupe is a pure consumer — it never
+computes hashes itself.
+
+This module owns:
 
 - Prerequisite checks (`require_migrated_with_hashes`) — every library
-  file must have both `pix:OriginalPath` and `pix:ContentHash`.
-- Hash grouping (`group_by_hash`) — index files by `pix:ContentHash`,
+  file must have `pix:OriginalPath` and a valid cached content hash.
+- Hash grouping (`group_by_hash`) — index files by cached hash,
   yield only groups of 2+.
 - Keeper selection (`select_keeper`) — investment-tier rule, lex
   tie-break per spec.
@@ -30,10 +35,10 @@ from pathlib import Path
 from typing import IO
 
 from pix.events import PIX_EVENT_OVERRIDE
+from pix.hash_cache import read_cached_hash
 from pix.metadata import FileMetadata
 from pix.organize import cleanup_empty_folders  # reused
 from pix.plan import (
-    PIX_CONTENT_HASH,
     PIX_DATE_OVERRIDE,
     PIX_ORIGINAL_PATH,
     Action,
@@ -62,12 +67,12 @@ class UnmigratedFilesError(DedupeError):
 
 
 class MissingHashesError(DedupeError):
-    """Raised when one or more files lack `pix:ContentHash`."""
+    """Raised when one or more files lack a cached content hash."""
 
     def __init__(self, paths: list[Path]) -> None:
         super().__init__(
-            f"{len(paths)} file(s) in the library lack pix:ContentHash. "
-            f"Run `pix migrate <library-root>` to compute missing hashes."
+            f"{len(paths)} file(s) in the library lack a cached content "
+            f"hash. Run `pix hash <library-root>` first."
         )
         self.paths = paths
 
@@ -149,9 +154,10 @@ def select_keeper(
 
 
 def require_migrated_with_hashes(
+    library_root: Path,
     cache: dict[Path, FileMetadata],
 ) -> None:
-    """Refuse if any file lacks pix:OriginalPath or pix:ContentHash."""
+    """Refuse if any file lacks pix:OriginalPath or a cached content hash."""
     unmigrated = [
         p for p, m in cache.items() if m.get_str(PIX_ORIGINAL_PATH) is None
     ]
@@ -159,7 +165,7 @@ def require_migrated_with_hashes(
         raise UnmigratedFilesError(sorted(unmigrated)[:10])
 
     no_hash = [
-        p for p, m in cache.items() if m.get_str(PIX_CONTENT_HASH) is None
+        p for p in cache if read_cached_hash(library_root, p) is None
     ]
     if no_hash:
         raise MissingHashesError(sorted(no_hash)[:10])
@@ -172,10 +178,10 @@ def group_by_hash(
     library_root: Path,
     cache: dict[Path, FileMetadata],
 ) -> list[DedupeGroup]:
-    """Group files by `pix:ContentHash`; yield only groups of 2+."""
+    """Group files by cached content hash; yield only groups of 2+."""
     by_hash: dict[str, list[tuple[Path, FileMetadata]]] = defaultdict(list)
     for path, meta in cache.items():
-        h = meta.get_str(PIX_CONTENT_HASH)
+        h = read_cached_hash(library_root, path)
         if h is None:
             continue  # require_migrated_with_hashes should have caught
         by_hash[h].append((path, meta))
@@ -214,7 +220,7 @@ def generate_plan(
     plan_log: IO[str] | None = None,
 ) -> DedupeResult:
     """Build a dedupe plan from the library cache."""
-    require_migrated_with_hashes(cache)
+    require_migrated_with_hashes(library_root, cache)
 
     groups = group_by_hash(library_root, cache)
 

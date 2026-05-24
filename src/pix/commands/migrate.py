@@ -221,7 +221,7 @@ def migrate_folder(folder: Path) -> None:
         break  # 'y' — apply
 
     try:
-        completed, skipped = apply_plan(
+        completed, convert_failures = apply_plan(
             plan=plan,
             plan_path=plan_path,
             run_dir=runs_dir,
@@ -232,16 +232,34 @@ def migrate_folder(folder: Path) -> None:
         typer.echo(f"Error: apply failed: {e}", err=True)
         raise typer.Exit(code=1) from e
 
-    # Keep the per-file metadata cache in sync with what apply just did.
-    # Best-effort: failures here only mean a slower next-run for that
-    # one file (cache miss → re-read).
-    _post_apply_cache_update(meta_cache, plan, kept_line_ids)
+    # Skip cache updates for plan lines whose CONVERT failed — the source
+    # file is still in place at its old name with its old metadata, so
+    # the cache entry remains correct as-is.
+    failed_ids = {ln.line_id for ln, _ in convert_failures}
+    applied_ids = kept_line_ids - failed_ids
+    _post_apply_cache_update(meta_cache, plan, applied_ids)
 
     typer.echo("")
-    typer.echo(
-        f"Applied {completed} action(s)"
-        f"{f', skipped {skipped}' if skipped else ''}."
-    )
+    typer.echo(f"Applied {completed} action(s).")
+
+    if convert_failures:
+        typer.echo("")
+        typer.echo(
+            f"{len(convert_failures)} CONVERT line(s) failed — "
+            f"source files left in place for review:",
+            err=True,
+        )
+        for ln, err in convert_failures:
+            typer.echo(f"  {ln.abs_path}", err=True)
+            typer.echo(f"    {err}", err=True)
+        typer.echo("", err=True)
+        typer.echo(
+            f"See {runs_dir / 'apply.log'} for full log. Decide per file "
+            f"(restore from backup, delete, or leave alone) and re-run "
+            f"migrate to pick up any fixes.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
 
 def _post_apply_cache_update(

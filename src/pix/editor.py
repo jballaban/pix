@@ -60,6 +60,25 @@ def prompt_apply() -> str:
         typer.echo("Please answer Y (apply), e (edit), or n (abort).")
 
 
+def prompt_proceed() -> bool:
+    """Prompt `Proceed? [Y/n]` and return True for yes, False for no.
+
+    Used by ops with no editable plan (e.g. `pix hash`) — the work set is
+    mechanical, no per-file decision to make. Pressing Enter accepts the
+    default (yes).
+    """
+    while True:
+        raw = typer.prompt(
+            "Proceed? [Y/n]", default="y", show_default=False
+        )
+        ans = raw.strip().lower()
+        if ans in ("y", "yes"):
+            return True
+        if ans in ("n", "no"):
+            return False
+        typer.echo("Please answer Y (proceed) or n (abort).")
+
+
 def parse_kept_line_ids(plan_text: str) -> set[str]:
     """Extract the set of `L###` IDs still present in the (post-edit) plan.
 

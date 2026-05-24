@@ -6,7 +6,6 @@ from pathlib import Path
 from pix.config import Config
 from pix.metadata import FileMetadata
 from pix.plan import (
-    PIX_CONTENT_HASH,
     PIX_DATE_AUTO,
     PIX_DATE_OVERRIDE,
     PIX_EVENT_AUTO,
@@ -129,7 +128,6 @@ def test_plan_first_migrate_convert(tmp_path: Path) -> None:
     assert line.is_first_migrate is True
     assert "→2023-08-15_143205.jpg" in line.details
     assert "original_path init" in line.details
-    assert "content_hash compute" in line.details
     assert "date_auto null→2023-08-15-14:32:05" in line.details
 
 
@@ -171,7 +169,6 @@ def test_plan_already_canonical_keeps_file_with_no_line(tmp_path: Path) -> None:
                 # Date-only parent → no EventAuto derivation, so the
                 # test stays focused on the no-action case.
                 PIX_ORIGINAL_PATH: "F:/2023-08/source.jpg",
-                PIX_CONTENT_HASH: "deadbeef",
             },
         )
     }
@@ -202,7 +199,6 @@ def test_plan_pure_rename_for_non_canonical_name(tmp_path: Path) -> None:
                 # Date-only parent → no EventAuto derivation, so the
                 # test stays focused on the pure-rename case.
                 PIX_ORIGINAL_PATH: "F:/2023-08/source.jpg",
-                PIX_CONTENT_HASH: "deadbeef",
             },
         )
     }
@@ -238,7 +234,6 @@ def test_plan_m4v_renames_to_mp4_via_extension_alias(tmp_path: Path) -> None:
             **{
                 PIX_DATE_AUTO: "2015-06-12-19:30:00",
                 PIX_ORIGINAL_PATH: "F:/2015-06/source.m4v",
-                PIX_CONTENT_HASH: "deadbeef",
             },
         )
     }
@@ -290,7 +285,6 @@ def test_plan_rename_plus_tag_for_first_migrate_canonical_format(
     assert line.is_first_migrate is True
     assert "→2023-08-15_143612.jpg" in line.details
     assert "original_path init" in line.details
-    assert "content_hash compute" in line.details
 
 
 def test_plan_drift_detection_writes_new_date_auto(tmp_path: Path) -> None:
@@ -308,7 +302,6 @@ def test_plan_drift_detection_writes_new_date_auto(tmp_path: Path) -> None:
                 # Stored DateAuto is stale (2020); EXIF says 2023 — drift!
                 PIX_DATE_AUTO: "2020-01-01-00:00:00",
                 PIX_ORIGINAL_PATH: "F:/2023-08/source.jpg",
-                PIX_CONTENT_HASH: "deadbeef",
                 "EXIF:DateTimeOriginal": "2023:08:15 14:32:05",
             },
         )
@@ -350,7 +343,6 @@ def test_plan_drift_with_override_writes_date_auto_previous(
                 PIX_DATE_AUTO: "2023-08-15-14:32:05",  # stored
                 PIX_DATE_OVERRIDE: "2022-*-*-*:*:*",  # pins year
                 PIX_ORIGINAL_PATH: "F:/2023-08/source.jpg",
-                PIX_CONTENT_HASH: "deadbeef",
                 # New EXIF says 2024 → re-derive will produce drift.
                 "EXIF:DateTimeOriginal": "2024:08:15 14:32:05",
             },
@@ -398,7 +390,6 @@ def test_plan_drift_without_override_does_not_write_previous(
                 PIX_DATE_AUTO: "2023-08-15-14:32:05",
                 # No DateOverride.
                 PIX_ORIGINAL_PATH: "F:/2023-08/source.jpg",
-                PIX_CONTENT_HASH: "deadbeef",
                 "EXIF:DateTimeOriginal": "2024:08:15 14:32:05",
             },
         )
@@ -436,7 +427,6 @@ def test_plan_all_wildcard_override_is_treated_as_no_override(
                 PIX_DATE_AUTO: "2023-08-15-14:32:05",
                 PIX_DATE_OVERRIDE: "*-*-*-*:*:*",  # all wildcard
                 PIX_ORIGINAL_PATH: "F:/2023-08/source.jpg",
-                PIX_CONTENT_HASH: "deadbeef",
                 "EXIF:DateTimeOriginal": "2024:08:15 14:32:05",
             },
         )
@@ -470,7 +460,6 @@ def test_plan_no_drift_no_action_when_stored_matches_derivation(
             **{
                 PIX_DATE_AUTO: "2023-08-15-14:32:05",
                 PIX_ORIGINAL_PATH: "F:/2023-08/source.jpg",
-                PIX_CONTENT_HASH: "deadbeef",
                 # Filename pattern would derive the same value — no drift.
             },
         )
@@ -485,42 +474,6 @@ def test_plan_no_drift_no_action_when_stored_matches_derivation(
         staging_dir=tmp_path / "staging",
     )
     assert plan.lines == []
-
-
-def test_plan_tag_only_for_missing_hash_on_already_migrated(
-    tmp_path: Path,
-) -> None:
-    src = tmp_path / "src"
-    src.mkdir()
-    f = src / "2021-12-25_090015.jpg"
-    f.write_bytes(b"")
-
-    cfg = _config(jpg="keep")
-    cache = {
-        f.resolve(): _meta(
-            str(f),
-            **{
-                PIX_DATE_AUTO: "2021-12-25-09:00:15",
-                PIX_ORIGINAL_PATH: "F:/2023-08/source.jpg",
-                # PIX_CONTENT_HASH intentionally missing.
-            },
-        )
-    }
-
-    plan = generate_plan(
-        source=src.resolve(),
-        cache=cache,
-        config=cfg,
-        run_id="test-run",
-        run_dir=tmp_path / "runs",
-        staging_dir=tmp_path / "staging",
-    )
-
-    assert len(plan.lines) == 1
-    line = plan.lines[0]
-    assert line.action == Action.TAG
-    assert "content_hash compute" in line.details
-    assert "→" not in line.details  # no rename
 
 
 def test_plan_line_ids_are_sequential(tmp_path: Path) -> None:
@@ -776,7 +729,6 @@ def test_plan_re_migrate_writes_event_drift(tmp_path: Path) -> None:
                 # OriginalPath points at a `Birthday` folder (user moved it).
                 PIX_ORIGINAL_PATH: "F:/source/2023-08-Birthday/img.jpg",
                 PIX_EVENT_AUTO: "Wedding",
-                PIX_CONTENT_HASH: "deadbeef",
             },
         )
     }
@@ -815,7 +767,6 @@ def test_plan_re_migrate_writes_event_previous_when_override_set(
                 PIX_ORIGINAL_PATH: "F:/source/2023-08-Birthday/img.jpg",
                 PIX_EVENT_AUTO: "Wedding",
                 PIX_EVENT_OVERRIDE: "Reception",
-                PIX_CONTENT_HASH: "deadbeef",
             },
         )
     }
@@ -854,7 +805,6 @@ def test_plan_re_migrate_no_action_when_event_matches(
                 PIX_DATE_AUTO: "2023-08-15-14:32:05",
                 PIX_ORIGINAL_PATH: "F:/source/2023-08-Hawaii/img.jpg",
                 PIX_EVENT_AUTO: "Hawaii",
-                PIX_CONTENT_HASH: "deadbeef",
             },
         )
     }

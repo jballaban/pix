@@ -75,13 +75,13 @@ def test_apply_delete_moves_file_into_run_dir(tmp_path: Path) -> None:
     plan_path = run_dir / "plan.txt"
     plan_path.write_text(plan.to_text(), encoding="utf-8")
 
-    completed, skipped = apply_plan(
+    completed, convert_failures = apply_plan(
         plan=plan,
         plan_path=plan_path,
         run_dir=run_dir,
         kept_line_ids={"L001"},
     )
-    assert (completed, skipped) == (1, 0)
+    assert (completed, convert_failures) == (1, [])
     assert not junk.exists()
     assert (run_dir / "data" / "L001_Thumbs.db").exists()
 
@@ -251,7 +251,6 @@ def test_apply_tag_writes_pix_field_and_creates_sidecar(
                     PIX_DATE_AUTO: "2023-08-15-14:32:05",
                     "XMP:OriginalPath": str(jpg.resolve()),
                 },
-                needs_content_hash=True,
             )
         ],
         run_dir=run_dir,
@@ -281,11 +280,6 @@ def test_apply_tag_writes_pix_field_and_creates_sidecar(
     meta = cache[jpg.resolve()]
     assert meta.get_str(PIX_DATE_AUTO) == "2023-08-15-14:32:05"
     assert meta.get_str("XMP:OriginalPath") == str(jpg.resolve())
-    # Content hash is 64 hex chars of BLAKE3.
-    content_hash = meta.get_str("XMP:ContentHash")
-    assert content_hash is not None
-    assert len(content_hash) == 64
-    assert all(c in "0123456789abcdef" for c in content_hash)
 
 
 @needs_exiftool
@@ -318,7 +312,6 @@ def test_apply_convert_png_to_jpg_end_to_end(tmp_path: Path) -> None:
                     PIX_DATE_AUTO: "2023-08-15-14:32:05",
                     "XMP:OriginalPath": str(png.resolve()),
                 },
-                needs_content_hash=True,
             )
         ],
         run_dir=run_dir,
@@ -351,8 +344,6 @@ def test_apply_convert_png_to_jpg_end_to_end(tmp_path: Path) -> None:
     converted = cache[(src / "2023-08-15_143205.jpg").resolve()]
     assert converted.get_str(PIX_DATE_AUTO) == "2023-08-15-14:32:05"
     assert "IMG_001.png" in (converted.get_str("XMP:OriginalPath") or "")
-    content_hash = converted.get_str("XMP:ContentHash")
-    assert content_hash is not None and len(content_hash) == 64
 
 
 def test_apply_handles_overlapping_renames_via_topo_sort(

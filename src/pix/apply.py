@@ -24,7 +24,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import IO
 
-from pix.content_hash import compute_content_hash
 from pix.convert import ConvertFailed, convert_to_jpg, convert_to_mp4
 from pix.exiftool_session import ExifToolSession
 from pix.plan import Action, Plan, PlanLine
@@ -50,12 +49,14 @@ def apply_plan(
     run_dir: Path,
     kept_line_ids: set[str],
     staging_dir: Path | None = None,
-) -> tuple[int, int]:
+) -> tuple[int, list[tuple[PlanLine, str]]]:
     """Apply the plan, streaming progress to `<run_dir>/apply.log`.
 
-    Returns `(completed, skipped)`. Raises `ApplyError` if any action fails.
-    `plan_path` is unused here — kept in the signature so callers can pass
-    the same paths they pass elsewhere; plan.txt is never rewritten.
+    Returns `(completed, convert_failures)` where `convert_failures` is a
+    list of `(plan_line, error_message)` for CONVERT lines that failed on
+    the conversion step itself. Per spec/migrate.md → Failure handling,
+    CONVERT failures skip-and-log (broken source files are a per-file data
+    issue); TAG/RENAME/DELETE failures halt the run and raise `ApplyError`.
     """
     del plan_path  # plan.txt is immutable from apply's perspective
 
@@ -85,6 +86,7 @@ def apply_plan(
     log_path = run_dir / "apply.log"
     exiftool: ExifToolSession | None = None
     completed = 0
+    convert_failures: list[tuple[PlanLine, str]] = []
     with (
         log_path.open("a", encoding="utf-8") as log,
         LiveProgress(total=len(runnable)) as progress,
@@ -109,6 +111,11 @@ def apply_plan(
                 except KeyboardInterrupt:
                     _log(log, ln, "Interrupted")
                     raise
+                except ConvertFailed as e:
+                    _log(log, ln, "Failed", detail=str(e))
+                    convert_failures.append((ln, str(e)))
+                    progress.advance()
+                    continue
                 except Exception as e:
                     _log(log, ln, "Failed", detail=str(e))
                     raise ApplyError(
@@ -121,7 +128,7 @@ def apply_plan(
             if exiftool is not None:
                 exiftool.close()
 
-    return completed, 0
+    return completed, convert_failures
 
 
 def _order_for_apply(runnable: list[PlanLine]) -> list[PlanLine]:
@@ -318,16 +325,8 @@ def _apply_tag(
     # Capture sidecar with prior XMP contents before mutating.
     exiftool.export_xmp_sidecar(ln.abs_path, ln.sidecar_path)
 
-    writes = dict(ln.pix_writes)
-    if ln.needs_content_hash:
-        # The only value we compute here rather than at plan-gen: format-
-        # aware hashing requires a full-file scan, deliberately deferred
-        # to apply (per spec/migrate.md → Metadata cache) so an aborted
-        # plan doesn't waste hashing time on thousands of files.
-        writes["XMP:ContentHash"] = compute_content_hash(ln.abs_path)
-
-    if writes:
-        exiftool.write_tags(ln.abs_path, writes)
+    if ln.pix_writes:
+        exiftool.write_tags(ln.abs_path, dict(ln.pix_writes))
 
 
 def _apply_convert(
@@ -370,26 +369,22 @@ def _apply_convert(
     if ln.staging_path.exists():
         ln.staging_path.unlink()
 
-    try:
-        if target_ext == "jpg":
-            convert_to_jpg(src, ln.staging_path)
-        elif target_ext == "mp4":
-            convert_to_mp4(src, ln.staging_path)
-        else:
-            raise ApplyError(
-                f"{ln.line_id}: unsupported CONVERT target extension "
-                f"{target_ext!r}"
-            )
-    except ConvertFailed as e:
+    # ConvertFailed propagates uncaught to apply_plan's loop, where it's
+    # logged and the run continues to the next plan line — broken source
+    # files are a per-file data issue, not an environmental failure. See
+    # spec/migrate.md → Failure handling.
+    if target_ext == "jpg":
+        convert_to_jpg(src, ln.staging_path)
+    elif target_ext == "mp4":
+        convert_to_mp4(src, ln.staging_path)
+    else:
         raise ApplyError(
-            f"{ln.line_id}: conversion failed: {e}"
-        ) from e
+            f"{ln.line_id}: unsupported CONVERT target extension "
+            f"{target_ext!r}"
+        )
 
-    writes = dict(ln.pix_writes)
-    if ln.needs_content_hash:
-        writes["XMP:ContentHash"] = compute_content_hash(ln.staging_path)
     exiftool.copy_metadata_and_write_tags(
-        source=src, dest=ln.staging_path, tags=writes
+        source=src, dest=ln.staging_path, tags=dict(ln.pix_writes)
     )
 
     # Step 2: bring into source as marker.

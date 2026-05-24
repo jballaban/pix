@@ -18,7 +18,6 @@ from pix.dedupe import (
 )
 from pix.metadata import FileMetadata
 from pix.plan import (
-    PIX_CONTENT_HASH,
     PIX_DATE_OVERRIDE,
     PIX_EVENT_OVERRIDE,
     PIX_ORIGINAL_PATH,
@@ -32,15 +31,12 @@ def _meta(path: Path, **fields: object) -> FileMetadata:
     )
 
 
-def _migrated(path: Path, content_hash: str, **extra: object) -> FileMetadata:
-    """A file that's been migrated and has a content hash."""
+def _migrated(path: Path, **extra: object) -> FileMetadata:
+    """A file that's been migrated. Hashes are registered separately via
+    the `patched_hash_cache` fixture — dedupe reads them from there."""
     return _meta(
         path,
-        **{
-            PIX_ORIGINAL_PATH: f"F:/source/{path.name}",
-            PIX_CONTENT_HASH: content_hash,
-            **extra,
-        },
+        **{PIX_ORIGINAL_PATH: f"F:/source/{path.name}", **extra},
     )
 
 
@@ -64,16 +60,13 @@ def test_refuses_unmigrated_files(tmp_path: Path) -> None:
 
 
 def test_refuses_missing_content_hash(tmp_path: Path) -> None:
-    """Migrated files without pix:ContentHash cause refusal."""
+    """Migrated files without a cached content hash cause refusal."""
     root = tmp_path / "lib"
     root.mkdir()
     p = root / "a.jpg"
     p.write_bytes(b"")
-    cache = {
-        p.resolve(): _meta(
-            p, **{PIX_ORIGINAL_PATH: "F:/source/a.jpg"}
-        )  # no ContentHash
-    }
+    cache = {p.resolve(): _migrated(p)}
+    # No hash registered → MissingHashesError.
     with pytest.raises(MissingHashesError):
         generate_plan(
             library_root=root,
@@ -86,7 +79,9 @@ def test_refuses_missing_content_hash(tmp_path: Path) -> None:
 # --- Grouping ---------------------------------------------------------------
 
 
-def test_group_by_hash_yields_only_groups_of_two_or_more(tmp_path: Path) -> None:
+def test_group_by_hash_yields_only_groups_of_two_or_more(
+    tmp_path: Path, patched_hash_cache: dict[Path, str]
+) -> None:
     root = tmp_path / "lib"
     root.mkdir()
     a = root / "a.jpg"
@@ -94,10 +89,13 @@ def test_group_by_hash_yields_only_groups_of_two_or_more(tmp_path: Path) -> None
     c = root / "c.jpg"  # unique
     for p in (a, b, c):
         p.write_bytes(b"")
+    patched_hash_cache[a.resolve()] = "abc"
+    patched_hash_cache[b.resolve()] = "abc"
+    patched_hash_cache[c.resolve()] = "def"
     cache = {
-        a.resolve(): _migrated(a, "abc"),
-        b.resolve(): _migrated(b, "abc"),
-        c.resolve(): _migrated(c, "def"),
+        a.resolve(): _migrated(a),
+        b.resolve(): _migrated(b),
+        c.resolve(): _migrated(c),
     }
     groups = group_by_hash(root, cache)
     assert len(groups) == 1
@@ -118,9 +116,9 @@ def test_keeper_lex_smallest_when_all_pristine(tmp_path: Path) -> None:
     for p in paths:
         p.write_bytes(b"")
     members = [
-        (paths[0].resolve(), _migrated(paths[0], "h")),
-        (paths[1].resolve(), _migrated(paths[1], "h")),
-        (paths[2].resolve(), _migrated(paths[2], "h")),
+        (paths[0].resolve(), _migrated(paths[0])),
+        (paths[1].resolve(), _migrated(paths[1])),
+        (paths[2].resolve(), _migrated(paths[2])),
     ]
     assert select_keeper(root, members) == paths[1].resolve()  # a.jpg
 
@@ -134,10 +132,10 @@ def test_keeper_invested_beats_pristine(tmp_path: Path) -> None:
     for p in (a, z):
         p.write_bytes(b"")
     members = [
-        (a.resolve(), _migrated(a, "h")),
+        (a.resolve(), _migrated(a)),
         (
             z.resolve(),
-            _migrated(z, "h", **{PIX_DATE_OVERRIDE: "2022-*-*-*:*:*"}),
+            _migrated(z, **{PIX_DATE_OVERRIDE: "2022-*-*-*:*:*"}),
         ),
     ]
     assert select_keeper(root, members) == z.resolve()
@@ -151,10 +149,10 @@ def test_keeper_event_override_counts_as_invested(tmp_path: Path) -> None:
     for p in (a, z):
         p.write_bytes(b"")
     members = [
-        (a.resolve(), _migrated(a, "h")),
+        (a.resolve(), _migrated(a)),
         (
             z.resolve(),
-            _migrated(z, "h", **{PIX_EVENT_OVERRIDE: "Birthday"}),
+            _migrated(z, **{PIX_EVENT_OVERRIDE: "Birthday"}),
         ),
     ]
     assert select_keeper(root, members) == z.resolve()
@@ -169,10 +167,10 @@ def test_keeper_all_wildcards_override_is_not_invested(tmp_path: Path) -> None:
     for p in (a, z):
         p.write_bytes(b"")
     members = [
-        (a.resolve(), _migrated(a, "h")),
+        (a.resolve(), _migrated(a)),
         (
             z.resolve(),
-            _migrated(z, "h", **{PIX_DATE_OVERRIDE: "*-*-*-*:*:*"}),
+            _migrated(z, **{PIX_DATE_OVERRIDE: "*-*-*-*:*:*"}),
         ),
     ]
     # Neither is invested; pristine lex-smallest wins.
@@ -189,11 +187,11 @@ def test_keeper_lex_smallest_among_invested(tmp_path: Path) -> None:
     members = [
         (
             a.resolve(),
-            _migrated(a, "h", **{PIX_DATE_OVERRIDE: "2022-*-*-*:*:*"}),
+            _migrated(a, **{PIX_DATE_OVERRIDE: "2022-*-*-*:*:*"}),
         ),
         (
             z.resolve(),
-            _migrated(z, "h", **{PIX_DATE_OVERRIDE: "2022-*-*-*:*:*"}),
+            _migrated(z, **{PIX_DATE_OVERRIDE: "2022-*-*-*:*:*"}),
         ),
     ]
     assert select_keeper(root, members) == a.resolve()
@@ -209,8 +207,8 @@ def test_keeper_case_insensitive_lex(tmp_path: Path) -> None:
     upper.write_bytes(b"")
     z.write_bytes(b"")
     members = [
-        (upper.resolve(), _migrated(upper, "h")),
-        (z.resolve(), _migrated(z, "h")),
+        (upper.resolve(), _migrated(upper)),
+        (z.resolve(), _migrated(z)),
     ]
     assert select_keeper(root, members) == upper.resolve()
 
@@ -218,12 +216,15 @@ def test_keeper_case_insensitive_lex(tmp_path: Path) -> None:
 # --- Plan generation --------------------------------------------------------
 
 
-def test_plan_no_duplicates_produces_empty_plan(tmp_path: Path) -> None:
+def test_plan_no_duplicates_produces_empty_plan(
+    tmp_path: Path, patched_hash_cache: dict[Path, str]
+) -> None:
     root = tmp_path / "lib"
     root.mkdir()
     p = root / "a.jpg"
     p.write_bytes(b"")
-    cache = {p.resolve(): _migrated(p, "h")}
+    patched_hash_cache[p.resolve()] = "h"
+    cache = {p.resolve(): _migrated(p)}
     result = generate_plan(
         library_root=root,
         cache=cache,
@@ -234,16 +235,20 @@ def test_plan_no_duplicates_produces_empty_plan(tmp_path: Path) -> None:
     assert result.groups == ()
 
 
-def test_plan_two_duplicates_produces_one_dedup_line(tmp_path: Path) -> None:
+def test_plan_two_duplicates_produces_one_dedup_line(
+    tmp_path: Path, patched_hash_cache: dict[Path, str]
+) -> None:
     root = tmp_path / "lib"
     root.mkdir()
     a = root / "a.jpg"  # keeper (lex)
     b = root / "b.jpg"  # loser
     a.write_bytes(b"")
     b.write_bytes(b"")
+    patched_hash_cache[a.resolve()] = "h"
+    patched_hash_cache[b.resolve()] = "h"
     cache = {
-        a.resolve(): _migrated(a, "h"),
-        b.resolve(): _migrated(b, "h"),
+        a.resolve(): _migrated(a),
+        b.resolve(): _migrated(b),
     }
     run_dir = tmp_path / "runs" / "r"
     result = generate_plan(
@@ -262,7 +267,9 @@ def test_plan_two_duplicates_produces_one_dedup_line(tmp_path: Path) -> None:
     assert result.groups[0].losers == (b.resolve(),)
 
 
-def test_plan_three_groups_three_lines_each_id_unique(tmp_path: Path) -> None:
+def test_plan_three_groups_three_lines_each_id_unique(
+    tmp_path: Path, patched_hash_cache: dict[Path, str]
+) -> None:
     """Three duplicate pairs → three DEDUP lines with L001/L002/L003."""
     root = tmp_path / "lib"
     root.mkdir()
@@ -275,7 +282,8 @@ def test_plan_three_groups_three_lines_each_id_unique(tmp_path: Path) -> None:
     # Three groups: (0,1), (2,3), (4,5) sharing distinct hashes.
     for idx, h in enumerate(["aaa", "bbb", "ccc"]):
         for p in (paths[idx * 2], paths[idx * 2 + 1]):
-            cache[p.resolve()] = _migrated(p, h)
+            cache[p.resolve()] = _migrated(p)
+            patched_hash_cache[p.resolve()] = h
     result = generate_plan(
         library_root=root,
         cache=cache,
@@ -293,16 +301,20 @@ def test_plan_three_groups_three_lines_each_id_unique(tmp_path: Path) -> None:
 # --- Serialization ----------------------------------------------------------
 
 
-def test_serialize_plan_grouped_format(tmp_path: Path) -> None:
+def test_serialize_plan_grouped_format(
+    tmp_path: Path, patched_hash_cache: dict[Path, str]
+) -> None:
     root = tmp_path / "lib"
     root.mkdir()
     a = root / "a.jpg"
     b = root / "b.jpg"
     a.write_bytes(b"")
     b.write_bytes(b"")
+    patched_hash_cache[a.resolve()] = "abc123def456ghi"
+    patched_hash_cache[b.resolve()] = "abc123def456ghi"
     cache = {
-        a.resolve(): _migrated(a, "abc123def456ghi"),
-        b.resolve(): _migrated(b, "abc123def456ghi"),
+        a.resolve(): _migrated(a),
+        b.resolve(): _migrated(b),
     }
     result = generate_plan(
         library_root=root,
@@ -322,16 +334,20 @@ def test_serialize_plan_grouped_format(tmp_path: Path) -> None:
 # --- Apply ------------------------------------------------------------------
 
 
-def test_apply_moves_loser_to_data_dir(tmp_path: Path) -> None:
+def test_apply_moves_loser_to_data_dir(
+    tmp_path: Path, patched_hash_cache: dict[Path, str]
+) -> None:
     root = tmp_path / "lib"
     root.mkdir()
     a = root / "a.jpg"  # keeper
     b = root / "b.jpg"  # loser
     a.write_bytes(b"keep")
     b.write_bytes(b"dup")
+    patched_hash_cache[a.resolve()] = "h"
+    patched_hash_cache[b.resolve()] = "h"
     cache = {
-        a.resolve(): _migrated(a, "h"),
-        b.resolve(): _migrated(b, "h"),
+        a.resolve(): _migrated(a),
+        b.resolve(): _migrated(b),
     }
     run_dir = tmp_path / "runs" / "r"
     run_dir.mkdir(parents=True)
@@ -356,16 +372,20 @@ def test_apply_moves_loser_to_data_dir(tmp_path: Path) -> None:
     assert captured.read_bytes() == b"dup"
 
 
-def test_apply_refuses_when_capture_path_collides(tmp_path: Path) -> None:
+def test_apply_refuses_when_capture_path_collides(
+    tmp_path: Path, patched_hash_cache: dict[Path, str]
+) -> None:
     root = tmp_path / "lib"
     root.mkdir()
     a = root / "a.jpg"
     b = root / "b.jpg"
     a.write_bytes(b"")
     b.write_bytes(b"")
+    patched_hash_cache[a.resolve()] = "h"
+    patched_hash_cache[b.resolve()] = "h"
     cache = {
-        a.resolve(): _migrated(a, "h"),
-        b.resolve(): _migrated(b, "h"),
+        a.resolve(): _migrated(a),
+        b.resolve(): _migrated(b),
     }
     run_dir = tmp_path / "runs" / "r"
     run_dir.mkdir(parents=True)
@@ -387,7 +407,9 @@ def test_apply_refuses_when_capture_path_collides(tmp_path: Path) -> None:
         )
 
 
-def test_apply_sweeps_empty_folders(tmp_path: Path) -> None:
+def test_apply_sweeps_empty_folders(
+    tmp_path: Path, patched_hash_cache: dict[Path, str]
+) -> None:
     """When a duplicate is removed and its folder becomes empty, sweep it."""
     root = tmp_path / "lib"
     (root / "imports").mkdir(parents=True)
@@ -395,9 +417,11 @@ def test_apply_sweeps_empty_folders(tmp_path: Path) -> None:
     b = root / "imports" / "b.jpg"  # loser; its parent will go empty
     a.write_bytes(b"")
     b.write_bytes(b"")
+    patched_hash_cache[a.resolve()] = "h"
+    patched_hash_cache[b.resolve()] = "h"
     cache = {
-        a.resolve(): _migrated(a, "h"),
-        b.resolve(): _migrated(b, "h"),
+        a.resolve(): _migrated(a),
+        b.resolve(): _migrated(b),
     }
     run_dir = tmp_path / "runs" / "r"
     run_dir.mkdir(parents=True)

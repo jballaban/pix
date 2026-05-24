@@ -9,6 +9,7 @@ from typing import Annotated
 import typer
 
 from pix.commands.dedupe import dedupe_library
+from pix.commands.hash import hash_library
 from pix.commands.init import init_library
 from pix.commands.migrate import migrate_folder
 from pix.commands.organize import organize_library
@@ -96,6 +97,24 @@ def organize(
 ) -> None:
     """Re-shape the library to match a folder template (library-wide MOVE)."""
     organize_library(path=path, template_str=template)
+
+
+@app.command("hash")
+def hash_(
+    path: Annotated[
+        Path,
+        typer.Argument(
+            help=(
+                "Path inside (or at) the library root. The library is "
+                "resolved by walking up from this path. Hash operates on "
+                "every file under the library; subfolder scope is not "
+                "supported in v1."
+            ),
+        ),
+    ],
+) -> None:
+    """Populate the per-file content-hash cache for every stale/missing entry."""
+    hash_library(path=path)
 
 
 @app.command("dedupe")

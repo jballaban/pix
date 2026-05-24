@@ -120,6 +120,15 @@ During apply, progress streams to a sibling `apply.log` in the same run folder, 
 
 `plan.txt` itself is never rewritten. A `Started` line with no matching `Completed`/`Failed` is the line that was active when the process died.
 
+### Failure handling
+
+Two policies, by action type:
+
+- **CONVERT failures skip-and-log.** A CONVERT action that fails on the conversion step itself (Pillow refuses to decode a truncated HEIC, ffmpeg can't read a corrupted MOV, …) is logged to `apply.log` as `Failed` and the run **continues** to the next plan line. The source file stays in place untouched — its truncated/broken bytes are still there for the user to inspect or replace. At end of run, the console prints the list of failed source paths and migrate exits non-zero. The user reviews the list, decides per file (restore from backup? delete? leave alone?), and re-runs migrate to pick up any fixes.
+- **All other actions halt.** A failure in TAG (ExifTool error), RENAME (filesystem error), or DELETE (filesystem error) halts the run on the first occurrence. These signal infrastructure problems, not per-file data quality — they're the same root cause for every file, so continuing wastes time. The user reads the error, fixes the root cause, and re-runs.
+
+The distinction: CONVERT failures are almost always a property of the *source file* (truncated, corrupted, unreadable for that specific input); other failures are almost always a property of the *environment* (ExifTool wedged, disk full, AV holding a lock). The same file-vs-environment distinction applies to timeouts — see [implementation.md → Subprocess hardening](implementation.md#subprocess-hardening).
+
 Line IDs (`L001`, `L002`, …) are assigned at plan generation. They're stable for the duration of the run and tie each plan line to its `apply.log` entries and its capture file in the run folder. Users who delete lines from the plan during edit leave gaps in the numbering — that's fine, the survivors keep their IDs.
 
 Behaviors:

@@ -22,7 +22,9 @@ The library root itself is fine as CWD — organize never removes the root, and 
 
 ## Workflow
 
-1. **Validate prerequisites.** Walk the library; if any file lacks `pix:OriginalPath`, abort before generating any plan. Surface the offending paths and tell the user to run migrate first. (Organize templates read effective tag values; un-migrated files have no values to read.)
+1. **Validate prerequisites.** Walk the library; abort before generating any plan if either condition holds:
+   - **Any file lacks `pix:OriginalPath`** — un-migrated. Surface the offending paths; tell the user to run `pix migrate <library-root>` first. (Organize templates read effective tag values; un-migrated files have no values to read.)
+   - **Any file lacks a cached content hash** — i.e. `<library>/.pix/cache/.../<filename>.hash` is missing or stale. Surface paths; tell the user to run `pix hash <library-root>` first. The cached hash is the deterministic collision tiebreaker (see [library.md → Collision handling](library.md#collision-handling)); without it, suffix assignment for files sharing a target path isn't deterministic. See [hash.md](hash.md) — same prereq dedupe enforces.
 2. **Allocate run folder.** Create `<library-root>\.pix\runs\<run-id>\` (same shape as migrate's run folder).
 3. **Parse template.** See [template grammar](#template-grammar) below. Bad templates abort with a clear error before any work.
 4. **Build metadata cache.** Bulk-extract pix:* fields for every library file (same one-shot ExifTool pattern as migrate). The cache only needs `pix:OriginalPath`, `pix:DateAuto`, `pix:DateOverride`, `pix:EventAuto`, `pix:EventOverride` — much smaller than migrate's read.

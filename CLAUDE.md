@@ -25,6 +25,8 @@ Pre-code. The design lives in `spec/`. Treat each `spec/*.md` as authoritative u
 - [`spec/organize.md`](spec/organize.md) — organize (sketched)
 - [`spec/export.md`](spec/export.md) — export (sketched)
 - [`spec/implementation.md`](spec/implementation.md) — language, libs, env, perf notes, sync-client interaction
+- [`spec/backlog.md`](spec/backlog.md) — spec-vs-code gap (features designed but not yet built)
+- [`spec/perf-backlog.md`](spec/perf-backlog.md) — performance ideas against already-implemented code
 
 ## Environment
 

@@ -33,9 +33,9 @@ from typing import IO
 
 from pix.dates import format_pix_datetime
 from pix.events import effective_event
+from pix.hash_cache import read_cached_hash
 from pix.metadata import FileMetadata
 from pix.plan import (
-    PIX_CONTENT_HASH,
     PIX_ORIGINAL_PATH,
     Action,
     Plan,
@@ -63,6 +63,23 @@ class UnmigratedFilesError(OrganizeError):
         super().__init__(
             f"{len(paths)} file(s) in the library lack pix:OriginalPath. "
             f"Run `pix migrate <library-root>` first."
+        )
+        self.paths = paths
+
+
+class MissingHashesError(OrganizeError):
+    """Raised when one or more files lack a cached content hash.
+
+    Organize uses the cached hash as the collision tiebreaker (see
+    spec/library.md → Collision handling). Without it the collision
+    suffix assignment isn't deterministic across files with identical
+    target paths.
+    """
+
+    def __init__(self, paths: list[Path]) -> None:
+        super().__init__(
+            f"{len(paths)} file(s) in the library lack a cached content "
+            f"hash. Run `pix hash <library-root>` first."
         )
         self.paths = paths
 
@@ -290,6 +307,14 @@ def generate_plan(
     if unmigrated:
         raise UnmigratedFilesError(sorted(unmigrated)[:10])
 
+    # Refuse if any file lacks a cached content hash — needed as the
+    # collision-resolution tiebreaker.
+    no_hash = [
+        p for p in cache if read_cached_hash(library_root, p) is None
+    ]
+    if no_hash:
+        raise MissingHashesError(sorted(no_hash)[:10])
+
     paths = sorted(cache.keys())
     candidates: list[_CandidateTarget] = []
 
@@ -312,7 +337,8 @@ def generate_plan(
                 # lands in null/ anyway (date tokens render null).
                 bare = path.name
 
-            content_hash = meta.get_str(PIX_CONTENT_HASH) or str(path)
+            # Prereq check above guarantees a cached hash exists.
+            content_hash = read_cached_hash(library_root, path) or str(path)
             candidates.append(
                 _CandidateTarget(
                     path=path,

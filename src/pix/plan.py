@@ -40,7 +40,6 @@ PIX_DATE_AUTO: str = "XMP:DateAuto"
 PIX_DATE_AUTO_PREVIOUS: str = "XMP:DateAutoPrevious"
 PIX_DATE_OVERRIDE: str = "XMP:DateOverride"
 PIX_ORIGINAL_PATH: str = "XMP:OriginalPath"
-PIX_CONTENT_HASH: str = "XMP:ContentHash"
 PIX_EVENT_AUTO: str = "XMP:EventAuto"
 PIX_EVENT_AUTO_PREVIOUS: str = "XMP:EventAutoPrevious"
 PIX_EVENT_OVERRIDE: str = "XMP:EventOverride"
@@ -79,11 +78,7 @@ class PlanLine:
     Apply is a pure executor: all paths it needs (target / sidecar /
     capture / staging / marker) are pre-computed by plan-gen, and all
     pix:* field values it writes (DateAuto, OriginalPath, ...) are already
-    in `pix_writes`. The one exception is `pix:ContentHash` — the value
-    requires a full-file scan that we deliberately defer to apply (so an
-    aborted plan doesn't waste hashing time on thousands of files); when
-    `needs_content_hash` is True, apply computes the hash on the
-    appropriate file and writes it alongside the other `pix_writes`.
+    in `pix_writes`.
 
     User edits to `details` in the editor are ignored at apply time; only
     line deletions (removing whole lines) affect what gets applied.
@@ -97,7 +92,6 @@ class PlanLine:
     is_first_migrate: bool = False
     target_filename: str | None = None
     pix_writes: dict[str, str] = field(default_factory=lambda: {})
-    needs_content_hash: bool = False
 
     # Pre-computed paths (filled in post-plan-gen via `_attach_paths`).
     # All absolute. None for actions that don't use the given path.
@@ -543,7 +537,6 @@ def _plan_convert(
 
     if is_first_migrate:
         details_parts.append("original_path init")
-        details_parts.append("content_hash compute")
         pix_writes["XMP:OriginalPath"] = str(path)
 
     date_auto = derive_date_auto(meta)
@@ -562,9 +555,6 @@ def _plan_convert(
     debug.log(f"  Action: CONVERT+RENAME+TAG (→ .{target_ext})")
     debug.log(f"  Target filename: {canonical_name or '<unknown>'}")
     debug.log(f"  pix:* writes: {pix_writes or '(none)'}")
-    debug.log(
-        f"  Content hash: compute (always written on CONVERT)"
-    )
 
     return PlanLine(
         line_id="",
@@ -575,7 +565,6 @@ def _plan_convert(
         is_first_migrate=is_first_migrate,
         target_filename=canonical_name,
         pix_writes=pix_writes,
-        needs_content_hash=True,
     )
 
 
@@ -730,13 +719,10 @@ def _plan_keep(
         details_parts.append(f"→{canonical_name}")
 
     needs_tag = False
-    needs_hash = False
     if is_first_migrate:
         details_parts.append("original_path init")
-        details_parts.append("content_hash compute")
         pix_writes["XMP:OriginalPath"] = str(path)
         needs_tag = True
-        needs_hash = True
         if new_auto is not None:
             formatted = format_pix_datetime(new_auto)
             details_parts.append(f"date_auto null→{formatted}")
@@ -764,15 +750,6 @@ def _plan_keep(
             pix_writes[PIX_EVENT_AUTO_PREVIOUS] = stored_event
             details_parts.append(f"event_auto_previous→{stored_event}")
             needs_tag = True
-        if meta.get_str(PIX_CONTENT_HASH) is None:
-            details_parts.append("content_hash compute")
-            needs_tag = True
-            needs_hash = True
-            debug.log("  Hash check: pix:ContentHash absent — needs compute")
-        else:
-            debug.log(
-                "  Hash check: pix:ContentHash present — no recompute needed"
-            )
 
     debug.section("Decision")
     if not needs_rename and not needs_tag:
@@ -792,7 +769,6 @@ def _plan_keep(
         f"{canonical_name if needs_rename else '(no rename)'}"
     )
     debug.log(f"  pix:* writes: {pix_writes or '(none)'}")
-    debug.log(f"  Needs content hash: {needs_hash}")
     debug.log(f"  Needs OriginalPath: {is_first_migrate}")
 
     return PlanLine(
@@ -804,7 +780,6 @@ def _plan_keep(
         is_first_migrate=is_first_migrate,
         target_filename=canonical_name if needs_rename else None,
         pix_writes=pix_writes,
-        needs_content_hash=needs_hash,
     )
 
 

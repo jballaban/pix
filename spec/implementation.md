@@ -47,11 +47,14 @@ Timeouts are per primitive call, not per plan action. A `CONVERT+RENAME+TAG` pla
 
 Defaults are hard-coded in v1. No env-var overrides, no config knobs. If real workflows hit a ceiling — most likely the 1-hour ffmpeg re-encode for 4K family videos — we add an override then. Until then, hitting a timeout is the signal that we need to learn something about the workload.
 
-### On timeout: halt
+### On timeout
 
-Apply writes `Failed   <action>  <file>: <tool> timed out after <Xs>` to apply.log and exits non-zero. The user edits the plan to skip the offending file (delete that line) and re-runs. Same shape as any other apply failure — consistent with migrate's "halt on first failure" policy.
+Two policies, mirroring migrate's per-action failure handling (see [migrate.md → Failure handling](migrate.md#failure-handling)):
 
-The exception is `pix hash`, which logs per-file failures (including timeouts) as `Failed` and **continues** to the next file. Per-file failures in hash are non-blocking: the file isn't dedupable until its hash lands, but it's still usable. The whole-run summary exits non-zero if anything failed.
+- **CONVERT timeouts skip-and-log.** A Pillow or ffmpeg timeout on a CONVERT plan line is treated like any other CONVERT failure: log `Failed   <action>  <file>: <tool> timed out after <Xs>` to apply.log, source file stays in place, run continues. End-of-run summary lists the failed paths and migrate exits non-zero.
+- **Other timeouts halt.** ExifTool / filesystem-rename timeouts halt the apply on first occurrence (they signal environment problems, not per-file data quality). The user edits the plan to skip the offending file and re-runs.
+
+`pix hash` is uniformly skip-and-log — every failure (timeout, IO error, unreadable file) is logged and the loop continues. Per-file failures in hash are non-blocking: the file isn't dedupable until its hash lands, but it's still usable. The whole-run summary exits non-zero if anything failed.
 
 ### CTRL+C — reader-thread pattern
 
