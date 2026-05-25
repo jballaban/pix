@@ -205,12 +205,12 @@ def _run_migrate(root: Path, folder: Path, config: Config) -> None:
     plan_path = runs_dir / "plan.txt"
     plan_path.write_text(plan.to_text(), encoding="utf-8")
 
-    typer.echo(f"Plan written: {plan_path}")
-    typer.echo(f"Summary: {_summarize(plan.lines)}")
-
     if len(plan.lines) == 0:
         typer.echo("Nothing to do.")
         return
+
+    typer.echo(f"Plan written: {plan_path}")
+    typer.echo(f"Summary: {_summarize(plan.lines)}")
 
     # The editor pass is opt-in. By default we trust the generated plan
     # and apply directly; the user can pick `e` to review/edit and
