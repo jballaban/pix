@@ -64,6 +64,30 @@ The per-file cache currently stores ExifTool's full JSON output per file (5–10
 
 Independent of upstream item #4 (which is about restricting what ExifTool *returns*); this is about what we *store* even if ExifTool gave us everything.
 
+### 21. Hardware-accelerated video encode (NVENC / Quick Sync / AMF)
+**Phase:** CONVERT — specifically the libx265 re-encode path for non-H.264/HEVC sources (MPG, VOB, exotic AVI, etc.). Re-mux on H.264/HEVC sources is already I/O-bound; this is only about the genuine re-encode cases.
+
+After the codec-detection bug fix (v0.1.56), the vast majority of MOVs re-mux via `-c copy` (sub-second, I/O-bound). The remaining re-encode workload is small for a personal library — mostly older camcorder formats (MPG/MPEG/VOB) plus the occasional non-H.264 AVI. Whether GPU helps depends on how much of that you actually have.
+
+ffmpeg options on Windows:
+- **`hevc_nvenc`** (NVIDIA): ~10× faster than libx265, ~10–20% larger files for equivalent quality.
+- **`hevc_qsv`** (Intel iGPU): ~5–10× faster, similar size penalty.
+- **`hevc_amf`** (AMD): ~5–10× faster, similar.
+
+Implementation cost (~200 lines + spec work):
+- Detect available encoders via `ffmpeg -hide_banner -encoders | grep hevc_`.
+- Config knob in `.pix/config.yaml` to pick `auto` / `cpu` / `nvenc` / `qsv` / `amf`.
+- Per-encoder CRF tuning (libx265 `-crf 23` is not equivalent to `nvenc -cq 23`).
+- Fallback when GPU encode fails (driver issues, unsupported pixel format).
+
+Quality trade is real: libx265 is the compression gold standard. For an archive pass, the ~15% extra storage for GPU-encoded output might or might not be acceptable. User-configurable, default cpu.
+
+**Verdict:** evaluate after a real run with the codec bug fixed. If post-fix telemetry shows re-encoding is <2% of total CONVERT time, this isn't worth doing. If you have hundreds of MPG/VOB files, it's a big win.
+
+Cheaper alternatives to try first if re-encode time is a problem:
+- libx265 `-preset fast` or `-preset faster`: 3-5× speedup, ~5% file size cost, zero engineering.
+- Apply-phase parallelism (item #5): N×-speedup on parallel ffmpeg processes, no quality cost.
+
 ## Items added 2026-05-25 (read-through review)
 
 Quick code-review wins identified before real telemetry was available. Each is a 1–20 line change with no new abstractions. Phase context is what matters here — a 100× speedup on a phase that's <1% of total runtime is irrelevant. Numbers will sharpen once we have apply.log summary blocks from a real run; re-prioritize then.

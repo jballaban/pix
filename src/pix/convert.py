@@ -147,7 +147,18 @@ def convert_to_mp4(src: Path, dst: Path) -> None:
 
 
 def _probe_video_codec(src: Path) -> str:
-    """Return the first video stream's codec name (e.g. 'h264', 'hevc')."""
+    """Return the first video stream's codec name (e.g. 'h264', 'hevc').
+
+    Uses ffprobe's `default=nw=1:nk=1` output: no wrapper, no key prefix —
+    just the bare value. Earlier we used `csv=p=0`, which emits a trailing
+    comma even for a single-field query (`hevc,` instead of `hevc`). That
+    silently routed every iPhone HEVC MOV through the libx265 re-encode
+    path because the literal string `"hevc,"` doesn't match the
+    `{"h264", "hevc"}` set — turning what should be a sub-second re-mux
+    into minutes of pointless re-encoding. We also strip and lowercase
+    defensively and take whatever's before any stray comma to keep the
+    function tolerant of future format quirks.
+    """
     ffprobe = _require_tool("ffprobe")
     try:
         proc = subprocess.run(
@@ -160,7 +171,7 @@ def _probe_video_codec(src: Path) -> str:
                 "-show_entries",
                 "stream=codec_name",
                 "-of",
-                "csv=p=0",
+                "default=nw=1:nk=1",
                 str(src),
             ],
             capture_output=True,
@@ -177,7 +188,7 @@ def _probe_video_codec(src: Path) -> str:
         raise ConvertFailed(
             f"ffprobe failed on {src} (exit {proc.returncode}):\n{proc.stderr}"
         )
-    return proc.stdout.strip().lower()
+    return proc.stdout.strip().lower().split(",", 1)[0]
 
 
 def _require_tool(name: str) -> str:
