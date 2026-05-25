@@ -109,16 +109,9 @@ Expected savings: a few seconds on a fresh first-migrate. Negligible on warm run
 
 **Verdict:** defer. Lump with #9 if/when we touch this code.
 
-### 17. `PerFileCache.cache_path_for` re-resolves an already-resolved path
-**Phase:** cache lookup (the "checking cache" progress phase, plus inline lookups from organize/dedupe).
+### 17. `PerFileCache.cache_path_for` re-resolves an already-resolved path — **done in v0.1.60**
 
-`walk_source_files` resolves every path. `PerFileCache.get()` calls `cache_path_for()` which calls `media_path.resolve()` again. Double resolution per cache lookup.
-
-Trivial fix: assume the caller's path is absolute; only `resolve()` if not. Or expose a `cache_path_for_resolved(path)` variant for hot paths.
-
-Expected savings: one stat per cache lookup. With 200k files and 32 parallel threads, the cache-lookup phase is currently ~10–15s. Maybe 5s saved. Modest.
-
-**Verdict:** defer. Trivial change but lives in a phase that's already fast.
+Dropped the `media_path.resolve()` call inside `cache_path_for` in both `pix.metadata_cache` and `pix.hash_cache`. Walker (post-v0.1.59) returns absolute canonical paths; the defensive resolve was costing one stat per cache lookup. Bundled with `read_text` → `read_bytes` switch (saves the UTF-8 decode step on the cache file content). User reported the "checking cache" phase ran ~12s before; expected to drop noticeably.
 
 ### 18. Throttle `LiveProgress.begin()` per-file render
 **Phase:** plan-gen (hot loop: 200k iterations, sub-ms each).

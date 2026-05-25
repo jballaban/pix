@@ -32,12 +32,15 @@ def cache_path_for(library_root: Path, file_path: Path) -> Path:
     Drive letters are folded into the first folder (NTFS dir names
     can't contain `:`). Same scheme as `pix.metadata_cache.PerFileCache`,
     suffix is `.hash` instead of `.cache`.
+
+    Caller is expected to pass an absolute path — every pix caller goes
+    through `pix.scan.walk_source_files` which returns absolute canonical
+    paths. A defensive `resolve()` here would cost one stat per lookup.
     """
-    abs_path = file_path.resolve()
-    parts = abs_path.parts
+    parts = file_path.parts
     cache_root = library_root / ".pix" / "cache"
     if not parts:
-        return cache_root / (abs_path.name + ".hash")
+        return cache_root / (file_path.name + ".hash")
     drive = parts[0].rstrip("\\/").rstrip(":")
     rest = parts[1:]
     if rest:
@@ -57,7 +60,7 @@ def read_cached_hash(library_root: Path, file_path: Path) -> str | None:
     if not cache_path.is_file():
         return None
     try:
-        loaded: object = json.loads(cache_path.read_text(encoding="utf-8"))
+        loaded: object = json.loads(cache_path.read_bytes())
     except (OSError, json.JSONDecodeError):
         return None
     if not isinstance(loaded, dict):

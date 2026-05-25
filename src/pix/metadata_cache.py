@@ -49,12 +49,17 @@ class PerFileCache:
         Absolute media path → cache path under `cache_root` with the
         drive letter as a top-level folder and `.cache` appended to
         the filename.
+
+        Caller is expected to pass an absolute path — every pix caller
+        goes through `pix.scan.walk_source_files` which returns
+        already-absolute canonical paths. A defensive `resolve()` here
+        would cost one stat per lookup and is the dominant cost of the
+        cache-check phase at scale.
         """
-        abs_path = media_path.resolve()
-        parts = abs_path.parts
+        parts = media_path.parts
         if not parts:
             # Shouldn't happen for a real file; defensive.
-            return self.cache_root / (abs_path.name + ".cache")
+            return self.cache_root / (media_path.name + ".cache")
         # On Windows, parts[0] is like "G:\\" — strip trailing slashes
         # and colon to get just the drive letter.
         drive = parts[0].rstrip("\\/").rstrip(":")
@@ -76,7 +81,7 @@ class PerFileCache:
         if not cache_path.is_file():
             return None
         try:
-            loaded: object = json.loads(cache_path.read_text(encoding="utf-8"))
+            loaded: object = json.loads(cache_path.read_bytes())
         except (OSError, json.JSONDecodeError):
             return None
         if not isinstance(loaded, dict):
