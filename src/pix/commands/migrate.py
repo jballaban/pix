@@ -143,7 +143,7 @@ def _run_migrate(root: Path, folder: Path, config: Config) -> None:
     meta_cache = PerFileCache.for_library(root)
 
     with LiveProgress(total=len(scanned)) as check_progress:
-        check_progress.begin("checking cache")
+        check_progress.begin("Loading cache")
 
         def _on_check_batch(batch_size: int) -> None:
             check_progress.advance(by=batch_size)
@@ -156,7 +156,7 @@ def _run_migrate(root: Path, folder: Path, config: Config) -> None:
     if misses:
         try:
             with LiveProgress(total=len(misses)) as read_progress:
-                read_progress.begin("reading metadata")
+                read_progress.begin("Filling missing cache")
 
                 def _on_batch(batch_size: int) -> None:
                     read_progress.advance(by=batch_size)
