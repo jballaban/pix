@@ -111,6 +111,12 @@ class LiveProgress:
         # per-iteration `(Yiter)` reflects just the current item.
         self._phase_start: float = now
         self._action_start: float = now
+        # Number of `begin()` calls so far. Used to decide whether the
+        # per-iter elapsed is distinct from the phase elapsed: with a
+        # single begin() (e.g. the cache-load phase) iter ≈ phase, so
+        # showing both as `(2s / 2s)` is just noise. From the second
+        # begin() onward they diverge, and `(2m14s / 3s)` is useful.
+        self._begin_count: int = 0
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
@@ -156,6 +162,7 @@ class LiveProgress:
         flicker too fast to read (plan-gen iterates in sub-ms).
         """
         with self._lock:
+            self._begin_count += 1
             self._label = label
             self._path = path
             self._action_start = time.monotonic()
@@ -218,9 +225,12 @@ class LiveProgress:
                 # Determinate — phase elapsed is always shown so the
                 # user has a constant temporal anchor even when each
                 # iteration is sub-second; per-iter is appended after
-                # `/` only when it's worth surfacing.
+                # `/` only when it's worth surfacing AND distinct from
+                # phase (>=2 begin() calls means iter is for the
+                # current item, not the whole phase).
                 pct = int(self._idx * 100 / self._total)
-                if iter_elapsed >= 1:
+                show_iter = iter_elapsed >= 1 and self._begin_count > 1
+                if show_iter:
                     suffix = (
                         f" ({format_duration(phase_elapsed)}"
                         f" / {format_duration(iter_elapsed)})"
