@@ -346,6 +346,63 @@ def test_apply_convert_png_to_jpg_end_to_end(tmp_path: Path) -> None:
     assert "IMG_001.png" in (converted.get_str("XMP:OriginalPath") or "")
 
 
+@needs_exiftool
+def test_apply_convert_writes_metadata_cache_for_new_file(
+    tmp_path: Path,
+) -> None:
+    """CONVERT must populate the persistent cache for the new file so the
+    next migrate doesn't have to re-read it via ExifTool."""
+    from PIL import Image
+    from pix.metadata_cache import PerFileCache
+
+    library_root = tmp_path / "lib"
+    library_root.mkdir()
+    src = library_root / "src"
+    src.mkdir()
+    png = src / "IMG_001.png"
+    Image.new("RGB", (50, 50), color="blue").save(png, "PNG")
+
+    run_dir = library_root / ".pix" / "runs" / "test-run"
+    run_dir.mkdir(parents=True)
+    staging = library_root / ".pix" / "staging"
+    meta_cache = PerFileCache.for_library(library_root)
+
+    plan = _make_plan(
+        src,
+        [
+            PlanLine(
+                line_id="L001",
+                action=Action.CONVERT_RENAME_TAG,
+                rel_path="IMG_001.png",
+                details="→2023-08-15_143205.jpg",
+                abs_path=png.resolve(),
+                is_first_migrate=True,
+                target_filename="2023-08-15_143205.jpg",
+                pix_writes={PIX_DATE_AUTO: "2023-08-15-14:32:05"},
+            )
+        ],
+        run_dir=run_dir,
+        staging_dir=staging,
+    )
+    plan_path = run_dir / "plan.txt"
+    plan_path.write_text(plan.to_text(), encoding="utf-8")
+
+    completed, _ = apply_plan(
+        plan=plan,
+        plan_path=plan_path,
+        run_dir=run_dir,
+        kept_line_ids={"L001"},
+        staging_dir=staging,
+        meta_cache=meta_cache,
+    )
+    assert completed == 1
+
+    new_file = src / "2023-08-15_143205.jpg"
+    cached = meta_cache.get(new_file, expected_size=new_file.stat().st_size)
+    assert cached is not None
+    assert cached.get(PIX_DATE_AUTO) == "2023-08-15-14:32:05"
+
+
 def test_apply_handles_overlapping_renames_via_topo_sort(
     tmp_path: Path,
 ) -> None:

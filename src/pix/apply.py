@@ -28,8 +28,9 @@ from typing import IO
 from pix.convert import ConvertFailed, convert_to_jpg, convert_to_mp4
 from pix.errors import move_to_errors
 from pix.timeout import safe_rename
-from pix.exiftool_session import ExifToolSession
+from pix.exiftool_session import ExifToolSession, ExifToolTimeout
 from pix.duration import format_duration_compact, format_size
+from pix.metadata_cache import PerFileCache
 from pix.plan import Action, Plan, PlanLine
 from pix.progress import LiveProgress
 from pix.stash import stash_file
@@ -54,6 +55,7 @@ def apply_plan(
     run_dir: Path,
     kept_line_ids: set[str],
     staging_dir: Path | None = None,
+    meta_cache: PerFileCache | None = None,
 ) -> tuple[int, list[tuple[PlanLine, str]]]:
     """Apply the plan, streaming progress to `<run_dir>/apply.log`.
 
@@ -62,6 +64,11 @@ def apply_plan(
     the conversion step itself. Per spec/migrate.md → Failure handling,
     CONVERT failures skip-and-log (broken source files are a per-file data
     issue); TAG/RENAME/DELETE failures halt the run and raise `ApplyError`.
+
+    When `meta_cache` is provided, CONVERT writes a fresh cache entry for
+    the new file via the live ExifTool session — without this, the next
+    migrate would have to re-read the converted output via ExifTool.
+    Best-effort: a failed cache write doesn't fail the apply.
     """
     del plan_path  # plan.txt is immutable from apply's perspective
 
@@ -124,7 +131,7 @@ def apply_plan(
                 t_start = time.monotonic()
                 _log(log, ln, "Started", size_bytes=size_bytes)
                 try:
-                    _apply_one(ln, run_dir, exiftool, staging_dir)
+                    _apply_one(ln, run_dir, exiftool, staging_dir, meta_cache)
                 except KeyboardInterrupt:
                     _log(
                         log,
@@ -304,6 +311,7 @@ def _apply_one(
     run_dir: Path,
     exiftool: ExifToolSession | None,
     staging_dir: Path | None,
+    meta_cache: PerFileCache | None,
 ) -> None:
     """Dispatch one plan line to its action handler."""
     if ln.action == Action.DELETE:
@@ -326,7 +334,7 @@ def _apply_one(
     elif ln.action == Action.CONVERT_RENAME_TAG:
         assert exiftool is not None, "CONVERT requires an ExifTool session"
         assert staging_dir is not None, "CONVERT requires a staging directory"
-        _apply_convert(ln, run_dir, exiftool, staging_dir)
+        _apply_convert(ln, run_dir, exiftool, staging_dir, meta_cache)
     else:
         raise ApplyError(f"action {ln.action.value} not supported")
 
@@ -422,6 +430,7 @@ def _apply_convert(
     run_dir: Path,
     exiftool: ExifToolSession,
     staging_dir: Path,
+    meta_cache: PerFileCache | None,
 ) -> None:
     """Execute the 4-step CONVERT sequence (spec/migrate.md → Atomicity).
 
@@ -433,6 +442,11 @@ def _apply_convert(
        the original as `<original-name>.__migrate__.<new-ext>`.
     3. **Capture original**: move source into `runs/<run-id>/`.
     4. **Finalize**: rename the marker to its canonical name.
+    5. **Refresh cache** (if `meta_cache` provided): read the new file's
+       metadata via the live ExifTool session and write it to the cache.
+       Without this, the next migrate would have to ExifTool-read every
+       converted output. Best-effort — read or cache write failures don't
+       fail the apply.
 
     All paths are pre-computed by plan-gen and stored on the PlanLine. The
     `run_dir` and `staging_dir` params are kept for signature uniformity
@@ -493,3 +507,15 @@ def _apply_convert(
             f"at finalize step"
         )
     safe_rename(ln.marker_path, ln.target_path)
+
+    # Step 5: refresh cache for the new file. Without this, the next
+    # migrate sees a file with no cache entry and re-reads it via
+    # ExifTool. Best-effort: read/parse/write failures fall through
+    # silently — same trust model as the rest of the cache layer.
+    if meta_cache is not None:
+        try:
+            fresh_raw = exiftool.read_metadata(ln.target_path)
+        except (ExifToolTimeout, RuntimeError):
+            fresh_raw = None
+        if fresh_raw is not None:
+            meta_cache.add(ln.target_path, fresh_raw)

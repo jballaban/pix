@@ -243,6 +243,7 @@ def _run_migrate(root: Path, folder: Path, config: Config) -> None:
                 run_dir=runs_dir,
                 kept_line_ids=kept_line_ids,
                 staging_dir=staging_dir,
+                meta_cache=meta_cache,
             )
         except ApplyError as e:
             typer.echo(f"Error: apply failed: {e}", err=True)

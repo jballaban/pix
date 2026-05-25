@@ -24,6 +24,7 @@ apply decides whether to halt the whole run).
 
 from __future__ import annotations
 
+import json
 import queue
 import subprocess
 import sys
@@ -31,7 +32,7 @@ import threading
 import time
 from pathlib import Path
 from types import TracebackType
-from typing import IO
+from typing import IO, cast
 
 from pix import exiftool_config_path
 from pix.metadata import require_exiftool
@@ -196,6 +197,36 @@ class ExifToolSession:
         args.append("-overwrite_original")
         args.append(str(dest))
         self.execute(*args)
+
+    def read_metadata(self, file: Path) -> dict[str, object] | None:
+        """Read `file`'s metadata via the live session; return the raw dict.
+
+        Same flags as the bulk-read path (`-j -G:0 -fast2`) so the result
+        is shape-compatible with the rest of the metadata pipeline.
+        Returns None on parse failure or missing SourceFile — caller
+        should treat that as "couldn't refresh, will rebuild next run".
+
+        Used by apply after CONVERT so the new file's metadata lands in
+        the persistent cache immediately, instead of forcing the next
+        migrate to re-read it.
+        """
+        stdout = self.execute("-j", "-G:0", "-fast2", str(file))
+        stripped = stdout.strip()
+        if not stripped:
+            return None
+        try:
+            data: object = json.loads(stripped)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(data, list) or not data:
+            return None
+        first = data[0]
+        if not isinstance(first, dict):
+            return None
+        entry = cast("dict[str, object]", first)
+        if not isinstance(entry.get("SourceFile"), str):
+            return None
+        return entry
 
     def export_xmp_sidecar(
         self, file: Path, sidecar_path: Path
