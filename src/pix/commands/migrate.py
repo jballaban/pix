@@ -123,17 +123,16 @@ def _run_migrate(root: Path, folder: Path, config: Config) -> None:
             f"prior interrupted run.",
         )
 
-    # Walk is silent at the per-file level — show an indeterminate
-    # `(Xs)` ticker so the user knows pix is working.
-    with LiveProgress() as walk_progress:
-        t0 = time.monotonic()
-        walk_progress.begin("Walking source folder...")
-        scanned = walk_source_files(folder)
-        _plog(
-            plan_log_path,
-            f"Found {len(scanned)} files in "
-            f"{format_duration_precise(time.monotonic() - t0)}.",
-        )
+    # Walk is sub-second on the libraries we care about (scandir-based
+    # since v0.1.62), so no console ticker — the next phase's progress
+    # bar comes up immediately. Timing still lands in plan.log.
+    t0 = time.monotonic()
+    scanned = walk_source_files(folder)
+    _plog(
+        plan_log_path,
+        f"Found {len(scanned)} files in "
+        f"{format_duration_precise(time.monotonic() - t0)}.",
+    )
 
     source_files = [p for p, _ in scanned]
     _validate_extensions(source_files, config)
