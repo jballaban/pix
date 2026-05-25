@@ -92,14 +92,11 @@ Cheaper alternatives to try first if re-encode time is a problem:
 
 Quick code-review wins identified before real telemetry was available. Each is a 1–20 line change with no new abstractions. Phase context is what matters here — a 100× speedup on a phase that's <1% of total runtime is irrelevant. Numbers will sharpen once we have apply.log summary blocks from a real run; re-prioritize then.
 
-### 15. Switch `scan.walk_source_files` from `rglob` → `os.walk`
-**Phase:** source walk. Empirically ~7s on a ~200k-file library — well under 0.1% of a 16h migrate run.
+### 15. Switch `scan.walk_source_files` from `rglob` → `os.walk` — **done in v0.1.59**
 
-`Path("…").rglob("*")` yields Path objects; calling `is_file()` on each is a syscall, then `p.resolve()` is another. Plus we walk *into* `.pix/` and filter via `_under_pix_dir`. Switching to `os.walk` gives is_file()-for-free from the directory listing (we get `dirnames` and `filenames` separately) and lets us prune `dirnames` to skip `.pix/` at the dir level — no descent into the runs/cache/staging subtrees.
+`Path("…").rglob("*")` yielded Path objects requiring `is_file()` + `resolve()` syscalls per entry, and we descended into `.pix/` then filtered. Switched to `os.walk` which yields filenames separately (no per-entry is_file stat) and lets us prune `dirnames` in-place to never descend into `.pix/`. Dropped `resolve()` per entry — caller is expected to have resolved `folder`, and Windows `os.walk` yields canonical NTFS case.
 
-Expected savings: eliminates ~3 stats per source file. On a 200k-file library that's 600k stats saved. Conservatively ~3–4s. Not the bottleneck.
-
-**Verdict:** defer. Only worth doing if telemetry shows the walk eating real time, or if we touch `scan.py` for another reason.
+Real-world: walk phase was ~12s on the user's library; expected to drop to a few seconds.
 
 ### 16. Drop redundant `path.resolve()` + `path.is_file()` in `metadata.parse_exiftool_json`
 **Phase:** bulk metadata read. On a fresh first-migrate this is potentially the biggest single phase (every file needs ExifTool). On warm runs the persistent cache makes it tiny.
