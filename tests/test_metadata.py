@@ -15,7 +15,6 @@ def test_parse_empty_stdout(tmp_path: Path) -> None:
 
 
 def test_parse_typical_output(tmp_path: Path) -> None:
-    # Create a real file so the SourceFile path resolves to is_file().
     f = tmp_path / "photo.jpg"
     f.write_bytes(b"not actually a jpg")
 
@@ -30,19 +29,24 @@ def test_parse_typical_output(tmp_path: Path) -> None:
 
     assert len(cache) == 1
     [(path, meta)] = cache.items()
-    assert path == f.resolve()
+    assert path == f
     assert isinstance(meta, FileMetadata)
     assert meta.get_str("EXIF:DateTimeOriginal") == "2023:08:15 14:32:05"
     assert meta.get_str("File:FileModifyDate") == "2024:01:01 00:00:00"
     assert meta.get_str("NotPresent") is None
 
 
-def test_parse_skips_non_existent_source_files(tmp_path: Path) -> None:
-    payload = [
-        {"SourceFile": str(tmp_path / "missing.jpg")},
-        # Folder entries get filtered out the same way (not a regular file).
-    ]
-    assert parse_exiftool_json(json.dumps(payload)) == {}
+def test_parse_trusts_source_file_without_stat(tmp_path: Path) -> None:
+    """parse_exiftool_json no longer stats each result.
+
+    The trust model: ExifTool emits SourceFile only for files it
+    successfully read, so re-validating is wasted I/O at scale. A
+    synthetic payload with a non-existent path still produces an entry.
+    """
+    payload = [{"SourceFile": str(tmp_path / "missing.jpg")}]
+    cache = parse_exiftool_json(json.dumps(payload))
+    assert len(cache) == 1
+    assert (tmp_path / "missing.jpg") in cache
 
 
 def test_parse_skips_entries_without_source_file() -> None:

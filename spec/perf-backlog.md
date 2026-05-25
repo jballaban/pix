@@ -98,20 +98,17 @@ Quick code-review wins identified before real telemetry was available. Each is a
 
 Real-world: walk phase was ~12s on the user's library; expected to drop to a few seconds.
 
-### 16. Drop redundant `path.resolve()` + `path.is_file()` in `metadata.parse_exiftool_json`
-**Phase:** bulk metadata read. On a fresh first-migrate this is potentially the biggest single phase (every file needs ExifTool). On warm runs the persistent cache makes it tiny.
+### 16. Drop redundant `path.resolve()` + `path.is_file()` in `metadata.parse_exiftool_json` — **done in v0.1.64**
 
-Lines 277–278: `Path(source_file).resolve()` then `path.is_file()`. Both are stats per result. ExifTool *just* successfully read the file — re-validating is pointless. On a 1000-file batch that's 2000 redundant stats; over a 200k-file first-migrate, ~400k stats saved.
-
-`resolve()` half of this is also part of perf-backlog item #9.
-
-Expected savings: a few seconds on a fresh first-migrate. Negligible on warm runs.
-
-**Verdict:** defer. Lump with #9 if/when we touch this code.
+Dropped both calls. ExifTool emits a `SourceFile` entry only for files it successfully read via the `-@ <listfile>` we provided, so re-validating each result with two stats per file was pure waste. Subsumes the `resolve()` half of item #9.
 
 ### 17. `PerFileCache.cache_path_for` re-resolves an already-resolved path — **done in v0.1.60**
 
 Dropped the `media_path.resolve()` call inside `cache_path_for` in both `pix.metadata_cache` and `pix.hash_cache`. Walker (post-v0.1.59) returns absolute canonical paths; the defensive resolve was costing one stat per cache lookup. Bundled with `read_text` → `read_bytes` switch (saves the UTF-8 decode step on the cache file content). User reported the "checking cache" phase ran ~12s before; expected to drop noticeably.
+
+### 23. Pass `-fast2` to the bulk ExifTool read — **done in v0.1.64**
+
+Added `-fast2` to the `_exiftool_bulk_read` subprocess call. ExifTool's `-fast2` skips the JPEG trailer scan (trailing IPTC/Photoshop blocks) and skips MakerNote extraction. pix consumes none of those — date fields live in EXIF IFD0/ExifIFD, our own tags are XMP, video timestamps are QuickTime, plus File:* basics. Trade is invisible at the consumer level; ExifTool docs cite roughly 2× faster JPEG reads. User reported the "reading metadata" phase at ~44s; bundled with #16 expected to drop noticeably.
 
 ### 22. Skip the per-file `is_file()` precheck + carry sizes from the walk — **done in v0.1.62**
 

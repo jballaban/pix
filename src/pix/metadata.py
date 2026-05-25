@@ -222,11 +222,17 @@ def _exiftool_bulk_read(
             for p in paths:
                 f.write(str(p) + "\n")
 
+        # -fast2 skips the JPEG trailer scan (trailing IPTC/Photoshop
+        # blocks) and the MakerNote extraction. pix never reads either:
+        # consumed tags live in EXIF (IFD0/ExifIFD), XMP (separate
+        # packet), QuickTime, or File:* basics. The skipped data is
+        # exactly what makes ExifTool slow on rich JPEGs.
         proc = subprocess.run(
             [
                 exe,
                 "-config",
                 str(exiftool_config_path()),
+                "-fast2",  # skip JPEG trailer + MakerNote extraction
                 "-j",  # JSON output
                 "-G:0",  # group-prefixed keys (family 0)
                 "-charset",
@@ -265,6 +271,11 @@ def parse_exiftool_json(stdout: str) -> dict[Path, FileMetadata]:
 
     Pure function — separated so tests can drive it with fixture JSON
     without needing exiftool installed.
+
+    No `resolve()` or `is_file()` on each result: ExifTool emits a
+    `SourceFile` entry only for files it successfully read, and the
+    string is already the absolute path we passed in via `-@ <listfile>`.
+    Re-validating each entry is two redundant stats per file at scale.
     """
     stripped = stdout.strip()
     if not stripped:
@@ -285,9 +296,7 @@ def parse_exiftool_json(stdout: str) -> dict[Path, FileMetadata]:
         source_file = entry_dict.get("SourceFile")
         if not isinstance(source_file, str):
             continue
-        path = Path(source_file).resolve()
-        if not path.is_file():
-            continue
+        path = Path(source_file)
         cache[path] = FileMetadata(path=path, raw=entry_dict)
 
     return cache
