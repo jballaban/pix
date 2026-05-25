@@ -27,10 +27,15 @@ Migrate honors the spec-wide metadata-preservation invariants: **CONVERT carries
 Status output during a migrate run keeps the console quiet — phase headers, file counts, and per-file detail all go to log files in the run folder; the console gets only the single rewriting progress line and the user-facing prompts (plan summary, `Apply? [Y/e/n]`, "Applied N actions").
 
 1. **Console during plan-gen and apply** — exactly one line, rewritten in place via `\r` once per second:
-   - `NN% - L042 ACTION path (Xs)` during apply
-   - `NN% - planning path (Xs)` during plan-gen
+   - `NNN% - L042 ACTION path (Xphase / Yiter)` during apply
+   - `NNN% - planning path (Xphase / Yiter)` during plan-gen
 
-   The `(Xs)` suffix is omitted while the per-action elapsed is below 1s (most files finish faster than that; `(0s)` everywhere would be noise). On clean exit the line wraps to `100%`. Auto-disabled when stdout isn't a TTY (tests, redirects).
+   The trailing parens always show **phase-total elapsed** so the user has a constant temporal anchor even when each iteration is sub-second. The **per-iteration elapsed** is appended after `/` only when it's worth surfacing (≥1s); fast iterations collapse to just `(Xphase)`. Examples:
+
+   - Slow iteration: `045% - L042 CONVERT+RENAME+TAG IMG_4821.HEIC (2m14s / 3s)`
+   - Fast iteration: `045% - L042 RENAME IMG_4821.HEIC (2m14s)`
+
+   On clean exit the percent wraps to `100%`. Auto-disabled when stdout isn't a TTY (tests, redirects).
 
    <a id="duration-format"></a>**Duration format** (applies to all `(Xs)` suffixes in progress lines and to the end-of-phase summaries in `plan.log` / `apply.log`):
 

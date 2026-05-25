@@ -2,10 +2,13 @@
 
 Two modes:
 
-- **Determinate** (`total=N`): `NNN% - LABEL path (Xs)`. Caller calls
-  `begin(label, path)` to set the current item then `advance()` to
-  bump the percent. Used by plan-gen and apply where the total
-  iteration count is known up front.
+- **Determinate** (`total=N`): `NNN% - LABEL path (Xphase / Yiter)`.
+  Caller calls `begin(label, path)` to set the current item then
+  `advance()` to bump the percent. The trailing parens always show
+  phase-total elapsed; the per-iteration elapsed is appended after
+  `/` only when it's worth surfacing (≥1s), so fast iterations
+  collapse to just `(Xphase)`. Used by plan-gen and apply where the
+  total iteration count is known up front.
 - **Indeterminate** (`total=None`): `LABEL (Xs)`. No percent, just a
   ticking elapsed-time counter. Used for phases where the underlying
   work gives no progress feedback (the bulk ExifTool read, the
@@ -73,7 +76,13 @@ class LiveProgress:
         self._idx = 0
         self._label: str = ""
         self._path: str = ""
-        self._action_start: float = time.monotonic()
+        now = time.monotonic()
+        # `_phase_start` is set once at construction and never resets, so
+        # the trailing `(Xphase)` ticker keeps climbing across every
+        # iteration. `_action_start` resets per `begin()` call so the
+        # per-iteration `(Yiter)` reflects just the current item.
+        self._phase_start: float = now
+        self._action_start: float = now
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
@@ -163,17 +172,34 @@ class LiveProgress:
         with self._lock:
             if not self._label:
                 return
-            elapsed = time.monotonic() - self._action_start
-            # Most per-file actions finish in well under a second; only
-            # surface the elapsed counter once it's worth showing. The
-            # 1s thread tick keeps it updated for long-running actions.
-            suffix = f" ({format_duration(elapsed)})" if elapsed >= 1 else ""
+            now = time.monotonic()
+            iter_elapsed = now - self._action_start
+            phase_elapsed = now - self._phase_start
             mid = f" {self._path}" if self._path else ""
             if self._total is None:
-                # Indeterminate — just the label and elapsed timer.
+                # Indeterminate — each begin() resets the timer, so the
+                # tick here IS the per-action elapsed (which == phase
+                # elapsed for single-begin uses, the common case).
+                # Hidden under 1s to match the determinate per-iter rule.
+                suffix = (
+                    f" ({format_duration(iter_elapsed)})"
+                    if iter_elapsed >= 1
+                    else ""
+                )
                 line = f"{self._label}{mid}{suffix}"
             else:
+                # Determinate — phase elapsed is always shown so the
+                # user has a constant temporal anchor even when each
+                # iteration is sub-second; per-iter is appended after
+                # `/` only when it's worth surfacing.
                 pct = int(self._idx * 100 / self._total)
+                if iter_elapsed >= 1:
+                    suffix = (
+                        f" ({format_duration(phase_elapsed)}"
+                        f" / {format_duration(iter_elapsed)})"
+                    )
+                else:
+                    suffix = f" ({format_duration(phase_elapsed)})"
                 line = f"{pct:03d}% - {self._label}{mid}{suffix}"
             # Clip to terminal width minus one (avoid wrapping into a
             # second row — `\r` only resets the cursor on the current
