@@ -237,7 +237,7 @@ class LiveProgress:
                     )
                 else:
                     suffix = f" ({format_duration(phase_elapsed)})"
-                head = f"{pct:03d}% - {self._label}"
+                head = f"{pct:3d}% - {self._label}"
 
             # Clip to terminal width minus one (avoid wrapping into a
             # second row — `\r` only resets the cursor on the current
