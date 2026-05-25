@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import IO
 
 from pix.convert import ConvertFailed, convert_to_jpg, convert_to_mp4
+from pix.errors import move_to_errors
 from pix.timeout import safe_rename
 from pix.exiftool_session import ExifToolSession
 from pix.duration import format_duration_compact, format_size
@@ -135,6 +136,35 @@ def apply_plan(
                 except ConvertFailed as e:
                     dur = time.monotonic() - t_start
                     _log(log, ln, "Failed", detail=str(e), dur_seconds=dur)
+                    # Move the unprocessable source into .pix/errors/ so
+                    # subsequent migrate runs don't keep retrying it.
+                    # library_root = runs/<id>/ → runs/ → .pix/ → root.
+                    library_root = run_dir.parent.parent.parent
+                    run_id = run_dir.name
+                    try:
+                        dest = move_to_errors(
+                            source=ln.abs_path,
+                            library_root=library_root,
+                            run_id=run_id,
+                            line_id=ln.line_id,
+                            error=str(e),
+                        )
+                    except Exception as move_err:
+                        # The move itself failed — environment problem,
+                        # halt consistent with our rename-failure policy.
+                        _log(
+                            log, ln, "Failed",
+                            detail=f"move to .pix/errors/ failed: {move_err}",
+                        )
+                        raise ApplyError(
+                            f"{ln.line_id} ({ln.rel_path}): "
+                            f"convert failed and move to .pix/errors/ "
+                            f"also failed: {move_err}"
+                        ) from move_err
+                    _log(
+                        log, ln, "Quarantined",
+                        detail=f".pix/errors/{dest.name}",
+                    )
                     convert_failures.append((ln, str(e)))
                     records.append(
                         LineRecord(

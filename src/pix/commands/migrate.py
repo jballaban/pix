@@ -257,10 +257,11 @@ def _run_migrate(root: Path, folder: Path, config: Config) -> None:
     typer.echo(f"Applied {completed} action(s).")
 
     if convert_failures:
+        errors_dir = root / ".pix" / "errors"
         typer.echo("")
         typer.echo(
             f"{len(convert_failures)} CONVERT line(s) failed — "
-            f"source files left in place for review:",
+            f"sources moved to {errors_dir}:",
             err=True,
         )
         for ln, err in convert_failures:
@@ -268,9 +269,10 @@ def _run_migrate(root: Path, folder: Path, config: Config) -> None:
             typer.echo(f"    {err}", err=True)
         typer.echo("", err=True)
         typer.echo(
-            f"See {runs_dir / 'apply.log'} for full log. Decide per file "
-            f"(restore from backup, delete, or leave alone) and re-run "
-            f"migrate to pick up any fixes.",
+            f"See {runs_dir / 'apply.log'} for full log. Each entry in "
+            f"{errors_dir} has a .errorinfo sidecar with original path "
+            f"and error. To retry: restore the original file at its "
+            f"source path and re-run migrate.",
             err=True,
         )
         raise typer.Exit(code=1)
