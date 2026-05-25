@@ -119,18 +119,11 @@ Previously each `PerFileCache.get()` did three syscalls per file: an `is_file()`
 
 Net: cache-hit path goes from 3 syscalls to 1 (just the JSON read). User reported the "checking cache" phase at ~17s; expected to drop ~2–3×.
 
-### 18. Throttle `LiveProgress.begin()` per-file render
-**Phase:** plan-gen (hot loop: 200k iterations, sub-ms each).
+### 18. Throttle `LiveProgress.begin()` per-file render — **done in v0.1.76**
 
-`progress.begin()` calls `_render()` synchronously every call. On a 200k-file plan-gen that's 200k `\r`-style writes to stderr. On Windows console subsystem, each write is ~50µs — total ~10s of overhead in a phase that should be CPU-bound.
+100ms throttle added inside `_render()` itself, so every progress path (begin / advance / background tick) is rate-limited identically. `__exit__` does a `force=True` render so the 100% transition still lands. Per-instance throttle state lives on `LiveProgress`, so no API change at call sites — every command benefits transparently.
 
-The 1s background ticker already refreshes the display; the per-begin render is redundant for fast phases where individual paths flicker too fast to read. For apply (slow per-line actions) the per-begin render is what makes the path visible immediately on a new action, so keep it there.
-
-Cleanest fix: throttle inside `_render()` itself — skip if last render was <50ms ago. Doesn't change API; helps every caller transparently.
-
-Expected savings: ~5–15s on plan-gen for large libraries.
-
-**Verdict:** worth doing — small change, real-world win on the plan-gen phase the user sees as a single long bar.
+Measured: plan-gen on a 63k-file library dropped from 14s consistently to 8s — ~40%, the upper end of the 5–15s estimate. The remaining 8s is real CPU work (date derivation, candidate-set evaluation, collision resolution).
 
 ### 19. Drop per-file `plan_log.flush()` in plan-gen
 **Phase:** plan-gen.
