@@ -64,6 +64,74 @@ The per-file cache currently stores ExifTool's full JSON output per file (5–10
 
 Independent of upstream item #4 (which is about restricting what ExifTool *returns*); this is about what we *store* even if ExifTool gave us everything.
 
+## Items added 2026-05-25 (read-through review)
+
+Quick code-review wins identified before real telemetry was available. Each is a 1–20 line change with no new abstractions. Phase context is what matters here — a 100× speedup on a phase that's <1% of total runtime is irrelevant. Numbers will sharpen once we have apply.log summary blocks from a real run; re-prioritize then.
+
+### 15. Switch `scan.walk_source_files` from `rglob` → `os.walk`
+**Phase:** source walk. Empirically ~7s on a ~200k-file library — well under 0.1% of a 16h migrate run.
+
+`Path("…").rglob("*")` yields Path objects; calling `is_file()` on each is a syscall, then `p.resolve()` is another. Plus we walk *into* `.pix/` and filter via `_under_pix_dir`. Switching to `os.walk` gives is_file()-for-free from the directory listing (we get `dirnames` and `filenames` separately) and lets us prune `dirnames` to skip `.pix/` at the dir level — no descent into the runs/cache/staging subtrees.
+
+Expected savings: eliminates ~3 stats per source file. On a 200k-file library that's 600k stats saved. Conservatively ~3–4s. Not the bottleneck.
+
+**Verdict:** defer. Only worth doing if telemetry shows the walk eating real time, or if we touch `scan.py` for another reason.
+
+### 16. Drop redundant `path.resolve()` + `path.is_file()` in `metadata.parse_exiftool_json`
+**Phase:** bulk metadata read. On a fresh first-migrate this is potentially the biggest single phase (every file needs ExifTool). On warm runs the persistent cache makes it tiny.
+
+Lines 277–278: `Path(source_file).resolve()` then `path.is_file()`. Both are stats per result. ExifTool *just* successfully read the file — re-validating is pointless. On a 1000-file batch that's 2000 redundant stats; over a 200k-file first-migrate, ~400k stats saved.
+
+`resolve()` half of this is also part of perf-backlog item #9.
+
+Expected savings: a few seconds on a fresh first-migrate. Negligible on warm runs.
+
+**Verdict:** defer. Lump with #9 if/when we touch this code.
+
+### 17. `PerFileCache.cache_path_for` re-resolves an already-resolved path
+**Phase:** cache lookup (the "checking cache" progress phase, plus inline lookups from organize/dedupe).
+
+`walk_source_files` resolves every path. `PerFileCache.get()` calls `cache_path_for()` which calls `media_path.resolve()` again. Double resolution per cache lookup.
+
+Trivial fix: assume the caller's path is absolute; only `resolve()` if not. Or expose a `cache_path_for_resolved(path)` variant for hot paths.
+
+Expected savings: one stat per cache lookup. With 200k files and 32 parallel threads, the cache-lookup phase is currently ~10–15s. Maybe 5s saved. Modest.
+
+**Verdict:** defer. Trivial change but lives in a phase that's already fast.
+
+### 18. Throttle `LiveProgress.begin()` per-file render
+**Phase:** plan-gen (hot loop: 200k iterations, sub-ms each).
+
+`progress.begin()` calls `_render()` synchronously every call. On a 200k-file plan-gen that's 200k `\r`-style writes to stderr. On Windows console subsystem, each write is ~50µs — total ~10s of overhead in a phase that should be CPU-bound.
+
+The 1s background ticker already refreshes the display; the per-begin render is redundant for fast phases where individual paths flicker too fast to read. For apply (slow per-line actions) the per-begin render is what makes the path visible immediately on a new action, so keep it there.
+
+Cleanest fix: throttle inside `_render()` itself — skip if last render was <50ms ago. Doesn't change API; helps every caller transparently.
+
+Expected savings: ~5–15s on plan-gen for large libraries.
+
+**Verdict:** worth doing — small change, real-world win on the plan-gen phase the user sees as a single long bar.
+
+### 19. Drop per-file `plan_log.flush()` in plan-gen
+**Phase:** plan-gen.
+
+`plan.py:231` calls `plan_log.flush()` every iteration. Python text-mode flush is userspace→OS (not fsync), but still serializes through I/O on every call. plan.log is throwaway-on-crash anyway — if plan-gen aborts the user just re-runs.
+
+Fix: drop the flush, let block buffering coalesce. Or flush every N lines (~1000) so user can `tail -f plan.log` during long runs.
+
+Expected savings: a few seconds on 200k iterations. Same order as #18.
+
+**Verdict:** worth doing alongside #18 since both are 1-line plan-gen tweaks.
+
+### 20. Double `fp.stat()` in `commands/hash.py` apply loop
+**Phase:** hash apply (one full library pass).
+
+Regression introduced in v0.1.55 (telemetry). The Started-line telemetry calls `fp.stat().st_size` for the `size=…` field; the next line then does `st = fp.stat()` again to capture size+mtime for the cache write. Both stats produce the same data — should reuse the first result.
+
+Expected savings: one stat per file in `pix hash`. On a 200k-file library that's 200k stats — maybe 2-5s on a fast disk. Tiny but it's literally a 2-line fix.
+
+**Verdict:** worth fixing as a quick cleanup since I introduced it. Treat as bugfix rather than backlog.
+
 ## Non-perf items parked here
 
 ### 12. Config evolution: existing libraries don't pick up new default extensions — **superseded in v0.1.20**
