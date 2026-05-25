@@ -128,13 +128,14 @@ def _run_migrate(root: Path, folder: Path, config: Config) -> None:
     with LiveProgress() as walk_progress:
         t0 = time.monotonic()
         walk_progress.begin("Walking source folder...")
-        source_files = walk_source_files(folder)
+        scanned = walk_source_files(folder)
         _plog(
             plan_log_path,
-            f"Found {len(source_files)} files in "
+            f"Found {len(scanned)} files in "
             f"{format_duration_precise(time.monotonic() - t0)}.",
         )
 
+    source_files = [p for p, _ in scanned]
     _validate_extensions(source_files, config)
 
     # Cache lookup + ExifTool reads. With the per-file cache, the
@@ -142,14 +143,14 @@ def _run_migrate(root: Path, folder: Path, config: Config) -> None:
     t0 = time.monotonic()
     meta_cache = PerFileCache.for_library(root)
 
-    with LiveProgress(total=len(source_files)) as check_progress:
+    with LiveProgress(total=len(scanned)) as check_progress:
         check_progress.begin("checking cache")
 
         def _on_check_batch(batch_size: int) -> None:
             check_progress.advance(by=batch_size)
 
         hits, misses = filter_cache_misses(
-            source_files, meta_cache, on_batch=_on_check_batch
+            scanned, meta_cache, on_batch=_on_check_batch
         )
 
     fresh: dict[Path, FileMetadata] = {}

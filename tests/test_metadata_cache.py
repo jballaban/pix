@@ -49,15 +49,18 @@ def test_get_returns_none_when_no_cache_entry(tmp_path: Path) -> None:
 
 
 def test_get_invalidates_on_size_mismatch(tmp_path: Path) -> None:
-    """If file size changed, cache treats entry as stale."""
+    """If the caller's expected size doesn't match the cache's recorded
+    size, the entry is treated as stale."""
     cache = _new_cache(tmp_path)
     media = tmp_path / "foo.jpg"
     media.write_bytes(b"original")
     cache.add(media, {"EXIF:Foo": "bar"})
 
-    # Replace with different-sized content.
+    # Replace with different-sized content; caller (walker) sees the new
+    # size and passes it in.
     media.write_bytes(b"different size")
-    assert cache.get(media) is None
+    new_size = media.stat().st_size
+    assert cache.get(media, expected_size=new_size) is None
 
 
 def test_get_invalidates_on_version_mismatch(tmp_path: Path) -> None:

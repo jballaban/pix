@@ -113,6 +113,15 @@ Expected savings: a few seconds on a fresh first-migrate. Negligible on warm run
 
 Dropped the `media_path.resolve()` call inside `cache_path_for` in both `pix.metadata_cache` and `pix.hash_cache`. Walker (post-v0.1.59) returns absolute canonical paths; the defensive resolve was costing one stat per cache lookup. Bundled with `read_text` → `read_bytes` switch (saves the UTF-8 decode step on the cache file content). User reported the "checking cache" phase ran ~12s before; expected to drop noticeably.
 
+### 22. Skip the per-file `is_file()` precheck + carry sizes from the walk — **done in v0.1.62**
+
+Previously each `PerFileCache.get()` did three syscalls per file: an `is_file()` stat on the cache path, a `read_bytes()` on the cache JSON, and a `media_path.stat()` to validate size. Two of those three are now gone:
+
+- `is_file()` precheck dropped — `read_bytes()` is attempted directly, `FileNotFoundError` is caught as a miss. Saves one stat per cache hit (the steady-state majority).
+- Media file size threaded in from the walk — `walk_source_files` now uses `os.scandir` directly and returns `list[tuple[Path, int]]`. On Windows the DirEntry already carries size from the dirent, so we get it for free during the walk. `cache.get(path, expected_size)` validates against the caller-supplied size instead of stat'ing again.
+
+Net: cache-hit path goes from 3 syscalls to 1 (just the JSON read). User reported the "checking cache" phase at ~17s; expected to drop ~2–3×.
+
 ### 18. Throttle `LiveProgress.begin()` per-file render
 **Phase:** plan-gen (hot loop: 200k iterations, sub-ms each).
 

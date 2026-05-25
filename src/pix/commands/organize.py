@@ -106,28 +106,30 @@ def _run_organize(
     with LiveProgress() as walk_progress:
         t0 = time.monotonic()
         walk_progress.begin("Walking library...")
-        library_files = walk_source_files(root)
+        scanned = walk_source_files(root)
         _plog(
             plan_log_path,
-            f"Found {len(library_files)} file(s) in "
+            f"Found {len(scanned)} file(s) in "
             f"{format_duration_precise(time.monotonic() - t0)}.",
         )
 
-    if not library_files:
+    if not scanned:
         typer.echo("Library is empty; nothing to organize.")
         return
+
+    library_files = [p for p, _ in scanned]
 
     t0 = time.monotonic()
     meta_cache = PerFileCache.for_library(root)
 
-    with LiveProgress(total=len(library_files)) as check_progress:
+    with LiveProgress(total=len(scanned)) as check_progress:
         check_progress.begin("checking cache")
 
         def _on_check_batch(batch_size: int) -> None:
             check_progress.advance(by=batch_size)
 
         hits, misses = filter_cache_misses(
-            library_files, meta_cache, on_batch=_on_check_batch
+            scanned, meta_cache, on_batch=_on_check_batch
         )
 
     fresh: dict[Path, FileMetadata] = {}

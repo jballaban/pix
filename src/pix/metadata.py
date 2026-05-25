@@ -77,20 +77,25 @@ def require_exiftool() -> str:
 
 
 def filter_cache_misses(
-    paths: list[Path],
+    paths_with_sizes: list[tuple[Path, int]],
     cache: PerFileCache | None,
     on_batch: Callable[[int], None] | None = None,
     batch_size: int = BATCH_SIZE,
     max_workers: int = CACHE_LOOKUP_WORKERS,
 ) -> tuple[dict[Path, FileMetadata], list[Path]]:
-    """Split `paths` into (cache_hits, misses).
+    """Split `(path, size)` pairs into (cache_hits, misses).
+
+    Sizes come from the scandir-based walk in `pix.scan.walk_source_files`,
+    where they're free from the dirent. They're passed through to
+    `cache.get()` for validation so the cache lookup is a pure file read
+    with no additional `stat()`.
 
     If `cache` is None, every path is a miss.
 
     Lookups run in a thread pool (`max_workers` default 32) — each
-    per-file check is I/O-bound (stat + small read + parse) and
-    independent, so concurrent execution on SSD/NVMe pushes the
-    total phase time ~10× lower than sequential.
+    per-file check is I/O-bound (read + parse) and independent, so
+    concurrent execution on SSD/NVMe pushes the total phase time
+    ~10× lower than sequential.
 
     `on_batch(batch_size)` fires every `batch_size` files (default
     1000) from the consumer thread (after results are collected in
@@ -98,17 +103,20 @@ def filter_cache_misses(
     needed for the callback.
     """
     if cache is None:
-        return {}, list(paths)
+        return {}, [p for p, _ in paths_with_sizes]
 
     hits: dict[Path, FileMetadata] = {}
     misses: list[Path] = []
     in_batch = 0
 
-    def check_one(path: Path) -> tuple[Path, dict[str, object] | None]:
-        return path, cache.get(path)
+    def check_one(
+        item: tuple[Path, int],
+    ) -> tuple[Path, dict[str, object] | None]:
+        path, size = item
+        return path, cache.get(path, expected_size=size)
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        for path, cached in executor.map(check_one, paths):
+        for path, cached in executor.map(check_one, paths_with_sizes):
             if cached is not None:
                 hits[path] = FileMetadata(path=path, raw=cached)
             else:
@@ -157,7 +165,7 @@ def read_metadata_batched(
 
 
 def build_cache(
-    paths: list[Path],
+    paths_with_sizes: list[tuple[Path, int]],
     cache: PerFileCache | None = None,
     exiftool: str | None = None,
     on_batch: Callable[[int], None] | None = None,
@@ -165,15 +173,18 @@ def build_cache(
 ) -> dict[Path, FileMetadata]:
     """Convenience: cache lookup + batched read in one call.
 
+    Accepts the `(path, size)` shape returned by
+    `pix.scan.walk_source_files` so callers don't have to massage it.
+
     For commands that want per-batch progress, prefer the lower-level
     split: `filter_cache_misses` then `read_metadata_batched`, so the
     caller can put a determinate `LiveProgress` around the read.
 
     Returns a dict keyed by absolute file path.
     """
-    if not paths:
+    if not paths_with_sizes:
         return {}
-    hits, misses = filter_cache_misses(paths, cache)
+    hits, misses = filter_cache_misses(paths_with_sizes, cache)
     fresh = read_metadata_batched(
         misses,
         cache=cache,

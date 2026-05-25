@@ -77,7 +77,7 @@ def _run_hash(root: Path) -> None:
     with LiveProgress() as walk_progress:
         t0 = time.monotonic()
         walk_progress.begin("Walking library...")
-        library_files = walk_source_files(root)
+        library_files = [p for p, _ in walk_source_files(root)]
         _plog(
             plan_log_path,
             f"Found {len(library_files)} file(s) in "

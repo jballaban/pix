@@ -70,18 +70,28 @@ class PerFileCache:
             mirrored = Path(drive)
         return self.cache_root / mirrored.with_name(mirrored.name + ".cache")
 
-    def get(self, media_path: Path) -> dict[str, object] | None:
+    def get(
+        self,
+        media_path: Path,
+        expected_size: int | None = None,
+    ) -> dict[str, object] | None:
         """Return cached metadata if present and current; else None.
 
-        Validates `size` against the media file's current size. Mismatch
-        or any read/parse error returns None — next read will overwrite
-        the cache entry naturally.
+        If `expected_size` is given, validates the cache entry's recorded
+        size against it (the cheap insurance against in-place edits under
+        pix's single-writer trust model). Pass `None` to skip validation
+        — e.g. update-after-write, where the caller knows the cache is
+        fresh and re-stat'ing the file would be redundant.
+
+        No existence pre-stat: `read_bytes()` is attempted directly and
+        `FileNotFoundError` is treated as a miss. Saves one stat per
+        cache hit on the hot path.
         """
         cache_path = self.cache_path_for(media_path)
-        if not cache_path.is_file():
-            return None
         try:
             loaded: object = json.loads(cache_path.read_bytes())
+        except FileNotFoundError:
+            return None
         except (OSError, json.JSONDecodeError):
             return None
         if not isinstance(loaded, dict):
@@ -89,11 +99,7 @@ class PerFileCache:
         data = cast("dict[str, object]", loaded)
         if data.get("v") != CACHE_FILE_VERSION:
             return None
-        try:
-            current_size = media_path.stat().st_size
-        except OSError:
-            return None
-        if data.get("size") != current_size:
+        if expected_size is not None and data.get("size") != expected_size:
             return None
         metadata = data.get("metadata")
         if not isinstance(metadata, dict):
