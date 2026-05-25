@@ -1,15 +1,31 @@
 """Tests for the live progress line formatting.
 
-The interesting logic is path truncation — long paths used to push the
-trailing `(Xphase / Yiter)` suffix off the right edge of the terminal,
-costing the user their temporal signal during slow phases.
-`_truncate_path` trims from the left with an ellipsis prefix and snaps
-to a path-separator boundary so the result is readable.
+Two pieces of logic worth covering:
+
+- `_truncate_path` — long paths used to push the trailing
+  `(Xphase / Yiter)` suffix off the right edge of the terminal,
+  costing the user their temporal signal during slow phases. Helper
+  trims from the left with an ellipsis prefix and snaps to a
+  path-separator boundary so the result is readable.
+- Render throttle — plan-gen calls `begin()`/`advance()` at
+  thousands-per-second; without a throttle that's tens of thousands
+  of stderr writes for nothing visible. 100ms throttle keeps the eye
+  happy and the I/O cost down.
 """
 
 from __future__ import annotations
 
-from pix.progress import _truncate_path
+import time
+from io import StringIO
+
+from pix.progress import LiveProgress, _truncate_path
+
+
+class _FakeTTY(StringIO):
+    """StringIO that lies about being a TTY so LiveProgress enables itself."""
+
+    def isatty(self) -> bool:  # noqa: D401 — match StringIO signature
+        return True
 
 
 def test_truncate_returns_path_unchanged_when_it_fits() -> None:
@@ -54,6 +70,43 @@ def test_truncate_max_chars_one_returns_ellipsis_only() -> None:
 
 def test_truncate_max_chars_zero_returns_empty() -> None:
     assert _truncate_path("x/y/z.jpg", 0) == ""
+
+
+def test_render_throttle_collapses_rapid_calls() -> None:
+    """Many begin()/advance() calls in a tight loop should produce far
+    fewer stderr writes than the call count. The 100ms throttle keeps
+    the visible progress smooth without paying for every iteration.
+    """
+    tty = _FakeTTY()
+    with LiveProgress(total=100, stream=tty) as progress:
+        for i in range(50):
+            progress.begin("planning", f"file_{i}.jpg")
+            progress.advance()
+    rendered = tty.getvalue()
+    # 100 calls (50 begin + 50 advance) inside the same 100ms window;
+    # we expect roughly the first render plus the forced 100% render
+    # from __exit__. Hard upper bound: well under the call count.
+    write_count = rendered.count("\r")
+    assert write_count < 10, (
+        f"throttle leaked: {write_count} writes for 100 calls"
+    )
+    # Final 100% line still lands.
+    assert "100%" in rendered
+
+
+def test_render_throttle_releases_after_window() -> None:
+    """After the 100ms window elapses, the next call paints."""
+    tty = _FakeTTY()
+    with LiveProgress(total=10, stream=tty) as progress:
+        progress.begin("planning", "a.jpg")
+        # Force-clear the buffer so we count only post-sleep writes.
+        tty.seek(0)
+        tty.truncate(0)
+        time.sleep(0.12)  # cross the 100ms boundary
+        progress.advance()
+    rendered = tty.getvalue()
+    # At least one render after the sleep, plus the forced 100% line.
+    assert rendered.count("\r") >= 2
 
 
 def test_truncate_user_mtp_path_keeps_filename_and_parent() -> None:

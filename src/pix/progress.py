@@ -37,6 +37,15 @@ from typing import IO
 from pix.duration import format_duration
 
 
+# Render throttle. Sub-millisecond plan-gen iterations call begin()/
+# advance() at thousands-per-second; rendering every one costs ~50µs
+# per console write on Windows (≈5–15s of pure overhead on a 60k-file
+# library, per spec/perf-backlog.md #18). 100ms still feels responsive
+# — the eye barely sees faster updates anyway — and drops ~95% of the
+# stderr writes. The 1-sec background tick still updates idle phases.
+_RENDER_THROTTLE_S: float = 0.1
+
+
 def _truncate_path(path: str, max_chars: int) -> str:
     """Trim `path` from the left to fit in `max_chars`, ellipsis-prefixed.
 
@@ -117,6 +126,10 @@ class LiveProgress:
         # showing both as `(2s / 2s)` is just noise. From the second
         # begin() onward they diverge, and `(2m14s / 3s)` is useful.
         self._begin_count: int = 0
+        # Last-render timestamp for the 100ms render throttle (see
+        # `_RENDER_THROTTLE_S`). 0.0 means "never rendered" so the
+        # first call always paints.
+        self._last_render_at: float = 0.0
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
@@ -149,7 +162,9 @@ class LiveProgress:
         ):
             with self._lock:
                 self._idx = self._total
-            self._render()
+            # Bypass the 100ms throttle so the 100% line definitely
+            # lands even if the loop just rendered.
+            self._render(force=True)
         self._stream.write("\n")
         self._stream.flush()
 
@@ -201,13 +216,19 @@ class LiveProgress:
         while not self._stop_event.wait(1.0):
             self._render()
 
-    def _render(self) -> None:
+    def _render(self, *, force: bool = False) -> None:
         if not self._enabled:
             return
         with self._lock:
             if not self._label:
                 return
             now = time.monotonic()
+            if (
+                not force
+                and (now - self._last_render_at) < _RENDER_THROTTLE_S
+            ):
+                return
+            self._last_render_at = now
             iter_elapsed = now - self._action_start
             phase_elapsed = now - self._phase_start
             if self._total is None:
