@@ -2,7 +2,7 @@
 
 Two modes:
 
-- **Determinate** (`total=N`): `NN% - LABEL path (Xs)`. Caller calls
+- **Determinate** (`total=N`): `NNN% - LABEL path (Xs)`. Caller calls
   `begin(label, path)` to set the current item then `advance()` to
   bump the percent. Used by plan-gen and apply where the total
   iteration count is known up front.
@@ -53,7 +53,7 @@ class LiveProgress:
 
     `begin` resets the per-action elapsed timer and updates the visible
     label (and optionally path). `advance` bumps the completed count
-    (which drives `NN%`); irrelevant in indeterminate mode. On clean
+    (which drives `NNN%`); irrelevant in indeterminate mode. On clean
     exit, determinate mode wraps to `100%`; indeterminate mode just
     drops a newline and leaves whatever the last rendered label was.
     """
@@ -113,7 +113,7 @@ class LiveProgress:
     def begin(self, label: str, path: str = "") -> None:
         """Mark the start of a new item; resets the per-action timer.
 
-        `label` is the human-readable descriptor that follows `NN% - `,
+        `label` is the human-readable descriptor that follows `NNN% - `,
         e.g. `L042 RENAME+TAG` (apply) or `planning` (plan-gen).
         `path` is optional — omit for phases where per-file paths
         flicker too fast to read (plan-gen iterates in sub-ms).
@@ -174,7 +174,7 @@ class LiveProgress:
                 line = f"{self._label}{mid}{suffix}"
             else:
                 pct = int(self._idx * 100 / self._total)
-                line = f"{pct:02d}% - {self._label}{mid}{suffix}"
+                line = f"{pct:03d}% - {self._label}{mid}{suffix}"
             # Clip to terminal width minus one (avoid wrapping into a
             # second row — `\r` only resets the cursor on the current
             # row, so a wrap leaves the upper row stranded).
