@@ -164,10 +164,20 @@ class ExifToolSession:
             out.append(line)
 
     def write_tags(self, file: Path, tags: dict[str, str]) -> None:
-        """Write `tags` to `file` in place via `-overwrite_original`."""
+        """Write `tags` to `file` in place via `-overwrite_original`.
+
+        Passes `-m` so ExifTool ignores minor warnings (duplicate XMP
+        properties, stale IPTCDigest, etc.) and lets the write proceed.
+        Without it ExifTool aborts the write but exits 0, producing
+        silent "Completed" lines in apply.log while the file is
+        actually unchanged. Real-world trigger: files edited by
+        Photoshop Elements often have duplicate photoshop:DateCreated
+        properties; without `-m`, every subsequent migrate proposes
+        the same TAG line again forever.
+        """
         if not tags:
             return
-        args: list[str] = []
+        args: list[str] = ["-m"]
         for key, value in tags.items():
             # ExifTool tag-set syntax: `-<key>=<value>`
             args.append(f"-{key}={value}")
@@ -186,8 +196,13 @@ class ExifToolSession:
         Used by the CONVERT step (pixel/container conversion happens via
         Pillow/ffmpeg without metadata; this call then layers the source's
         EXIF/XMP/IPTC into the converted file alongside the pix:* writes).
+
+        Same `-m` rationale as `write_tags`: a minor warning on the
+        source file would otherwise leave the dest file with no
+        metadata copied at all.
         """
         args: list[str] = [
+            "-m",
             "-tagsFromFile",
             str(source),
             "-all:all",  # copy every readable tag from source
