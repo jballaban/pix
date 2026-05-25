@@ -38,6 +38,7 @@ from pix.events import PIX_EVENT_OVERRIDE
 from pix.hash_cache import read_cached_hash
 from pix.metadata import FileMetadata
 from pix.organize import cleanup_empty_folders  # reused
+from pix.timeout import safe_rename
 from pix.plan import (
     PIX_DATE_OVERRIDE,
     PIX_ORIGINAL_PATH,
@@ -380,7 +381,7 @@ def _apply_dedup(ln: PlanLine) -> None:
         raise DedupeApplyError(
             f"capture path {ln.capture_path} already exists"
         )
-    ln.abs_path.rename(ln.capture_path)
+    safe_rename(ln.abs_path, ln.capture_path)
 
 
 def _log(

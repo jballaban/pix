@@ -23,7 +23,9 @@ from pix.dedupe import (
     generate_plan,
     serialize_plan,
 )
+from pix.duration import format_duration_precise
 from pix.editor import open_in_editor, parse_kept_line_ids, prompt_apply
+from pix.library_lock import LockHeld, acquire as acquire_lock
 from pix.metadata import (
     ExifToolFailed,
     ExifToolNotFound,
@@ -62,6 +64,16 @@ def dedupe_library(path: Path) -> None:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
 
+    try:
+        with acquire_lock(root, "dedupe"):
+            _run_dedupe(root)
+    except LockHeld as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+
+
+def _run_dedupe(root: Path) -> None:
+    """Dedupe body, called under the library lock."""
     run_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     runs_dir = root / ".pix" / "runs" / run_id
     runs_dir.mkdir(parents=True)
@@ -76,7 +88,7 @@ def dedupe_library(path: Path) -> None:
         _plog(
             plan_log_path,
             f"Found {len(library_files)} file(s) in "
-            f"{time.monotonic() - t0:.1f}s.",
+            f"{format_duration_precise(time.monotonic() - t0)}.",
         )
 
     if not library_files:
@@ -120,7 +132,8 @@ def dedupe_library(path: Path) -> None:
             cache[p] = FileMetadata(path=p, raw={"SourceFile": str(p)})
     _plog(
         plan_log_path,
-        f"Read {len(cache)} file(s) in {time.monotonic() - t0:.1f}s "
+        f"Read {len(cache)} file(s) in "
+        f"{format_duration_precise(time.monotonic() - t0)} "
         f"({len(hits)} cache hits, {len(misses)} from ExifTool).",
     )
 
@@ -150,7 +163,7 @@ def dedupe_library(path: Path) -> None:
         raise typer.Exit(code=1) from e
     _plog(
         plan_log_path,
-        f"Plan generated in {time.monotonic() - t0:.1f}s.",
+        f"Plan generated in {format_duration_precise(time.monotonic() - t0)}.",
     )
 
     plan_path = runs_dir / "plan.txt"

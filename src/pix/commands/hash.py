@@ -17,12 +17,19 @@ import typer
 
 from pix import banner
 from pix.content_hash import compute_content_hash
+from pix.duration import format_duration, format_duration_precise
 from pix.editor import prompt_proceed
 from pix.hash_cache import read_cached_hash, write_cached_hash
+from pix.library_lock import LockHeld, acquire as acquire_lock
 from pix.progress import LiveProgress
 from pix.root import NoLibraryRoot, resolve as resolve_root
 from pix.scan import walk_source_files
 from pix.schema import SCHEMA_VERSION, SchemaTooNew, SchemaUpgradeRequired
+from pix.timeout import OperationTimeout, run_with_timeout
+
+# Hash compute timeout per spec/implementation.md → Subprocess hardening.
+# Even a 10 GB MP4 hashes in seconds (BLAKE3 ~3 GB/s); 60s = pathological.
+_HASH_TIMEOUT: float = 60.0
 
 
 def hash_library(path: Path) -> None:
@@ -42,6 +49,16 @@ def hash_library(path: Path) -> None:
 
     banner(schema_version=SCHEMA_VERSION)
 
+    try:
+        with acquire_lock(root, "hash"):
+            _run_hash(root)
+    except LockHeld as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+
+
+def _run_hash(root: Path) -> None:
+    """Inner workflow, called under the library lock."""
     run_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     runs_dir = root / ".pix" / "runs" / run_id
     runs_dir.mkdir(parents=True)
@@ -58,7 +75,7 @@ def hash_library(path: Path) -> None:
         _plog(
             plan_log_path,
             f"Found {len(library_files)} file(s) in "
-            f"{time.monotonic() - t0:.1f}s.",
+            f"{format_duration_precise(time.monotonic() - t0)}.",
         )
 
     if not library_files:
@@ -106,7 +123,12 @@ def hash_library(path: Path) -> None:
             _log(log, line_id, "Started", rel)
             try:
                 st = fp.stat()
-                hash_hex = compute_content_hash(fp)
+                hash_hex = run_with_timeout(
+                    f"hash {fp.name}",
+                    _HASH_TIMEOUT,
+                    compute_content_hash,
+                    fp,
+                )
                 write_cached_hash(
                     root,
                     fp,
@@ -117,6 +139,12 @@ def hash_library(path: Path) -> None:
             except KeyboardInterrupt:
                 _log(log, line_id, "Interrupted", rel)
                 raise
+            except OperationTimeout as e:
+                # Halt the run so the user can investigate why this file
+                # wedged. Re-raised as typer.Exit by the outer handler.
+                _log(log, line_id, "Failed", rel, detail=str(e))
+                typer.echo(f"\nError: {e}", err=True)
+                raise typer.Exit(code=1) from e
             except Exception as e:
                 _log(log, line_id, "Failed", rel, detail=str(e))
                 failures.append((fp, str(e)))
@@ -126,7 +154,7 @@ def hash_library(path: Path) -> None:
             progress.advance()
             completed += 1
 
-    duration = _format_duration(time.monotonic() - t_apply)
+    duration = format_duration(time.monotonic() - t_apply)
     typer.echo("")
     if failures:
         typer.echo(
@@ -169,17 +197,3 @@ def _plog(plan_log_path: Path, msg: str) -> None:
     ts = datetime.now().isoformat(timespec="seconds")
     with plan_log_path.open("a", encoding="utf-8") as f:
         f.write(f"{ts} {msg}\n")
-
-
-def _format_duration(seconds: float) -> str:
-    """Tiered duration per spec/migrate.md → Duration format.
-
-    Local copy; see backlog item #5 for the shared helper that will
-    replace it.
-    """
-    s = int(seconds)
-    if s < 60:
-        return f"{s}s"
-    if s < 3600:
-        return f"{s // 60}m{s % 60:02d}s"
-    return f"{s // 3600}h{(s % 3600) // 60:02d}m{s % 60:02d}s"

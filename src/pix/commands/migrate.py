@@ -24,7 +24,9 @@ from pix.cleanup import (
     wipe_staging,
 )
 from pix.config import Config
+from pix.duration import format_duration_precise
 from pix.editor import open_in_editor, parse_kept_line_ids, prompt_apply
+from pix.library_lock import LockHeld, acquire as acquire_lock
 from pix.metadata import (
     ExifToolFailed,
     ExifToolNotFound,
@@ -67,6 +69,16 @@ def migrate_folder(folder: Path) -> None:
 
     config = Config.load(root / ".pix" / "config.yaml")
 
+    try:
+        with acquire_lock(root, "migrate"):
+            _run_migrate(root, folder, config)
+    except LockHeld as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+
+
+def _run_migrate(root: Path, folder: Path, config: Config) -> None:
+    """Migrate body, called under the library lock."""
     # Create the run dir up front so plan.log exists from the very
     # start of the planning phase. Plan-phase status (Library root,
     # source walk timing, bulk-read timing, etc.) all goes to plan.log
@@ -119,7 +131,8 @@ def migrate_folder(folder: Path) -> None:
         source_files = walk_source_files(folder)
         _plog(
             plan_log_path,
-            f"Found {len(source_files)} files in {time.monotonic() - t0:.1f}s.",
+            f"Found {len(source_files)} files in "
+            f"{format_duration_precise(time.monotonic() - t0)}.",
         )
 
     _validate_extensions(source_files, config)
@@ -162,7 +175,8 @@ def migrate_folder(folder: Path) -> None:
     cache = {**hits, **fresh}
     _plog(
         plan_log_path,
-        f"Read {len(cache)} files in {time.monotonic() - t0:.1f}s "
+        f"Read {len(cache)} files in "
+        f"{format_duration_precise(time.monotonic() - t0)} "
         f"({len(hits)} cache hits, {len(misses)} from ExifTool).",
     )
 
@@ -185,7 +199,7 @@ def migrate_folder(folder: Path) -> None:
         )
     _plog(
         plan_log_path,
-        f"Plan generated in {time.monotonic() - t0:.1f}s.",
+        f"Plan generated in {format_duration_precise(time.monotonic() - t0)}.",
     )
 
     plan_path = runs_dir / "plan.txt"

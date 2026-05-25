@@ -31,6 +31,8 @@ import time
 from types import TracebackType
 from typing import IO
 
+from pix.duration import format_duration
+
 
 class LiveProgress:
     """Context-managed live progress line.
@@ -161,11 +163,11 @@ class LiveProgress:
         with self._lock:
             if not self._label:
                 return
-            elapsed = int(time.monotonic() - self._action_start)
+            elapsed = time.monotonic() - self._action_start
             # Most per-file actions finish in well under a second; only
             # surface the elapsed counter once it's worth showing. The
             # 1s thread tick keeps it updated for long-running actions.
-            suffix = f" ({elapsed}s)" if elapsed >= 1 else ""
+            suffix = f" ({format_duration(elapsed)})" if elapsed >= 1 else ""
             mid = f" {self._path}" if self._path else ""
             if self._total is None:
                 # Indeterminate — just the label and elapsed timer.

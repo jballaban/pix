@@ -47,14 +47,13 @@ Timeouts are per primitive call, not per plan action. A `CONVERT+RENAME+TAG` pla
 
 Defaults are hard-coded in v1. No env-var overrides, no config knobs. If real workflows hit a ceiling — most likely the 1-hour ffmpeg re-encode for 4K family videos — we add an override then. Until then, hitting a timeout is the signal that we need to learn something about the workload.
 
-### On timeout
+### On timeout: halt for investigation
 
-Two policies, mirroring migrate's per-action failure handling (see [migrate.md → Failure handling](migrate.md#failure-handling)):
+All timeouts halt the run on first occurrence. Apply writes `Failed   <action>  <file>: <tool> timed out after <Xs>` to apply.log and exits non-zero. The intent is diagnostic — timeouts shouldn't fire in steady state; when one does, the user wants to see it immediately and decide whether the limit needs raising for their workload. Once timeout values are tuned against real data, individual operations can opt into skip-and-continue if their failure mode is per-file data quality (this is what CONVERT-with-truncated-source does for non-timeout failures via `ConvertFailed`).
 
-- **CONVERT timeouts skip-and-log.** A Pillow or ffmpeg timeout on a CONVERT plan line is treated like any other CONVERT failure: log `Failed   <action>  <file>: <tool> timed out after <Xs>` to apply.log, source file stays in place, run continues. End-of-run summary lists the failed paths and migrate exits non-zero.
-- **Other timeouts halt.** ExifTool / filesystem-rename timeouts halt the apply on first occurrence (they signal environment problems, not per-file data quality). The user edits the plan to skip the offending file and re-runs.
+Non-timeout `ConvertFailed` (truncated source, unreadable format) still skips and continues — see [migrate.md → Failure handling](migrate.md#failure-handling). That carve-out is data-quality-specific; timeouts are not.
 
-`pix hash` is uniformly skip-and-log — every failure (timeout, IO error, unreadable file) is logged and the loop continues. Per-file failures in hash are non-blocking: the file isn't dedupable until its hash lands, but it's still usable. The whole-run summary exits non-zero if anything failed.
+`pix hash` is per-file skip-and-log for *non-timeout* failures (a file with permission issues doesn't block the rest of the library). Hash compute timeouts still halt — same rationale as above: a hash that takes >60s is pathological and worth investigating before we let the run continue.
 
 ### CTRL+C — reader-thread pattern
 

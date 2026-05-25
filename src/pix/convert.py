@@ -20,6 +20,8 @@ from pathlib import Path
 from PIL import Image
 import pillow_heif  # pyright: ignore[reportMissingTypeStubs]
 
+from pix.timeout import OperationTimeout, run_with_timeout
+
 
 # Register HEIC/HEIF support with Pillow once at import time so
 # `Image.open('foo.heic')` works.
@@ -27,11 +29,7 @@ pillow_heif.register_heif_opener()  # pyright: ignore[reportUnknownMemberType]
 
 
 class ConvertFailed(Exception):
-    """Raised when a conversion step fails."""
-
-
-class ConvertTimeout(ConvertFailed):
-    """Raised when an ffmpeg / ffprobe call exceeds its timeout."""
+    """Raised when a conversion step fails (data-quality issue)."""
 
 
 class ToolNotFound(Exception):
@@ -45,20 +43,28 @@ H264_HEVC_CODECS: frozenset[str] = frozenset({"h264", "hevc"})
 _FFPROBE_TIMEOUT: float = 30.0       # codec probe; small read, generous margin
 _FFMPEG_REMUX_TIMEOUT: float = 300.0  # 5 min for `-c copy` (cheap; long for safety)
 _FFMPEG_REENCODE_TIMEOUT: float = 3600.0  # 1 hour for libx265 re-encode
+_PILLOW_TIMEOUT: float = 60.0         # Pillow JPG decode + encode
 
 
 def convert_to_jpg(src: Path, dst: Path) -> None:
     """Decode `src` and re-encode as JPEG at `dst`. No metadata copied.
 
     Conversion fails (raises `ConvertFailed`) if Pillow can't open the
-    source, can't decode it, or can't write the destination.
+    source, can't decode it, or can't write the destination. Raises
+    `OperationTimeout` if Pillow takes longer than `_PILLOW_TIMEOUT`
+    seconds (typically pathological — see spec/implementation.md).
     """
-    try:
+    def _do() -> None:
         with Image.open(src) as img:
             # JPEG doesn't support alpha or paletted/RGBA modes — coerce to RGB.
             if img.mode != "RGB":
                 img = img.convert("RGB")
             img.save(dst, format="JPEG", quality=JPG_QUALITY)
+
+    try:
+        run_with_timeout("Pillow JPG encode", _PILLOW_TIMEOUT, _do)
+    except OperationTimeout:
+        raise  # halt the run; caller treats as fatal
     except Exception as e:
         raise ConvertFailed(
             f"Pillow failed to convert {src} to JPEG: {e}"
@@ -129,7 +135,7 @@ def convert_to_mp4(src: Path, dst: Path) -> None:
             timeout=timeout,
         )
     except subprocess.TimeoutExpired as e:
-        raise ConvertTimeout(
+        raise OperationTimeout(
             f"ffmpeg timed out after {timeout:.0f}s converting {src} to MP4 "
             f"(codec={codec!r})"
         ) from e
@@ -164,7 +170,7 @@ def _probe_video_codec(src: Path) -> str:
             timeout=_FFPROBE_TIMEOUT,
         )
     except subprocess.TimeoutExpired as e:
-        raise ConvertTimeout(
+        raise OperationTimeout(
             f"ffprobe timed out after {_FFPROBE_TIMEOUT:.0f}s on {src}"
         ) from e
     if proc.returncode != 0:

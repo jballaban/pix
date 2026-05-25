@@ -35,6 +35,7 @@ from pix.dates import format_pix_datetime
 from pix.events import effective_event
 from pix.hash_cache import read_cached_hash
 from pix.metadata import FileMetadata
+from pix.timeout import safe_rename
 from pix.plan import (
     PIX_ORIGINAL_PATH,
     Action,
@@ -476,7 +477,7 @@ def _apply_move(ln: PlanLine) -> None:
                 f"target {target} already exists"
             )
     target.parent.mkdir(parents=True, exist_ok=True)
-    ln.abs_path.rename(target)
+    safe_rename(ln.abs_path, target)
 
 
 def _log(log: IO[str], ln: PlanLine, state: str, detail: str | None = None) -> None:

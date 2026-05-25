@@ -16,33 +16,22 @@ Once `pix hash` has been run, `pix dedupe` and `pix organize` (broken by item #2
 
 Stripped all XMP coupling: `PIX_CONTENT_HASH` constant removed, `needs_content_hash` field removed, apply.py no longer computes/writes the hash, `exiftool_config.cfg` namespace trimmed. Dedupe and organize now read from `src/pix/hash_cache.py` (a stub that always returns None until item #1 lands) and refuse upfront with `MissingHashesError` pointing to `pix hash`. Both ops are non-functional in v0.1.50 by design — they become functional when item #1 populates the cache.
 
-## 3. Library-wide lock at `<library>\.pix\lock`
+## 3. Library-wide lock at `<library>\.pix\lock` — **done in v0.1.52**
 
-Spec: [`README.md` → Concurrency](README.md#concurrency). Entirely unbuilt; no `library_lock` / `acquire_lock` anywhere.
+`src/pix/library_lock.py` provides a context-manager `acquire(library_root, op)` that writes `<pid>\n<op>\n<iso-timestamp>` to `<library>/.pix/lock` via O_EXCL + fsync, raises `LockHeld` if a live `pix` process holds it, and stale-cleans (with a stderr notice) if the PID is dead or recycled-to-non-pix. Process liveness uses `psutil.Process(pid).name()`; case-insensitive comparison strips `.exe` so `pix.exe`/`pix` both match. Wired into `migrate`, `organize`, `dedupe`, and `hash` — each command's body was factored into a `_run_<op>(...)` helper invoked under the lock. `init` and read-only ops do not acquire.
 
-- New `src/pix/library_lock.py` (or similar) that writes `<pid>\n<op>\n<iso-timestamp>` and exposes a context manager.
-- Acquired at the start of `migrate`, `organize`, `dedupe`, future `hash`. Released on clean exit and on KeyboardInterrupt.
-- On existing lock: probe PID liveness *and* identify as a `pix` process. Live → refuse with the spec'd message and exit non-zero before any work. Dead → log `cleaning stale lock from PID <N>`, take the lock, proceed.
-- `init` and read-only ops do **not** acquire the lock.
-- Wire into `commands/migrate.py`, `commands/organize.py`, `commands/dedupe.py`, and the new `commands/hash.py`.
+## 4. Subprocess hardening — missing timeouts — **done in v0.1.54**
 
-## 4. Subprocess hardening — missing timeouts
+New `src/pix/timeout.py` exposes `OperationTimeout`, `run_with_timeout(name, timeout, func, *args, **kwargs)`, and `safe_rename(src, dst, timeout=10)`. Wired in:
 
-Spec: [`implementation.md` → Subprocess hardening](implementation.md#subprocess-hardening). Partially built.
+- **Pillow JPG encode (60s)** — `convert.convert_to_jpg` runs `Image.save()` under `run_with_timeout`.
+- **Content-hash compute (60s)** — `commands/hash.py` wraps each `compute_content_hash(fp)` call.
+- **Filesystem rename (10s)** — every user-data `Path.rename(...)` in `apply.py`, `dedupe.py`, `organize.py`, and `cleanup.py` now goes through `safe_rename`. Internal cache-layer renames (`metadata_cache.py`, `hash_cache.py`) stay best-effort without a timeout.
 
-In place:
-- ExifTool 30s + reader-thread + `shutdown_flag` (`exiftool_session.py:42-148`).
-- ffmpeg re-mux 5min, re-encode 1h, ffprobe 30s (`convert.py:44-47`).
+Policy change (documented in `spec/implementation.md`): **all timeouts halt the run** so the user can investigate what hit the limit. Previously CONVERT timeouts skip-and-logged alongside other CONVERT failures; that's gone — `ConvertFailed` still skips, `OperationTimeout` halts. ffmpeg/ffprobe timeouts now also halt (previously they were `ConvertTimeout(ConvertFailed)` which routed to skip-and-log). Once timeout values are tuned to real workloads we can revisit per-op.
 
-Missing:
-- **Pillow JPG encode timeout (60s)** — `convert_to_jpg` in `convert.py:50-65` runs `Image.save()` unbounded. Either thread-wrap with a join-timeout or accept the GIL caveat; spec lists 60s explicitly.
-- **Filesystem rename timeout (10s)** — every `ln.abs_path.rename(...)` in `apply.py` (e.g. `apply.py:243`, `apply.py:282`) is unbounded. Catches AV locks and network-FS hangs per spec.
-- **Content-hash compute timeout (60s)** — `compute_content_hash` in `content_hash.py:36-51` reads whole-file synchronously with no upper bound. Needed once `pix hash` is the caller.
-- **`Interrupted` line in apply.log on SIGINT** — `cli.py:33-37` catches `KeyboardInterrupt` cleanly but doesn't write the interrupt to the active run's `apply.log` as the spec describes.
+The `Interrupted` line in apply.log on SIGINT was already in place — `apply.py` and `commands/hash.py` both catch `KeyboardInterrupt` per-line, log `Interrupted`, and re-raise.
 
-## 5. Tiered duration format
+## 5. Tiered duration format — **done in v0.1.53**
 
-Spec: [`migrate.md` → Duration format](migrate.md#duration-format). Currently single-tier (integer seconds only).
-
-- `src/pix/progress.py:168` emits `({elapsed}s)` and stops there. Add a `format_duration(seconds)` helper rendering `Xs` / `XmYs` / `XhYmZs` per the spec table.
-- Apply across migrate / dedupe / organize / hash progress lines and end-of-phase summaries (summaries may use one decimal under 60s).
+New `src/pix/duration.py` exposes `format_duration` (integer-tiered for progress-line suffixes) and `format_duration_precise` (one decimal under 60s, for post-phase summaries). `progress.py` consumes `format_duration` for the `(Xs)` suffix; `commands/{migrate,dedupe,organize,hash}.py` consume `format_duration_precise` for the `Found N files in …` / `Read N files in …` / `Plan generated in …` summary lines. The placeholder `_format_duration` that lived in `commands/hash.py` is gone.

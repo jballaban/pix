@@ -27,6 +27,7 @@ from pathlib import Path
 
 from pix.dates import parse_exiftool_datetime
 from pix.exiftool_session import ExifToolSession
+from pix.timeout import safe_rename
 
 _RENAME_SUFFIX: str = ".__pixrename__"
 _MIGRATE_INFIX: str = ".__migrate__."
@@ -60,7 +61,7 @@ def cleanup_rename_orphans(folder: Path) -> list[Path]:
         if original.exists():
             path.unlink()
         else:
-            path.rename(original)
+            safe_rename(path, original)
         resolved.append(original)
     return resolved
 
@@ -160,7 +161,7 @@ def _finalize_convert_marker(
             f"marker {marker.name}: finalize target {canonical_name} "
             f"already exists"
         )
-    marker.rename(target)
+    safe_rename(marker, target)
     return target
 
 

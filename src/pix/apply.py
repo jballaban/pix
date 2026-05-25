@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import IO
 
 from pix.convert import ConvertFailed, convert_to_jpg, convert_to_mp4
+from pix.timeout import safe_rename
 from pix.exiftool_session import ExifToolSession
 from pix.plan import Action, Plan, PlanLine
 from pix.progress import LiveProgress
@@ -247,7 +248,7 @@ def _apply_delete(ln: PlanLine, run_dir: Path) -> None:
     """Move the file into the run folder. Single atomic rename = capture+remove."""
     if ln.capture_path is None:
         raise ApplyError(f"{ln.line_id}: DELETE missing capture_path")
-    ln.abs_path.rename(ln.capture_path)
+    safe_rename(ln.abs_path, ln.capture_path)
 
 
 def _apply_stash(ln: PlanLine) -> None:
@@ -293,12 +294,12 @@ def _apply_rename(ln: PlanLine) -> None:
                 f"already exists (leftover from a prior crash; "
                 f"re-run migrate to recover)"
             )
-        ln.abs_path.rename(intermediate)  # step A
+        safe_rename(ln.abs_path, intermediate)  # step A
         try:
-            intermediate.rename(target)  # step B
+            safe_rename(intermediate, target)  # step B
         except Exception as e:
             try:
-                intermediate.rename(ln.abs_path)
+                safe_rename(intermediate, ln.abs_path)
             except Exception as rollback_err:
                 raise ApplyError(
                     f"{ln.line_id}: rename failed and rollback failed; "
@@ -312,7 +313,7 @@ def _apply_rename(ln: PlanLine) -> None:
         raise ApplyError(
             f"{ln.line_id}: target {target.name} already exists"
         )
-    ln.abs_path.rename(target)
+    safe_rename(ln.abs_path, target)
 
 
 def _apply_tag(
@@ -393,10 +394,10 @@ def _apply_convert(
             f"{ln.line_id}: marker {ln.marker_path.name} already exists "
             f"(leftover from a prior crash?)"
         )
-    ln.staging_path.rename(ln.marker_path)
+    safe_rename(ln.staging_path, ln.marker_path)
 
     # Step 3: capture original into the run folder.
-    src.rename(ln.capture_path)
+    safe_rename(src, ln.capture_path)
 
     # Step 4: finalize marker to canonical name.
     if ln.target_path.exists():
@@ -404,4 +405,4 @@ def _apply_convert(
             f"{ln.line_id}: target {ln.target_path.name} already exists "
             f"at finalize step"
         )
-    ln.marker_path.rename(ln.target_path)
+    safe_rename(ln.marker_path, ln.target_path)

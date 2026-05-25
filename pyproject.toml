@@ -9,6 +9,7 @@ dependencies = [
     "pillow>=10.0",
     "pillow-heif>=0.16",
     "blake3>=0.4",
+    "psutil>=5.9",
 ]
 
 [project.scripts]
