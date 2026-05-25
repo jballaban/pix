@@ -245,6 +245,7 @@ def _run_organize(
 
     typer.echo("")
     typer.echo(f"Organized {completed} file(s).")
+    typer.echo(f"Log: {runs_dir / 'apply.log'}")
 
 
 def _plog(plan_log_path: Path, msg: str) -> None:

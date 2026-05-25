@@ -255,6 +255,7 @@ def _run_migrate(root: Path, folder: Path, config: Config) -> None:
 
     typer.echo("")
     typer.echo(f"Applied {completed} action(s).")
+    typer.echo(f"Log: {runs_dir / 'apply.log'}")
 
     if convert_failures:
         errors_dir = root / ".pix" / "errors"

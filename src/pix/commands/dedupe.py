@@ -226,6 +226,7 @@ def _run_dedupe(root: Path) -> None:
         f"Removed {completed} duplicate(s) across "
         f"{len(result.groups)} group(s)."
     )
+    typer.echo(f"Log: {runs_dir / 'apply.log'}")
 
 
 def _plog(plan_log_path: Path, msg: str) -> None:

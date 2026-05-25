@@ -235,6 +235,7 @@ def _run_hash(root: Path) -> None:
             typer.echo(f"    {err}", err=True)
         raise typer.Exit(code=1)
     typer.echo(f"Hashed {completed} file(s) in {duration}.")
+    typer.echo(f"Log: {apply_log_path}")
 
 
 def _rel_or_abs(path: Path, root: Path) -> str:
