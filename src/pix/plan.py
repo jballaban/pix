@@ -232,6 +232,7 @@ def generate_plan(
             progress.advance()
 
     lines = _resolve_collisions(cache, lines)
+    lines = _drop_noop_renames(lines)
     lines = [attach_paths(ln, run_dir, staging_dir) for ln in lines]
 
     return Plan(
@@ -414,6 +415,73 @@ def _resolve_collisions(
             )
         )
     return result
+
+
+def _drop_noop_renames(lines: list[PlanLine]) -> list[PlanLine]:
+    """Drop RENAME / demote RENAME+TAG lines whose target == current name.
+
+    Collision resolution gives the bare canonical slot to one file and
+    assigns suffixes `_001`, `_002`, … to the others in sort order. When
+    a colliding folder already contains the bare-name file plus
+    `_001.mp4`, `_002.mp4`, …, the assigned suffixes happen to match each
+    file's current suffix — the resulting "rename" would move every file
+    onto itself.
+
+    - RENAME with target == source name: drop entirely.
+    - RENAME+TAG with target == source name: demote to TAG (the tag
+      writes still need to happen) and strip the `→<name>` arrow from
+      the details column.
+
+    CONVERT is unaffected: a convert always crosses extensions, so its
+    target filename can't equal the source name.
+    """
+    result: list[PlanLine] = []
+    for ln in lines:
+        if ln.target_filename != ln.abs_path.name:
+            result.append(ln)
+            continue
+        if ln.action == Action.RENAME:
+            with debug.for_file(ln.abs_path):
+                debug.section("No-op rename")
+                debug.log(
+                    "  Collision-resolved target matches current "
+                    "filename — dropping plan line."
+                )
+            continue
+        if ln.action == Action.RENAME_TAG:
+            new_details = _strip_rename_from_details(
+                ln.details, ln.target_filename
+            )
+            with debug.for_file(ln.abs_path):
+                debug.section("No-op rename")
+                debug.log(
+                    "  Collision-resolved target matches current "
+                    "filename — demoting RENAME+TAG to TAG."
+                )
+            result.append(
+                dataclasses.replace(
+                    ln,
+                    action=Action.TAG,
+                    target_filename=None,
+                    details=new_details,
+                )
+            )
+            continue
+        result.append(ln)
+    return result
+
+
+def _strip_rename_from_details(details: str, target: str | None) -> str:
+    """Remove the `→<target>` segment from a `; `-joined details string."""
+    if target is None:
+        return details
+    arrow = f"→{target}"
+    parts = [
+        p
+        for p in (s.strip() for s in details.split(";"))
+        if p and p != arrow
+    ]
+    return "; ".join(parts)
 
 
 _EXT_ALIASES: dict[str, str] = {

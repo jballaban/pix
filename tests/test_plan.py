@@ -615,6 +615,103 @@ def test_plan_collision_three_way(tmp_path: Path) -> None:
     ]
 
 
+def test_plan_drops_noop_rename_from_collision_reshuffle(
+    tmp_path: Path,
+) -> None:
+    """Regression: a folder containing the bare-name file plus suffixed
+    siblings must not produce no-op RENAMEs on a re-migrate.
+
+    File `2003-09-01_000000.mp4` already at canonical → no plan line.
+    Files `_001.mp4`, `_002.mp4` collide on the same canonical; the
+    bare file wins, and collision resolution assigns suffixes `_001`,
+    `_002` to the others — but those match each file's current
+    suffix. Plan should be empty.
+    """
+    src = tmp_path / "src"
+    src.mkdir()
+    bare = src / "2003-09-01_000000.mp4"
+    one = src / "2003-09-01_000000_001.mp4"
+    two = src / "2003-09-01_000000_002.mp4"
+    for p in (bare, one, two):
+        p.write_bytes(b"")
+
+    cfg = _config(mp4="keep")
+    cache = {
+        p.resolve(): _meta(
+            str(p),
+            **{
+                "QuickTime:CreateDate": "2003:09:01 00:00:00",
+                PIX_ORIGINAL_PATH: str(p),  # already-migrated marker
+                PIX_DATE_AUTO: "2003-09-01-00:00:00",
+                # Match what derive_event_auto would produce from the
+                # folder name, so no event-drift TAG line is queued.
+                PIX_EVENT_AUTO: "src",
+            },
+        )
+        for p in (bare, one, two)
+    }
+
+    plan = generate_plan(
+        source=src.resolve(),
+        cache=cache,
+        config=cfg,
+        run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
+    )
+
+    assert plan.lines == []
+
+
+def test_plan_demotes_rename_tag_to_tag_when_target_matches_current(
+    tmp_path: Path,
+) -> None:
+    """Same collision-reshuffle case but with a pending TAG write.
+
+    The file's current name already equals the collision-resolved
+    target, so the rename is a no-op — but a tag write still needs to
+    happen (first-migrate marker missing). Plan should demote the line
+    from RENAME+TAG to TAG and strip the rename arrow from details.
+    """
+    src = tmp_path / "src"
+    src.mkdir()
+    bare = src / "2003-09-01_000000.mp4"
+    one = src / "2003-09-01_000000_001.mp4"
+    for p in (bare, one):
+        p.write_bytes(b"")
+
+    cfg = _config(mp4="keep")
+    # Both files are first-migrate (no pix:OriginalPath) → tag writes
+    # will be queued for both. With the bare-name file present, the
+    # `_001` file's rename target lands on its own name.
+    cache = {
+        p.resolve(): _meta(
+            str(p),
+            **{"QuickTime:CreateDate": "2003:09:01 00:00:00"},
+        )
+        for p in (bare, one)
+    }
+
+    plan = generate_plan(
+        source=src.resolve(),
+        cache=cache,
+        config=cfg,
+        run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
+    )
+
+    one_line = next(
+        ln for ln in plan.lines if ln.abs_path == one.resolve()
+    )
+    assert one_line.action == Action.TAG
+    assert one_line.target_filename is None
+    # The rename-target arrow must be gone; tag-change arrows
+    # (date_auto null→…, event_auto null→…) are fine and stay.
+    assert "→2003-09-01_000000_001.mp4" not in one_line.details
+    assert "original_path init" in one_line.details
+
+
 def test_plan_to_text_includes_header_and_summary(tmp_path: Path) -> None:
     src = tmp_path / "src"
     src.mkdir()
