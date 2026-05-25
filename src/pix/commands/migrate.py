@@ -294,11 +294,15 @@ def _post_apply_cache_update(
     Walks the applied plan lines and:
     - DELETE / STASH: removes the cache entry.
     - CONVERT+RENAME+TAG: removes the old entry; the new file's cache
-      will be built on its next read (we don't have the post-convert
-      metadata in hand here).
+      was already written inside apply (via the live ExifTool session)
+      because it's the only path with access to the post-convert tags.
     - RENAME: renames the cache file alongside the media rename.
     - TAG: merges the written pix:* fields into the cached metadata.
-    - RENAME+TAG: both.
+    - RENAME+TAG: rename the sidecar first (apply already moved the
+      file), then update_metadata using `target_path` so cache.add
+      stats the file at its current location. Calling update_metadata
+      with abs_path here would silently fail the stat and leave the
+      cache entry with the pre-tag size — guaranteed mismatch next run.
     """
     for ln in plan.lines:
         if ln.line_id not in kept_line_ids:
@@ -308,8 +312,7 @@ def _post_apply_cache_update(
         elif ln.action == Action.STASH:
             cache.remove(ln.abs_path)
         elif ln.action == Action.CONVERT_RENAME_TAG:
-            cache.remove(ln.abs_path)  # old file gone
-            # New file's cache will be (re)built on next read.
+            cache.remove(ln.abs_path)  # old file gone; new entry written in apply
         elif ln.action == Action.RENAME:
             if ln.target_path is not None:
                 cache.rename(ln.abs_path, ln.target_path)
@@ -317,10 +320,12 @@ def _post_apply_cache_update(
             if ln.pix_writes:
                 cache.update_metadata(ln.abs_path, dict(ln.pix_writes))
         elif ln.action == Action.RENAME_TAG:
-            if ln.pix_writes:
-                cache.update_metadata(ln.abs_path, dict(ln.pix_writes))
             if ln.target_path is not None:
                 cache.rename(ln.abs_path, ln.target_path)
+                if ln.pix_writes:
+                    cache.update_metadata(
+                        ln.target_path, dict(ln.pix_writes)
+                    )
 
 
 def _plog(plan_log_path: Path, msg: str) -> None:
