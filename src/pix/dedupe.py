@@ -28,12 +28,14 @@ become empty after dups go to `data/`).
 
 from __future__ import annotations
 
+import time
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import IO
 
+from pix.duration import format_duration_compact, format_size
 from pix.events import PIX_EVENT_OVERRIDE
 from pix.hash_cache import read_cached_hash
 from pix.metadata import FileMetadata
@@ -47,6 +49,7 @@ from pix.plan import (
     PlanLine,
 )
 from pix.progress import LiveProgress
+from pix.telemetry import LineRecord, write_summary
 
 
 # --- Errors ------------------------------------------------------------------
@@ -350,6 +353,7 @@ def apply_plan(
         data_dir.mkdir(parents=True, exist_ok=True)
 
     completed = 0
+    records: list[LineRecord] = []
     with (
         log_path.open("a", encoding="utf-8") as log,
         LiveProgress(total=len(runnable)) as progress,
@@ -358,17 +362,40 @@ def apply_plan(
             progress.begin(
                 f"{ln.line_id} {ln.action.value}", str(ln.abs_path)
             )
+            t_start = time.monotonic()
             _log(log, ln, "Started")
             try:
                 _apply_dedup(ln)
             except Exception as e:
-                _log(log, ln, "Failed", detail=str(e))
+                dur = time.monotonic() - t_start
+                _log(log, ln, "Failed", detail=str(e), dur_seconds=dur)
+                records.append(
+                    LineRecord(
+                        line_id=ln.line_id,
+                        action=ln.action.value,
+                        duration_seconds=dur,
+                        rel_path=ln.rel_path,
+                        failed=True,
+                    )
+                )
+                write_summary(log, records)
                 raise DedupeApplyError(
                     f"{ln.line_id} ({ln.rel_path}): {e}"
                 ) from e
-            _log(log, ln, "Completed")
+            dur = time.monotonic() - t_start
+            _log(log, ln, "Completed", dur_seconds=dur)
+            records.append(
+                LineRecord(
+                    line_id=ln.line_id,
+                    action=ln.action.value,
+                    duration_seconds=dur,
+                    rel_path=ln.rel_path,
+                )
+            )
             progress.advance()
             completed += 1
+
+        write_summary(log, records)
 
     cleanup_empty_folders(library_root)
     return completed
@@ -385,12 +412,24 @@ def _apply_dedup(ln: PlanLine) -> None:
 
 
 def _log(
-    log: IO[str], ln: PlanLine, state: str, detail: str | None = None
+    log: IO[str],
+    ln: PlanLine,
+    state: str,
+    detail: str | None = None,
+    *,
+    dur_seconds: float | None = None,
+    size_bytes: int | None = None,
 ) -> None:
-    ts = datetime.now().isoformat(timespec="seconds")
-    suffix = f": {detail}" if detail else ""
+    ts = datetime.now().isoformat(timespec="milliseconds")
+    extras: list[str] = []
+    if dur_seconds is not None:
+        extras.append(f"dur={format_duration_compact(dur_seconds)}")
+    if size_bytes is not None:
+        extras.append(f"size={format_size(size_bytes)}")
+    extras_str = f"  [{' '.join(extras)}]" if extras else ""
+    detail_str = f": {detail}" if detail else ""
     log.write(
         f"{ts} {ln.line_id} {state:<9} {ln.action.value:<18}  "
-        f"{ln.rel_path}{suffix}\n"
+        f"{ln.rel_path}{extras_str}{detail_str}\n"
     )
     log.flush()

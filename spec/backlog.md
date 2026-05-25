@@ -32,6 +32,12 @@ Policy change (documented in `spec/implementation.md`): **all timeouts halt the 
 
 The `Interrupted` line in apply.log on SIGINT was already in place — `apply.py` and `commands/hash.py` both catch `KeyboardInterrupt` per-line, log `Interrupted`, and re-raise.
 
+## 6. Telemetry in apply.log — **done in v0.1.55**
+
+apply.log now records sub-second timestamps, per-line `dur=…` durations, `size=…` for CONVERT/HASH lines, and an end-of-run summary block (per-action p50/p95/max counts plus the top-10 slowest entries). Always-on, no flag. Lets a 10-minute migrate run be analyzed from the summary block alone without parsing 60k transition lines.
+
+Added `src/pix/telemetry.py` (`LineRecord`, `write_summary`) and `format_duration_compact` + `format_size` helpers in `src/pix/duration.py`. Wired into migrate's `apply.apply_plan`, `commands/hash`, `dedupe.apply_plan`, and `organize.apply_plan`.
+
 ## 5. Tiered duration format — **done in v0.1.53**
 
 New `src/pix/duration.py` exposes `format_duration` (integer-tiered for progress-line suffixes) and `format_duration_precise` (one decimal under 60s, for post-phase summaries). `progress.py` consumes `format_duration` for the `(Xs)` suffix; `commands/{migrate,dedupe,organize,hash}.py` consume `format_duration_precise` for the `Found N files in …` / `Read N files in …` / `Plan generated in …` summary lines. The placeholder `_format_duration` that lived in `commands/hash.py` is gone.

@@ -19,6 +19,7 @@ order, which may not be numerically ascending.
 
 from __future__ import annotations
 
+import time
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -27,9 +28,11 @@ from typing import IO
 from pix.convert import ConvertFailed, convert_to_jpg, convert_to_mp4
 from pix.timeout import safe_rename
 from pix.exiftool_session import ExifToolSession
+from pix.duration import format_duration_compact, format_size
 from pix.plan import Action, Plan, PlanLine
 from pix.progress import LiveProgress
 from pix.stash import stash_file
+from pix.telemetry import LineRecord, write_summary
 
 
 class ApplyError(Exception):
@@ -88,6 +91,7 @@ def apply_plan(
     exiftool: ExifToolSession | None = None
     completed = 0
     convert_failures: list[tuple[PlanLine, str]] = []
+    records: list[LineRecord] = []
     with (
         log_path.open("a", encoding="utf-8") as log,
         LiveProgress(total=len(runnable)) as progress,
@@ -106,28 +110,67 @@ def apply_plan(
                 progress.begin(
                     f"{ln.line_id} {ln.action.value}", str(ln.abs_path)
                 )
-                _log(log, ln, "Started")
+                # File size is only interesting for CONVERT (correlates
+                # with encode/transcode time); for TAG/RENAME/DELETE it
+                # doesn't predict duration so we skip the stat() to save
+                # a syscall per line.
+                size_bytes: int | None = None
+                if ln.action == Action.CONVERT_RENAME_TAG:
+                    try:
+                        size_bytes = ln.abs_path.stat().st_size
+                    except OSError:
+                        pass
+                t_start = time.monotonic()
+                _log(log, ln, "Started", size_bytes=size_bytes)
                 try:
                     _apply_one(ln, run_dir, exiftool, staging_dir)
                 except KeyboardInterrupt:
-                    _log(log, ln, "Interrupted")
+                    _log(
+                        log,
+                        ln,
+                        "Interrupted",
+                        dur_seconds=time.monotonic() - t_start,
+                    )
                     raise
                 except ConvertFailed as e:
-                    _log(log, ln, "Failed", detail=str(e))
+                    dur = time.monotonic() - t_start
+                    _log(log, ln, "Failed", detail=str(e), dur_seconds=dur)
                     convert_failures.append((ln, str(e)))
+                    records.append(
+                        LineRecord(
+                            line_id=ln.line_id,
+                            action=ln.action.value,
+                            duration_seconds=dur,
+                            rel_path=ln.rel_path,
+                            size_bytes=size_bytes,
+                            failed=True,
+                        )
+                    )
                     progress.advance()
                     continue
                 except Exception as e:
-                    _log(log, ln, "Failed", detail=str(e))
+                    dur = time.monotonic() - t_start
+                    _log(log, ln, "Failed", detail=str(e), dur_seconds=dur)
                     raise ApplyError(
                         f"{ln.line_id} ({ln.rel_path}): {e}"
                     ) from e
-                _log(log, ln, "Completed")
+                dur = time.monotonic() - t_start
+                _log(log, ln, "Completed", dur_seconds=dur)
+                records.append(
+                    LineRecord(
+                        line_id=ln.line_id,
+                        action=ln.action.value,
+                        duration_seconds=dur,
+                        rel_path=ln.rel_path,
+                        size_bytes=size_bytes,
+                    )
+                )
                 progress.advance()
                 completed += 1
         finally:
             if exiftool is not None:
                 exiftool.close()
+            write_summary(log, records)
 
     return completed, convert_failures
 
@@ -201,13 +244,27 @@ def _log(
     ln: PlanLine,
     state: str,
     detail: str | None = None,
+    *,
+    dur_seconds: float | None = None,
+    size_bytes: int | None = None,
 ) -> None:
-    """Append one transition line to apply.log and flush."""
-    ts = datetime.now().isoformat(timespec="seconds")
-    suffix = f": {detail}" if detail else ""
+    """Append one transition line to apply.log and flush.
+
+    Millisecond timestamp precision so sub-second actions are
+    distinguishable. Optional `dur=…` / `size=…` extras land in a
+    `[…]` bracket between the path and any detail/error message.
+    """
+    ts = datetime.now().isoformat(timespec="milliseconds")
+    extras: list[str] = []
+    if dur_seconds is not None:
+        extras.append(f"dur={format_duration_compact(dur_seconds)}")
+    if size_bytes is not None:
+        extras.append(f"size={format_size(size_bytes)}")
+    extras_str = f"  [{' '.join(extras)}]" if extras else ""
+    detail_str = f": {detail}" if detail else ""
     log.write(
         f"{ts} {ln.line_id} {state:<9} {ln.action.value:<18}  "
-        f"{ln.rel_path}{suffix}\n"
+        f"{ln.rel_path}{extras_str}{detail_str}\n"
     )
     log.flush()
 
