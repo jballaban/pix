@@ -223,29 +223,34 @@ def _run_organize(
             continue
         break  # 'y'
 
+    apply_log_path = runs_dir / "apply.log"
     try:
-        completed = apply_plan(
-            plan=plan,
-            kept_line_ids=kept_line_ids,
-            run_dir=runs_dir,
-            library_root=root,
-        )
-    except OrganizeApplyError as e:
-        typer.echo(f"Error: apply failed: {e}", err=True)
-        raise typer.Exit(code=1) from e
+        try:
+            completed = apply_plan(
+                plan=plan,
+                kept_line_ids=kept_line_ids,
+                run_dir=runs_dir,
+                library_root=root,
+            )
+        except OrganizeApplyError as e:
+            typer.echo(f"Error: apply failed: {e}", err=True)
+            raise typer.Exit(code=1) from e
 
-    # Cache survives organize by following every MOVE: rename the
-    # .cache file alongside its media file. Best-effort.
-    for ln in plan.lines:
-        if ln.line_id in kept_line_ids and ln.target_path is not None:
-            meta_cache.rename(ln.abs_path, ln.target_path)
+        # Cache survives organize by following every MOVE: rename the
+        # .cache file alongside its media file. Best-effort.
+        for ln in plan.lines:
+            if ln.line_id in kept_line_ids and ln.target_path is not None:
+                meta_cache.rename(ln.abs_path, ln.target_path)
 
-    # Persist the active template now that apply succeeded.
-    set_organize_template(config_path, template_str)
+        # Persist the active template now that apply succeeded.
+        set_organize_template(config_path, template_str)
 
-    typer.echo("")
-    typer.echo(f"Organized {completed} file(s).")
-    typer.echo(f"Log: {runs_dir / 'apply.log'}")
+        typer.echo("")
+        typer.echo(f"Organized {completed} file(s).")
+    finally:
+        # Always emit the log path on the way out — success, error, or
+        # CTRL+C. Lets the user copy-paste straight into a tail/grep.
+        typer.echo(f"Log: {apply_log_path}")
 
 
 def _plog(plan_log_path: Path, msg: str) -> None:

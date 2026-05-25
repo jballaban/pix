@@ -204,29 +204,34 @@ def _run_dedupe(root: Path) -> None:
             continue
         break  # 'y'
 
+    apply_log_path = runs_dir / "apply.log"
     try:
-        completed = apply_plan(
-            plan=result.plan,
-            kept_line_ids=kept_line_ids,
-            run_dir=runs_dir,
-            library_root=root,
+        try:
+            completed = apply_plan(
+                plan=result.plan,
+                kept_line_ids=kept_line_ids,
+                run_dir=runs_dir,
+                library_root=root,
+            )
+        except DedupeApplyError as e:
+            typer.echo(f"Error: apply failed: {e}", err=True)
+            raise typer.Exit(code=1) from e
+
+        # Cache mutation: each removed duplicate's cache entry goes away.
+        # Best-effort.
+        for ln in result.plan.lines:
+            if ln.line_id in kept_line_ids:
+                meta_cache.remove(ln.abs_path)
+
+        typer.echo("")
+        typer.echo(
+            f"Removed {completed} duplicate(s) across "
+            f"{len(result.groups)} group(s)."
         )
-    except DedupeApplyError as e:
-        typer.echo(f"Error: apply failed: {e}", err=True)
-        raise typer.Exit(code=1) from e
-
-    # Cache mutation: each removed duplicate's cache entry goes away.
-    # Best-effort.
-    for ln in result.plan.lines:
-        if ln.line_id in kept_line_ids:
-            meta_cache.remove(ln.abs_path)
-
-    typer.echo("")
-    typer.echo(
-        f"Removed {completed} duplicate(s) across "
-        f"{len(result.groups)} group(s)."
-    )
-    typer.echo(f"Log: {runs_dir / 'apply.log'}")
+    finally:
+        # Always emit the log path on the way out — success, error, or
+        # CTRL+C. Lets the user copy-paste straight into a tail/grep.
+        typer.echo(f"Log: {apply_log_path}")
 
 
 def _plog(plan_log_path: Path, msg: str) -> None:

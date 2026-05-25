@@ -234,49 +234,53 @@ def _run_migrate(root: Path, folder: Path, config: Config) -> None:
             continue
         break  # 'y' — apply
 
+    apply_log_path = runs_dir / "apply.log"
     try:
-        completed, convert_failures = apply_plan(
-            plan=plan,
-            plan_path=plan_path,
-            run_dir=runs_dir,
-            kept_line_ids=kept_line_ids,
-            staging_dir=staging_dir,
-        )
-    except ApplyError as e:
-        typer.echo(f"Error: apply failed: {e}", err=True)
-        raise typer.Exit(code=1) from e
+        try:
+            completed, convert_failures = apply_plan(
+                plan=plan,
+                plan_path=plan_path,
+                run_dir=runs_dir,
+                kept_line_ids=kept_line_ids,
+                staging_dir=staging_dir,
+            )
+        except ApplyError as e:
+            typer.echo(f"Error: apply failed: {e}", err=True)
+            raise typer.Exit(code=1) from e
 
-    # Skip cache updates for plan lines whose CONVERT failed — the source
-    # file is still in place at its old name with its old metadata, so
-    # the cache entry remains correct as-is.
-    failed_ids = {ln.line_id for ln, _ in convert_failures}
-    applied_ids = kept_line_ids - failed_ids
-    _post_apply_cache_update(meta_cache, plan, applied_ids)
+        # Skip cache updates for plan lines whose CONVERT failed — the
+        # source file is still in place at its old name with its old
+        # metadata, so the cache entry remains correct as-is.
+        failed_ids = {ln.line_id for ln, _ in convert_failures}
+        applied_ids = kept_line_ids - failed_ids
+        _post_apply_cache_update(meta_cache, plan, applied_ids)
 
-    typer.echo("")
-    typer.echo(f"Applied {completed} action(s).")
-    typer.echo(f"Log: {runs_dir / 'apply.log'}")
-
-    if convert_failures:
-        errors_dir = root / ".pix" / "errors"
         typer.echo("")
-        typer.echo(
-            f"{len(convert_failures)} CONVERT line(s) failed — "
-            f"sources moved to {errors_dir}:",
-            err=True,
-        )
-        for ln, err in convert_failures:
-            typer.echo(f"  {ln.abs_path}", err=True)
-            typer.echo(f"    {err}", err=True)
-        typer.echo("", err=True)
-        typer.echo(
-            f"See {runs_dir / 'apply.log'} for full log. Each entry in "
-            f"{errors_dir} has a .errorinfo sidecar with original path "
-            f"and error. To retry: restore the original file at its "
-            f"source path and re-run migrate.",
-            err=True,
-        )
-        raise typer.Exit(code=1)
+        typer.echo(f"Applied {completed} action(s).")
+
+        if convert_failures:
+            errors_dir = root / ".pix" / "errors"
+            typer.echo("")
+            typer.echo(
+                f"{len(convert_failures)} CONVERT line(s) failed — "
+                f"sources moved to {errors_dir}:",
+                err=True,
+            )
+            for ln, err in convert_failures:
+                typer.echo(f"  {ln.abs_path}", err=True)
+                typer.echo(f"    {err}", err=True)
+            typer.echo("", err=True)
+            typer.echo(
+                f"Each entry in {errors_dir} has a .errorinfo sidecar "
+                f"with original path and error. To retry: restore the "
+                f"original file at its source path and re-run migrate.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+    finally:
+        # Always emit the log path on the way out — success, error, or
+        # CTRL+C. Lets the user copy-paste straight into a tail/grep.
+        typer.echo(f"Log: {apply_log_path}")
 
 
 def _post_apply_cache_update(

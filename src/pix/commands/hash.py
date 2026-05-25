@@ -114,6 +114,19 @@ def _run_hash(root: Path) -> None:
         typer.echo("Aborted.")
         return
 
+    try:
+        _hash_apply(root, needs_hashing, apply_log_path)
+    finally:
+        # Always emit the log path on the way out — success, halt, or
+        # CTRL+C. Lets the user copy-paste straight into a tail/grep.
+        typer.echo(f"Log: {apply_log_path}")
+
+
+def _hash_apply(
+    root: Path, needs_hashing: list[Path], apply_log_path: Path
+) -> None:
+    """Apply loop body — extracted so the outer function can wrap it in
+    a try/finally that emits the log path on any exit path."""
     # Apply: hash + write cache entry, one file at a time.
     completed = 0
     failures: list[tuple[Path, str]] = []
@@ -226,8 +239,7 @@ def _run_hash(root: Path) -> None:
     typer.echo("")
     if failures:
         typer.echo(
-            f"Hashed {completed} file(s); {len(failures)} failed — "
-            f"see {apply_log_path}.",
+            f"Hashed {completed} file(s); {len(failures)} failed.",
             err=True,
         )
         for fp, err in failures:
@@ -235,7 +247,6 @@ def _run_hash(root: Path) -> None:
             typer.echo(f"    {err}", err=True)
         raise typer.Exit(code=1)
     typer.echo(f"Hashed {completed} file(s) in {duration}.")
-    typer.echo(f"Log: {apply_log_path}")
 
 
 def _rel_or_abs(path: Path, root: Path) -> str:
