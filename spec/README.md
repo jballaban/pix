@@ -10,13 +10,13 @@ The tool is named `pix`. The CLI is invoked as `pix <op> ...`.
 
 ## Operations
 
-Nine top-level operations. `init` and `migrate` are implemented; the rest are sketches or deferred.
+Nine top-level operations. `init`, `migrate`, `hash`, `dedupe`, and `organize` are implemented; the rest are sketches or deferred.
 
 | Op | What it does | Spec | Status |
 |---|---|---|---|
 | `init [<path>]` | Establish a library root by creating `<path>\.pix\` with default config. | [library.md](library.md#establishing-a-root) | **v1 implemented** |
 | `migrate <folder>` | Per-file **in-place** normalization: convert formats, rename, re-derive `_auto` tags, write tags into files. | [migrate.md](migrate.md) | **v1 implemented** (face detection deferred — see [Open decisions](#open-decisions)) |
-| `hash <library-root>` | Populate the per-file content-hash cache at `.pix/cache/` for every file missing or stale. Decoupled from migrate so migrate's hot path stays fast. | [hash.md](hash.md) | Designed (not yet implemented) |
+| `hash <library-root>` | Populate the per-file content-hash cache at `.pix/cache/` for every file missing or stale. Decoupled from migrate so migrate's hot path stays fast. | [hash.md](hash.md) | **v1 implemented** |
 | `dedupe` | Find duplicates by content hash across the library and remove redundant copies. | [dedupe.md](dedupe.md) | **v1 implemented** |
 | `merge <src> <dst>` | Combine two already-migrated trees; reuses `dedupe`. | — | Deferred (after dedupe) |
 | `organize <template>` | Physically rearrange files per a template. Single-valued tags only. | [organize.md](organize.md) | **v1 implemented** |
