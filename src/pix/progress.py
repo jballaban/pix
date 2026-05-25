@@ -37,6 +37,34 @@ from typing import IO
 from pix.duration import format_duration
 
 
+def _truncate_path(path: str, max_chars: int) -> str:
+    """Trim `path` from the left to fit in `max_chars`, ellipsis-prefixed.
+
+    Snaps the cut to the nearest path separator (`\\` or `/`) so the
+    result starts at a clean directory boundary — `…\\Subdir\\foo.jpg`
+    rather than `…dir\\foo.jpg`. If no separator is found in the kept
+    tail (a really long bare filename), falls back to a raw character
+    cut so the budget is always respected.
+
+    The point is to keep the progress line within the terminal width
+    *without losing the trailing duration suffix*. Truncating the
+    whole line from the right (the previous behavior) ate the
+    `(Xphase / Yiter)` block, leaving the user with no temporal
+    signal on the slowest cases.
+    """
+    if max_chars <= 0:
+        return ""
+    if len(path) <= max_chars:
+        return path
+    if max_chars == 1:
+        return "…"
+    tail = path[-(max_chars - 1):]
+    for i, ch in enumerate(tail):
+        if ch in "\\/":
+            return "…" + tail[i:]
+    return "…" + tail
+
+
 class LiveProgress:
     """Context-managed live progress line.
 
@@ -175,7 +203,6 @@ class LiveProgress:
             now = time.monotonic()
             iter_elapsed = now - self._action_start
             phase_elapsed = now - self._phase_start
-            mid = f" {self._path}" if self._path else ""
             if self._total is None:
                 # Indeterminate — each begin() resets the timer, so the
                 # tick here IS the per-action elapsed (which == phase
@@ -186,7 +213,7 @@ class LiveProgress:
                     if iter_elapsed >= 1
                     else ""
                 )
-                line = f"{self._label}{mid}{suffix}"
+                head = self._label
             else:
                 # Determinate — phase elapsed is always shown so the
                 # user has a constant temporal anchor even when each
@@ -200,13 +227,28 @@ class LiveProgress:
                     )
                 else:
                     suffix = f" ({format_duration(phase_elapsed)})"
-                line = f"{pct:03d}% - {self._label}{mid}{suffix}"
+                head = f"{pct:03d}% - {self._label}"
+
             # Clip to terminal width minus one (avoid wrapping into a
             # second row — `\r` only resets the cursor on the current
-            # row, so a wrap leaves the upper row stranded).
+            # row, so a wrap leaves the upper row stranded). Long paths
+            # are trimmed from the left with `_truncate_path` so the
+            # duration suffix is preserved.
             cols = shutil.get_terminal_size((80, 24)).columns
             max_len = max(20, cols - 1)
+            if self._path:
+                # head + " " + path + suffix
+                overhead = len(head) + 1 + len(suffix)
+                path_budget = max_len - overhead
+                if path_budget <= 0:
+                    line = head + suffix
+                else:
+                    line = f"{head} {_truncate_path(self._path, path_budget)}{suffix}"
+            else:
+                line = head + suffix
             if len(line) > max_len:
+                # Falls through only when head+suffix alone won't fit
+                # (pathological terminal width or a wildly long label).
                 line = line[: max_len - 1] + "…"
             pad = max(0, self._last_line_len - len(line))
             self._last_line_len = len(line)
