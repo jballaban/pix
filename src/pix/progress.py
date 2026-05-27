@@ -195,6 +195,22 @@ class LiveProgress:
             self._idx += by
         self._render()
 
+    def set_total(self, total: int) -> None:
+        """Promote an indeterminate progress to determinate, or update
+        the known total mid-phase.
+
+        Useful when the work-item count isn't known until after a
+        pre-loop step (e.g. a walk that produces the iteration set).
+        The phase timer and begin count are preserved, so the pre-loop
+        step counts as the "beginning" of the same phase rather than a
+        separate flash-and-gone progress line.
+        """
+        if total < 1:
+            return
+        with self._lock:
+            self._total = total
+        self._render()
+
     def set_label(self, label: str) -> None:
         """Update the label without resetting the elapsed-time counter.
 

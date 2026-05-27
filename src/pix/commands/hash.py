@@ -73,10 +73,15 @@ def _run_hash(root: Path) -> None:
 
     _plog(plan_log_path, f"Library root: {root}")
 
-    # Walk the library.
-    with LiveProgress() as walk_progress:
+    # Walk + discovery share one progress instance: the walk completes
+    # in a fraction of a second on the typical library and doesn't
+    # warrant its own flashing "Walking library..." line. Open the
+    # progress indeterminate, walk under it, then promote to
+    # determinate once we know how many files we're scanning.
+    needs_hashing: list[Path] = []
+    with LiveProgress() as scan_progress:
+        scan_progress.begin("hash-scan")
         t0 = time.monotonic()
-        walk_progress.begin("Walking library...")
         library_files = [p for p, _ in walk_source_files(root)]
         _plog(
             plan_log_path,
@@ -84,14 +89,11 @@ def _run_hash(root: Path) -> None:
             f"{format_duration_precise(time.monotonic() - t0)}.",
         )
 
-    if not library_files:
-        typer.echo("Library is empty; nothing to hash.")
-        return
+        if not library_files:
+            typer.echo("Library is empty; nothing to hash.")
+            return
 
-    # Discovery: which files need (re)hashing?
-    needs_hashing: list[Path] = []
-    with LiveProgress(total=len(library_files)) as scan_progress:
-        scan_progress.begin("hash-scan")
+        scan_progress.set_total(len(library_files))
         for fp in library_files:
             scan_progress.begin("hash-scan", str(fp))
             if read_cached_hash(root, fp) is None:
