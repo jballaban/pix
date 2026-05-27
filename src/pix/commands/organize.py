@@ -17,6 +17,7 @@ from pix import banner, debug
 from pix.config import Config, set_organize_template
 from pix.duration import format_duration_precise
 from pix.editor import open_in_editor, parse_kept_line_ids, prompt_apply
+from pix.hash_cache import read_all_cached_hashes
 from pix.library_lock import LockHeld, acquire as acquire_lock
 from pix.metadata import (
     ExifToolFailed,
@@ -29,6 +30,7 @@ from pix.metadata_cache import PerFileCache
 from pix.progress import LiveProgress
 from pix.organize import (
     CwdInsideLibraryError,
+    MissingHashesError,
     OrganizeApplyError,
     OrganizeError,
     Template,
@@ -103,15 +105,16 @@ def _run_organize(
     _plog(plan_log_path, f"Library root: {root}")
     _plog(plan_log_path, f"Template: {template_str}")
 
-    with LiveProgress() as walk_progress:
-        t0 = time.monotonic()
-        walk_progress.begin("Walking library...")
-        scanned = walk_source_files(root)
-        _plog(
-            plan_log_path,
-            f"Found {len(scanned)} file(s) in "
-            f"{format_duration_precise(time.monotonic() - t0)}.",
-        )
+    # Walk is sub-second on libraries we care about; no console
+    # ticker — the next phase's progress bar comes up immediately.
+    # Timing still lands in plan.log. (Same pattern as migrate/dedupe.)
+    t0 = time.monotonic()
+    scanned = walk_source_files(root)
+    _plog(
+        plan_log_path,
+        f"Found {len(scanned)} file(s) in "
+        f"{format_duration_precise(time.monotonic() - t0)}.",
+    )
 
     if not scanned:
         typer.echo("Library is empty; nothing to organize.")
@@ -163,6 +166,26 @@ def _run_organize(
         f"({len(hits)} cache hits, {len(misses)} from ExifTool).",
     )
 
+    # One parallel pass over the hash cache — feeds the prereq check
+    # (no_hash refusal) and the collision-resolution tiebreaker inside
+    # generate_plan. Previously read_cached_hash was called twice per
+    # file sequentially.
+    t0 = time.monotonic()
+    with LiveProgress(total=len(scanned)) as hash_progress:
+        hash_progress.begin("Reading hashes")
+
+        def _on_hash_batch(batch_size: int) -> None:
+            hash_progress.advance(by=batch_size)
+
+        hashes = read_all_cached_hashes(
+            root, scanned, on_batch=_on_hash_batch
+        )
+    _plog(
+        plan_log_path,
+        f"Read {len(hashes)} hash(es) in "
+        f"{format_duration_precise(time.monotonic() - t0)}.",
+    )
+
     t0 = time.monotonic()
     _plog(plan_log_path, "Generating plan...")
     try:
@@ -174,6 +197,7 @@ def _run_organize(
                 library_root=root,
                 template=template,
                 cache=cache,
+                hashes=hashes,
                 run_id=run_id,
                 run_dir=runs_dir,
                 plan_log=plan_log,
@@ -186,6 +210,11 @@ def _run_organize(
             f"Run `pix migrate {root}` (or the relevant subfolder) first.",
             err=True,
         )
+        raise typer.Exit(code=1) from e
+    except MissingHashesError as e:
+        typer.echo(f"Error: {e}", err=True)
+        for p in e.paths:
+            typer.echo(f"  {p}", err=True)
         raise typer.Exit(code=1) from e
     _plog(
         plan_log_path,

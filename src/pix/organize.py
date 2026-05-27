@@ -35,7 +35,6 @@ from typing import IO
 from pix.dates import format_pix_datetime
 from pix.duration import format_duration_compact, format_size
 from pix.events import effective_event
-from pix.hash_cache import read_cached_hash
 from pix.metadata import FileMetadata
 from pix.timeout import safe_rename
 from pix.plan import (
@@ -294,28 +293,28 @@ def generate_plan(
     library_root: Path,
     template: Template,
     cache: dict[Path, FileMetadata],
+    hashes: dict[Path, str | None],
     run_id: str,
     run_dir: Path,
     plan_log: IO[str] | None = None,
 ) -> Plan:
-    """Build an organize Plan from the cache.
+    """Build an organize Plan from the cache and precomputed hash map.
 
     Raises `UnmigratedFilesError` if any file lacks `pix:OriginalPath`
     — the library invariant is that every file has been migrated, and
-    organize templates read effective tag values.
+    organize templates read effective tag values. Raises
+    `MissingHashesError` if any file lacks a cached content hash
+    (needed as the collision-resolution tiebreaker).
+
+    Both checks consume already-computed inputs — no per-file syscalls.
     """
-    # Refuse if any file is un-migrated. Surface up to 10 examples.
     unmigrated = [
         p for p, m in cache.items() if m.get_str(PIX_ORIGINAL_PATH) is None
     ]
     if unmigrated:
         raise UnmigratedFilesError(sorted(unmigrated)[:10])
 
-    # Refuse if any file lacks a cached content hash — needed as the
-    # collision-resolution tiebreaker.
-    no_hash = [
-        p for p in cache if read_cached_hash(library_root, p) is None
-    ]
+    no_hash = [p for p in cache if hashes.get(p) is None]
     if no_hash:
         raise MissingHashesError(sorted(no_hash)[:10])
 
@@ -342,7 +341,7 @@ def generate_plan(
                 bare = path.name
 
             # Prereq check above guarantees a cached hash exists.
-            content_hash = read_cached_hash(library_root, path) or str(path)
+            content_hash = hashes.get(path) or str(path)
             candidates.append(
                 _CandidateTarget(
                     path=path,

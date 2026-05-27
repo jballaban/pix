@@ -242,6 +242,7 @@ def test_plan_refuses_unmigrated_files(tmp_path: Path) -> None:
             library_root=root,
             template=parse_template("{year}"),
             cache=cache,
+            hashes={},
             run_id="test-run",
             run_dir=tmp_path / "runs",
         )
@@ -262,6 +263,7 @@ def test_plan_refuses_missing_content_hash(tmp_path: Path) -> None:
             library_root=root,
             template=parse_template("{year}"),
             cache=cache,
+            hashes={},
             run_id="test-run",
             run_dir=tmp_path / "runs",
         )
@@ -290,6 +292,7 @@ def test_plan_moves_file_to_template_path(
         library_root=root,
         template=parse_template("{year}/{month}/{event}"),
         cache=cache,
+        hashes=patched_hash_cache,
         run_id="test-run",
         run_dir=tmp_path / "runs",
     )
@@ -323,6 +326,7 @@ def test_plan_idempotent_when_already_in_place(
         library_root=root,
         template=parse_template("{year}/{month}/{event}"),
         cache=cache,
+        hashes=patched_hash_cache,
         run_id="test-run",
         run_dir=tmp_path / "runs",
     )
@@ -354,6 +358,7 @@ def test_plan_drops_stale_collision_suffix(
         library_root=root,
         template=parse_template("{year}/{event}"),
         cache=cache,
+        hashes=patched_hash_cache,
         run_id="test-run",
         run_dir=tmp_path / "runs",
     )
@@ -398,6 +403,7 @@ def test_plan_applies_collision_suffix_at_target(
         library_root=root,
         template=parse_template("{year}/{event}"),
         cache=cache,
+        hashes=patched_hash_cache,
         run_id="test-run",
         run_dir=tmp_path / "runs",
     )
@@ -435,6 +441,7 @@ def test_plan_event_override_wins_over_event_auto(
         library_root=root,
         template=parse_template("{event}"),
         cache=cache,
+        hashes=patched_hash_cache,
         run_id="test-run",
         run_dir=tmp_path / "runs",
     )
@@ -470,6 +477,7 @@ def test_apply_moves_file_to_target(
         library_root=root,
         template=parse_template("{year}/{event}"),
         cache=cache,
+        hashes=patched_hash_cache,
         run_id="test-run",
         run_dir=run_dir,
     )

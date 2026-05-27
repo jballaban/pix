@@ -148,6 +148,17 @@ Expected savings: one stat per file in `pix hash`. On a 200k-file library that's
 
 ## Items added 2026-05-26 (hash-scan perf pass)
 
+### 26. Apply the dedupe pattern to organize — **done in v0.1.83**
+
+Organize had the same shape as dedupe pre-v0.1.82: two sequential `read_cached_hash` calls per file (prereq refusal + collision-resolution tiebreaker), plus a flashing "Walking library..." LiveProgress on the sub-second walk. Mechanical port:
+
+- commands/organize.py now does a single parallel pass via `read_all_cached_hashes` and threads the `hashes` dict into `generate_plan`.
+- `generate_plan` takes `hashes` as a keyword arg and reads it via `hashes.get(p)` for both the no-hash refusal and the collision-tiebreaker lookup. No more `read_cached_hash` import in `pix.organize`.
+- `MissingHashesError` is now caught in commands/organize.py with the same shape as the dedupe handler. (Previously it would have surfaced as an uncaught traceback — pre-existing gap.)
+- Silent walk replaces the flashing walking line.
+
+Conftest fixture simplified: with both dedupe and organize consuming a precomputed hash dict, the `patched_hash_cache` monkeypatching is gone — the fixture is now just an empty dict tests populate and pass through as `hashes=`.
+
 ### 25. Parallelize dedupe's hash reads + dedupe duplicate per-file calls — **done in v0.1.82**
 
 Dedupe was calling `read_cached_hash` sequentially twice per file — once in `require_migrated_with_hashes` (the prereq check) and once in `group_by_hash` (grouping). On a 63k-file library that's 252k sequential syscalls (4 per file). Refactored to:
@@ -157,8 +168,6 @@ Dedupe was calling `read_cached_hash` sequentially twice per file — once in `r
 - Drop dedupe's flashing "Walking library..." progress line (migrate-pattern silent walk).
 
 `find_missing_hashes` is now a thin wrapper over `read_all_cached_hashes` — single source of truth for parallel hash-cache scans across the hash and dedupe commands.
-
-Same fix needed for organize (calls `read_cached_hash` twice per file in the prereq + collision-resolution paths). Deferred to a follow-up.
 
 ### 24. Parallelize the hash-cache scan + skip per-file stat via scandir mtime — **done in v0.1.81**
 
