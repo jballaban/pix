@@ -12,8 +12,9 @@ Each item links back to the file it'd primarily touch.
 - `hash_mp4`: seek through box headers, then stream `mdat` payloads in 1 MiB chunks into BLAKE3. Header walk only needs the first dozen-ish bytes of each top-level box.
 - `hash_jpeg`: stream (or mmap) and feed BLAKE3 in chunks while scanning marker-by-marker.
 
-### 2. Native-speed JPEG marker scan
-`src/pix/content_hash.py` — `hash_jpeg` is a Python byte-at-a-time loop. Replace the inner loop with `data.find(b"\xff", i)` to jump between marker candidates; only the marker-boundary handling stays in Python. Combined with #1 this should be ~10× on a 5 MB JPEG.
+### 2. Native-speed JPEG marker scan — **done in v0.1.77**
+
+`hash_jpeg` was hashing JPEGs byte-at-a-time in Python — at 100 ms/MB it was the dominant cost of `pix hash`. Telemetry on a 472-file sample showed throughput stuck at 3.5 files/sec with CPU at 3% and I/O at 1%, confirming we were spending all the time in interpreter overhead, not on any resource. Replaced the per-byte loop with `data.find(b"\xff", i)` to skip across entropy-coded scan-data runs in C and feed them to BLAKE3 in one `update()` call. Byte-for-byte identical hash output (same updates, just batched) so existing cache entries stay valid. Marker-boundary handling is unchanged.
 
 ### 3. Combine TAG sidecar export + write in one ExifTool round-trip
 `src/pix/apply.py:_apply_tag`, `src/pix/exiftool_session.py` — currently two `-execute` calls per TAG line (`export_xmp_sidecar` then `write_tags`). ExifTool can do both in one `-execute`. At TB-scale, TAG is the bulk of work; halving the per-line round-trip count is a meaningful chunk.

@@ -66,11 +66,17 @@ def hash_jpeg(path: Path) -> str:
     n = len(data)
     i = 0
     while i < n:
-        if data[i] != 0xFF:
-            # In compressed scan data — hash this byte and continue.
-            hasher.update(data[i : i + 1])
-            i += 1
-            continue
+        # Most of the file is entropy-coded scan data with long runs of
+        # non-`FF` bytes. `bytes.find` jumps to the next marker candidate
+        # in C, and we feed the intervening run to BLAKE3 in one update.
+        # Equivalent to byte-at-a-time but orders of magnitude faster.
+        next_ff = data.find(b"\xff", i)
+        if next_ff < 0:
+            hasher.update(data[i:n])
+            break
+        if next_ff > i:
+            hasher.update(data[i:next_ff])
+            i = next_ff
 
         if i + 1 >= n:
             # Trailing stray FF; hash and bail.
