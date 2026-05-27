@@ -117,7 +117,7 @@ def _run_organize(
         typer.echo("Library is empty; nothing to organize.")
         return
 
-    library_files = [p for p, _ in scanned]
+    library_files = [p for p, _, _ in scanned]
 
     t0 = time.monotonic()
     meta_cache = PerFileCache.for_library(root)

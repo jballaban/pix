@@ -134,7 +134,7 @@ def _run_migrate(root: Path, folder: Path, config: Config) -> None:
         f"{format_duration_precise(time.monotonic() - t0)}.",
     )
 
-    source_files = [p for p, _ in scanned]
+    source_files = [p for p, _, _ in scanned]
     _validate_extensions(source_files, config)
 
     # Cache lookup + ExifTool reads. With the per-file cache, the

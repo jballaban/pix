@@ -24,7 +24,11 @@ from pix.duration import (
     format_size,
 )
 from pix.editor import prompt_proceed
-from pix.hash_cache import read_cached_hash, write_cached_hash
+from pix.hash_cache import (
+    find_missing_hashes,
+    read_cached_hash,
+    write_cached_hash,
+)
 from pix.library_lock import LockHeld, acquire as acquire_lock
 from pix.progress import LiveProgress
 from pix.root import NoLibraryRoot, resolve as resolve_root
@@ -82,28 +86,30 @@ def _run_hash(root: Path) -> None:
     with LiveProgress() as scan_progress:
         scan_progress.begin("hash-scan")
         t0 = time.monotonic()
-        library_files = [p for p, _ in walk_source_files(root)]
+        scanned = walk_source_files(root)
         _plog(
             plan_log_path,
-            f"Found {len(library_files)} file(s) in "
+            f"Found {len(scanned)} file(s) in "
             f"{format_duration_precise(time.monotonic() - t0)}.",
         )
 
-        if not library_files:
+        if not scanned:
             typer.echo("Library is empty; nothing to hash.")
             return
 
-        scan_progress.set_total(len(library_files))
-        for fp in library_files:
-            scan_progress.begin("hash-scan", str(fp))
-            if read_cached_hash(root, fp) is None:
-                needs_hashing.append(fp)
-            scan_progress.advance()
+        scan_progress.set_total(len(scanned))
+
+        def _on_batch(n: int) -> None:
+            scan_progress.advance(by=n)
+
+        needs_hashing = find_missing_hashes(
+            root, scanned, on_batch=_on_batch
+        )
 
     _plog(
         plan_log_path,
         f"{len(needs_hashing)} file(s) need hashing "
-        f"({len(library_files) - len(needs_hashing)} cache hit(s)).",
+        f"({len(scanned) - len(needs_hashing)} cache hit(s)).",
     )
 
     if not needs_hashing:

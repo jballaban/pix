@@ -95,7 +95,7 @@ def _run_dedupe(root: Path) -> None:
         typer.echo("Library is empty; nothing to dedupe.")
         return
 
-    library_files = [p for p, _ in scanned]
+    library_files = [p for p, _, _ in scanned]
 
     t0 = time.monotonic()
     meta_cache = PerFileCache.for_library(root)

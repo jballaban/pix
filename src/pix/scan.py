@@ -6,13 +6,15 @@ import os
 from pathlib import Path
 
 
-def walk_source_files(folder: Path) -> list[tuple[Path, int]]:
+def walk_source_files(folder: Path) -> list[tuple[Path, int, int]]:
     """Walk `folder` recursively for files, skipping `.pix/` state directories.
 
-    Returns `(absolute_path, file_size_bytes)` pairs. The size comes free
-    from the directory entry on Windows (NTFS dirents include size), so
-    callers can avoid a follow-up `stat()` per file when they need it —
-    notably the per-file metadata cache check.
+    Returns `(absolute_path, file_size_bytes, mtime_ns)` triples. Both
+    size and mtime come free from the directory entry on Windows (NTFS
+    dirents cache them), so downstream cache validators can avoid a
+    follow-up `stat()` per file — notably the per-file metadata cache
+    check (size-validated) and the per-file hash cache check (validated
+    on size+mtime_ns).
 
     pix's own state lives under `.pix/` — `runs/`, `staging/`, `checkouts/`,
     `faces/`, `cache/`, `errors/`, `config.yaml`, etc. None of that should
@@ -22,12 +24,12 @@ def walk_source_files(folder: Path) -> list[tuple[Path, int]]:
     descend into it.
 
     Uses `os.scandir` (iteratively) rather than `os.walk` so we can keep
-    the `DirEntry` and read its cached `st_size` without an extra syscall.
-    The caller is expected to have resolved `folder` already; on Windows
-    `scandir` yields canonical NTFS case so output is consistent with
-    what `resolve()` would have produced.
+    the `DirEntry` and read its cached `st_size` / `st_mtime_ns` without
+    extra syscalls. The caller is expected to have resolved `folder`
+    already; on Windows `scandir` yields canonical NTFS case so output
+    is consistent with what `resolve()` would have produced.
     """
-    out: list[tuple[Path, int]] = []
+    out: list[tuple[Path, int, int]] = []
     stack: list[str] = [str(folder)]
     while stack:
         dirpath = stack.pop()
@@ -38,7 +40,10 @@ def walk_source_files(folder: Path) -> list[tuple[Path, int]]:
                         if entry.name != ".pix":
                             stack.append(entry.path)
                     elif entry.is_file(follow_symlinks=False):
-                        out.append((Path(entry.path), entry.stat().st_size))
+                        st = entry.stat()
+                        out.append(
+                            (Path(entry.path), st.st_size, st.st_mtime_ns)
+                        )
         except OSError:
             continue
     return out

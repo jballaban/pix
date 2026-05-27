@@ -25,7 +25,7 @@ def test_walk_skips_pix_state_directory(tmp_path: Path) -> None:
 
     files = walk_source_files(root)
 
-    found = {p.relative_to(root.resolve()).as_posix() for p, _ in files}
+    found = {p.relative_to(root.resolve()).as_posix() for p, _, _ in files}
     assert found == {"photo.jpg", "trip/another.jpg"}
 
 
@@ -39,16 +39,21 @@ def test_walk_skips_nested_pix_dirs(tmp_path: Path) -> None:
     (root / "subdir" / "alsogood.jpg").write_bytes(b"")
 
     files = walk_source_files(root)
-    found = {p.relative_to(root.resolve()).as_posix() for p, _ in files}
+    found = {p.relative_to(root.resolve()).as_posix() for p, _, _ in files}
     assert found == {"good.jpg", "subdir/alsogood.jpg"}
 
 
 def test_walk_returns_file_sizes(tmp_path: Path) -> None:
-    """Each entry pairs the absolute path with its size in bytes."""
+    """Each entry pairs the absolute path with its size and mtime_ns."""
     root = tmp_path / "src"
     root.mkdir()
     (root / "small.jpg").write_bytes(b"abc")  # 3 bytes
     (root / "bigger.jpg").write_bytes(b"x" * 1024)  # 1024 bytes
 
-    sizes = {p.name: sz for p, sz in walk_source_files(root)}
-    assert sizes == {"small.jpg": 3, "bigger.jpg": 1024}
+    entries = {p.name: (sz, mt) for p, sz, mt in walk_source_files(root)}
+    assert {n: sz for n, (sz, _) in entries.items()} == {
+        "small.jpg": 3,
+        "bigger.jpg": 1024,
+    }
+    # mtime_ns is populated and non-zero for real files.
+    assert all(mt > 0 for _, mt in entries.values())

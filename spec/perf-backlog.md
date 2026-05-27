@@ -146,6 +146,18 @@ Expected savings: one stat per file in `pix hash`. On a 200k-file library that's
 
 **Verdict:** worth fixing as a quick cleanup since I introduced it. Treat as bugfix rather than backlog.
 
+## Items added 2026-05-26 (hash-scan perf pass)
+
+### 24. Parallelize the hash-cache scan + skip per-file stat via scandir mtime — **done in v0.1.81**
+
+The hash-scan phase (the "are any files missing a cached hash?" pass over the whole library) was sequential and stat-heavy: 63k files × 3 syscalls each (`cache_path.is_file()` + `read_bytes` + `file_path.stat()`) ran ~3 minutes for a no-op pass where every file was already cached. Three changes together:
+
+- **Parallelized via `ThreadPoolExecutor`** (32 workers, matching `metadata.filter_cache_misses`). Each per-file check is one `read_bytes` of a small JSON file — I/O-bound and independent, so concurrent execution on SSD pushes throughput ~10× higher. New `hash_cache.find_missing_hashes` mirrors the `filter_cache_misses` pattern.
+- **Dropped `is_file()` precheck.** Try `read_bytes`, catch `FileNotFoundError`. Same pattern `PerFileCache.get` adopted in v0.1.62. Saves one stat per cache hit.
+- **Carry `mtime_ns` from the walk.** `walk_source_files` now returns `(Path, size, mtime_ns)` triples — both attributes come free from the scandir DirEntry on Windows. `find_missing_hashes` validates against the walk-provided values instead of stat'ing each media file. Saves the third syscall per file. `filter_cache_misses` / `build_cache` accept the same 3-tuple shape; metadata cache continues to validate on size only.
+
+Combined: 3 syscalls/file → 1 syscall/file, 32× parallel. Expected ~30× total speedup on the scan phase (~3 min → ~6 s on a 63k-file library).
+
 ## Non-perf items parked here
 
 ### 12. Config evolution: existing libraries don't pick up new default extensions — **superseded in v0.1.20**

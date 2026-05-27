@@ -21,9 +21,10 @@ from __future__ import annotations
 
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from typing import cast
+from typing import Callable, cast
 
 
 def cache_path_for(library_root: Path, file_path: Path) -> Path:
@@ -55,12 +56,16 @@ def read_cached_hash(library_root: Path, file_path: Path) -> str | None:
 
     Validates the entry against the file's current `(size, mtime_ns)`
     — any drift makes the entry stale, same as missing.
+
+    No is_file precheck: `read_bytes` is attempted directly and
+    `FileNotFoundError` is treated as a miss. Saves one stat per cache
+    hit on the hot path.
     """
     cache_path = cache_path_for(library_root, file_path)
-    if not cache_path.is_file():
-        return None
     try:
         loaded: object = json.loads(cache_path.read_bytes())
+    except FileNotFoundError:
+        return None
     except (OSError, json.JSONDecodeError):
         return None
     if not isinstance(loaded, dict):
@@ -78,6 +83,97 @@ def read_cached_hash(library_root: Path, file_path: Path) -> str | None:
     if not isinstance(h, str):
         return None
     return h
+
+
+def _validate_cached_hash(
+    library_root: Path,
+    file_path: Path,
+    expected_size: int,
+    expected_mtime_ns: int,
+) -> str | None:
+    """Like `read_cached_hash` but uses caller-provided size+mtime_ns
+    instead of stat'ing the media file.
+
+    Used by `find_missing_hashes` where the scandir walk already
+    captured both values for free from the dirent.
+    """
+    cache_path = cache_path_for(library_root, file_path)
+    try:
+        loaded: object = json.loads(cache_path.read_bytes())
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(loaded, dict):
+        return None
+    data = cast("dict[str, object]", loaded)
+    if data.get("size") != expected_size:
+        return None
+    if data.get("mtime_ns") != expected_mtime_ns:
+        return None
+    h = data.get("hash")
+    if not isinstance(h, str):
+        return None
+    return h
+
+
+# Match `metadata.CACHE_LOOKUP_WORKERS` — same I/O-bound JSON-read
+# workload, same SSD parallelism profile.
+_HASH_LOOKUP_WORKERS: int = 32
+_HASH_LOOKUP_BATCH: int = 1000
+
+
+def find_missing_hashes(
+    library_root: Path,
+    paths_with_meta: list[tuple[Path, int, int]],
+    on_batch: Callable[[int], None] | None = None,
+    batch_size: int = _HASH_LOOKUP_BATCH,
+    max_workers: int = _HASH_LOOKUP_WORKERS,
+) -> list[Path]:
+    """Return library paths that lack a valid cached hash.
+
+    Validates each entry's `(size, mtime_ns)` against the values
+    supplied by the caller (sourced from
+    `pix.scan.walk_source_files`'s scandir dirents). Mismatches and
+    missing-entirely are both treated as "missing".
+
+    Lookups run in a thread pool — each per-file check is one
+    `read_bytes` of a small JSON file + a cheap validation, and lookups
+    are independent. Concurrent execution on SSD/NVMe pushes the total
+    phase time ~10× lower than sequential.
+
+    `on_batch(batch_size)` fires every `batch_size` files from the
+    consumer thread (results arrive in submission order via
+    `ThreadPoolExecutor.map`).
+    """
+    if not paths_with_meta:
+        return []
+
+    missing: list[Path] = []
+    in_batch = 0
+
+    def check_one(item: tuple[Path, int, int]) -> tuple[Path, str | None]:
+        path, size, mtime_ns = item
+        return path, _validate_cached_hash(
+            library_root,
+            path,
+            expected_size=size,
+            expected_mtime_ns=mtime_ns,
+        )
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for path, cached in executor.map(check_one, paths_with_meta):
+            if cached is None:
+                missing.append(path)
+            in_batch += 1
+            if in_batch >= batch_size:
+                if on_batch is not None:
+                    on_batch(in_batch)
+                in_batch = 0
+
+    if in_batch > 0 and on_batch is not None:
+        on_batch(in_batch)
+    return missing
 
 
 def write_cached_hash(
