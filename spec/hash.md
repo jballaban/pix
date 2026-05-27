@@ -78,11 +78,11 @@ No ExifTool. No file mutation. No conservation capture. The only on-disk artifac
 
 Same policy as migrate / dedupe / organize:
 
-- **During discovery:** single rewriting `NN% - hash-scan <path> (Xs)` line. Phase headers and per-file decisions go to a plan.log in the run folder.
-- **During apply:** single rewriting `NN% - L042 HASH <path> (Xs)` line.
+- **During discovery:** single rewriting `NNN% Xphase - hash-scan <path>` line (front-of-line phase elapsed per [migrate.md → Console output](migrate.md#console-output)). Phase headers and per-file decisions go to a plan.log in the run folder.
+- **During apply:** single rewriting `NNN% Xphase - L042 HASH <path>` line.
 - **After apply:** `Hashed N file(s) in <duration>.` (Or `Hashed N file(s); M failed — see <apply.log>.` if anything failed.)
 
-`(Xs)` follows the tiered duration format defined in [migrate.md → Duration format](migrate.md#duration-format).
+`Xphase` and the trailing `(Yiter)` (when present) follow the tiered duration format defined in [migrate.md → Duration format](migrate.md#duration-format).
 
 Errors print to stderr.
 

@@ -1,16 +1,20 @@
 """Live one-line progress display for migrate's long phases.
 
-Two modes:
+Two modes, both sharing a fixed-width front block so the duration
+column stays aligned across phases:
 
-- **Determinate** (`total=N`): `NNN% - LABEL path (Xphase / Yiter)`.
+- **Determinate** (`total=N`): `NNN% Xphase - LABEL path (Yiter)`.
   Caller calls `begin(label, path)` to set the current item then
-  `advance()` to bump the percent. The trailing parens always show
-  phase-total elapsed; the per-iteration elapsed is appended after
-  `/` only when it's worth surfacing (≥1s), so fast iterations
-  collapse to just `(Xphase)`. Used by plan-gen and apply where the
+  `advance()` to bump the percent. The front block shows phase-total
+  elapsed (8-char right-aligned, sub-tiers padded with leading
+  spaces). The per-iteration elapsed is appended in trailing parens
+  only when it's worth surfacing (≥1s) and the phase has multiple
+  begin() calls; fast iterations and single-begin phases collapse
+  to just the front block. Used by plan-gen and apply where the
   total iteration count is known up front.
-- **Indeterminate** (`total=None`): `LABEL (Xs)`. No percent, just a
-  ticking elapsed-time counter. Used for phases where the underlying
+- **Indeterminate** (`total=None`): `        Xphase - LABEL`. Percent
+  slot is replaced with spaces; no trailing parens (the only timer
+  is already at the front). Used for phases where the underlying
   work gives no progress feedback (the bulk ExifTool read, the
   source walk). Caller just calls `begin(label)` and lets the
   background thread tick the elapsed counter once per second.
@@ -56,10 +60,10 @@ def _truncate_path(path: str, max_chars: int) -> str:
     cut so the budget is always respected.
 
     The point is to keep the progress line within the terminal width
-    *without losing the trailing duration suffix*. Truncating the
-    whole line from the right (the previous behavior) ate the
-    `(Xphase / Yiter)` block, leaving the user with no temporal
-    signal on the slowest cases.
+    *without losing the trailing `(Yiter)` suffix*. Truncating the
+    whole line from the right (an earlier approach) ate the per-iter
+    block, leaving the user with no signal on which slow item was
+    causing the stall.
     """
     if max_chars <= 0:
         return ""
@@ -115,16 +119,18 @@ class LiveProgress:
         self._path: str = ""
         now = time.monotonic()
         # `_phase_start` is set once at construction and never resets, so
-        # the trailing `(Xphase)` ticker keeps climbing across every
+        # the front-of-line `Xphase` ticker keeps climbing across every
         # iteration. `_action_start` resets per `begin()` call so the
-        # per-iteration `(Yiter)` reflects just the current item.
+        # trailing `(Yiter)` reflects just the current item.
         self._phase_start: float = now
         self._action_start: float = now
         # Number of `begin()` calls so far. Used to decide whether the
         # per-iter elapsed is distinct from the phase elapsed: with a
         # single begin() (e.g. the cache-load phase) iter ≈ phase, so
-        # showing both as `(2s / 2s)` is just noise. From the second
-        # begin() onward they diverge, and `(2m14s / 3s)` is useful.
+        # the trailing `(Yiter)` parens would just echo the front-block
+        # `Xphase` and add noise. From the second begin() onward they
+        # diverge, and the trailing `(3s)` next to ` 45%    2m14s -`
+        # is useful.
         self._begin_count: int = 0
         # Last-render timestamp for the 100ms render throttle (see
         # `_RENDER_THROTTLE_S`). 0.0 means "never rendered" so the
@@ -231,34 +237,26 @@ class LiveProgress:
             self._last_render_at = now
             iter_elapsed = now - self._action_start
             phase_elapsed = now - self._phase_start
+            phase_dur = format_duration(phase_elapsed)
             if self._total is None:
-                # Indeterminate — each begin() resets the timer, so the
-                # tick here IS the per-action elapsed (which == phase
-                # elapsed for single-begin uses, the common case).
-                # Hidden under 1s to match the determinate per-iter rule.
+                # Indeterminate — only the phase timer exists. Pad the
+                # percent slot with spaces so the duration column stays
+                # aligned with determinate lines.
+                prefix = f"    {phase_dur:>8} - "
+                suffix = ""
+            else:
+                pct = int(self._idx * 100 / self._total)
+                prefix = f"{pct:>3}% {phase_dur:>8} - "
+                # Trailing per-iter parens only when worth surfacing AND
+                # distinct from phase (>=2 begin() calls means iter is
+                # for the current item, not the whole phase).
+                show_iter = iter_elapsed >= 1 and self._begin_count > 1
                 suffix = (
                     f" ({format_duration(iter_elapsed)})"
-                    if iter_elapsed >= 1
+                    if show_iter
                     else ""
                 )
-                head = self._label
-            else:
-                # Determinate — phase elapsed is always shown so the
-                # user has a constant temporal anchor even when each
-                # iteration is sub-second; per-iter is appended after
-                # `/` only when it's worth surfacing AND distinct from
-                # phase (>=2 begin() calls means iter is for the
-                # current item, not the whole phase).
-                pct = int(self._idx * 100 / self._total)
-                show_iter = iter_elapsed >= 1 and self._begin_count > 1
-                if show_iter:
-                    suffix = (
-                        f" ({format_duration(phase_elapsed)}"
-                        f" / {format_duration(iter_elapsed)})"
-                    )
-                else:
-                    suffix = f" ({format_duration(phase_elapsed)})"
-                head = f"{pct:3d}% - {self._label}"
+            head = f"{prefix}{self._label}"
 
             # Clip to terminal width minus one (avoid wrapping into a
             # second row — `\r` only resets the cursor on the current

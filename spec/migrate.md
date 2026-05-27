@@ -27,17 +27,23 @@ Migrate honors the spec-wide metadata-preservation invariants: **CONVERT carries
 Status output during a migrate run keeps the console quiet — phase headers, file counts, and per-file detail all go to log files in the run folder; the console gets only the single rewriting progress line and the user-facing prompts (plan summary, `Apply? [Y/e/n]`, "Applied N actions").
 
 1. **Console during plan-gen and apply** — exactly one line, rewritten in place via `\r` once per second:
-   - `NNN% - L042 ACTION path (Xphase / Yiter)` during apply
-   - `NNN% - planning path (Xphase / Yiter)` during plan-gen
+   - `NNN% Xphase - L042 ACTION path (Yiter)` during apply
+   - `NNN% Xphase - planning path` during plan-gen
 
-   The trailing parens always show **phase-total elapsed** so the user has a constant temporal anchor even when each iteration is sub-second. The **per-iteration elapsed** is appended after `/` only when it's worth surfacing (≥1s); fast iterations collapse to just `(Xphase)`. Examples:
+   The phase-total elapsed sits at the **front of the line** as a fixed-width temporal anchor — present on every render so the user sees the run progressing even when each iteration is sub-second. The **per-iteration elapsed** is appended in trailing parens only when it's worth surfacing (≥1s) and the phase has multiple `begin()` calls; fast iterations and single-begin phases collapse to just the front block.
 
-   - Slow iteration: `045% - L042 CONVERT+RENAME+TAG IMG_4821.HEIC (2m14s / 3s)`
-   - Fast iteration: `045% - L042 RENAME IMG_4821.HEIC (2m14s)`
+   Front-block layout: 3-char right-aligned percent, `%`, space, 8-char right-aligned phase-duration, ` - `. The duration field reserves enough width for `9h59m59s` and renders shorter tiers right-aligned with leading spaces (`      3s`, `   1m23s`); >9h overflows the field naturally. Examples:
+
+   - Slow iteration: ` 45%    2m14s - L042 CONVERT+RENAME+TAG IMG_4821.HEIC (3s)`
+   - Fast iteration: ` 45%    2m14s - L042 RENAME IMG_4821.HEIC`
+
+   **Indeterminate-mode phases** (no total known — `Walking library...`, `Reading metadata...`) replace the percent slot with spaces so the duration column stays aligned across phases, and have no trailing per-iter parens (the only timer is already at the front):
+
+   - Indeterminate: `        1m23s - Walking library...`
 
    On clean exit the percent wraps to `100%`. Auto-disabled when stdout isn't a TTY (tests, redirects).
 
-   <a id="duration-format"></a>**Duration format** (applies to all `(Xs)` suffixes in progress lines and to the end-of-phase summaries in `plan.log` / `apply.log`):
+   <a id="duration-format"></a>**Duration format** (applies to the front-of-line `Xphase` and to the trailing `(Yiter)` parens in progress lines, and to the end-of-phase summaries in `plan.log` / `apply.log`):
 
    | Elapsed | Format | Examples |
    |---|---|---|

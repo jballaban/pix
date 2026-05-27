@@ -111,8 +111,8 @@ A library with no duplicates produces an empty plan. Re-running dedupe with no i
 
 Same policy as migrate and organize:
 
-- During plan-gen: silent except the single rewriting `NN% - hashing <path> (Xs)` progress line. All phase headers, file counts, per-file group assignments → `plan.log`.
-- During apply: single rewriting `NN% - L042 DEDUP <path> (Xs)` line.
+- During plan-gen: silent except the single rewriting `NNN% Xphase - hashing <path>` progress line (front-of-line phase elapsed per [migrate.md → Console output](migrate.md#console-output)). All phase headers, file counts, per-file group assignments → `plan.log`.
+- During apply: single rewriting `NNN% Xphase - L042 DEDUP <path>` line.
 - After plan-gen: `Plan written: ...`, `Summary: ...`, `Apply? [Y/e/n]`.
 - After apply: `Removed N duplicate(s) across M group(s).`
 
