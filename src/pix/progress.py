@@ -241,8 +241,9 @@ class LiveProgress:
             if self._total is None:
                 # Indeterminate — only the phase timer exists. Pad the
                 # percent slot with spaces so the duration column stays
-                # aligned with determinate lines.
-                prefix = f"    {phase_dur:>8} - "
+                # aligned with determinate lines. Width matches
+                # len("{pct:>3}% ") = 5.
+                prefix = f"     {phase_dur:>8} - "
                 suffix = ""
             else:
                 pct = int(self._idx * 100 / self._total)
