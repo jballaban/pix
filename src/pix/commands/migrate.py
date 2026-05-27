@@ -24,6 +24,7 @@ from pix.cleanup import (
     wipe_staging,
 )
 from pix.config import Config
+from pix.convert import VideoProfile, probe_videos_parallel
 from pix.duration import format_duration_precise
 from pix.editor import open_in_editor, parse_kept_line_ids, prompt_apply
 from pix.library_lock import LockHeld, acquire as acquire_lock
@@ -35,7 +36,14 @@ from pix.metadata import (
     read_metadata_batched,
 )
 from pix.metadata_cache import PerFileCache
-from pix.plan import Action, Plan, PlanLine, generate_plan, lookup_policy
+from pix.plan import (
+    Action,
+    Plan,
+    PlanLine,
+    canonical_extension,
+    generate_plan,
+    lookup_policy,
+)
 from pix.progress import LiveProgress
 from pix.root import NoLibraryRoot, resolve as resolve_root
 from pix.scan import walk_source_files
@@ -186,6 +194,38 @@ def _run_migrate(root: Path, folder: Path, config: Config) -> None:
                 path=path, raw={"SourceFile": str(path)}
             )
 
+    # Windows-playability probe per spec/migrate.md → Windows playability
+    # check. Probe every keep-policy mp4/m4v candidate so plan-gen knows
+    # whether to route to CONVERT for re-encode. Source files matching
+    # `convert_to_mp4` policy already go through CONVERT and re-probe
+    # internally at apply time, so we don't probe them here.
+    video_candidates = [
+        p for p in source_files
+        if lookup_policy(p.name, config.extensions) == "keep"
+        and canonical_extension(p.suffix.lstrip(".")) == "mp4"
+    ]
+    video_profiles: dict[Path, VideoProfile | None] = {}
+    if video_candidates:
+        t0 = time.monotonic()
+        _plog(
+            plan_log_path,
+            f"Probing {len(video_candidates)} video(s) for playability...",
+        )
+        with LiveProgress(total=len(video_candidates)) as probe_progress:
+            probe_progress.begin("Probing videos")
+
+            def _on_probe_batch(n: int) -> None:
+                probe_progress.advance(by=n)
+
+            video_profiles = probe_videos_parallel(
+                video_candidates, on_batch=_on_probe_batch
+            )
+        _plog(
+            plan_log_path,
+            f"Probed {len(video_profiles)} video(s) in "
+            f"{format_duration_precise(time.monotonic() - t0)}.",
+        )
+
     t0 = time.monotonic()
     _plog(plan_log_path, "Generating plan...")
     with debug.writing_to(runs_dir):
@@ -196,6 +236,7 @@ def _run_migrate(root: Path, folder: Path, config: Config) -> None:
             run_id=run_id,
             run_dir=runs_dir,
             staging_dir=staging_dir,
+            video_profiles=video_profiles,
         )
     _plog(
         plan_log_path,

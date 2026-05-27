@@ -1,9 +1,7 @@
-"""Tests for `pix.convert`.
+"""Tests for `pix.convert` codec/profile probing and playability check.
 
-Focused on the codec-detection parsing — historical bug where ffprobe's
-`csv=p=0` output included a trailing comma, silently routing every
-H.264/HEVC video through the libx265 re-encode path instead of the
-intended `-c copy` re-mux.
+Covers `probe_video_profile` output parsing (multi-field ffprobe) and the
+`is_windows_playable` decision matrix that drives re-mux vs re-encode.
 """
 
 from __future__ import annotations
@@ -16,7 +14,11 @@ from typing import Any
 import pytest
 
 from pix import convert
-from pix.convert import H264_HEVC_CODECS, _probe_video_codec
+from pix.convert import (
+    VideoProfile,
+    is_windows_playable,
+    probe_video_profile,
+)
 
 
 @dataclass
@@ -40,29 +42,76 @@ def _fake_run(stdout: str, returncode: int = 0):
 @pytest.mark.parametrize(
     "stdout,expected",
     [
-        ("hevc\n", "hevc"),  # default=nw=1:nk=1 — what we now ask for
-        ("h264\n", "h264"),
-        ("hevc", "hevc"),    # no trailing newline
-        ("HEVC\n", "hevc"),  # casing
-        ("  hevc  \n", "hevc"),  # whitespace tolerance
-        ("hevc,\n", "hevc"),  # historical csv=p=0 trailing-comma quirk
-        ("hevc,extra\n", "hevc"),  # tolerate multi-field future format
+        # ffprobe `default=nw=1:nk=1` with codec_name,profile,pix_fmt emits
+        # one line per field, in the order requested.
+        (
+            "h264\nMain\nyuv420p\n",
+            VideoProfile(codec="h264", profile="Main", pix_fmt="yuv420p"),
+        ),
+        (
+            "h264\nHigh 4:2:2\nyuvj422p\n",
+            VideoProfile(
+                codec="h264", profile="High 4:2:2", pix_fmt="yuvj422p"
+            ),
+        ),
+        (
+            "hevc\nMain\nyuv420p\n",
+            VideoProfile(codec="hevc", profile="Main", pix_fmt="yuv420p"),
+        ),
+        # Casing: codec + pix_fmt lowercased, profile preserved.
+        (
+            "H264\nHigh\nYUV420P\n",
+            VideoProfile(codec="h264", profile="High", pix_fmt="yuv420p"),
+        ),
+        # Tolerate missing tail values (some old containers don't expose
+        # profile or pix_fmt) — they pad to "" and the playability check
+        # will route to re-encode.
+        (
+            "mpeg2video\n\n\n",
+            VideoProfile(codec="mpeg2video", profile="", pix_fmt=""),
+        ),
+        # Trailing-comma tolerance kept from the v0.1.56 fix.
+        (
+            "hevc,\nMain\nyuv420p\n",
+            VideoProfile(codec="hevc", profile="Main", pix_fmt="yuv420p"),
+        ),
     ],
 )
-def test_probe_video_codec_parses_output(
-    monkeypatch: pytest.MonkeyPatch, stdout: str, expected: str
+def test_probe_video_profile_parses_output(
+    monkeypatch: pytest.MonkeyPatch,
+    stdout: str,
+    expected: VideoProfile,
 ) -> None:
     monkeypatch.setattr(convert, "_require_tool", lambda _name: "ffprobe")
     monkeypatch.setattr(subprocess, "run", _fake_run(stdout))
-    assert _probe_video_codec(Path("/fake/video.mov")) == expected
+    assert probe_video_profile(Path("/fake/video.mov")) == expected
 
 
-@pytest.mark.parametrize("codec", ["hevc", "h264"])
-def test_iphone_codec_strings_match_remux_set(codec: str) -> None:
-    """Sanity: iPhone MOV codecs land in the re-mux fast path.
-
-    Guards against the historical bug — if `H264_HEVC_CODECS` ever loses
-    'hevc' (or someone rewrites it as 'HEVC'), iPhone videos go back to
-    re-encoding silently.
-    """
-    assert codec in H264_HEVC_CODECS
+@pytest.mark.parametrize(
+    "profile,playable",
+    [
+        # H.264: only 4:2:0 + standard profiles play on stock Windows.
+        (VideoProfile("h264", "Main", "yuv420p"), True),
+        (VideoProfile("h264", "High", "yuv420p"), True),
+        (VideoProfile("h264", "Baseline", "yuv420p"), True),
+        (VideoProfile("h264", "Constrained Baseline", "yuv420p"), True),
+        # The user's actual broken file from 2003-era camcorder.
+        (VideoProfile("h264", "High 4:2:2", "yuvj422p"), False),
+        (VideoProfile("h264", "High 4:4:4", "yuv444p"), False),
+        (VideoProfile("h264", "High 10", "yuv420p10le"), False),
+        (VideoProfile("h264", "Main", "yuvj422p"), False),  # right profile, wrong fmt
+        (VideoProfile("h264", "High 4:2:2", "yuv420p"), False),  # right fmt, wrong profile
+        # HEVC: accepted unconditionally (Windows HEVC Video Extension).
+        (VideoProfile("hevc", "Main", "yuv420p"), True),
+        (VideoProfile("hevc", "Main 10", "yuv420p10le"), True),
+        (VideoProfile("hevc", "Rext", "yuv422p"), True),
+        # Other codecs: never re-muxable. Must re-encode.
+        (VideoProfile("mpeg2video", "Main", "yuv420p"), False),
+        (VideoProfile("mpeg4", "Simple Profile", "yuv420p"), False),
+        (VideoProfile("vp9", "Profile 0", "yuv420p"), False),
+        # Unknown / probe-incomplete.
+        (VideoProfile("", "", ""), False),
+    ],
+)
+def test_is_windows_playable(profile: VideoProfile, playable: bool) -> None:
+    assert is_windows_playable(profile) is playable

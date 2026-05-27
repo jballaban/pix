@@ -15,7 +15,10 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from PIL import Image
 import pillow_heif  # pyright: ignore[reportMissingTypeStubs]
@@ -37,13 +40,56 @@ class ToolNotFound(Exception):
 
 
 JPG_QUALITY: int = 95
-H264_HEVC_CODECS: frozenset[str] = frozenset({"h264", "hevc"})
+
+# Windows-playable H.264 profile names per spec/migrate.md → Windows
+# playability check. ffprobe reports `profile` as a human-readable
+# string; these are the values we accept for `-c copy`.
+_WINDOWS_PLAYABLE_H264_PROFILES: frozenset[str] = frozenset(
+    {"Constrained Baseline", "Baseline", "Main", "High"}
+)
 
 # Subprocess timeouts per spec/implementation.md → Subprocess hardening.
 _FFPROBE_TIMEOUT: float = 30.0       # codec probe; small read, generous margin
 _FFMPEG_REMUX_TIMEOUT: float = 300.0  # 5 min for `-c copy` (cheap; long for safety)
-_FFMPEG_REENCODE_TIMEOUT: float = 3600.0  # 1 hour for libx265 re-encode
+_FFMPEG_REENCODE_TIMEOUT: float = 3600.0  # 1 hour for libx264 re-encode
 _PILLOW_TIMEOUT: float = 60.0         # Pillow JPG decode + encode
+
+# Parallel-probe pool size — ffprobe is dominated by process startup,
+# so concurrency helps. Matches the `metadata.CACHE_LOOKUP_WORKERS`
+# size used for the hash-cache scan.
+_PROBE_WORKERS: int = 32
+
+
+@dataclass(frozen=True)
+class VideoProfile:
+    """Codec / profile / pixel format triple from `ffprobe`.
+
+    All fields are lowercased except `profile`, which preserves
+    ffprobe's casing (e.g. `Main`, `High 4:2:2`) because the H.264
+    playability check compares to canonical profile names.
+    """
+
+    codec: str
+    profile: str
+    pix_fmt: str
+
+
+def is_windows_playable(profile: VideoProfile) -> bool:
+    """Return True iff the stream plays in stock Windows H.264/HEVC decoders.
+
+    See spec/migrate.md → Windows playability check. H.264 must be
+    Baseline/Main/High (4:2:0) at 8-bit. HEVC is accepted unconditionally
+    — the user opts in via the Windows HEVC Video Extension.
+    """
+    if profile.codec == "h264":
+        if profile.profile not in _WINDOWS_PLAYABLE_H264_PROFILES:
+            return False
+        if profile.pix_fmt != "yuv420p":
+            return False
+        return True
+    if profile.codec == "hevc":
+        return True
+    return False
 
 
 def convert_to_jpg(src: Path, dst: Path) -> None:
@@ -74,15 +120,17 @@ def convert_to_jpg(src: Path, dst: Path) -> None:
 def convert_to_mp4(src: Path, dst: Path) -> None:
     """Convert `src` to MP4 at `dst` via ffmpeg.
 
-    Re-muxes (`-c copy`) when the source video stream is H.264 or H.265
-    (cheap, near-instant). Otherwise re-encodes with libx265 + AAC per
-    spec/migrate.md. Container-level metadata copied via `-map_metadata 0`;
-    pix:* fields are written separately by the apply layer.
+    Re-muxes (`-c copy`) when the source meets the Windows-playable
+    criteria (see spec/migrate.md → Windows playability check).
+    Otherwise re-encodes with libx264 Main + yuv420p + AAC, the
+    universally playable lowest-common-denominator. Container-level
+    metadata copied via `-map_metadata 0`; pix:* fields are written
+    separately by the apply layer.
     """
     ffmpeg = _require_tool("ffmpeg")
-    codec = _probe_video_codec(src)
+    profile = probe_video_profile(src)
 
-    if codec in H264_HEVC_CODECS:
+    if is_windows_playable(profile):
         cmd: list[str] = [
             ffmpeg,
             "-hide_banner",
@@ -110,9 +158,13 @@ def convert_to_mp4(src: Path, dst: Path) -> None:
             "-i",
             str(src),
             "-c:v",
-            "libx265",
+            "libx264",
+            "-profile:v",
+            "main",
+            "-pix_fmt",
+            "yuv420p",
             "-crf",
-            "23",
+            "18",
             "-c:a",
             "aac",
             "-b:a",
@@ -137,27 +189,27 @@ def convert_to_mp4(src: Path, dst: Path) -> None:
     except subprocess.TimeoutExpired as e:
         raise OperationTimeout(
             f"ffmpeg timed out after {timeout:.0f}s converting {src} to MP4 "
-            f"(codec={codec!r})"
+            f"(codec={profile.codec!r}, profile={profile.profile!r}, "
+            f"pix_fmt={profile.pix_fmt!r})"
         ) from e
     if proc.returncode != 0:
         raise ConvertFailed(
             f"ffmpeg failed converting {src} to MP4 "
-            f"(codec={codec!r}, exit={proc.returncode}):\n{proc.stderr}"
+            f"(codec={profile.codec!r}, profile={profile.profile!r}, "
+            f"pix_fmt={profile.pix_fmt!r}, exit={proc.returncode}):\n"
+            f"{proc.stderr}"
         )
 
 
-def _probe_video_codec(src: Path) -> str:
-    """Return the first video stream's codec name (e.g. 'h264', 'hevc').
+def probe_video_profile(src: Path) -> VideoProfile:
+    """Return the first video stream's codec, profile, and pixel format.
 
-    Uses ffprobe's `default=nw=1:nk=1` output: no wrapper, no key prefix —
-    just the bare value. Earlier we used `csv=p=0`, which emits a trailing
-    comma even for a single-field query (`hevc,` instead of `hevc`). That
-    silently routed every iPhone HEVC MOV through the libx265 re-encode
-    path because the literal string `"hevc,"` doesn't match the
-    `{"h264", "hevc"}` set — turning what should be a sub-second re-mux
-    into minutes of pointless re-encoding. We also strip and lowercase
-    defensively and take whatever's before any stray comma to keep the
-    function tolerant of future format quirks.
+    Single ffprobe call with multi-field output. The earlier
+    single-field `default=nw=1:nk=1` form trimmed cleanly; the
+    multi-field form returns one value per line in field order, so we
+    split on newlines and lowercase codec / pix_fmt while preserving
+    profile casing for the playability check (which compares to
+    canonical names like `Main`, `High 4:2:2`).
     """
     ffprobe = _require_tool("ffprobe")
     try:
@@ -169,7 +221,7 @@ def _probe_video_codec(src: Path) -> str:
                 "-select_streams",
                 "v:0",
                 "-show_entries",
-                "stream=codec_name",
+                "stream=codec_name,profile,pix_fmt",
                 "-of",
                 "default=nw=1:nk=1",
                 str(src),
@@ -188,7 +240,63 @@ def _probe_video_codec(src: Path) -> str:
         raise ConvertFailed(
             f"ffprobe failed on {src} (exit {proc.returncode}):\n{proc.stderr}"
         )
-    return proc.stdout.strip().lower().split(",", 1)[0]
+    parts = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+    # ffprobe emits empty/missing values as "unknown" or just blanks; we
+    # want a populated triple regardless so the playability check has
+    # something to compare. Pad missing tail values with "" so a stream
+    # that lacks profile or pix_fmt info still produces a VideoProfile
+    # (it'll just fail the playability check, routing to re-encode).
+    while len(parts) < 3:
+        parts.append("")
+    codec, profile, pix_fmt = parts[0], parts[1], parts[2]
+    return VideoProfile(
+        codec=codec.lower().split(",", 1)[0],
+        profile=profile,
+        pix_fmt=pix_fmt.lower(),
+    )
+
+
+def probe_videos_parallel(
+    paths: list[Path],
+    on_batch: Callable[[int], None] | None = None,
+    batch_size: int = 1000,
+    max_workers: int = _PROBE_WORKERS,
+) -> dict[Path, VideoProfile | None]:
+    """Probe a batch of video files in a thread pool.
+
+    Per-file failure (ffprobe error, corrupt file, missing video stream)
+    yields `None` for that path rather than raising — the caller treats
+    `None` as "can't determine playability, schedule a re-encode to be
+    safe."
+
+    Mirrors the `read_all_cached_hashes` pattern: 32-worker thread pool,
+    consumer-thread `on_batch` callback for progress, results collected
+    in submission order via `executor.map`.
+    """
+    if not paths:
+        return {}
+
+    result: dict[Path, VideoProfile | None] = {}
+    in_batch = 0
+
+    def probe_one(p: Path) -> tuple[Path, VideoProfile | None]:
+        try:
+            return p, probe_video_profile(p)
+        except (ConvertFailed, OperationTimeout, ToolNotFound):
+            return p, None
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for path, profile in executor.map(probe_one, paths):
+            result[path] = profile
+            in_batch += 1
+            if in_batch >= batch_size:
+                if on_batch is not None:
+                    on_batch(in_batch)
+                in_batch = 0
+
+    if in_batch > 0 and on_batch is not None:
+        on_batch(in_batch)
+    return result
 
 
 def _require_tool(name: str) -> str:

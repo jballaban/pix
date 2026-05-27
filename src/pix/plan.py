@@ -21,6 +21,7 @@ from pathlib import Path
 
 from pix import debug
 from pix.config import Config, ExtensionAction
+from pix.convert import VideoProfile, is_windows_playable
 from pix.dates import (
     PIX_DATETIME_FORMAT,
     derive_date_auto,
@@ -188,6 +189,7 @@ def generate_plan(
     run_id: str,
     run_dir: Path,
     staging_dir: Path,
+    video_profiles: dict[Path, "VideoProfile | None"] | None = None,
     now: datetime | None = None,
 ) -> Plan:
     """Build a Plan from the metadata cache and extension policy.
@@ -195,6 +197,12 @@ def generate_plan(
     `run_dir` and `staging_dir` are the destinations for run-folder
     captures and staging conversions respectively. Plan-gen uses them to
     pre-compute every path apply will need, so apply is a pure executor.
+
+    `video_profiles` is the precomputed `{path: VideoProfile|None}` for
+    keep-policy video candidates (per spec/migrate.md → Windows playability
+    check). When a file's profile fails the playability check, plan-gen
+    routes it to CONVERT instead of keep. Built once in commands/migrate.py
+    via `convert.probe_videos_parallel`.
     """
     generated_at = now or datetime.now()
     lines: list[PlanLine] = []
@@ -213,7 +221,11 @@ def generate_plan(
             progress.begin("planning", str(path))
             meta = cache[path]
             line = _plan_one(
-                path=path, meta=meta, source=source, config=config
+                path=path,
+                meta=meta,
+                source=source,
+                config=config,
+                video_profiles=video_profiles,
             )
             ts = datetime.now().isoformat(timespec="seconds")
             if line is not None:
@@ -490,7 +502,7 @@ _EXT_ALIASES: dict[str, str] = {
 }
 
 
-def _canonical_extension(ext: str) -> str:
+def canonical_extension(ext: str) -> str:
     lowered = ext.lower().lstrip(".")
     return _EXT_ALIASES.get(lowered, lowered)
 
@@ -524,7 +536,11 @@ def lookup_policy(
 
 
 def _plan_one(
-    path: Path, meta: FileMetadata, source: Path, config: Config
+    path: Path,
+    meta: FileMetadata,
+    source: Path,
+    config: Config,
+    video_profiles: dict[Path, "VideoProfile | None"] | None = None,
 ) -> PlanLine | None:
     """Decide the plan line for one file, or return None if no action is needed."""
     rel = path.relative_to(source)
@@ -573,6 +589,41 @@ def _plan_one(
         )
         debug.log(f"  First migrate: {'yes' if is_first_migrate else 'no'}")
 
+        # Windows-playability override per spec/migrate.md → Windows
+        # playability check. Files where the extension policy says
+        # `keep` (target_ext is None) but the actual codec/profile/pixel
+        # format isn't Windows-playable get routed to CONVERT, which
+        # re-encodes to libx264 Main + yuv420p.
+        playability_override = False
+        if (
+            target_ext is None
+            and video_profiles is not None
+            and path in video_profiles
+        ):
+            profile = video_profiles[path]
+            debug.section("Windows playability")
+            if profile is None:
+                debug.log(
+                    "  ffprobe failed or returned no video stream — "
+                    "leaving action unchanged."
+                )
+            elif not is_windows_playable(profile):
+                debug.log(
+                    f"  Codec: {profile.codec}, profile: {profile.profile!r}, "
+                    f"pix_fmt: {profile.pix_fmt}"
+                )
+                debug.log(
+                    "  Not Windows-playable — forcing CONVERT to re-encode."
+                )
+                target_ext = "mp4"
+                playability_override = True
+            else:
+                debug.log(
+                    f"  Codec: {profile.codec}, profile: {profile.profile!r}, "
+                    f"pix_fmt: {profile.pix_fmt}"
+                )
+                debug.log("  Windows-playable — no override.")
+
         if target_ext is not None:
             return _plan_convert(
                 meta=meta,
@@ -580,6 +631,7 @@ def _plan_one(
                 rel_str=rel_str,
                 target_ext=target_ext,
                 is_first_migrate=is_first_migrate,
+                playability_override=playability_override,
             )
 
         return _plan_keep(
@@ -596,11 +648,14 @@ def _plan_convert(
     rel_str: str,
     target_ext: str,
     is_first_migrate: bool,
+    playability_override: bool = False,
 ) -> PlanLine:
     canonical_name = _canonical_filename(meta=meta, ext=target_ext)
     details_parts: list[str] = [
         f"→{canonical_name}" if canonical_name else "→<unknown-date>"
     ]
+    if playability_override:
+        details_parts.append("windows-playability re-encode")
     pix_writes: dict[str, str] = {}
 
     if is_first_migrate:
@@ -766,7 +821,7 @@ def _plan_keep(
                 )
 
     # --- Canonical filename ---
-    canonical_ext = _canonical_extension(path.suffix)
+    canonical_ext = canonical_extension(path.suffix)
     canonical_name = (
         f"{effective.strftime('%Y-%m-%d_%H%M%S')}.{canonical_ext}"
         if effective is not None

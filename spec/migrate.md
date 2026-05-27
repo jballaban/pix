@@ -183,7 +183,7 @@ Every source extension must have an explicit action in `<library-root>\.pix\conf
 |---|---|
 | `keep` | Already canonical. Extension is normalized (case + alias, see below); content untouched. |
 | `convert_to_jpg` | Decode + re-encode as JPG (quality 95). Pillow + pillow-heif. EXIF/XMP preserved. |
-| `convert_to_mp4` | Container → MP4. Re-mux (`ffmpeg -c copy`) if codec is H.264/H.265; otherwise re-encode `-c:v libx265 -crf 23 -c:a aac -b:a 192k`. Container metadata copied (`-map_metadata 0`). |
+| `convert_to_mp4` | Container → MP4, Windows-playable codec. Re-mux (`ffmpeg -c copy`) only when the source already meets the [Windows-playable](#windows-playability-check) criteria; otherwise re-encode `-c:v libx264 -profile:v main -pix_fmt yuv420p -crf 18 -c:a aac -b:a 192k`. Container metadata copied (`-map_metadata 0`). |
 | `delete` | Capture the file into the run folder during migrate, then remove from source. Conservation applies. |
 | `stash` | Move the file into `<library-root>/.pix/stash/` for future processing (RAW formats, proprietary 360 sources, anything we can't canonically process in v1). Whole-file BLAKE3 dedups across stash entries: same content from multiple sources lands once with a multi-origin sidecar. See [Stash action](#stash-action) below. |
 
@@ -274,6 +274,41 @@ That's the entire sidecar. The original filename, full source path, and timestam
 **Rollback**: deferred. The apply.log records source → stash mapping per line; the sidecar carries `origin`. Either is enough to reverse a stash (move file back to its source path).
 
 **Dedup of stashed files**: explicitly **out of scope for stash itself**. The same content imported from two different sources lands twice in `.pix/stash/`. A future operation (likely re-using migrate's plumbing) will scan stashed files, hash them, and propose dedup actions when the user decides to deal with them.
+
+<a id="windows-playability-check"></a>
+### Windows playability check
+
+Windows's built-in H.264 decoder (Windows Media Player, Movies & TV, the system Media Foundation decoder) supports only 4:2:0 chroma sampling. Camcorder-era files encoded as H.264 High 4:2:2 / High 4:4:4 / High 10, or with pixel formats like `yuvj422p`, `yuv422p`, `yuv444p`, will not play in Windows even though ffmpeg, VLC, and MPC-HC handle them fine. Stock Windows just shows "can't play this format" — same surface error as a corrupt file, which is misleading.
+
+Migrate enforces "playable on stock Windows" as a CONVERT trigger so the canonical library is universally playable.
+
+**Criteria.** A video file is Windows-playable iff:
+
+- **H.264** with profile in `{Constrained Baseline, Baseline, Main, High}` AND `pix_fmt = yuv420p` (8-bit), OR
+- **HEVC** (any profile / pix_fmt — users opt in to HEVC playback via the Windows HEVC Video Extension; modern phone/camera HEVC is already yuv420p 8-bit).
+
+All other video streams (h264 with extended profiles or non-4:2:0 chroma; mpeg2video; mpeg4 ASP; etc.) are not Windows-playable and must be re-encoded.
+
+**Probe.** During plan-gen, migrate runs `ffprobe -show_entries stream=codec_name,profile,pix_fmt` on every video file (anything matching the `convert_to_mp4` policy *and* anything matching `keep` with a video extension — `mp4`, `m4v`, `3gp`). The probe runs in a thread pool (same 32-worker pattern as the hash-cache scan; ffprobe is process-startup-bound, not CPU-bound) so the phase scales with hundreds of videos.
+
+Result feeds the action decision in plan-gen:
+
+- `keep` policy + Windows-playable → no plan line (or RENAME/TAG only, per the usual idempotence rules).
+- `keep` policy + **not** Windows-playable → **CONVERT+RENAME+TAG**, re-encoding under the criteria below.
+- `convert_to_mp4` policy + source Windows-playable → re-mux (`-c copy`) as before.
+- `convert_to_mp4` policy + source **not** Windows-playable → re-encode under the criteria below.
+
+**Re-encode target.**
+
+- Video: `-c:v libx264 -profile:v main -pix_fmt yuv420p -crf 18`. CRF 18 is visually lossless for typical handheld content; this is an archive pass, not a streaming pass.
+- Audio: `-c:a aac -b:a 192k` (unchanged from prior policy).
+- Container metadata: `-map_metadata 0` (unchanged).
+
+This replaces the prior libx265-CRF-23 re-encode target: x264 + 4:2:0 is the universally playable lowest-common-denominator. Larger files vs HEVC, but the user can run a future `pix transcode` op if they later want HEVC for storage savings.
+
+**Re-processing already-migrated files.** Files with `pix:OriginalPath` already set are *not* exempt from the playability check — migrate re-CONVERTs them under the new policy. This is deliberate: when the user runs `pix migrate <library-root>` after this spec change, every previously-migrated yuvj422p/High-4:2:2 file gets re-encoded once, and the library becomes uniformly playable. Originals are captured to `runs/<run-id>/data/` so the operation is reversible.
+
+The XMP layer carries over (per the cross-cutting CONVERT invariant) so `pix:OriginalPath`, `pix:DateAuto`, user `DateOverride` / `EventOverride` etc. all survive the re-encode. The `.pix/cache/<…>.hash` cache for each re-encoded file becomes stale (size + mtime change); `pix hash` regenerates on next run.
 
 ### Fail-fast on unknown extensions
 
