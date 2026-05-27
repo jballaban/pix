@@ -37,7 +37,6 @@ from typing import IO
 
 from pix.duration import format_duration_compact, format_size
 from pix.events import PIX_EVENT_OVERRIDE
-from pix.hash_cache import read_cached_hash
 from pix.metadata import FileMetadata
 from pix.organize import cleanup_empty_folders  # reused
 from pix.timeout import safe_rename
@@ -158,19 +157,22 @@ def select_keeper(
 
 
 def require_migrated_with_hashes(
-    library_root: Path,
     cache: dict[Path, FileMetadata],
+    hashes: dict[Path, str | None],
 ) -> None:
-    """Refuse if any file lacks pix:OriginalPath or a cached content hash."""
+    """Refuse if any file lacks pix:OriginalPath or a cached content hash.
+
+    Both checks consume already-computed inputs — the cache (from the
+    metadata bulk read) and the hashes (from one parallel pass over
+    `hash_cache.read_all_cached_hashes`). No per-file syscalls here.
+    """
     unmigrated = [
         p for p, m in cache.items() if m.get_str(PIX_ORIGINAL_PATH) is None
     ]
     if unmigrated:
         raise UnmigratedFilesError(sorted(unmigrated)[:10])
 
-    no_hash = [
-        p for p in cache if read_cached_hash(library_root, p) is None
-    ]
+    no_hash = [p for p in cache if hashes.get(p) is None]
     if no_hash:
         raise MissingHashesError(sorted(no_hash)[:10])
 
@@ -181,11 +183,16 @@ def require_migrated_with_hashes(
 def group_by_hash(
     library_root: Path,
     cache: dict[Path, FileMetadata],
+    hashes: dict[Path, str | None],
 ) -> list[DedupeGroup]:
-    """Group files by cached content hash; yield only groups of 2+."""
+    """Group files by cached content hash; yield only groups of 2+.
+
+    Consumes the precomputed `hashes` dict (built once via
+    `read_all_cached_hashes`) instead of re-reading per file.
+    """
     by_hash: dict[str, list[tuple[Path, FileMetadata]]] = defaultdict(list)
     for path, meta in cache.items():
-        h = read_cached_hash(library_root, path)
+        h = hashes.get(path)
         if h is None:
             continue  # require_migrated_with_hashes should have caught
         by_hash[h].append((path, meta))
@@ -219,14 +226,15 @@ def generate_plan(
     *,
     library_root: Path,
     cache: dict[Path, FileMetadata],
+    hashes: dict[Path, str | None],
     run_id: str,
     run_dir: Path,
     plan_log: IO[str] | None = None,
 ) -> DedupeResult:
-    """Build a dedupe plan from the library cache."""
-    require_migrated_with_hashes(library_root, cache)
+    """Build a dedupe plan from the library cache and precomputed hash map."""
+    require_migrated_with_hashes(cache, hashes)
 
-    groups = group_by_hash(library_root, cache)
+    groups = group_by_hash(library_root, cache, hashes)
 
     # Build PlanLines with stable IDs and pre-computed capture paths.
     # Capture path lives at runs/<run-id>/data/L<NNN>_<filename>; the

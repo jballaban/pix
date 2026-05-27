@@ -148,6 +148,18 @@ Expected savings: one stat per file in `pix hash`. On a 200k-file library that's
 
 ## Items added 2026-05-26 (hash-scan perf pass)
 
+### 25. Parallelize dedupe's hash reads + dedupe duplicate per-file calls — **done in v0.1.82**
+
+Dedupe was calling `read_cached_hash` sequentially twice per file — once in `require_migrated_with_hashes` (the prereq check) and once in `group_by_hash` (grouping). On a 63k-file library that's 252k sequential syscalls (4 per file). Refactored to:
+
+- Compute the hash map once in commands/dedupe.py via the new `hash_cache.read_all_cached_hashes` primitive (parallel, 32 workers, mirrors `find_missing_hashes`).
+- Thread the resulting `dict[Path, str | None]` through to `generate_plan`, which passes it to both `require_migrated_with_hashes` and `group_by_hash`. Neither function does I/O any more — they're pure dict consumers.
+- Drop dedupe's flashing "Walking library..." progress line (migrate-pattern silent walk).
+
+`find_missing_hashes` is now a thin wrapper over `read_all_cached_hashes` — single source of truth for parallel hash-cache scans across the hash and dedupe commands.
+
+Same fix needed for organize (calls `read_cached_hash` twice per file in the prereq + collision-resolution paths). Deferred to a follow-up.
+
 ### 24. Parallelize the hash-cache scan + skip per-file stat via scandir mtime — **done in v0.1.81**
 
 The hash-scan phase (the "are any files missing a cached hash?" pass over the whole library) was sequential and stat-heavy: 63k files × 3 syscalls each (`cache_path.is_file()` + `read_bytes` + `file_path.stat()`) ran ~3 minutes for a no-op pass where every file was already cached. Three changes together:

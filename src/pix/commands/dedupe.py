@@ -25,6 +25,7 @@ from pix.dedupe import (
 )
 from pix.duration import format_duration_precise
 from pix.editor import open_in_editor, parse_kept_line_ids, prompt_apply
+from pix.hash_cache import read_all_cached_hashes
 from pix.library_lock import LockHeld, acquire as acquire_lock
 from pix.metadata import (
     ExifToolFailed,
@@ -81,15 +82,16 @@ def _run_dedupe(root: Path) -> None:
 
     _plog(plan_log_path, f"Library root: {root}")
 
-    with LiveProgress() as walk_progress:
-        t0 = time.monotonic()
-        walk_progress.begin("Walking library...")
-        scanned = walk_source_files(root)
-        _plog(
-            plan_log_path,
-            f"Found {len(scanned)} file(s) in "
-            f"{format_duration_precise(time.monotonic() - t0)}.",
-        )
+    # Walk is sub-second on libraries we care about; no console
+    # ticker — the next phase's progress bar comes up immediately.
+    # Timing still lands in plan.log. (Same pattern as migrate.)
+    t0 = time.monotonic()
+    scanned = walk_source_files(root)
+    _plog(
+        plan_log_path,
+        f"Found {len(scanned)} file(s) in "
+        f"{format_duration_precise(time.monotonic() - t0)}.",
+    )
 
     if not scanned:
         typer.echo("Library is empty; nothing to dedupe.")
@@ -139,6 +141,26 @@ def _run_dedupe(root: Path) -> None:
         f"({len(hits)} cache hits, {len(misses)} from ExifTool).",
     )
 
+    # One parallel pass over the hash cache — feeds both the prereq
+    # check (which files lack a hash) and the group-by-hash pass that
+    # produces the dedupe plan. Previously each phase re-read every
+    # hash sequentially, doubling the syscall cost.
+    t0 = time.monotonic()
+    with LiveProgress(total=len(scanned)) as hash_progress:
+        hash_progress.begin("Reading hashes")
+
+        def _on_hash_batch(batch_size: int) -> None:
+            hash_progress.advance(by=batch_size)
+
+        hashes = read_all_cached_hashes(
+            root, scanned, on_batch=_on_hash_batch
+        )
+    _plog(
+        plan_log_path,
+        f"Read {len(hashes)} hash(es) in "
+        f"{format_duration_precise(time.monotonic() - t0)}.",
+    )
+
     t0 = time.monotonic()
     _plog(plan_log_path, "Generating plan...")
     try:
@@ -149,6 +171,7 @@ def _run_dedupe(root: Path) -> None:
             result = generate_plan(
                 library_root=root,
                 cache=cache,
+                hashes=hashes,
                 run_id=run_id,
                 run_dir=runs_dir,
                 plan_log=plan_log,

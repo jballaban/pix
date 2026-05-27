@@ -123,19 +123,19 @@ _HASH_LOOKUP_WORKERS: int = 32
 _HASH_LOOKUP_BATCH: int = 1000
 
 
-def find_missing_hashes(
+def read_all_cached_hashes(
     library_root: Path,
     paths_with_meta: list[tuple[Path, int, int]],
     on_batch: Callable[[int], None] | None = None,
     batch_size: int = _HASH_LOOKUP_BATCH,
     max_workers: int = _HASH_LOOKUP_WORKERS,
-) -> list[Path]:
-    """Return library paths that lack a valid cached hash.
+) -> dict[Path, str | None]:
+    """Return `{path: cached_hash_or_None}` for every input path.
 
     Validates each entry's `(size, mtime_ns)` against the values
     supplied by the caller (sourced from
     `pix.scan.walk_source_files`'s scandir dirents). Mismatches and
-    missing-entirely are both treated as "missing".
+    missing-entirely both yield `None`.
 
     Lookups run in a thread pool — each per-file check is one
     `read_bytes` of a small JSON file + a cheap validation, and lookups
@@ -145,11 +145,16 @@ def find_missing_hashes(
     `on_batch(batch_size)` fires every `batch_size` files from the
     consumer thread (results arrive in submission order via
     `ThreadPoolExecutor.map`).
+
+    Single primitive for two consumers: hash uses
+    `find_missing_hashes` (just needs the missing list); dedupe needs
+    the actual hash values for grouping and shares this one parallel
+    pass between the prereq check and the group-by-hash pass.
     """
     if not paths_with_meta:
-        return []
+        return {}
 
-    missing: list[Path] = []
+    result: dict[Path, str | None] = {}
     in_batch = 0
 
     def check_one(item: tuple[Path, int, int]) -> tuple[Path, str | None]:
@@ -163,8 +168,7 @@ def find_missing_hashes(
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         for path, cached in executor.map(check_one, paths_with_meta):
-            if cached is None:
-                missing.append(path)
+            result[path] = cached
             in_batch += 1
             if in_batch >= batch_size:
                 if on_batch is not None:
@@ -173,7 +177,31 @@ def find_missing_hashes(
 
     if in_batch > 0 and on_batch is not None:
         on_batch(in_batch)
-    return missing
+    return result
+
+
+def find_missing_hashes(
+    library_root: Path,
+    paths_with_meta: list[tuple[Path, int, int]],
+    on_batch: Callable[[int], None] | None = None,
+    batch_size: int = _HASH_LOOKUP_BATCH,
+    max_workers: int = _HASH_LOOKUP_WORKERS,
+) -> list[Path]:
+    """Return library paths that lack a valid cached hash.
+
+    Thin wrapper over `read_all_cached_hashes`: same parallel pass,
+    discards the hash values, returns just the missing list. Used by
+    `pix hash` discovery where the caller only needs to know which
+    files still need hashing.
+    """
+    hashes = read_all_cached_hashes(
+        library_root,
+        paths_with_meta,
+        on_batch=on_batch,
+        batch_size=batch_size,
+        max_workers=max_workers,
+    )
+    return [p for p, h in hashes.items() if h is None]
 
 
 def write_cached_hash(

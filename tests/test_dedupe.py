@@ -54,6 +54,7 @@ def test_refuses_unmigrated_files(tmp_path: Path) -> None:
         generate_plan(
             library_root=root,
             cache=cache,
+            hashes={},
             run_id="r",
             run_dir=tmp_path / "runs",
         )
@@ -71,6 +72,7 @@ def test_refuses_missing_content_hash(tmp_path: Path) -> None:
         generate_plan(
             library_root=root,
             cache=cache,
+            hashes={},
             run_id="r",
             run_dir=tmp_path / "runs",
         )
@@ -97,7 +99,7 @@ def test_group_by_hash_yields_only_groups_of_two_or_more(
         b.resolve(): _migrated(b),
         c.resolve(): _migrated(c),
     }
-    groups = group_by_hash(root, cache)
+    groups = group_by_hash(root, cache, patched_hash_cache)
     assert len(groups) == 1
     assert groups[0].content_hash == "abc"
     assert {groups[0].keeper, *groups[0].losers} == {
@@ -228,6 +230,7 @@ def test_plan_no_duplicates_produces_empty_plan(
     result = generate_plan(
         library_root=root,
         cache=cache,
+        hashes=patched_hash_cache,
         run_id="r",
         run_dir=tmp_path / "runs",
     )
@@ -254,6 +257,7 @@ def test_plan_two_duplicates_produces_one_dedup_line(
     result = generate_plan(
         library_root=root,
         cache=cache,
+        hashes=patched_hash_cache,
         run_id="r",
         run_dir=run_dir,
     )
@@ -287,6 +291,7 @@ def test_plan_three_groups_three_lines_each_id_unique(
     result = generate_plan(
         library_root=root,
         cache=cache,
+        hashes=patched_hash_cache,
         run_id="r",
         run_dir=tmp_path / "runs",
     )
@@ -319,6 +324,7 @@ def test_serialize_plan_grouped_format(
     result = generate_plan(
         library_root=root,
         cache=cache,
+        hashes=patched_hash_cache,
         run_id="2026-05-21_15-00-00",
         run_dir=tmp_path / "runs",
     )
@@ -354,6 +360,7 @@ def test_apply_moves_loser_to_data_dir(
     result = generate_plan(
         library_root=root,
         cache=cache,
+        hashes=patched_hash_cache,
         run_id="r",
         run_dir=run_dir,
     )
@@ -392,6 +399,7 @@ def test_apply_refuses_when_capture_path_collides(
     result = generate_plan(
         library_root=root,
         cache=cache,
+        hashes=patched_hash_cache,
         run_id="r",
         run_dir=run_dir,
     )
@@ -428,6 +436,7 @@ def test_apply_sweeps_empty_folders(
     result = generate_plan(
         library_root=root,
         cache=cache,
+        hashes=patched_hash_cache,
         run_id="r",
         run_dir=run_dir,
     )

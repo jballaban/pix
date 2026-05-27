@@ -11,16 +11,14 @@ import pytest
 def patched_hash_cache(
     monkeypatch: pytest.MonkeyPatch,
 ) -> dict[Path, str]:
-    """Patches `read_cached_hash` to read from a dict.
+    """Returns a `{resolved_path: hash}` dict that tests populate.
 
-    Returns the dict — tests populate it with `{resolved_path: hash}` and
-    dedupe/organize will see those hashes as if they came from the real
-    `.pix/cache/.../<filename>.hash` layer.
+    Dedupe consumes the dict directly — tests pass it to
+    `generate_plan(..., hashes=patched_hash_cache)` as the precomputed
+    hash map (built in production via `read_all_cached_hashes`).
 
-    Production code's `read_cached_hash` always returns None (stub until
-    `pix hash` lands); production-code consumers (`pix.dedupe`,
-    `pix.organize`) import the symbol at module load, so we patch each
-    consumer's binding to keep the override scoped per-test.
+    Organize still calls `read_cached_hash` per-file at the module
+    level, so its binding is monkeypatched to read from this dict.
     """
     hashes: dict[Path, str] = {}
 
@@ -28,7 +26,6 @@ def patched_hash_cache(
         del library_root
         return hashes.get(file_path)
 
-    for module in ("pix.dedupe", "pix.organize"):
-        monkeypatch.setattr(f"{module}.read_cached_hash", fake_read)
+    monkeypatch.setattr("pix.organize.read_cached_hash", fake_read)
 
     return hashes
