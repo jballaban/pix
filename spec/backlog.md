@@ -38,6 +38,20 @@ apply.log now records sub-second timestamps, per-line `dur=…` durations, `size
 
 Added `src/pix/telemetry.py` (`LineRecord`, `write_summary`) and `format_duration_compact` + `format_size` helpers in `src/pix/duration.py`. Wired into migrate's `apply.apply_plan`, `commands/hash`, `dedupe.apply_plan`, and `organize.apply_plan`.
 
+## 7. `pix checkout` — tag editing via folder-shuffle — **designed, not yet built**
+
+Full design landed in [spec/tag-editing.md](tag-editing.md). Three actions on one command: `pix checkout <path> <template>` (scope to `<path>` and below like `pix migrate <folder>`; materialize a hard-link workspace under `.pix/checkout/` shaped by a compound single-valued template + write `snapshot.json`), `pix checkout --commit` (diff workspace vs. snapshot by NTFS file-ID, write inferred `DateOverride`/`EventOverride` edits as migrate-style TAG lines with XMP conservation capture into a run folder, then tear the workspace down), and `pix checkout --reset` (throw the workspace away). Commit writes **tags only** — no rename/relocate; the library is eventually consistent via the next migrate/organize. Scope bounds the file set but the freeze stays library-wide.
+
+Cross-cutting pieces this needs:
+- **The freeze.** Every command except `checkout --commit`/`--reset` must refuse when `.pix/checkout/` exists. New guard, separate from the library lock; wire into `migrate`, `organize`, `dedupe`, `hash`, `upgrade`.
+- **Reuse migrate's TAG/DELETE apply path** (per-file ExifTool `-overwrite_original`, `.xmp` sidecar capture, run-folder layout, `apply.log`) and the shared `Apply? [Y/e/n]` editor/confirm loop.
+- Prereq check: all files migrated (`pix:OriginalPath`); no hash requirement.
+- Face checkout (`{face}`) stays **deferred** with migrate-time face detection.
+
+## 8. Bare `pix organize` re-applies the stored template — **designed, not yet built**
+
+`organize.template` was previously read only by commit's auto-trigger; commit no longer organizes (see [tag-editing.md](tag-editing.md)), so the key is repurposed: a no-argument `pix organize` re-applies the stored default shape; errors if none is stored. Code change is to `commands/organize.py` (make the template arg optional, fall back to `config.organize.template`). See [organize.md → Active template persistence](organize.md#active-template-persistence).
+
 ## 5. Tiered duration format — **done in v0.1.53**
 
 New `src/pix/duration.py` exposes `format_duration` (integer-tiered for progress-line suffixes) and `format_duration_precise` (one decimal under 60s, for post-phase summaries). `progress.py` consumes `format_duration` for the `(Xs)` suffix; `commands/{migrate,dedupe,organize,hash}.py` consume `format_duration_precise` for the `Found N files in …` / `Read N files in …` / `Plan generated in …` summary lines. The placeholder `_format_duration` that lived in `commands/hash.py` is gone.

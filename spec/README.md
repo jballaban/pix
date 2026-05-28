@@ -10,7 +10,7 @@ The tool is named `pix`. The CLI is invoked as `pix <op> ...`.
 
 ## Operations
 
-Nine top-level operations. `init`, `migrate`, `hash`, `dedupe`, and `organize` are implemented; the rest are sketches or deferred.
+Eight top-level operations. `init`, `migrate`, `hash`, `dedupe`, and `organize` are implemented; the rest are designed-pending-build, sketched, or deferred.
 
 | Op | What it does | Spec | Status |
 |---|---|---|---|
@@ -19,8 +19,8 @@ Nine top-level operations. `init`, `migrate`, `hash`, `dedupe`, and `organize` a
 | `hash <library-root>` | Populate the per-file content-hash cache at `.pix/cache/` for every file missing or stale. Decoupled from migrate so migrate's hot path stays fast. | [hash.md](hash.md) | **v1 implemented** |
 | `dedupe` | Find duplicates by content hash across the library and remove redundant copies. | [dedupe.md](dedupe.md) | **v1 implemented** |
 | `merge <src> <dst>` | Combine two already-migrated trees; reuses `dedupe`. | — | Deferred (after dedupe) |
-| `organize <template>` | Physically rearrange files per a template. Single-valued tags only. | [organize.md](organize.md) | **v1 implemented** |
-| `checkout <template>` / `commit` | Tag editing via folder-shuffle. | [tag-editing.md](tag-editing.md) | Sketched |
+| `organize [<template>]` | Physically rearrange files per a template (bare = re-apply the stored default). Single-valued tags only. | [organize.md](organize.md) | **v1 implemented** (bare/no-arg form pending build) |
+| `checkout <path> <template>` / `checkout --commit` / `checkout --reset` | Tag editing via folder-shuffle, scoped to `<path>` (like migrate). Compound single-valued templates; commit writes tags only. | [tag-editing.md](tag-editing.md) | **Designed (pending build)** |
 | `export <template>` | Produce a copy/link-based derived view at a separate path. Read-only. | [export.md](export.md) | Sketched |
 
 ## Cross-cutting invariants
@@ -59,6 +59,8 @@ Lock files live in `.pix/lock` so they're excluded from sync clients alongside t
 `pix init` does not acquire the lock — it creates `.pix/` from scratch and has nothing to conflict with. Read-only future operations (e.g. `pix list`, if it lands) won't acquire the lock either. Anything that writes does.
 
 This is intentionally a coarse lock: one operation at a time, library-wide. Finer-grained locking (e.g., letting `pix hash` run concurrently with `pix migrate` on disjoint subtrees) is a future-work concession, not a v1 design goal.
+
+**Checkout freeze.** Separately from the per-invocation lock, an **open tag-editing checkout freezes the whole library**: while `<library>\.pix\checkout\` exists, every command except `pix checkout --commit` and `pix checkout --reset` refuses up front. A checkout materializes hard links whose identity commit relies on (NTFS file-ID); migrate/dedupe/organize/upgrade would all invalidate that identity if they ran mid-session. The freeze is enforced by folder presence (a checkout session spans many invocations, so the lock can't cover it). See [tag-editing.md → The freeze](tag-editing.md#the-freeze--an-open-checkout-locks-the-library).
 
 ## Open decisions
 

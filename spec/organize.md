@@ -31,7 +31,7 @@ The library root itself is fine as CWD — organize never removes the root, and 
 5. **Generate plan.** For each file: compute effective tag values, render the template to get the target folder, compute the **bare** canonical filename from effective date (ignoring any `_NNN` suffix on the current name — see [Filename recomputation](#filename-recomputation) below), assemble the tentative target path. Group all tentative targets by target folder, resolve collisions per group, and assign final names. Compare each final target path to the current path; emit a `MOVE` line if different. Write per-file decisions to `plan.log`. Detect empty-folder candidates.
 6. **Confirm, optionally edit, apply** — same `Apply? [Y/e/n]` flow as migrate (defaults to Y; `e` opens the plan for review/edit and re-prompts).
 7. **Apply.** Process plan lines sequentially. Each plan line is a single same-volume rename — no markers needed (organize doesn't destroy bytes, just relocates them). After all moves, bottom-up sweep of emptied folders.
-8. **Update active template.** On successful apply, write the template string to `.pix/config.yaml` under an `organize.template` key (created if absent). Commit reads it to decide whether to auto-trigger re-organize.
+8. **Update active template.** On successful apply, write the template string to `.pix/config.yaml` under an `organize.template` key (created if absent). This becomes the library's "default" shape — see [Active template persistence](#active-template-persistence).
 
 No folder lock — single-user, single-active-run assumption (same as migrate).
 
@@ -174,9 +174,11 @@ organize:
   template: "{year}/{month}/{event}"
 ```
 
-This is the "active" template. Commit (see [tag-editing.md](tag-editing.md)) reads it to decide whether a tag change should auto-trigger re-organize. The key is **optional** — its addition to config doesn't bump `SCHEMA_VERSION` (see [library.md → Schema versioning](library.md#schema-versioning)). Libraries without it have no active template; commit's auto-organize is a no-op.
+This is the library's **default shape**. A bare **`pix organize`** (no template argument) re-applies the stored template — re-shaping the library back to its default after, e.g., a [`pix checkout --commit`](tag-editing.md) changed some tags and left files where they no longer belong. If no template is stored yet, bare `pix organize` errors and asks for one.
 
-A subsequent `pix organize <different-template>` overwrites the key. There's no separate "set template" command.
+The key is **optional** — its addition to config doesn't bump `SCHEMA_VERSION` (see [library.md → Schema versioning](library.md#schema-versioning)). A subsequent `pix organize <different-template>` overwrites the key. There's no separate "set template" command.
+
+Note: commit does **not** auto-trigger organize. Commit writes tags only; re-shaping the library to match changed tags is an explicit `pix organize` the user runs when ready. See [tag-editing.md](tag-editing.md) for the eventual-consistency model.
 
 ## Run folder layout
 
