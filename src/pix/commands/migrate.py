@@ -16,6 +16,7 @@ import typer
 
 from pix import banner, debug
 from pix.apply import ApplyError, apply_plan
+from pix.checkout import CheckoutOpen, ensure_no_open_checkout
 from pix.cleanup import (
     CleanupError,
     cleanup_exiftool_tmp,
@@ -73,6 +74,12 @@ def migrate_folder(folder: Path) -> None:
         raise typer.Exit(code=1) from e
 
     banner(schema_version=SCHEMA_VERSION)
+
+    try:
+        ensure_no_open_checkout(root)
+    except CheckoutOpen as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
 
     if not folder.is_dir():
         typer.echo(f"Error: {folder} is not a directory.", err=True)

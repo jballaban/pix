@@ -8,6 +8,7 @@ from typing import Annotated
 
 import typer
 
+from pix.commands.checkout import run_checkout
 from pix.commands.dedupe import dedupe_library
 from pix.commands.hash import hash_library
 from pix.commands.init import init_library
@@ -97,6 +98,41 @@ def organize(
 ) -> None:
     """Re-shape the library to match a folder template (library-wide MOVE)."""
     organize_library(path=path, template_str=template)
+
+
+@app.command("checkout")
+def checkout(
+    path: Annotated[
+        Path | None,
+        typer.Argument(
+            help=(
+                "Folder to scope the checkout to (like `pix migrate "
+                "<folder>`). Resolves the library root and bounds the "
+                "file set. `.` for CWD. Required when starting a checkout; "
+                "omit it (and the template) for --commit / --reset / status."
+            ),
+        ),
+    ] = None,
+    template: Annotated[
+        str | None,
+        typer.Argument(
+            help=(
+                "Folder template, e.g. '{year}/{event}'. Tokens: {year}, "
+                "{month}, {day}, {date}, {event}. Required when starting."
+            ),
+        ),
+    ] = None,
+    commit: Annotated[
+        bool,
+        typer.Option("--commit", help="Apply the open checkout's tag edits."),
+    ] = False,
+    reset: Annotated[
+        bool,
+        typer.Option("--reset", help="Discard the open checkout."),
+    ] = False,
+) -> None:
+    """Edit tags by shuffling a hard-link workspace (scoped to <path>)."""
+    run_checkout(path, template, commit=commit, reset=reset)
 
 
 @app.command("hash")

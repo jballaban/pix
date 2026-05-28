@@ -17,6 +17,7 @@ import typer
 
 from pix import banner
 from pix.cache_base import prune_orphans
+from pix.checkout import CheckoutOpen, ensure_no_open_checkout
 from pix.content_hash import compute_content_hash
 from pix.duration import (
     format_duration,
@@ -59,6 +60,12 @@ def hash_library(path: Path) -> None:
         raise typer.Exit(code=1) from e
 
     banner(schema_version=SCHEMA_VERSION)
+
+    try:
+        ensure_no_open_checkout(root)
+    except CheckoutOpen as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
 
     try:
         with acquire_lock(root, "hash"):

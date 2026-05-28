@@ -20,6 +20,7 @@ from pathlib import Path
 import typer
 
 from pix import banner
+from pix.checkout import CheckoutOpen, ensure_no_open_checkout
 from pix.root import NoLibraryRoot, resolve as resolve_root
 from pix.schema import SchemaTooNew, upgrade
 
@@ -34,6 +35,14 @@ def upgrade_library(path: Path) -> None:
     try:
         root = resolve_root(start=path, check_schema=False)
     except NoLibraryRoot as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+
+    # An open checkout archives into oblivion if upgrade sweeps .pix/;
+    # refuse until it's committed or reset (same freeze as every op).
+    try:
+        ensure_no_open_checkout(root)
+    except CheckoutOpen as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
 

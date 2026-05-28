@@ -16,6 +16,7 @@ import typer
 
 from pix import banner, debug
 from pix.cache_base import prune_orphans
+from pix.checkout import CheckoutOpen, ensure_no_open_checkout
 from pix.dedupe import (
     DedupeApplyError,
     MissingHashesError,
@@ -59,6 +60,12 @@ def dedupe_library(path: Path) -> None:
         raise typer.Exit(code=1) from e
 
     banner(schema_version=SCHEMA_VERSION)
+
+    try:
+        ensure_no_open_checkout(root)
+    except CheckoutOpen as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
 
     try:
         check_cwd_not_inside(root)
