@@ -16,6 +16,7 @@ from typing import IO
 import typer
 
 from pix import banner
+from pix.cache_base import prune_orphans
 from pix.content_hash import compute_content_hash
 from pix.duration import (
     format_duration,
@@ -104,6 +105,18 @@ def _run_hash(root: Path) -> None:
 
         needs_hashing = find_missing_hashes(
             root, scanned, on_batch=_on_batch
+        )
+
+    # Drop cache sidecars whose source files no longer exist anywhere
+    # in the library, plus any legacy-suffix sidecars from older pix
+    # versions. Hash walks the whole library, so no prefix scoping.
+    prune_stats = prune_orphans(root, {p for p, _, _ in scanned})
+    if prune_stats.orphans_removed or prune_stats.legacy_removed:
+        _plog(
+            plan_log_path,
+            f"Pruned {prune_stats.orphans_removed} orphan cache "
+            f"sidecar(s) and {prune_stats.legacy_removed} legacy "
+            f"sidecar(s) from .pix/cache/.",
         )
 
     _plog(

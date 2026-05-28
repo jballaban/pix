@@ -17,9 +17,9 @@ def test_cache_path_mirrors_absolute_path(tmp_path: Path) -> None:
     media = tmp_path / "foo" / "bar.jpg"
     cache_path = cache.cache_path_for(media)
     # The cache file's path mirrors the absolute path of the media,
-    # with drive letter as folder name and `.cache` appended.
-    assert cache_path.suffix == ".cache"
-    assert cache_path.name == "bar.jpg.cache"
+    # with drive letter as folder name and `.meta` appended.
+    assert cache_path.suffix == ".meta"
+    assert cache_path.name == "bar.jpg.meta"
     # Must live under <library>/.pix/cache/
     assert (tmp_path / ".pix" / "cache") in cache_path.parents
 

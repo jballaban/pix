@@ -1,10 +1,10 @@
 """Per-file persistent metadata cache.
 
 One tiny JSON sidecar per media file under `<library>/.pix/cache/`,
-suffix `.cache`:
+suffix `.meta`:
 
     media:  G:\\pix\\raw\\2023\\Hawaii\\foo.jpg
-    cache:  <library>/.pix/cache/G/pix/raw/2023/Hawaii/foo.jpg.cache
+    cache:  <library>/.pix/cache/G/pix/raw/2023/Hawaii/foo.jpg.meta
 
 Cache file format:
 
@@ -34,7 +34,7 @@ from pix import cache_base
 
 
 CACHE_FILE_VERSION: int = 1
-SUFFIX: str = ".cache"
+SUFFIX: str = ".meta"
 
 
 @dataclass(frozen=True)

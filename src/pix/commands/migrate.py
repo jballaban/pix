@@ -23,6 +23,7 @@ from pix.cleanup import (
     cleanup_rename_orphans,
     wipe_staging,
 )
+from pix.cache_base import prune_orphans
 from pix.config import Config
 from pix.convert import VideoProfile, probe_videos_parallel
 from pix.duration import format_duration_precise
@@ -181,6 +182,23 @@ def _run_migrate(root: Path, folder: Path, config: Config) -> None:
 
     source_files = [p for p, _, _ in scanned]
     _validate_extensions(source_files, config)
+
+    # Drop cache sidecars whose source files no longer exist under
+    # the walked folder. Scoped to `folder` so we don't touch caches
+    # for files outside this migrate's source. Also sweeps legacy
+    # suffixes from older pix versions (currently `.cache` → renamed
+    # to `.meta` in v0.1.88).
+    expected_paths = {p for p in source_files}
+    prune_stats = prune_orphans(
+        root, expected_paths, allowed_prefix=folder
+    )
+    if prune_stats.orphans_removed or prune_stats.legacy_removed:
+        _plog(
+            plan_log_path,
+            f"Pruned {prune_stats.orphans_removed} orphan cache "
+            f"sidecar(s) and {prune_stats.legacy_removed} legacy "
+            f"sidecar(s) from .pix/cache/.",
+        )
 
     # Cache lookup + ExifTool reads. With the per-file cache, the
     # second pass typically has few misses; only those need ExifTool.

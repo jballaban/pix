@@ -14,6 +14,7 @@ from pathlib import Path
 import typer
 
 from pix import banner, debug
+from pix.cache_base import prune_orphans
 from pix.config import Config, set_organize_template
 from pix.duration import format_duration_precise
 from pix.editor import open_in_editor, parse_kept_line_ids, prompt_apply
@@ -121,6 +122,18 @@ def _run_organize(
         return
 
     library_files = [p for p, _, _ in scanned]
+
+    # Drop cache sidecars whose source files no longer exist anywhere
+    # in the library, plus any legacy-suffix sidecars from older pix
+    # versions. Library-wide walk, so no prefix scoping.
+    prune_stats = prune_orphans(root, set(library_files))
+    if prune_stats.orphans_removed or prune_stats.legacy_removed:
+        _plog(
+            plan_log_path,
+            f"Pruned {prune_stats.orphans_removed} orphan cache "
+            f"sidecar(s) and {prune_stats.legacy_removed} legacy "
+            f"sidecar(s) from .pix/cache/.",
+        )
 
     t0 = time.monotonic()
     meta_cache = PerFileCache.for_library(root)

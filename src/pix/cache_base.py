@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, TypeVar, cast
 
@@ -36,6 +37,16 @@ T = TypeVar("T")
 # on any SSD/NVMe.
 DEFAULT_WORKERS: int = 32
 DEFAULT_BATCH_SIZE: int = 1000
+
+# Known live cache suffixes. Anything else in `.pix/cache/` is either
+# legacy (see `_LEGACY_SUFFIXES`) or stray.
+LIVE_SUFFIXES: tuple[str, ...] = (".meta", ".hash", ".video")
+
+# Suffixes from earlier pix versions that should be cleared on contact.
+# Currently: `.cache` was renamed to `.meta` in v0.1.88; old sidecars
+# are unreachable by the new code (the metadata cache reads `.meta`)
+# but consume disk space until pruned.
+_LEGACY_SUFFIXES: tuple[str, ...] = (".cache",)
 
 
 def cache_root_for(library_root: Path) -> Path:
@@ -141,6 +152,104 @@ def rename(old: Path, new: Path) -> None:
         old.replace(new)
     except OSError:
         pass
+
+
+def _unmirror_path(
+    cache_path: Path, library_root: Path
+) -> Path | None:
+    """Reverse `cache_path_for`: given a cache sidecar path, recover
+    the media path it mirrors. Returns None if the path doesn't look
+    like a sidecar we recognize.
+
+    Reversal is straightforward because the mirror only mutates the
+    first path component (drive letter folds to a bare letter folder)
+    and appends a suffix to the filename.
+    """
+    cache_root = cache_root_for(library_root)
+    try:
+        rel = cache_path.relative_to(cache_root)
+    except ValueError:
+        return None
+    parts = rel.parts
+    if len(parts) < 2:
+        return None
+    name = parts[-1]
+    for suffix in LIVE_SUFFIXES:
+        if name.endswith(suffix):
+            stem = name[: -len(suffix)]
+            drive = parts[0]
+            interior = parts[1:-1]
+            # Restore the colon + root-slash to form an absolute
+            # Windows path. `Path("G:")` alone is "current dir on G:";
+            # `Path("G:\\")` is the drive root.
+            return Path(f"{drive}:\\", *interior, stem)
+    return None
+
+
+@dataclass(frozen=True)
+class PruneStats:
+    """Result of `prune_orphans`. All fields are counts."""
+
+    orphans_removed: int
+    legacy_removed: int
+
+
+def prune_orphans(
+    library_root: Path,
+    expected_paths: set[Path],
+    allowed_prefix: Path | None = None,
+) -> PruneStats:
+    """Remove cache sidecars whose source media file isn't in
+    `expected_paths`, plus any legacy-suffix sidecars from older pix
+    versions.
+
+    `allowed_prefix`: when set, only prune sidecars whose mirrored
+    media path lives under that prefix. Used by migrate, which walks a
+    subfolder and shouldn't touch cache entries for files outside the
+    source folder. Library-wide commands (organize, dedupe, hash) pass
+    `None` and prune anything not in `expected_paths`.
+
+    Legacy-suffix sidecars are always pruned regardless of
+    `allowed_prefix` — their suffix is no longer recognized by any
+    live code path, so they're pure dead bytes.
+    """
+    cache_root = cache_root_for(library_root)
+    if not cache_root.is_dir():
+        return PruneStats(0, 0)
+
+    orphans_removed = 0
+    legacy_removed = 0
+    for cache_file in cache_root.rglob("*"):
+        if not cache_file.is_file():
+            continue
+        name = cache_file.name
+        if any(name.endswith(s) for s in _LEGACY_SUFFIXES):
+            try:
+                cache_file.unlink()
+                legacy_removed += 1
+            except OSError:
+                pass
+            continue
+        if not any(name.endswith(s) for s in LIVE_SUFFIXES):
+            continue  # stray file we don't manage; leave alone
+        media_path = _unmirror_path(cache_file, library_root)
+        if media_path is None:
+            continue
+        if allowed_prefix is not None:
+            try:
+                media_path.relative_to(allowed_prefix)
+            except ValueError:
+                continue  # outside the walked prefix; not ours to judge
+        if media_path not in expected_paths:
+            try:
+                cache_file.unlink()
+                orphans_removed += 1
+            except OSError:
+                pass
+    return PruneStats(
+        orphans_removed=orphans_removed,
+        legacy_removed=legacy_removed,
+    )
 
 
 def read_all_parallel(
