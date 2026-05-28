@@ -26,6 +26,7 @@ from pix.cleanup import (
 from pix.config import Config
 from pix.convert import VideoProfile, probe_videos_parallel
 from pix.duration import format_duration_precise
+from pix.errors import restore_stale_errors
 from pix.editor import open_in_editor, parse_kept_line_ids, prompt_apply
 from pix.library_lock import LockHeld, acquire as acquire_lock
 from pix.metadata import (
@@ -130,6 +131,41 @@ def _run_migrate(root: Path, folder: Path, config: Config) -> None:
             f"Cleaned up {len(tmp_deleted)} *_exiftool_tmp file(s) from a "
             f"prior interrupted run.",
         )
+
+    # Restore previously-quarantined files whose errorinfo predates the
+    # running pix version — a code change since the failure means the
+    # same input may now succeed. Files quarantined by THIS version are
+    # left in place (retrying same code would fail again). Sidecars
+    # missing `pix_version` (pre-v0.1.86) are treated as stale.
+    restored, restore_skipped, kept_same_version = restore_stale_errors(root)
+    if restored:
+        _plog(
+            plan_log_path,
+            f"Restored {len(restored)} file(s) from .pix/errors/ "
+            f"(written by an older pix version; will be re-attempted "
+            f"this run).",
+        )
+        for entry in restored:
+            _plog(
+                plan_log_path,
+                f"  restored {entry.original_path} "
+                f"(prior version: {entry.sidecar_pix_version or '<unknown>'})",
+            )
+    if kept_same_version:
+        _plog(
+            plan_log_path,
+            f"Left {kept_same_version} file(s) in .pix/errors/ unchanged "
+            f"(same pix version that quarantined them — retrying would "
+            f"hit the same failure).",
+        )
+    if restore_skipped:
+        _plog(
+            plan_log_path,
+            f"Could not restore {len(restore_skipped)} errorinfo entr(ies); "
+            f"see details below:",
+        )
+        for skip in restore_skipped:
+            _plog(plan_log_path, f"  {skip.entry_path}: {skip.reason}")
 
     # Walk is sub-second on the libraries we care about (scandir-based
     # since v0.1.62), so no console ticker — the next phase's progress

@@ -1,12 +1,12 @@
 """Errors action — move-aside for files that fail CONVERT.
 
 Per spec/migrate.md → Failure handling: when CONVERT fails on the
-conversion step itself (Pillow truncated-image error, ffmpeg can't
-decode, …), the source file is moved to `<library>/.pix/errors/` with
-an opaque filename + YAML sidecar capturing the original path, the
-error message, and the run-id. Same on-disk shape as `pix.stash`; the
-semantic distinction (intentional set-aside vs. runtime failure) lives
-in which folder, not in the layout.
+conversion step itself (Pillow can't decode, ffmpeg can't read, …),
+the source file is moved to `<library>/.pix/errors/` with an opaque
+filename + YAML sidecar capturing the original path, the error
+message, the run-id, and the **pix version that produced the
+failure**. Same on-disk shape as `pix.stash`; the semantic distinction
+(intentional set-aside vs. runtime failure) lives in which folder.
 
 Sidecar format:
 
@@ -14,12 +14,14 @@ Sidecar format:
     failed_at: 2026-05-25T15:32:01
     error: "Pillow failed to convert ... truncated (14 bytes not processed)"
     run_id: 2026-05-25_14-52-13
+    pix_version: 0.1.85
 
-Recovery: the user can either restore the file at `original_path` from
-backup (next migrate run will pick it up), or hard-delete the
-`.pix/errors/<...>` entry to forget it. The errors folder accumulates
-across runs; a future `pix errors clean` command can prune entries
-older than N days if needed.
+Auto-retry semantics: migrate's cleanup phase restores any errorinfo
+whose `pix_version` doesn't match the current `pix.__version__` (a code
+change since the failure means the same input may now succeed). The
+restored file goes back to its `original_path`, where the upcoming
+plan-gen pass will see it. Sidecars missing `pix_version` (written by
+pre-v0.1.86 builds) are also treated as stale and restored.
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ from typing import cast
 
 import yaml
 
+from pix import __version__ as _PIX_VERSION
 from pix.stash import stash_filename  # reuse the opaque-name builder
 
 
@@ -46,6 +49,7 @@ class ErrorSidecar:
     failed_at: str  # ISO 8601 datetime, second precision
     error: str
     run_id: str
+    pix_version: str  # `pix.__version__` at failure time
 
     def to_yaml(self) -> str:
         return yaml.safe_dump(
@@ -54,6 +58,7 @@ class ErrorSidecar:
                 "failed_at": self.failed_at,
                 "error": self.error,
                 "run_id": self.run_id,
+                "pix_version": self.pix_version,
             },
             default_flow_style=False,
             sort_keys=False,
@@ -79,11 +84,17 @@ class ErrorSidecar:
         run_id = data.get("run_id")
         if not isinstance(run_id, str):
             raise ValueError("errorinfo: 'run_id' must be a string")
+        # pix_version is optional for backward compatibility with
+        # sidecars written by pre-v0.1.86 builds; absent = "unknown
+        # older version", which the restore logic treats as stale.
+        pix_version_raw = data.get("pix_version", "")
+        pix_version = pix_version_raw if isinstance(pix_version_raw, str) else ""
         return cls(
             original_path=original_path,
             failed_at=failed_at,
             error=error,
             run_id=run_id,
+            pix_version=pix_version,
         )
 
 
@@ -125,8 +136,126 @@ def move_to_errors(
         failed_at=ts,
         error=error,
         run_id=run_id,
+        pix_version=_PIX_VERSION,
     )
     sidecar_path_for(target).write_text(
         sidecar.to_yaml(), encoding="utf-8"
     )
     return target
+
+
+@dataclass(frozen=True)
+class RestoredEntry:
+    """One entry restored from `.pix/errors/` back to its original path."""
+
+    original_path: Path
+    sidecar_pix_version: str  # may be "" for legacy sidecars
+
+
+@dataclass(frozen=True)
+class SkippedEntry:
+    """One errorinfo we couldn't or wouldn't restore. Reason is human-readable."""
+
+    entry_path: Path
+    reason: str
+
+
+def restore_stale_errors(library_root: Path) -> tuple[
+    list[RestoredEntry], list[SkippedEntry], int
+]:
+    """Restore every `.pix/errors/` entry whose `pix_version` differs from
+    the running `pix.__version__`, plus any legacy sidecar without a
+    version recorded.
+
+    Called from migrate's cleanup phase: by the time plan-gen walks the
+    source, the restored files are back in place and get the new
+    code's chance.
+
+    Returns `(restored, skipped, kept_current_version)`:
+    - `restored`: entries successfully moved back to `original_path`
+    - `skipped`: entries we couldn't restore (file missing, sidecar
+      malformed, target slot occupied, move failed). Reason is logged
+      so the user knows what needs manual attention.
+    - `kept_current_version`: count of entries left in place because
+      their `pix_version` matches the running version (retrying would
+      hit the same failure).
+    """
+    errors_dir = errors_dir_for(library_root)
+    if not errors_dir.is_dir():
+        return [], [], 0
+
+    restored: list[RestoredEntry] = []
+    skipped: list[SkippedEntry] = []
+    kept = 0
+
+    for errorinfo in sorted(errors_dir.glob(f"*{SIDECAR_SUFFIX}")):
+        data_file = errorinfo.parent / errorinfo.name[: -len(SIDECAR_SUFFIX)]
+        if not data_file.is_file():
+            skipped.append(
+                SkippedEntry(
+                    entry_path=errorinfo,
+                    reason="quarantined file missing alongside sidecar",
+                )
+            )
+            continue
+
+        try:
+            sidecar = ErrorSidecar.from_yaml(
+                errorinfo.read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError, yaml.YAMLError) as e:
+            skipped.append(
+                SkippedEntry(
+                    entry_path=errorinfo,
+                    reason=f"errorinfo unreadable: {e}",
+                )
+            )
+            continue
+
+        if sidecar.pix_version == _PIX_VERSION:
+            # Same version that quarantined → same code would fail
+            # again. Leave in place.
+            kept += 1
+            continue
+
+        original_path = Path(sidecar.original_path)
+        if original_path.exists():
+            skipped.append(
+                SkippedEntry(
+                    entry_path=data_file,
+                    reason=(
+                        f"target {original_path} already exists — "
+                        "not overwriting"
+                    ),
+                )
+            )
+            continue
+
+        try:
+            original_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(data_file), str(original_path))
+        except OSError as e:
+            skipped.append(
+                SkippedEntry(
+                    entry_path=data_file,
+                    reason=f"move failed: {e}",
+                )
+            )
+            continue
+
+        # Sidecar cleanup is best-effort. A leftover sidecar with no
+        # adjacent data file is harmless — the next cleanup pass skips
+        # it with a clear reason.
+        try:
+            errorinfo.unlink()
+        except OSError:
+            pass
+
+        restored.append(
+            RestoredEntry(
+                original_path=original_path,
+                sidecar_pix_version=sidecar.pix_version,
+            )
+        )
+
+    return restored, skipped, kept

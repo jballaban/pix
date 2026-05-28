@@ -7,10 +7,12 @@ from pathlib import Path
 
 import pytest
 
+from pix import __version__ as PIX_VERSION
 from pix.errors import (
     ErrorSidecar,
     errors_dir_for,
     move_to_errors,
+    restore_stale_errors,
     sidecar_path_for,
 )
 
@@ -51,6 +53,7 @@ def test_move_to_errors_relocates_file_and_writes_sidecar(
     assert parsed.failed_at == "2026-05-25T15:32:01"
     assert "truncated" in parsed.error
     assert parsed.run_id == "2026-05-25_14-52-13"
+    assert parsed.pix_version == PIX_VERSION
 
 
 def test_sidecar_round_trip() -> None:
@@ -59,10 +62,28 @@ def test_sidecar_round_trip() -> None:
         failed_at="2026-05-25T15:32:01",
         error="Pillow failed",
         run_id="2026-05-25_14-52-13",
+        pix_version="0.1.99",
     )
     yaml_text = sidecar.to_yaml()
     parsed = ErrorSidecar.from_yaml(yaml_text)
     assert parsed == sidecar
+
+
+def test_sidecar_from_yaml_treats_missing_pix_version_as_empty() -> None:
+    """Legacy errorinfo files (pre-v0.1.86) lack pix_version. We accept
+    them with an empty string so the restore logic can treat them as
+    stale rather than refuse the parse."""
+    # YAML auto-detects unquoted ISO timestamps as datetime; the real
+    # legacy errorinfo files quote the string (yaml.safe_dump does this
+    # automatically for stringy values that look like timestamps).
+    legacy_yaml = (
+        "original_path: G:/foo/bar.heic\n"
+        "failed_at: '2026-05-25T15:32:01'\n"
+        "error: Pillow failed\n"
+        "run_id: '2026-05-25_14-52-13'\n"
+    )
+    parsed = ErrorSidecar.from_yaml(legacy_yaml)
+    assert parsed.pix_version == ""
 
 
 def test_sidecar_from_yaml_rejects_missing_fields() -> None:
@@ -82,6 +103,147 @@ def test_sidecar_from_yaml_rejects_missing_fields() -> None:
         ErrorSidecar.from_yaml(
             "original_path: x\nfailed_at: y\nerror: z\n"
         )
+
+
+def _quarantine(
+    *,
+    library_root: Path,
+    original_path: Path,
+    pix_version: str,
+    line_id: str = "L001",
+    contents: bytes = b"data",
+) -> Path:
+    """Helper: create a quarantined entry with a chosen pix_version."""
+    original_path.parent.mkdir(parents=True, exist_ok=True)
+    original_path.write_bytes(contents)
+    dest = move_to_errors(
+        source=original_path,
+        library_root=library_root,
+        run_id="2026-05-25_14-52-13",
+        line_id=line_id,
+        error="old failure",
+    )
+    # Rewrite the sidecar with the chosen pix_version (move_to_errors
+    # always stamps the current version; we need to simulate older
+    # entries).
+    sidecar = ErrorSidecar(
+        original_path=str(original_path),
+        failed_at="2026-05-25T15:32:01",
+        error="old failure",
+        run_id="2026-05-25_14-52-13",
+        pix_version=pix_version,
+    )
+    sidecar_path_for(dest).write_text(sidecar.to_yaml(), encoding="utf-8")
+    return dest
+
+
+def test_restore_stale_errors_brings_back_old_version_entries(
+    tmp_path: Path,
+) -> None:
+    """Entries written by a different (older) pix version get restored."""
+    root = tmp_path / "lib"
+    src = tmp_path / "src" / "old.heic"
+
+    quarantined = _quarantine(
+        library_root=root,
+        original_path=src,
+        pix_version="0.1.50",  # older than current
+        contents=b"old bytes",
+    )
+    assert quarantined.is_file()
+    assert not src.exists()
+
+    restored, skipped, kept = restore_stale_errors(root)
+    assert len(restored) == 1
+    assert restored[0].original_path == src
+    assert restored[0].sidecar_pix_version == "0.1.50"
+    assert skipped == []
+    assert kept == 0
+
+    # File back in source, sidecar gone.
+    assert src.is_file()
+    assert src.read_bytes() == b"old bytes"
+    assert not quarantined.is_file()
+    assert not sidecar_path_for(quarantined).exists()
+
+
+def test_restore_stale_errors_leaves_current_version_in_place(
+    tmp_path: Path,
+) -> None:
+    """Entries written by the running pix version stay quarantined."""
+    root = tmp_path / "lib"
+    src = tmp_path / "src" / "current.heic"
+
+    quarantined = _quarantine(
+        library_root=root,
+        original_path=src,
+        pix_version=PIX_VERSION,
+    )
+
+    restored, skipped, kept = restore_stale_errors(root)
+    assert restored == []
+    assert skipped == []
+    assert kept == 1
+    assert quarantined.is_file()
+    assert not src.exists()
+
+
+def test_restore_stale_errors_treats_legacy_sidecar_as_stale(
+    tmp_path: Path,
+) -> None:
+    """Sidecars missing pix_version (pre-v0.1.86) get restored too."""
+    root = tmp_path / "lib"
+    src = tmp_path / "src" / "legacy.heic"
+    src.parent.mkdir(parents=True)
+    src.write_bytes(b"legacy")
+    dest = move_to_errors(
+        source=src,
+        library_root=root,
+        run_id="run1",
+        line_id="L001",
+        error="legacy failure",
+    )
+    # Overwrite the sidecar with a legacy (no pix_version) form. YAML
+    # requires the timestamp to be quoted so it doesn't auto-parse as
+    # a datetime — matches yaml.safe_dump's actual output for the field.
+    sidecar_path_for(dest).write_text(
+        "original_path: " + str(src) + "\n"
+        "failed_at: '2026-05-25T15:32:01'\n"
+        "error: legacy failure\n"
+        "run_id: run1\n",
+        encoding="utf-8",
+    )
+
+    restored, skipped, kept = restore_stale_errors(root)
+    assert len(restored) == 1
+    assert restored[0].sidecar_pix_version == ""
+    assert kept == 0
+    assert src.is_file()
+
+
+def test_restore_stale_errors_skips_when_target_exists(
+    tmp_path: Path,
+) -> None:
+    """If the original_path slot is already occupied, don't overwrite."""
+    root = tmp_path / "lib"
+    src = tmp_path / "src" / "x.heic"
+
+    _quarantine(
+        library_root=root,
+        original_path=src,
+        pix_version="0.1.50",
+        contents=b"quarantined",
+    )
+    # User restored the original file out-of-band before re-running.
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_bytes(b"manually-restored")
+
+    restored, skipped, kept = restore_stale_errors(root)
+    assert restored == []
+    assert len(skipped) == 1
+    assert "already exists" in skipped[0].reason
+    # Manual restore stays as-is.
+    assert src.read_bytes() == b"manually-restored"
 
 
 def test_move_to_errors_opaque_name_avoids_collisions(
