@@ -13,6 +13,7 @@ from pix.commands.hash import hash_library
 from pix.commands.init import init_library
 from pix.commands.migrate import migrate_folder
 from pix.commands.organize import organize_library
+from pix.commands.retry_errors import retry_errors
 from pix.commands.upgrade import upgrade_library
 
 app: typer.Typer = typer.Typer(
@@ -131,6 +132,23 @@ def dedupe(
 ) -> None:
     """Remove duplicate files sharing the same `pix:ContentHash` (library-wide)."""
     dedupe_library(path=path)
+
+
+@app.command("retry-errors")
+def retry_errors_(
+    path: Annotated[
+        Path,
+        typer.Argument(
+            help=(
+                "Path inside (or at) the library root. Restores every "
+                "file in <library>/.pix/errors/ back to its original "
+                "path so the next `pix migrate` can retry it."
+            ),
+        ),
+    ],
+) -> None:
+    """Restore quarantined `.pix/errors/` files to their original locations."""
+    retry_errors(path=path)
 
 
 @app.command("upgrade")

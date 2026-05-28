@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from PIL import Image
+from PIL import Image, ImageFile
 import pillow_heif  # pyright: ignore[reportMissingTypeStubs]
 
 from pix.timeout import OperationTimeout, run_with_timeout
@@ -29,6 +29,16 @@ from pix.timeout import OperationTimeout, run_with_timeout
 # Register HEIC/HEIF support with Pillow once at import time so
 # `Image.open('foo.heic')` works.
 pillow_heif.register_heif_opener()  # pyright: ignore[reportUnknownMemberType]
+
+# Tolerate truncated images so partial-but-recoverable sources (camera
+# crashed mid-write, network copy interrupted, drive failure mid-import,
+# …) produce the recoverable portion as a valid JPEG instead of refusing
+# the convert and quarantining to .pix/errors/. Healthy files decode
+# strictly anyway — this only changes behavior on inputs that would
+# otherwise raise `"image file is truncated"`. Visually: the top of the
+# image is intact; missing pixels at the bottom render black or garbage,
+# which is far more useful than no JPG at all.
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
 class ConvertFailed(Exception):
