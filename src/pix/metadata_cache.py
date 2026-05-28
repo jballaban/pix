@@ -1,74 +1,57 @@
 """Per-file persistent metadata cache.
 
-Each media file gets one tiny JSON sidecar under
-`<library>/.pix/cache/`, with the cache file's path mirroring the
-media file's absolute path:
+One tiny JSON sidecar per media file under `<library>/.pix/cache/`,
+suffix `.cache`:
 
     media:  G:\\pix\\raw\\2023\\Hawaii\\foo.jpg
     cache:  <library>/.pix/cache/G/pix/raw/2023/Hawaii/foo.jpg.cache
-
-Drive letters are folded into folder names (no `:` in NTFS dir names);
-filename gets `.cache` appended.
 
 Cache file format:
 
     {"v": 1, "size": 4521234, "metadata": { ... ExifTool JSON ... }}
 
-Lookup is a single stat + small JSON read per file. Validation is by
-`size` only — under pix's single-writer trust model, `size` is enough
-insurance against the rare in-place edit. No mtime, no hash.
+Validation is by `size` only — under pix's single-writer trust model,
+size is enough insurance against the rare in-place edit. (Hash and
+video caches also check mtime_ns; the metadata cache deliberately
+doesn't, because pix's own TAG writes change mtime but we refresh
+the cache synchronously, so an mtime check would cause spurious
+invalidations after every tag write.)
 
 Mutations are best-effort: if a rename or delete on the cache file
-fails, the next run just rebuilds that single file's entry from
-ExifTool. Failures don't propagate.
+fails, the next run just rebuilds that one entry from ExifTool.
+Non-atomic writes (`pix.cache_base.write_json_plain` — no `.tmp`/fsync)
+since these run thousands of times per migrate batch and rebuilding
+one stray truncated entry from ExifTool is cheap.
 """
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from pix import cache_base
+
+
 CACHE_FILE_VERSION: int = 1
+SUFFIX: str = ".cache"
 
 
 @dataclass(frozen=True)
 class PerFileCache:
-    """Persistent metadata cache rooted at `<library>/.pix/cache/`."""
+    """Persistent metadata cache rooted at `<library>/.pix/`."""
 
-    cache_root: Path
+    library_root: Path
 
     @classmethod
     def for_library(cls, library_root: Path) -> "PerFileCache":
-        return cls(cache_root=library_root / ".pix" / "cache")
+        return cls(library_root=library_root)
 
     def cache_path_for(self, media_path: Path) -> Path:
-        """Return the cache file path that mirrors `media_path`.
-
-        Absolute media path → cache path under `cache_root` with the
-        drive letter as a top-level folder and `.cache` appended to
-        the filename.
-
-        Caller is expected to pass an absolute path — every pix caller
-        goes through `pix.scan.walk_source_files` which returns
-        already-absolute canonical paths. A defensive `resolve()` here
-        would cost one stat per lookup and is the dominant cost of the
-        cache-check phase at scale.
-        """
-        parts = media_path.parts
-        if not parts:
-            # Shouldn't happen for a real file; defensive.
-            return self.cache_root / (media_path.name + ".cache")
-        # On Windows, parts[0] is like "G:\\" — strip trailing slashes
-        # and colon to get just the drive letter.
-        drive = parts[0].rstrip("\\/").rstrip(":")
-        rest = parts[1:]
-        if rest:
-            mirrored = Path(drive, *rest)
-        else:
-            mirrored = Path(drive)
-        return self.cache_root / mirrored.with_name(mirrored.name + ".cache")
+        """Return the cache file path that mirrors `media_path`."""
+        return cache_base.cache_path_for(
+            self.library_root, media_path, SUFFIX
+        )
 
     def get(
         self,
@@ -77,26 +60,14 @@ class PerFileCache:
     ) -> dict[str, object] | None:
         """Return cached metadata if present and current; else None.
 
-        If `expected_size` is given, validates the cache entry's recorded
-        size against it (the cheap insurance against in-place edits under
-        pix's single-writer trust model). Pass `None` to skip validation
-        — e.g. update-after-write, where the caller knows the cache is
+        If `expected_size` is given, validates the cache entry's
+        recorded size against it. Pass `None` to skip validation —
+        e.g. update-after-write, where the caller knows the cache is
         fresh and re-stat'ing the file would be redundant.
-
-        No existence pre-stat: `read_bytes()` is attempted directly and
-        `FileNotFoundError` is treated as a miss. Saves one stat per
-        cache hit on the hot path.
         """
-        cache_path = self.cache_path_for(media_path)
-        try:
-            loaded: object = json.loads(cache_path.read_bytes())
-        except FileNotFoundError:
+        data = cache_base.read_json(self.cache_path_for(media_path))
+        if data is None:
             return None
-        except (OSError, json.JSONDecodeError):
-            return None
-        if not isinstance(loaded, dict):
-            return None
-        data = cast("dict[str, object]", loaded)
         if data.get("v") != CACHE_FILE_VERSION:
             return None
         if expected_size is not None and data.get("size") != expected_size:
@@ -117,42 +88,27 @@ class PerFileCache:
             size = media_path.stat().st_size
         except OSError:
             return
-        cache_path = self.cache_path_for(media_path)
-        try:
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            cache_path.write_text(
-                json.dumps(
-                    {
-                        "v": CACHE_FILE_VERSION,
-                        "size": size,
-                        "metadata": metadata,
-                    },
-                    ensure_ascii=False,
-                ),
-                encoding="utf-8",
-            )
-        except OSError:
-            pass  # best-effort
+        cache_base.write_json_plain(
+            self.cache_path_for(media_path),
+            {
+                "v": CACHE_FILE_VERSION,
+                "size": size,
+                "metadata": metadata,
+            },
+        )
 
     def remove(self, media_path: Path) -> None:
         """Delete the cache entry for `media_path` if present."""
-        cache_path = self.cache_path_for(media_path)
-        try:
-            cache_path.unlink(missing_ok=True)
-        except OSError:
-            pass  # best-effort
+        cache_base.remove(self.cache_path_for(media_path))
 
-    def rename(self, old_media_path: Path, new_media_path: Path) -> None:
+    def rename(
+        self, old_media_path: Path, new_media_path: Path
+    ) -> None:
         """Move the cache file alongside a media file rename/move."""
-        old_cache = self.cache_path_for(old_media_path)
-        if not old_cache.is_file():
-            return
-        new_cache = self.cache_path_for(new_media_path)
-        try:
-            new_cache.parent.mkdir(parents=True, exist_ok=True)
-            old_cache.replace(new_cache)
-        except OSError:
-            pass  # best-effort
+        cache_base.rename(
+            self.cache_path_for(old_media_path),
+            self.cache_path_for(new_media_path),
+        )
 
     def update_metadata(
         self, media_path: Path, updates: dict[str, object]

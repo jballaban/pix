@@ -49,6 +49,7 @@ from pix.progress import LiveProgress
 from pix.root import NoLibraryRoot, resolve as resolve_root
 from pix.scan import walk_source_files
 from pix.schema import SCHEMA_VERSION, SchemaTooNew, SchemaUpgradeRequired
+from pix.video_cache import read_all_cached_profiles, write_cached_profile
 
 
 def migrate_folder(folder: Path) -> None:
@@ -232,34 +233,79 @@ def _run_migrate(root: Path, folder: Path, config: Config) -> None:
 
     # Windows-playability probe per spec/migrate.md → Windows playability
     # check. Probe every keep-policy mp4/m4v candidate so plan-gen knows
-    # whether to route to CONVERT for re-encode. Source files matching
-    # `convert_to_mp4` policy already go through CONVERT and re-probe
-    # internally at apply time, so we don't probe them here.
-    video_candidates = [
-        p for p in source_files
+    # whether to route to CONVERT for re-encode. Cached at
+    # <library>/.pix/cache/<...>.video keyed on (size, mtime_ns), so
+    # subsequent runs over an unchanged library skip the ffprobe pass
+    # entirely. Source files matching `convert_to_mp4` policy already go
+    # through CONVERT and re-probe internally at apply time, so we don't
+    # cache or pre-probe them here.
+    video_candidates_meta = [
+        (p, sz, mt) for p, sz, mt in scanned
         if lookup_policy(p.name, config.extensions) == "keep"
         and canonical_extension(p.suffix.lstrip(".")) == "mp4"
     ]
     video_profiles: dict[Path, VideoProfile | None] = {}
-    if video_candidates:
+    if video_candidates_meta:
         t0 = time.monotonic()
         _plog(
             plan_log_path,
-            f"Probing {len(video_candidates)} video(s) for playability...",
+            f"Probing {len(video_candidates_meta)} video(s) for playability...",
         )
-        with LiveProgress(total=len(video_candidates)) as probe_progress:
-            probe_progress.begin("Probing videos")
+        # Parallel cache lookup first.
+        with LiveProgress(
+            total=len(video_candidates_meta)
+        ) as cache_progress:
+            cache_progress.begin("Loading video cache")
 
-            def _on_probe_batch(n: int) -> None:
-                probe_progress.advance(by=n)
+            def _on_cache_batch(n: int) -> None:
+                cache_progress.advance(by=n)
 
-            video_profiles = probe_videos_parallel(
-                video_candidates, on_batch=_on_probe_batch
+            cached_profiles = read_all_cached_profiles(
+                root, video_candidates_meta, on_batch=_on_cache_batch
             )
+
+        # Probe only the misses; write fresh results back to the cache.
+        miss_meta = [
+            (p, sz, mt) for p, sz, mt in video_candidates_meta
+            if cached_profiles.get(p) is None
+        ]
+        hits = sum(
+            1 for p in cached_profiles if cached_profiles[p] is not None
+        )
+        fresh_profiles: dict[Path, VideoProfile | None] = {}
+        if miss_meta:
+            with LiveProgress(total=len(miss_meta)) as probe_progress:
+                probe_progress.begin("Probing videos")
+
+                def _on_probe_batch(n: int) -> None:
+                    probe_progress.advance(by=n)
+
+                fresh_profiles = probe_videos_parallel(
+                    [p for p, _, _ in miss_meta],
+                    on_batch=_on_probe_batch,
+                )
+            # Persist fresh probes — successful ones only (a failed
+            # probe yields None; we'd re-probe on next run anyway, and
+            # caching None would mask a transient ffprobe error).
+            mt_by_path = {p: (sz, mt) for p, sz, mt in miss_meta}
+            for p, profile in fresh_profiles.items():
+                if profile is None:
+                    continue
+                sz, mt = mt_by_path[p]
+                write_cached_profile(
+                    root, p, profile=profile, size=sz, mtime_ns=mt
+                )
+
+        # Merge hits (non-None entries from cache) + fresh probes.
+        video_profiles = {
+            p: v for p, v in cached_profiles.items() if v is not None
+        }
+        video_profiles.update(fresh_profiles)
         _plog(
             plan_log_path,
             f"Probed {len(video_profiles)} video(s) in "
-            f"{format_duration_precise(time.monotonic() - t0)}.",
+            f"{format_duration_precise(time.monotonic() - t0)} "
+            f"({hits} cache hit(s), {len(miss_meta)} from ffprobe).",
         )
 
     t0 = time.monotonic()

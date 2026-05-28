@@ -293,7 +293,9 @@ Migrate enforces "playable on stock Windows" as a CONVERT trigger so the canonic
 
 All other video streams (h264 with extended profiles or non-4:2:0 chroma; mpeg2video; mpeg4 ASP; etc.) are not Windows-playable and must be re-encoded.
 
-**Probe.** During plan-gen, migrate runs `ffprobe -show_entries stream=codec_name,profile,pix_fmt` on every video file (anything matching the `convert_to_mp4` policy *and* anything matching `keep` with a video extension — `mp4`, `m4v`, `3gp`). The probe runs in a thread pool (same 32-worker pattern as the hash-cache scan; ffprobe is process-startup-bound, not CPU-bound) so the phase scales with hundreds of videos.
+**Probe.** During plan-gen, migrate runs `ffprobe -show_entries stream=codec_name,profile,pix_fmt` on every keep-policy mp4/m4v candidate. The probe runs in a thread pool (32 workers; ffprobe is process-startup-bound, not CPU-bound) so the phase scales with hundreds of videos. Results land in `<library>/.pix/cache/<absolute-path-mirror>/<filename>.video` keyed on `(size, mtime_ns)` — identical layout to the content-hash cache. First migrate pays the ffprobe cost; subsequent migrates over an unchanged library skip the ffprobe pass entirely (cache hit on every candidate). CONVERT rewrites a video → mtime shifts → next migrate re-probes (and finds the now-playable libx264 yuv420p output).
+
+Source files matching the `convert_to_mp4` policy already go through CONVERT regardless and probe internally at apply time, so they aren't part of the plan-gen probe set.
 
 Result feeds the action decision in plan-gen:
 
