@@ -165,6 +165,7 @@ Tag state is persisted in XMP, primarily in a custom `pix` namespace. Standard f
 Read at any time the tag value is needed (filename derivation, organize template, checkout view):
 
 1. **Date.** Start with `pix:DateAuto`. If `pix:DateOverride` is present, replace each non-`*` field of the override over the corresponding field of `DateAuto`. The result is the effective `date`. Components (`{year}`, `{month}`, `{day}`, `{time}`) are then derived from the effective `date` as needed.
+   - **No-auto case.** When `pix:DateAuto` is absent (un-dated file) but `pix:DateOverride` is present, the effective date is synthesized from the override alone: a **year is required** as the anchor, and any unspecified lower field defaults to its minimum (month/day → `01`, time → `00:00:00`). So an override of `2008-*-*-*:*:*` on an un-dated file yields `2008-01-01 00:00:00`. Without a year, the effective date stays null. The stored override is unchanged — only what the user set is persisted; the defaults are applied at read time. This is how [tag-editing](tag-editing.md) gives a date to a file migrate couldn't date.
 2. **Event.** If `pix:EventOverride` is present, its value is the effective `event`. Otherwise, fall back to `pix:EventAuto`.
 3. **Person, Face.** Derived: set of distinct identities across the file's face regions. Not stored.
 
@@ -205,7 +206,7 @@ No range filters and no operators beyond list/`null`/`!`.
 
 ### Date components as tokens
 
-Templates may reference `{date}` directly (the full datetime as a string), or any of the derived components: `{year}`, `{month}`, `{day}`, `{time}`. These are computed from the effective `date` value at render time; they aren't independently stored tags.
+Templates may reference the derived components `{year}`, `{month}`, `{day}` (computed from the effective `date` value at render time; they aren't independently stored tags). `{time}` and `{date}` are **rejected** in every template-consuming op (organize, checkout, export): `{time}` would make per-second folders, and `{date}` (the full datetime string) makes one folder per timestamp — neither is a useful folder level. Use `{year}/{month}/{day}`.
 
 ### Folder categories per operation
 

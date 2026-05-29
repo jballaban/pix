@@ -85,11 +85,11 @@ Hard links (not moves) mean the library is untouched while the user shuffles, an
 
 ### Template scope: single-valued tokens, compound allowed
 
-`checkout` accepts a **compound** template — any arrangement of single-valued tokens (`{year}`, `{month}`, `{day}`, `{event}`, and `{date}`) across slash-separated levels (`{year}/{event}`, `{year}/{month}/{event}`, …). **Every level is editable.** Because each file has one value per single-valued token, each file appears exactly **once** in the tree, which is what makes inode identity unambiguous.
+`checkout` accepts a **compound** template — any arrangement of single-valued tokens (`{year}`, `{month}`, `{day}`, `{event}`) across slash-separated levels (`{year}/{event}`, `{year}/{month}/{event}`, …). **Every level is editable.** Because each file has one value per single-valued token, each file appears exactly **once** in the tree, which is what makes inode identity unambiguous.
 
 Multi-valued tokens (`{person}`, `{face}`) must be the **sole** token in a checkout — a file appears once per value, so the tree carries duplicates of the same inode. The canonical multi-valued flow is the [face-specific checkout](#face-specific-checkout-face) below, which is **deferred** along with migrate-time face detection.
 
-`{time}` is rejected as a folder level (per-second folders are useless), same as organize.
+`{time}` and `{date}` are rejected as folder levels (per-second / per-timestamp folders are useless), same as organize.
 
 ## Identity model
 
@@ -152,6 +152,10 @@ Commit reconstructs intent purely from **where each link ended up**.
 
 If patching leaves the override all-`*`, the `pix:DateOverride` field is **removed** entirely (equivalent to absent — see the all-wildcards rule in tags.md). If no override existed and the patch introduces a non-`*` field, `DateOverride` is created.
 
+**Clear-when-equals-auto.** When a move sets a token to the value its `_auto` already yields, commit **clears** that override field (reverts to auto) rather than storing a redundant override — so "override present" stays meaningful and future `_auto` improvements keep showing through. (Same for `{event}`: moving a link back onto its auto-derived event name drops `EventOverride` entirely.) Commit determines the `_auto` value by re-reading the changed file's current `pix:*` fields (valid under the freeze).
+
+**Un-dated files.** Setting date components on a file with no `pix:DateAuto` works via the no-auto synthesis rule (a year anchors it; missing parts default to their minimum) — see [tags.md → Effective value computation](tags.md#effective-value-computation). Setting only a sub-year component (e.g. `{month}`) on an un-dated file records the override but leaves the effective date null until a year is also set.
+
 ### Cleaning up `*AutoPrevious` on override changes
 
 When a commit changes an override field, it reconciles the corresponding `*AutoPrevious` (see [tags.md → Auto-previous fields](tags.md#auto-previous-fields-dirty-flagging)):
@@ -168,12 +172,14 @@ Commit handles this implicitly as part of writing the override change; no separa
 1. **Acquire the library lock**; load `.pix/checkout/snapshot.json`.
 2. **Allocate a run folder** `<library-root>/.pix/runs/<run-id>/` (same shape and id format as migrate's).
 3. **Walk the workspace.** For each leaf link: split its workspace-relative path into level components (mapping each to its token via `template`; a `null/` component ⇒ that token is null), and `stat` it to get its `ino`. Collect any links under `pending-delete/` separately.
+   - **Change detection is name-based.** A token "changed" iff the link's current folder name for that level differs from `sanitize(snapshot value)` — comparing rendered name to rendered name, so a link left untouched in a pix-sanitized folder (e.g. `Birthday_Party`) is *not* a phantom change. The new value is read verbatim from the destination folder name.
+   - **Foreign links are not accepted.** A link whose `ino` isn't in the snapshot (a copy or new file the user dropped in — pix didn't write it) is **ignored** and listed in the output as "ignored — not part of this checkout"; commit never creates a library entry from it. The rare ambiguous case (one `ino` appearing at two workspace paths) and a link moved to a depth the template can't express are likewise **skipped with a warning**, never aborting the whole commit.
 4. **Diff against the snapshot**, per snapshot record:
    - In `pending-delete/` → emit a **`DELETE`** line for `library_path`.
-   - Present in the workspace → compare current token tuple vs. snapshot `values`; each differing token is one field edit. Bundle all of a file's edits into one **`TAG`** line.
+   - Present in the workspace with ≥1 changed token → re-read the file's current `pix:*` and compute the minimal override patch per token (set, or [clear-when-equals-auto](#date-overrides-are-wildcard-patches)). Bundle all of a file's edits into one **`TAG`** line.
    - Absent from the workspace (hard-deleted) → clear all editable tokens (emit a `TAG` line if it actually changes anything).
    - Defensive: if `library_path` no longer exists, the freeze was violated externally — abort with a clear error rather than guessing.
-5. **Write the plan** to `runs/<run-id>/plan.txt`, print the summary, and prompt `Apply? [Y/e/n]` — identical edit/confirm loop to migrate and organize (`e` opens `$EDITOR`, re-reads, re-summarizes; deleting a line skips that file this commit).
+5. **Write the plan** to `runs/<run-id>/plan.txt`, print the summary, and prompt `Apply? [Y/e/n]` — identical edit/confirm loop to migrate and organize (`e` opens `$EDITOR`, re-reads, re-summarizes; deleting a line skips that file this commit). **`n` (abort) and an empty diff (nothing changed) both leave the checkout open** — the freeze stays and you can keep editing, re-commit, or `--reset`. Only a successful apply tears the workspace down (step 7).
 6. **Apply** sequentially. This is migrate's TAG/DELETE machinery verbatim:
    - **TAG** — export the file's current XMP to `runs/<run-id>/data/L<NNN>_<name>.xmp` (conservation capture), then one ExifTool `-overwrite_original` call writing the changed `pix:*` override fields (plus any `*AutoPrevious` reconciliation). Atomicity is ExifTool's own (see [migrate → Example 3](migrate.md#example-3--tag-only)).
    - **DELETE** — move the file → `runs/<run-id>/data/L<NNN>_<name>` (one rename; capture + removal).

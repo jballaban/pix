@@ -111,7 +111,7 @@ def organize(
         typer.Argument(
             help=(
                 "Folder template, e.g. '{year}/{month}/{event}'. Tokens: "
-                "{year}, {month}, {day}, {date}, {event}. Levels separated "
+                "{year}, {month}, {day}, {event}. Levels separated "
                 "by `/`. Persisted as the active template on successful "
                 "apply. Omit to re-apply the stored default shape."
             ),
@@ -153,7 +153,7 @@ def checkout(
         typer.Argument(
             help=(
                 "Folder template, e.g. '{year}/{event}'. Tokens: {year}, "
-                "{month}, {day}, {date}, {event}. Required when starting."
+                "{month}, {day}, {event}. Required when starting."
             ),
         ),
     ] = None,

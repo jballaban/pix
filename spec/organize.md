@@ -54,10 +54,9 @@ The full grammar (filter syntax, `null`, negation) is defined in [tags.md → Te
 `organize` is single-valued only (a file has one physical location), so allowed tokens are:
 
 - `{year}`, `{month}`, `{day}` — derived from effective `date`
-- `{date}` — full effective datetime as a string (e.g., `2023-08-15-14:32:05`)
 - `{event}` — effective event value
 
-`{time}` is rejected at template parse time — per-second folders are a foot-gun. Multi-valued tokens (`{person}`, `{face}`) are checkout/export only and are rejected here.
+`{time}` and `{date}` are rejected at template parse time — per-second / per-timestamp folders are a foot-gun. Multi-valued tokens (`{person}`, `{face}`) are checkout/export only and are rejected here.
 
 ### Null and filtered placement
 

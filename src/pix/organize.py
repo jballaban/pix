@@ -95,7 +95,7 @@ class OrganizeApplyError(Exception):
 
 
 ALLOWED_TOKENS: frozenset[str] = frozenset(
-    {"year", "month", "day", "date", "event"}
+    {"year", "month", "day", "event"}
 )
 _TOKEN_RE = re.compile(r"\{([a-zA-Z]+)\}")
 
@@ -152,6 +152,11 @@ def parse_template(template_str: str) -> Template:
                 raise OrganizeError(
                     "{time} is per-second and not useful as a folder "
                     "level; use {year}/{month}/{day} instead."
+                )
+            if token_name == "date":
+                raise OrganizeError(
+                    "{date} is a full timestamp and not useful as a folder "
+                    "level (one folder per second); use {year}/{month}/{day}."
                 )
             if token_name not in ALLOWED_TOKENS:
                 raise OrganizeError(

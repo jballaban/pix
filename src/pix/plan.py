@@ -793,8 +793,18 @@ def _plan_keep(
     # --- Effective date (auto + optional override) for canonical filename ---
     debug.section("Effective date")
     if new_auto is None:
-        effective: datetime | None = None
-        debug.log("  Effective date: (none — no auto available)")
+        # No auto base — but a user override pinning a year (with missing
+        # parts defaulted) still yields an effective date and a canonical
+        # name. See spec/tags.md.
+        synth = _date_from_override_only(meta.get_str(PIX_DATE_OVERRIDE))
+        effective: datetime | None = synth
+        if synth is not None:
+            debug.log(
+                f"  No DateAuto; effective synthesized from override: "
+                f"{synth.isoformat()}"
+            )
+        else:
+            debug.log("  Effective date: (none — no auto available)")
     else:
         override = meta.get_str(PIX_DATE_OVERRIDE)
         if override is None:
@@ -952,6 +962,43 @@ def _apply_override(auto: datetime, override: str) -> datetime | None:
         return None
 
 
+def _date_from_override_only(override: str | None) -> datetime | None:
+    """Synthesize an effective date from `DateOverride` alone (no DateAuto).
+
+    Used when a file has no `pix:DateAuto` (un-dated) but the user pinned
+    date components via tag-editing. A **year is required** as the anchor;
+    any unspecified lower field defaults to its minimum (month/day → 01,
+    time → 00:00:00). Without a year there's nothing to anchor, so the
+    effective date stays null. The stored override is unchanged — only
+    what the user actually set is persisted; the defaults are applied
+    here at read time.
+    """
+    if not override:
+        return None
+    m = _OVERRIDE_RE.match(override)
+    if m is None:
+        return None
+    parts = m.groupdict()
+    if parts["Y"] == "*":
+        return None  # no year anchor
+
+    def pick(key: str, default: int) -> int:
+        v = parts[key]
+        return default if v == "*" else int(v)
+
+    try:
+        return datetime(
+            year=int(parts["Y"]),
+            month=pick("M", 1),
+            day=pick("D", 1),
+            hour=pick("h", 0),
+            minute=pick("m", 0),
+            second=pick("s", 0),
+        )
+    except ValueError:
+        return None
+
+
 def effective_date(meta: FileMetadata) -> datetime | None:
     debug.section("Effective date")
     stored_auto = meta.get_str(PIX_DATE_AUTO)
@@ -968,6 +1015,16 @@ def effective_date(meta: FileMetadata) -> datetime | None:
         auto = derive_date_auto(meta)
 
     if auto is None:
+        # No auto base. If the user pinned date components via an
+        # override, synthesize from it (year required; missing parts
+        # default to their minimum). See spec/tags.md.
+        synth = _date_from_override_only(meta.get_str(PIX_DATE_OVERRIDE))
+        if synth is not None:
+            debug.log(
+                f"  pix:DateAuto absent; synthesized from override "
+                f"(missing parts defaulted): {synth.isoformat()}"
+            )
+            return synth
         debug.log("  Effective date: (none)")
         return None
 

@@ -69,6 +69,11 @@ def test_parse_template_rejects_time_token() -> None:
         parse_template("{year}/{time}")
 
 
+def test_parse_template_rejects_date_token() -> None:
+    with pytest.raises(OrganizeError, match=r"\{date\}"):
+        parse_template("{date}/{event}")
+
+
 def test_parse_template_rejects_unknown_token() -> None:
     with pytest.raises(OrganizeError, match="unknown token"):
         parse_template("{year}/{quarter}")
