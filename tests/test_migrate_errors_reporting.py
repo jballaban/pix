@@ -103,6 +103,46 @@ def test_migrate_silent_when_errors_dir_clean(
     assert "Could not restore" not in captured.err
 
 
+def test_migrate_restores_mirrored_older_version_to_true_path(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A mirrored older-version entry is restored to its ORIGINAL path (via
+    its location), not guessed — proving location-as-provenance end to end.
+
+    Unknown extension so migrate fast-fails after the restore, before the
+    exiftool-backed metadata phase.
+    """
+    from pix.errors import errors_path_for, sidecar_path_for
+
+    root = _make_library(tmp_path)
+    src = root / "2014" / "old.zzz"
+    src.parent.mkdir(parents=True)
+    src.write_bytes(b"data")
+    dest = move_to_errors(
+        source=src, library_root=root, run_id="r", line_id="L1", error="e"
+    )
+    assert dest == errors_path_for(root, src)
+    # Re-stamp the sidecar with an older version so restore is attempted.
+    sidecar_path_for(dest).write_text(
+        ErrorSidecar(
+            original_path=str(src),
+            failed_at="2026-05-25T15:32:01",
+            error="e",
+            run_id="r",
+            pix_version="0.1.50",
+        ).to_yaml(),
+        encoding="utf-8",
+    )
+    assert not src.exists()
+
+    with pytest.raises(typer.Exit) as exc:
+        migrate_folder(root)
+    assert exc.value.exit_code == 1  # unknown-extension fast-fail
+
+    assert src.is_file()  # restored to its true source path
+    assert not dest.exists()
+
+
 def test_migrate_reprocesses_orphaned_sidecar_less_file(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

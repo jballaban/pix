@@ -54,28 +54,37 @@ def cache_root_for(library_root: Path) -> Path:
     return library_root / ".pix" / "cache"
 
 
-def cache_path_for(
-    library_root: Path, file_path: Path, suffix: str
-) -> Path:
-    """Mirror `file_path` under `<library>/.pix/cache/` with `suffix`.
+def mirror_under(root: Path, file_path: Path, suffix: str = "") -> Path:
+    """Mirror `file_path` under `root`, appending `suffix` to the filename.
 
     Drive letters (Windows) fold into the first folder name because
-    NTFS dir names can't contain `:`. Caller is expected to pass an
-    absolute path — every pix caller goes through `pix.scan.walk_source_files`
-    which returns absolute canonical paths. A defensive `resolve()` here
-    would cost one stat per cache lookup.
+    NTFS dir names can't contain `:` (`G:\\pix\\foo.jpg` → `root/G/pix/foo.jpg`).
+    Caller is expected to pass an absolute path — every pix caller goes
+    through `pix.scan.walk_source_files` which returns absolute canonical
+    paths. A defensive `resolve()` here would cost one stat per lookup.
+
+    Shared by the cache tree (`<library>/.pix/cache/`, with a `.meta`/`.hash`/
+    `.video` suffix) and the errors tree (`<library>/.pix/errors/`, no suffix —
+    the moved file keeps its own name, and its *location* records the source
+    path so a lost sidecar doesn't lose provenance).
     """
     parts = file_path.parts
-    cache_root = cache_root_for(library_root)
     if not parts:
-        return cache_root / (file_path.name + suffix)
+        return root / (file_path.name + suffix)
     drive = parts[0].rstrip("\\/").rstrip(":")
     rest = parts[1:]
     if rest:
         mirrored = Path(drive, *rest)
     else:
         mirrored = Path(drive)
-    return cache_root / mirrored.with_name(mirrored.name + suffix)
+    return root / mirrored.with_name(mirrored.name + suffix)
+
+
+def cache_path_for(
+    library_root: Path, file_path: Path, suffix: str
+) -> Path:
+    """Mirror `file_path` under `<library>/.pix/cache/` with `suffix`."""
+    return mirror_under(cache_root_for(library_root), file_path, suffix)
 
 
 def read_json(cache_path: Path) -> dict[str, object] | None:
@@ -181,29 +190,31 @@ def remove_all(library_root: Path, media: Path) -> None:
         remove(cache_path_for(library_root, media, suffix))
 
 
-def _unmirror_path(
-    cache_path: Path, library_root: Path
+def unmirror_under(
+    root: Path, mirrored: Path, suffixes: tuple[str, ...]
 ) -> Path | None:
-    """Reverse `cache_path_for`: given a cache sidecar path, recover
-    the media path it mirrors. Returns None if the path doesn't look
-    like a sidecar we recognize.
+    """Reverse `mirror_under`: recover the absolute source path that
+    `mirrored` (a file under `root`) mirrors. Returns None if `mirrored`
+    isn't under `root`, is too shallow to carry a drive folder, or its
+    name doesn't end in one of `suffixes`.
 
     Reversal is straightforward because the mirror only mutates the
     first path component (drive letter folds to a bare letter folder)
-    and appends a suffix to the filename.
+    and appends a suffix to the filename. Pass `("",)` for the errors
+    tree, whose files carry no suffix — `endswith("")` matches and the
+    stem is the whole name.
     """
-    cache_root = cache_root_for(library_root)
     try:
-        rel = cache_path.relative_to(cache_root)
+        rel = mirrored.relative_to(root)
     except ValueError:
         return None
     parts = rel.parts
     if len(parts) < 2:
         return None
     name = parts[-1]
-    for suffix in LIVE_SUFFIXES:
+    for suffix in suffixes:
         if name.endswith(suffix):
-            stem = name[: -len(suffix)]
+            stem = name[: len(name) - len(suffix)] if suffix else name
             drive = parts[0]
             interior = parts[1:-1]
             # Restore the colon + root-slash to form an absolute
@@ -211,6 +222,15 @@ def _unmirror_path(
             # `Path("G:\\")` is the drive root.
             return Path(f"{drive}:\\", *interior, stem)
     return None
+
+
+def _unmirror_path(
+    cache_path: Path, library_root: Path
+) -> Path | None:
+    """Reverse `cache_path_for` for a cache sidecar (recognized suffix)."""
+    return unmirror_under(
+        cache_root_for(library_root), cache_path, LIVE_SUFFIXES
+    )
 
 
 @dataclass(frozen=True)

@@ -11,12 +11,29 @@ from pix import __version__ as PIX_VERSION
 from pix.errors import (
     ErrorSidecar,
     errors_dir_for,
+    errors_path_for,
     find_orphaned_error_files,
     move_to_errors,
+    original_path_from_errors_file,
     restore_orphaned_errors,
     restore_stale_errors,
     sidecar_path_for,
 )
+
+
+def _sidecar_yaml(
+    *,
+    original_path: str,
+    pix_version: str = "0.1.50",
+) -> str:
+    """A complete, parseable .errorinfo body for tests."""
+    return ErrorSidecar(
+        original_path=original_path,
+        failed_at="2026-05-25T15:32:01",
+        error="some failure",
+        run_id="2026-05-25_14-52-13",
+        pix_version=pix_version,
+    ).to_yaml()
 
 
 def test_errors_dir_lives_under_pix(tmp_path: Path) -> None:
@@ -41,8 +58,11 @@ def test_move_to_errors_relocates_file_and_writes_sidecar(
         failed_at=datetime(2026, 5, 25, 15, 32, 1),
     )
 
-    # File moved to .pix/errors/<run-id>_<line-id>.<ext>.
-    assert dest == root / ".pix" / "errors" / "2026-05-25_14-52-13_L0042.heic"
+    # File moved to a path that mirrors its source under .pix/errors/, so
+    # the location itself records the origin.
+    assert dest == errors_path_for(root, src)
+    assert dest.name == "bad.heic"
+    assert original_path_from_errors_file(root, dest) == src
     assert dest.is_file()
     assert dest.read_bytes() == b"truncated heic bytes"
     assert not src.exists()
@@ -259,13 +279,15 @@ def test_find_orphaned_error_files_only_returns_sidecar_less_data(
 
     orphan = errors_dir / "run_L001.mp4"
     orphan.write_bytes(b"orphan")
-    # Properly-paired entry: data + sidecar.
+    # Properly-paired entry: data + a valid sidecar carrying the origin.
     paired = errors_dir / "run_L002.mp4"
     paired.write_bytes(b"paired")
-    sidecar_path_for(paired).write_text("original_path: x\n", encoding="utf-8")
+    sidecar_path_for(paired).write_text(
+        _sidecar_yaml(original_path="G:/x.mp4"), encoding="utf-8"
+    )
     # Lone sidecar (no data) — not a data orphan.
     (errors_dir / "run_L003.mp4.errorinfo").write_text(
-        "original_path: y\n", encoding="utf-8"
+        _sidecar_yaml(original_path="G:/y.mp4"), encoding="utf-8"
     )
 
     assert find_orphaned_error_files(root) == [orphan]
@@ -325,7 +347,9 @@ def test_restore_orphaned_errors_leaves_paired_entries_alone(
     errors_dir.mkdir(parents=True)
     paired = errors_dir / "run_L002.mp4"
     paired.write_bytes(b"paired")
-    sidecar_path_for(paired).write_text("original_path: x\n", encoding="utf-8")
+    sidecar_path_for(paired).write_text(
+        _sidecar_yaml(original_path="G:/x.mp4"), encoding="utf-8"
+    )
 
     restored, skipped = restore_orphaned_errors(root, root / "src")
 
@@ -334,10 +358,84 @@ def test_restore_orphaned_errors_leaves_paired_entries_alone(
     assert paired.exists()
 
 
-def test_move_to_errors_opaque_name_avoids_collisions(
+# --- mirrored layout: location is the durable provenance ---------------------
+
+
+def test_restore_stale_errors_restores_mirrored_sidecar_less_to_origin(
     tmp_path: Path,
 ) -> None:
-    """Two sources with the same filename get different opaque names."""
+    """A mirrored entry with NO sidecar still goes home — its location pins
+    the source path, so it's restored (not stranded as an orphan)."""
+    root = tmp_path / "lib"
+    src = tmp_path / "media" / "2014" / "clip.mp4"
+    src.parent.mkdir(parents=True)
+    src.write_bytes(b"clip")
+    dest = move_to_errors(
+        source=src, library_root=root, run_id="r", line_id="L1", error="e"
+    )
+    sidecar_path_for(dest).unlink()  # lose the sidecar
+    assert not src.exists()
+
+    restored, skipped, kept = restore_stale_errors(root)
+
+    assert kept == 0
+    assert skipped == []
+    assert len(restored) == 1
+    assert restored[0].original_path == src
+    assert restored[0].sidecar_pix_version == ""
+    assert src.is_file() and src.read_bytes() == b"clip"
+    assert not dest.exists()
+    # Not flagged as an orphan — origin was recoverable.
+    assert find_orphaned_error_files(root) == []
+
+
+def test_restore_stale_errors_keeps_mirrored_current_version(
+    tmp_path: Path,
+) -> None:
+    """A mirrored entry quarantined by the running version stays put."""
+    root = tmp_path / "lib"
+    src = tmp_path / "media" / "clip.mp4"
+    src.parent.mkdir(parents=True)
+    src.write_bytes(b"clip")
+    dest = move_to_errors(  # stamps the current pix version
+        source=src, library_root=root, run_id="r", line_id="L1", error="e"
+    )
+
+    restored, skipped, kept = restore_stale_errors(root)
+
+    assert kept == 1
+    assert restored == []
+    assert skipped == []
+    assert dest.is_file()
+    assert not src.exists()
+
+
+def test_restore_stale_errors_mirrored_corrupt_sidecar_still_restores(
+    tmp_path: Path,
+) -> None:
+    """A corrupt sidecar can't block a mirrored restore — location wins."""
+    root = tmp_path / "lib"
+    src = tmp_path / "media" / "2020" / "clip.mp4"
+    src.parent.mkdir(parents=True)
+    src.write_bytes(b"clip")
+    dest = move_to_errors(
+        source=src, library_root=root, run_id="r", line_id="L1", error="e"
+    )
+    sidecar_path_for(dest).write_text("just a string", encoding="utf-8")
+    assert not src.exists()
+
+    restored, _skipped, _kept = restore_stale_errors(root)
+
+    assert len(restored) == 1
+    assert restored[0].original_path == src
+    assert src.is_file()
+
+
+def test_move_to_errors_distinct_paths_for_same_filename(
+    tmp_path: Path,
+) -> None:
+    """Two sources with the same filename in different folders mirror to
+    distinct errors paths (the source subpath disambiguates them)."""
     root = tmp_path / "lib"
     a = tmp_path / "a" / "IMG_0001.heic"
     b = tmp_path / "b" / "IMG_0001.heic"
@@ -357,3 +455,6 @@ def test_move_to_errors_opaque_name_avoids_collisions(
     assert da != db
     assert da.read_bytes() == b"A"
     assert db.read_bytes() == b"B"
+    # Each round-trips back to its true source.
+    assert original_path_from_errors_file(root, da) == a
+    assert original_path_from_errors_file(root, db) == b

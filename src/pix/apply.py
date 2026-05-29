@@ -168,9 +168,16 @@ def apply_plan(
                             f"convert failed and move to .pix/errors/ "
                             f"also failed: {move_err}"
                         ) from move_err
+                    # Show the path under .pix/errors/ — the errors tree now
+                    # mirrors the source path, so the sublocation is the
+                    # provenance, not just the bare filename.
+                    try:
+                        rel_dest = dest.relative_to(library_root / ".pix")
+                    except ValueError:
+                        rel_dest = Path(dest.name)
                     _log(
                         log, ln, "Quarantined",
-                        detail=f".pix/errors/{dest.name}",
+                        detail=str(rel_dest).replace("\\", "/"),
                     )
                     convert_failures.append((ln, str(e)))
                     records.append(
