@@ -15,6 +15,7 @@ def test_default_config_parses(tmp_path: Path) -> None:
 
     assert cfg.extensions["jpg"] == "keep"
     assert cfg.extensions["heic"] == "convert_to_jpg"
+    assert cfg.extensions["bmp"] == "convert_to_jpg"
     assert cfg.extensions["mov"] == "convert_to_mp4"
     assert cfg.extensions["thumbs.db"] == "delete"
 

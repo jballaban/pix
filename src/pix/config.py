@@ -24,6 +24,7 @@ extensions:
   heic:    convert_to_jpg
   heif:    convert_to_jpg
   png:     convert_to_jpg
+  bmp:     convert_to_jpg   # uncompressed bitmap; re-encode to JPEG to reclaim space
   mov:     convert_to_mp4
   avi:     convert_to_mp4
   mts:     convert_to_mp4   # AVCHD camcorder MPEG-TS; usually H.264, remuxes cheaply

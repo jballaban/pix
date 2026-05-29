@@ -13,12 +13,41 @@ from typing import Any
 
 import pytest
 
+from PIL import Image
+
 from pix import convert
 from pix.convert import (
     VideoProfile,
+    convert_to_jpg,
     is_windows_playable,
     probe_video_profile,
 )
+
+
+def test_convert_to_jpg_handles_bmp(tmp_path: Path) -> None:
+    """BMP is a supported convert_to_jpg source — Pillow decodes it natively."""
+    src = tmp_path / "image.bmp"
+    Image.new("RGB", (8, 8), (10, 20, 30)).save(src, format="BMP")
+    dst = tmp_path / "out.jpg"
+
+    convert_to_jpg(src, dst)
+
+    assert dst.is_file()
+    with Image.open(dst) as out:
+        assert out.format == "JPEG"
+        assert out.size == (8, 8)
+
+
+def test_convert_to_jpg_handles_paletted_bmp(tmp_path: Path) -> None:
+    """A paletted (mode 'P') BMP is coerced to RGB before the JPEG encode."""
+    src = tmp_path / "paletted.bmp"
+    Image.new("P", (8, 8)).save(src, format="BMP")
+    dst = tmp_path / "out.jpg"
+
+    convert_to_jpg(src, dst)
+
+    with Image.open(dst) as out:
+        assert out.format == "JPEG"
 
 
 @dataclass
@@ -82,7 +111,10 @@ def test_probe_video_profile_parses_output(
     stdout: str,
     expected: VideoProfile,
 ) -> None:
-    monkeypatch.setattr(convert, "_require_tool", lambda _name: "ffprobe")
+    def _fake_require(_name: str) -> str:
+        return "ffprobe"
+
+    monkeypatch.setattr(convert, "_require_tool", _fake_require)
     monkeypatch.setattr(subprocess, "run", _fake_run(stdout))
     assert probe_video_profile(Path("/fake/video.mov")) == expected
 

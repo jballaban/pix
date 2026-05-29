@@ -55,7 +55,9 @@ from pix.config import DEFAULT_CONFIG_YAML
 #      get dropped on re-encode). Single-VOB rips convert cleanly;
 #      multi-VOB DVD rips would be split file-by-file (use HandBrake
 #      for those — known limitation, not auto-handled).
-SCHEMA_VERSION: int = 7
+# v8 — Default config gains bmp → convert_to_jpg (uncompressed bitmap;
+#      Pillow decodes it natively, re-encode to JPEG reclaims space).
+SCHEMA_VERSION: int = 8
 
 
 # --- Upgrades --------------------------------------------------------------
@@ -130,6 +132,13 @@ UPGRADES: dict[int, Upgrade] = {
         description=(
             "Default config gains vob → convert_to_mp4 (DVD-Video "
             "object; same MPEG-2 PS re-encode path as .mpg)."
+        ),
+    ),
+    8: Upgrade(
+        add_extensions={"bmp": "convert_to_jpg"},
+        description=(
+            "Default config gains bmp → convert_to_jpg (uncompressed "
+            "bitmap; Pillow decodes natively, re-encode reclaims space)."
         ),
     ),
 }
