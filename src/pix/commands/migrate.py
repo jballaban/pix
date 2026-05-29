@@ -14,7 +14,7 @@ from pathlib import Path
 
 import typer
 
-from pix import banner, debug
+from pix import __version__, banner, debug
 from pix.apply import ApplyError, apply_plan
 from pix.checkout import CheckoutOpen, ensure_no_open_checkout
 from pix.cleanup import (
@@ -160,12 +160,32 @@ def _run_migrate(root: Path, folder: Path, config: Config) -> None:
                 f"  restored {entry.original_path} "
                 f"(prior version: {entry.sidecar_pix_version or '<unknown>'})",
             )
+    if restored:
+        # Mirror to the console — these files re-enter this run's plan, so
+        # the user should know why work appeared for previously-failed files.
+        typer.echo(
+            f"Restored {len(restored)} file(s) from .pix/errors/ "
+            f"(quarantined by an older pix version) — retrying this run."
+        )
     if kept_same_version:
         _plog(
             plan_log_path,
             f"Left {kept_same_version} file(s) in .pix/errors/ unchanged "
             f"(same pix version that quarantined them — retrying would "
             f"hit the same failure).",
+        )
+        # Surface to the console too. Without this, a library whose only
+        # outstanding work is a quarantined file just prints "Nothing to
+        # do." with no hint the file exists or why it's being skipped.
+        errors_dir = root / ".pix" / "errors"
+        typer.echo(
+            f"{kept_same_version} file(s) remain quarantined in {errors_dir} "
+            f"after failing CONVERT under pix {__version__}. They are not "
+            f"retried automatically — the same code would fail again. Check "
+            f"each .errorinfo sidecar for the error; once the input is fixed "
+            f"(or a newer pix ships), restore the file to its source path and "
+            f"re-run to retry.",
+            err=True,
         )
     if restore_skipped:
         _plog(
@@ -175,6 +195,15 @@ def _run_migrate(root: Path, folder: Path, config: Config) -> None:
         )
         for skip in restore_skipped:
             _plog(plan_log_path, f"  {skip.entry_path}: {skip.reason}")
+        # These need a human — a missing/occupied/unreadable entry won't
+        # resolve itself on a re-run. Echo to the console, not just plan.log.
+        typer.echo(
+            f"Could not restore {len(restore_skipped)} entr(ies) from "
+            f".pix/errors/ — needs attention:",
+            err=True,
+        )
+        for skip in restore_skipped:
+            typer.echo(f"  {skip.entry_path.name}: {skip.reason}", err=True)
 
     # Walk is sub-second on the libraries we care about (scandir-based
     # since v0.1.62), so no console ticker — the next phase's progress
