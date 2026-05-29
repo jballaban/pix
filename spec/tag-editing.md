@@ -38,7 +38,7 @@ Deferred to a later build (separate design, with the "set to nothing" marker if 
 
 ## The freeze — an open checkout locks the library
 
-While `.pix/checkout/` exists, **every pix command except `pix checkout --commit` and `pix checkout --reset` refuses up front**, with:
+While a checkout is open — its `.pix/checkout/snapshot.json` is present — **every pix command except `pix checkout --commit` and `pix checkout --reset` refuses up front**, with:
 
 ```
 A checkout is open (template: {year}/{event}, started 2026-05-28 15:00).
@@ -57,7 +57,7 @@ A checkout link and its library file are two directory entries pointing at the *
 
 Rather than build drift-tolerance (re-identifying orphaned links by content hash, mapping deduped files to surviving keepers), the freeze makes the whole model provably correct: nothing mutates library inodes mid-session, so the snapshot stays valid and commit's identity is exact. The cost — no imports/normalization while a checkout is parked open — is acceptable for a single-user, transient editing session, and `--reset` is the escape hatch.
 
-The freeze is enforced by **folder presence**, not the library lock (the lock lives for one invocation; a checkout session spans many). Each command, after resolving the root, checks for `.pix/checkout/` and refuses if present.
+The freeze is enforced by the **snapshot's presence** (`.pix/checkout/snapshot.json`), not the library lock (the lock lives for one invocation; a checkout session spans many). Each command, after resolving the root, checks for the snapshot and refuses if present. We key on the snapshot rather than the folder so the `.pix/checkout/` folder can persist empty across commit/reset (the workspace path stays put; emptying contents is more robust than removing a folder that may be open in Explorer).
 
 ## Scope
 
@@ -194,7 +194,7 @@ Commit handles this implicitly as part of writing the override change; no separa
 6. **Apply** sequentially. This is migrate's TAG/DELETE machinery verbatim:
    - **TAG** — export the file's current XMP to `runs/<run-id>/data/L<NNN>_<name>.xmp` (conservation capture), then one ExifTool `-overwrite_original` call writing the changed `pix:*` override fields (plus any `*AutoPrevious` reconciliation). Atomicity is ExifTool's own (see [migrate → Example 3](migrate.md#example-3--tag-only)).
    - **DELETE** — move the file → `runs/<run-id>/data/L<NNN>_<name>` (one rename; capture + removal).
-7. **Tear down** `.pix/checkout/` (unlink the hard links, delete the snapshot) on a successful apply. Removing hard links never touches the library files. The freeze is now lifted.
+7. **Empty** `.pix/checkout/` (delete the snapshot + unlink the hard links) on a successful apply, **keeping the folder itself** so the workspace path persists. Removing hard links never touches the library files; with the snapshot gone the freeze is lifted.
 
 `plan.txt` is immutable once written; progress streams to `apply.log`. No markers are needed — TAG and DELETE are each a single atomic step (no CONVERT decomposition).
 
@@ -251,7 +251,7 @@ Conservation holds exactly as in migrate: nothing is destroyed without a capture
 
 ## Reset
 
-`pix checkout --reset` removes `.pix/checkout/` (links + snapshot) and exits. No tags are written, no run folder is allocated, the library is untouched, and the freeze lifts. It's the throw-away for a checkout the user no longer wants to commit.
+`pix checkout --reset` empties `.pix/checkout/` (deletes the snapshot + links, **keeping the folder**) and exits. No tags are written, no run folder is allocated, the library is untouched, and — with the snapshot gone — the freeze lifts. It's the throw-away for a checkout the user no longer wants to commit.
 
 ## Face-specific checkout: `{face}` (deferred)
 

@@ -118,7 +118,28 @@ def _snapshot_path(library_root: Path) -> Path:
 
 
 def is_open(library_root: Path) -> bool:
-    return checkout_dir(library_root).exists()
+    """A checkout is open iff its `snapshot.json` exists.
+
+    We key "open" on the snapshot, not the folder, so the
+    `.pix/checkout/` folder can persist (empty) across commit/reset —
+    the workspace path stays put for the user, and emptying contents is
+    more robust than removing a folder that may be open in Explorer.
+    """
+    return _snapshot_path(library_root).exists()
+
+
+def _clear_checkout_contents(cdir: Path) -> None:
+    """Delete everything inside the checkout folder, keeping the folder."""
+    if not cdir.exists():
+        return
+    for child in cdir.iterdir():
+        if child.is_dir():
+            shutil.rmtree(child, ignore_errors=True)
+        else:
+            try:
+                child.unlink()
+            except OSError:
+                pass
 
 
 # --- Snapshot ----------------------------------------------------------------
@@ -380,7 +401,10 @@ def create_checkout(
 
     cdir = checkout_dir(library_root)
     try:
-        cdir.mkdir(parents=True)
+        cdir.mkdir(parents=True, exist_ok=True)
+        # The folder may persist (empty) from a prior commit/reset, or
+        # hold stray links from a crashed start — clear before building.
+        _clear_checkout_contents(cdir)
 
         links: list[SnapshotLink] = []
         for cand in candidates:
@@ -407,25 +431,27 @@ def create_checkout(
             ),
         )
     except BaseException:
-        # Never leave a half-built workspace — it would freeze the
-        # library with nothing to commit. Tear down and re-raise.
-        shutil.rmtree(cdir, ignore_errors=True)
+        # Never leave a half-built workspace — the snapshot isn't written
+        # until the end, so on failure we just clear contents (no stray
+        # snapshot ⇒ not "open"). Keep the folder.
+        _clear_checkout_contents(cdir)
         raise
 
     return len(links)
 
 
 def discard(library_root: Path) -> bool:
-    """Remove the checkout workspace. Returns False if none was open.
+    """Empty the checkout workspace, keeping the `.pix/checkout/` folder.
 
-    Hard links are just directory entries — removing them never touches
-    the library files. This is the `--reset` action.
+    Deletes the snapshot + all hard links (which are just directory
+    entries — never touches the library files), but leaves the folder in
+    place so the workspace path persists. Returns whether a checkout was
+    open. This is the teardown for both `--reset` and a successful
+    `--commit`.
     """
-    cdir = checkout_dir(library_root)
-    if not cdir.exists():
-        return False
-    shutil.rmtree(cdir)
-    return True
+    was_open = is_open(library_root)
+    _clear_checkout_contents(checkout_dir(library_root))
+    return was_open
 
 
 # --- Commit: inferring changes -----------------------------------------------

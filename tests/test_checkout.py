@@ -141,10 +141,27 @@ def test_ensure_no_open_checkout_passes_when_absent(tmp_path: Path) -> None:
     ensure_no_open_checkout(tmp_path)  # no raise
 
 
+def _write_minimal_snapshot(root: Path) -> None:
+    checkout_dir(root).mkdir(parents=True, exist_ok=True)
+    write_snapshot(
+        root,
+        Snapshot(
+            template="{year}", scope="x", created="2026-05-29T00:00:00", links=[]
+        ),
+    )
+
+
 def test_ensure_no_open_checkout_raises_when_open(tmp_path: Path) -> None:
-    checkout_dir(tmp_path).mkdir(parents=True)
+    _write_minimal_snapshot(tmp_path)  # open = snapshot present
     with pytest.raises(CheckoutOpen):
         ensure_no_open_checkout(tmp_path)
+
+
+def test_empty_checkout_folder_is_not_open(tmp_path: Path) -> None:
+    """A folder with no snapshot (e.g. left empty after a commit) is closed."""
+    checkout_dir(tmp_path).mkdir(parents=True)
+    assert not is_open(tmp_path)
+    ensure_no_open_checkout(tmp_path)  # no raise
 
 
 def test_checkout_open_message_includes_template(tmp_path: Path) -> None:
@@ -309,10 +326,17 @@ def test_checkout_template_must_be_single_bare_tokens() -> None:
 # --- discard -----------------------------------------------------------------
 
 
-def test_discard_removes_workspace(tmp_path: Path) -> None:
-    checkout_dir(tmp_path).mkdir(parents=True)
-    assert discard(tmp_path) is True
-    assert not is_open(tmp_path)
+def test_discard_empties_but_keeps_folder(tmp_path: Path) -> None:
+    cdir = checkout_dir(tmp_path)
+    (cdir / "2023" / "Hawaii").mkdir(parents=True)
+    (cdir / "2023" / "Hawaii" / "x.jpg").write_bytes(b"link")
+    _write_minimal_snapshot(tmp_path)
+
+    assert is_open(tmp_path)
+    assert discard(tmp_path) is True  # was open
+    assert not is_open(tmp_path)  # snapshot gone
+    assert cdir.is_dir()  # folder persists
+    assert list(cdir.iterdir()) == []  # but empty
 
 
 def test_discard_no_op_when_absent(tmp_path: Path) -> None:
