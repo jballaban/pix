@@ -184,6 +184,23 @@ class ConflictDetail:
     version: int
 
 
+# Subfolders of `.pix/` that hold irreplaceable *user* files (not
+# regenerable tool state). Archiving sweeps them along with everything
+# else; the upgrade command warns loudly when any held files so the user
+# doesn't forget them in the archive. `runs/`, `cache/`, `staging/`, and
+# `faces/` are deliberately absent — all are rebuildable from the library.
+_USER_DATA_DIRS: tuple[str, ...] = ("stash", "errors")
+
+
+@dataclass(frozen=True)
+class ArchivedUserData:
+    """A user-data subfolder swept into the archive, with its file count."""
+
+    name: str  # e.g. "stash" / "errors"
+    path: Path  # archive/v<old>/<name>
+    file_count: int
+
+
 @dataclass(frozen=True)
 class UpgradeResult:
     """What `upgrade` did. Returned to the `pix upgrade` command."""
@@ -194,6 +211,7 @@ class UpgradeResult:
     added: list[str]
     removed: list[str]
     conflicts: list[ConflictDetail]
+    archived_user_data: list[ArchivedUserData]
 
 
 # --- Public surface ----------------------------------------------------------
@@ -275,6 +293,7 @@ def upgrade(root: Path) -> UpgradeResult:
 
     # Archive everything (including the soon-to-be-rewritten config.yaml).
     archive_path = _archive_prior_contents(root, library_version)
+    archived_user_data = _scan_archived_user_data(archive_path)
 
     # Apply upgrade_steps in order: library_version+1 .. SCHEMA_VERSION.
     added: list[str] = []
@@ -311,6 +330,7 @@ def upgrade(root: Path) -> UpgradeResult:
         added=added,
         removed=removed,
         conflicts=conflicts,
+        archived_user_data=archived_user_data,
     )
 
 
@@ -398,6 +418,21 @@ def _render_config_with_markers(
         out.append(line)
 
     return "\n".join(out) + "\n"
+
+
+def _scan_archived_user_data(archive_path: Path) -> list[ArchivedUserData]:
+    """Find user-data subfolders (`stash`/`errors`) that hold files in the
+    freshly-written archive, so the command can warn the user not to
+    abandon their only copies there."""
+    out: list[ArchivedUserData] = []
+    for name in _USER_DATA_DIRS:
+        d = archive_path / name
+        if not d.is_dir():
+            continue
+        count = sum(1 for p in d.rglob("*") if p.is_file())
+        if count > 0:
+            out.append(ArchivedUserData(name=name, path=d, file_count=count))
+    return out
 
 
 def _archive_prior_contents(root: Path, from_version: int) -> Path:

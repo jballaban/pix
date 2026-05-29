@@ -63,6 +63,34 @@ def upgrade_library(path: Path) -> None:
     typer.echo(f"Prior .pix/ contents archived to {result.archive_path}.")
     typer.echo("")
 
+    if result.archived_user_data:
+        total = sum(d.file_count for d in result.archived_user_data)
+        typer.echo(
+            f"⚠  IMPORTANT: {total} irreplaceable file(s) were moved into "
+            f"the archive and pix will NOT see them there:",
+            err=True,
+        )
+        for d in result.archived_user_data:
+            kind = (
+                "originals you stashed"
+                if d.name == "stash"
+                else "files that failed conversion"
+            )
+            typer.echo(
+                f"  .pix/{d.name}/  →  {d.path}  "
+                f"({d.file_count} file(s) — {kind})",
+                err=True,
+            )
+        typer.echo(
+            "These are the only copies. While they sit in the archive, "
+            "stashed files won't be listed and errored files won't be "
+            "auto-retried by migrate. Move anything you want to keep back "
+            "out of the archive (into your library or a safe location) "
+            "before you delete it.",
+            err=True,
+        )
+        typer.echo("", err=True)
+
     if result.added:
         typer.echo(f"Added {len(result.added)} entr"
                    f"{'y' if len(result.added) == 1 else 'ies'}:")

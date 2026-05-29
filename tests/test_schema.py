@@ -155,6 +155,58 @@ def test_upgrade_applies_additive_changes_to_existing_config(
     assert (root / ".pix" / "archive" / "v1" / "config.yaml").exists()
 
 
+def test_upgrade_reports_archived_user_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """stash/ and errors/ swept into the archive are reported with counts so
+    the command can warn — runs/ (regenerable) is not reported."""
+    root = _make_lib(tmp_path)
+    _write_state(root, 1)
+    pix = root / ".pix"
+    (pix / "stash").mkdir()
+    (pix / "stash" / "a.dng").write_bytes(b"raw")
+    (pix / "errors" / "G" / "pix").mkdir(parents=True)
+    (pix / "errors" / "G" / "pix" / "bad.mp4").write_bytes(b"x")
+    (pix / "errors" / "G" / "pix" / "bad.mp4.errorinfo").write_text(
+        "original_path: G:/pix/bad.mp4\n", encoding="utf-8"
+    )
+    (pix / "runs").mkdir()
+    (pix / "runs" / "plan.txt").write_text("noise", encoding="utf-8")
+
+    monkeypatch.setattr(
+        schema, "UPGRADES", {2: Upgrade(add_extensions={"dng": "stash"})}
+    )
+    monkeypatch.setattr(schema, "SCHEMA_VERSION", 2)
+
+    result = upgrade(root)
+
+    by_name = {d.name: d for d in result.archived_user_data}
+    assert set(by_name) == {"stash", "errors"}  # not "runs"
+    assert by_name["stash"].file_count == 1
+    assert by_name["errors"].file_count == 2  # data file + sidecar
+    assert by_name["stash"].path == pix / "archive" / "v1" / "stash"
+    # The files really moved into the archive.
+    assert (pix / "archive" / "v1" / "stash" / "a.dng").is_file()
+    assert not (pix / "stash").exists()
+
+
+def test_upgrade_reports_no_user_data_when_dirs_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No warning data when stash/errors are absent or empty."""
+    root = _make_lib(tmp_path)
+    _write_state(root, 1)
+    (root / ".pix" / "errors").mkdir()  # present but empty
+    monkeypatch.setattr(
+        schema, "UPGRADES", {2: Upgrade(add_extensions={"dng": "stash"})}
+    )
+    monkeypatch.setattr(schema, "SCHEMA_VERSION", 2)
+
+    result = upgrade(root)
+
+    assert result.archived_user_data == []
+
+
 def test_upgrade_skips_addition_when_user_already_matches_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
