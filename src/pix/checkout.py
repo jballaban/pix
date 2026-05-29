@@ -25,13 +25,15 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
-from collections import defaultdict
-from dataclasses import dataclass
+from collections import Counter, defaultdict
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import cast
 
+from pix.dates import PIX_DATETIME_FORMAT, parse_exiftool_datetime
 from pix.metadata import FileMetadata
 from pix.organize import (
     Template,
@@ -39,7 +41,16 @@ from pix.organize import (
     compute_values,
     sanitize_folder_name,
 )
-from pix.plan import PIX_ORIGINAL_PATH, effective_date
+from pix.plan import (
+    PIX_DATE_AUTO,
+    PIX_DATE_AUTO_PREVIOUS,
+    PIX_DATE_OVERRIDE,
+    PIX_EVENT_AUTO,
+    PIX_EVENT_AUTO_PREVIOUS,
+    PIX_EVENT_OVERRIDE,
+    PIX_ORIGINAL_PATH,
+    effective_date,
+)
 
 CHECKOUT_DIRNAME: str = "checkout"
 SNAPSHOT_FILENAME: str = "snapshot.json"
@@ -415,3 +426,230 @@ def discard(library_root: Path) -> bool:
         return False
     shutil.rmtree(cdir)
     return True
+
+
+# --- Commit: inferring changes -----------------------------------------------
+
+
+def parse_checkout_path(
+    template: Template, folder_parts: tuple[str, ...]
+) -> dict[str, str | None]:
+    """Inverse of `render_checkout_path`: folder components → token values.
+
+    Maps each folder component positionally to its level's token. Tokens
+    with no folder (the file rested shallower) come back as `None`.
+    """
+    names = _level_token_names(template)
+    result: dict[str, str | None] = {n: None for n in names}
+    for i, part in enumerate(folder_parts):
+        if i < len(names):
+            result[names[i]] = part
+    return result
+
+
+@dataclass(frozen=True)
+class _Assign:
+    """A file that moved to a new value for one or more tokens."""
+
+    library_path: Path
+    token_changes: dict[str, str]  # token name -> new folder value
+
+
+@dataclass
+class CommitDiff:
+    """Result of diffing the workspace against the snapshot (paths only)."""
+
+    assigns: list[_Assign] = field(default_factory=lambda: [])
+    skipped_removals: list[Path] = field(default_factory=lambda: [])
+    foreign: list[Path] = field(default_factory=lambda: [])
+    ambiguous: list[Path] = field(default_factory=lambda: [])
+    unchanged: int = 0
+
+
+def diff_workspace(
+    library_root: Path, template: Template, snapshot: Snapshot
+) -> CommitDiff:
+    """Diff the shuffled workspace against the snapshot, by path.
+
+    Pure path analysis — no metadata read. Produces the set of
+    value-assignments (v1's only edit); classifies everything else as a
+    skipped removal (a value cleared — unsupported in v1), a foreign file
+    (not part of this checkout), or an ambiguous link (same inode at two
+    paths, or nested too deep).
+    """
+    cdir = checkout_dir(library_root)
+    names = _level_token_names(template)
+    by_ino = {ln.ino: ln for ln in snapshot.links}
+
+    scanned: list[tuple[str, tuple[str, ...], Path]] = []
+    for p in sorted(cdir.rglob("*")):
+        if p.is_dir():
+            continue
+        if p.parent == cdir and p.name == SNAPSHOT_FILENAME:
+            continue
+        rel = p.relative_to(cdir)
+        try:
+            ino = file_id(p.stat())
+        except OSError:
+            continue
+        scanned.append((ino, rel.parts[:-1], p))
+
+    ino_counts = Counter(ino for ino, _, _ in scanned)
+    diff = CommitDiff()
+    seen: set[str] = set()
+    flagged_ambiguous: set[str] = set()
+
+    for ino, folder_parts, p in scanned:
+        if ino_counts[ino] > 1:
+            if ino not in flagged_ambiguous:
+                flagged_ambiguous.add(ino)
+                rec = by_ino.get(ino)
+                diff.ambiguous.append(Path(rec.library_path) if rec else p)
+            continue
+        rec = by_ino.get(ino)
+        if rec is None:
+            diff.foreign.append(p)
+            continue
+        seen.add(ino)
+        if len(folder_parts) > len(names):
+            diff.ambiguous.append(Path(rec.library_path))
+            continue
+
+        current = parse_checkout_path(template, folder_parts)
+        token_changes: dict[str, str] = {}
+        removal = False
+        for name in names:
+            snap_val = rec.values.get(name)
+            snap_folder = (
+                sanitize_folder_name(snap_val) if snap_val is not None else None
+            )
+            cur_folder = current.get(name)
+            if snap_folder == cur_folder:
+                continue
+            if cur_folder is None:
+                removal = True  # value cleared — v1 doesn't support
+            else:
+                token_changes[name] = cur_folder
+
+        if token_changes:
+            diff.assigns.append(
+                _Assign(Path(rec.library_path), token_changes)
+            )
+        if removal:
+            diff.skipped_removals.append(Path(rec.library_path))
+        if not token_changes and not removal:
+            diff.unchanged += 1
+
+    # Snapshot links absent from the workspace = the user deleted the link
+    # (a "revert to auto" gesture) — not supported in v1.
+    for ln in snapshot.links:
+        if ln.ino not in seen and ln.ino not in flagged_ambiguous:
+            diff.skipped_removals.append(Path(ln.library_path))
+
+    return diff
+
+
+# --- Commit: override math ---------------------------------------------------
+
+_OVERRIDE_RE = re.compile(
+    r"^(\*|\d{4})-(\*|\d{2})-(\*|\d{2})-(\*|\d{2}):(\*|\d{2}):(\*|\d{2})$"
+)
+_DATE_SLOT = {"year": 0, "month": 1, "day": 2}
+
+
+def _parse_pix_dt(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, PIX_DATETIME_FORMAT)
+    except ValueError:
+        return parse_exiftool_datetime(value)
+
+
+def _apply_date_token_changes(
+    current_override: str | None,
+    date_changes: dict[str, str],
+    auto: datetime | None,
+) -> str | None:
+    """Return the new `DateOverride` string (or None to delete it).
+
+    Starts from the current override (or all-`*`), sets each changed
+    year/month/day field to its new folder value — **except** when that
+    value already equals the corresponding `DateAuto` component, in which
+    case the field is cleared to `*` (clear-when-equals-auto). Time fields
+    are preserved untouched (checkout never edits them). All-`*` → None.
+    """
+    slots = ["*", "*", "*", "*", "*", "*"]
+    if current_override:
+        m = _OVERRIDE_RE.match(current_override)
+        if m is not None:
+            slots = list(m.groups())
+
+    auto_comp = {
+        "year": auto.year if auto else None,
+        "month": auto.month if auto else None,
+        "day": auto.day if auto else None,
+    }
+    for token, value in date_changes.items():
+        i = _DATE_SLOT[token]
+        comp = auto_comp[token]
+        try:
+            matches_auto = comp is not None and int(value) == comp
+        except ValueError:
+            matches_auto = False
+        slots[i] = "*" if matches_auto else value
+
+    if all(s == "*" for s in slots):
+        return None
+    return f"{slots[0]}-{slots[1]}-{slots[2]}-{slots[3]}:{slots[4]}:{slots[5]}"
+
+
+def compute_pix_writes(
+    token_changes: dict[str, str], meta: FileMetadata
+) -> tuple[dict[str, str], str]:
+    """Translate a file's token assignments into pix:* field writes.
+
+    Returns `(writes, details)`. A write value of `""` deletes the field
+    (ExifTool `-TAG=`). Empty `writes` means the move was a no-op (e.g.
+    assigning the value `_auto` already yields, with no existing override).
+    Applies clear-when-equals-auto and reconciles `*AutoPrevious`.
+    """
+    writes: dict[str, str] = {}
+    details: list[str] = []
+
+    if "event" in token_changes:
+        new_event = token_changes["event"]
+        auto = meta.get_str(PIX_EVENT_AUTO)
+        current = meta.get_str(PIX_EVENT_OVERRIDE)
+        if new_event == auto:
+            if current is not None:  # redundant override → clear it
+                writes[PIX_EVENT_OVERRIDE] = ""
+                details.append(f'event "{current}"→{new_event} (=auto, cleared)')
+                if meta.get_str(PIX_EVENT_AUTO_PREVIOUS) is not None:
+                    writes[PIX_EVENT_AUTO_PREVIOUS] = ""
+        elif new_event != current:
+            writes[PIX_EVENT_OVERRIDE] = new_event
+            details.append(f'event→"{new_event}"')
+
+    date_changes = {
+        k: v for k, v in token_changes.items() if k in _DATE_SLOT
+    }
+    if date_changes:
+        auto_dt = _parse_pix_dt(meta.get_str(PIX_DATE_AUTO))
+        current = meta.get_str(PIX_DATE_OVERRIDE)
+        new_override = _apply_date_token_changes(
+            current, date_changes, auto_dt
+        )
+        if new_override != current:
+            if new_override is None:
+                writes[PIX_DATE_OVERRIDE] = ""
+                if meta.get_str(PIX_DATE_AUTO_PREVIOUS) is not None:
+                    writes[PIX_DATE_AUTO_PREVIOUS] = ""
+            else:
+                writes[PIX_DATE_OVERRIDE] = new_override
+            details.append(
+                "date "
+                + ", ".join(f"{k}→{v}" for k, v in sorted(date_changes.items()))
+            )
+
+    return writes, "; ".join(details)

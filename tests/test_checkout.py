@@ -14,18 +14,29 @@ from pix.checkout import (
     Snapshot,
     SnapshotLink,
     checkout_dir,
+    compute_pix_writes,
     create_checkout,
+    diff_workspace,
     discard,
     ensure_no_open_checkout,
     file_id,
     is_open,
+    parse_checkout_path,
     read_snapshot,
     template_token_names,
     write_snapshot,
 )
 from pix.metadata import FileMetadata
 from pix.organize import parse_template
-from pix.plan import PIX_DATE_AUTO, PIX_EVENT_AUTO, PIX_ORIGINAL_PATH
+from pix.plan import (
+    PIX_DATE_AUTO,
+    PIX_DATE_AUTO_PREVIOUS,
+    PIX_DATE_OVERRIDE,
+    PIX_EVENT_AUTO,
+    PIX_EVENT_AUTO_PREVIOUS,
+    PIX_EVENT_OVERRIDE,
+    PIX_ORIGINAL_PATH,
+)
 
 
 def _meta(path: Path, **fields: object) -> FileMetadata:
@@ -306,3 +317,175 @@ def test_discard_removes_workspace(tmp_path: Path) -> None:
 
 def test_discard_no_op_when_absent(tmp_path: Path) -> None:
     assert discard(tmp_path) is False
+
+
+# --- commit: path parsing ----------------------------------------------------
+
+
+def test_parse_checkout_path_full() -> None:
+    t = parse_template("{year}/{event}")
+    assert parse_checkout_path(t, ("2023", "Hawaii")) == {
+        "year": "2023",
+        "event": "Hawaii",
+    }
+
+
+def test_parse_checkout_path_trailing_unset() -> None:
+    t = parse_template("{year}/{event}")
+    assert parse_checkout_path(t, ("2023",)) == {"year": "2023", "event": None}
+
+
+def test_parse_checkout_path_root() -> None:
+    t = parse_template("{event}/{year}")
+    assert parse_checkout_path(t, ()) == {"event": None, "year": None}
+
+
+# --- commit: override math ---------------------------------------------------
+
+
+def test_writes_event_assign_new_value() -> None:
+    meta = _meta(Path("/x.jpg"), **{PIX_EVENT_AUTO: "Hawaii"})
+    writes, _ = compute_pix_writes({"event": "Birthday"}, meta)
+    assert writes == {PIX_EVENT_OVERRIDE: "Birthday"}
+
+
+def test_writes_event_assign_matching_auto_clears_override() -> None:
+    meta = _meta(
+        Path("/x.jpg"),
+        **{PIX_EVENT_AUTO: "Hawaii", PIX_EVENT_OVERRIDE: "Party"},
+    )
+    writes, _ = compute_pix_writes({"event": "Hawaii"}, meta)
+    assert writes == {PIX_EVENT_OVERRIDE: ""}  # cleared (D1)
+
+
+def test_writes_event_clear_reconciles_autoprevious() -> None:
+    meta = _meta(
+        Path("/x.jpg"),
+        **{
+            PIX_EVENT_AUTO: "Hawaii",
+            PIX_EVENT_OVERRIDE: "Party",
+            PIX_EVENT_AUTO_PREVIOUS: "Beach",
+        },
+    )
+    writes, _ = compute_pix_writes({"event": "Hawaii"}, meta)
+    assert writes == {PIX_EVENT_OVERRIDE: "", PIX_EVENT_AUTO_PREVIOUS: ""}
+
+
+def test_writes_year_assign_new_value() -> None:
+    meta = _meta(Path("/x.jpg"), **{PIX_DATE_AUTO: "2023-08-15-14:32:05"})
+    writes, _ = compute_pix_writes({"year": "2024"}, meta)
+    assert writes == {PIX_DATE_OVERRIDE: "2024-*-*-*:*:*"}
+
+
+def test_writes_year_matching_auto_deletes_lone_override() -> None:
+    meta = _meta(
+        Path("/x.jpg"),
+        **{
+            PIX_DATE_AUTO: "2023-08-15-14:32:05",
+            PIX_DATE_OVERRIDE: "2020-*-*-*:*:*",
+        },
+    )
+    # New year 2023 == auto year → clear that field → all-* → delete.
+    writes, _ = compute_pix_writes({"year": "2023"}, meta)
+    assert writes == {PIX_DATE_OVERRIDE: ""}
+
+
+def test_writes_month_patches_existing_override() -> None:
+    meta = _meta(
+        Path("/x.jpg"),
+        **{
+            PIX_DATE_AUTO: "2023-08-15-14:32:05",
+            PIX_DATE_OVERRIDE: "2020-*-*-*:*:*",
+        },
+    )
+    writes, _ = compute_pix_writes({"month": "03"}, meta)
+    assert writes == {PIX_DATE_OVERRIDE: "2020-03-*-*:*:*"}
+
+
+def test_writes_year_on_undated_file() -> None:
+    meta = _meta(Path("/x.jpg"))  # no DateAuto
+    writes, _ = compute_pix_writes({"year": "2008"}, meta)
+    assert writes == {PIX_DATE_OVERRIDE: "2008-*-*-*:*:*"}
+
+
+def test_writes_year_and_event_bundle() -> None:
+    meta = _meta(
+        Path("/x.jpg"),
+        **{PIX_DATE_AUTO: "2023-08-15-14:32:05", PIX_EVENT_AUTO: "Hawaii"},
+    )
+    writes, _ = compute_pix_writes(
+        {"year": "2024", "event": "Birthday"}, meta
+    )
+    assert writes == {
+        PIX_DATE_OVERRIDE: "2024-*-*-*:*:*",
+        PIX_EVENT_OVERRIDE: "Birthday",
+    }
+
+
+# --- commit: workspace diff --------------------------------------------------
+
+
+def _open_checkout(tmp_path: Path, template: str) -> Path:
+    root = tmp_path / "lib"
+    (root / ".pix").mkdir(parents=True)
+    a = (root / "2023-08-15_143205.jpg").resolve()
+    a.write_bytes(b"a")
+    cache = {
+        a: _migrated(a, date="2023-08-15-14:32:05", event="Hawaii")
+    }
+    create_checkout(
+        library_root=root,
+        scope=root,
+        template=parse_template(template),
+        cache=cache,
+    )
+    return root
+
+
+def test_diff_detects_year_assign(tmp_path: Path) -> None:
+    root = _open_checkout(tmp_path, "{year}/{event}")
+    cdir = checkout_dir(root)
+    link = cdir / "2023" / "Hawaii" / "2023-08-15_143205.jpg"
+    dest = cdir / "2024" / "Hawaii"
+    dest.mkdir(parents=True)
+    link.rename(dest / "2023-08-15_143205.jpg")  # move 2023 → 2024
+
+    snap = read_snapshot(root)
+    assert snap is not None
+    diff = diff_workspace(root, parse_template("{year}/{event}"), snap)
+    assert len(diff.assigns) == 1
+    assert diff.assigns[0].token_changes == {"year": "2024"}
+    assert diff.skipped_removals == []
+
+
+def test_diff_unchanged_when_not_moved(tmp_path: Path) -> None:
+    root = _open_checkout(tmp_path, "{year}/{event}")
+    snap = read_snapshot(root)
+    assert snap is not None
+    diff = diff_workspace(root, parse_template("{year}/{event}"), snap)
+    assert diff.assigns == []
+    assert diff.unchanged == 1
+
+
+def test_diff_flags_foreign_file(tmp_path: Path) -> None:
+    root = _open_checkout(tmp_path, "{year}/{event}")
+    (checkout_dir(root) / "stranger.jpg").write_bytes(b"new")  # not a link
+    snap = read_snapshot(root)
+    assert snap is not None
+    diff = diff_workspace(root, parse_template("{year}/{event}"), snap)
+    assert len(diff.foreign) == 1
+
+
+def test_writes_date_clear_reconciles_autoprevious() -> None:
+    meta = _meta(
+        Path("/x.jpg"),
+        **{
+            PIX_DATE_AUTO: "2023-08-15-14:32:05",
+            PIX_DATE_OVERRIDE: "2020-*-*-*:*:*",
+            PIX_DATE_AUTO_PREVIOUS: "2019-01-01-00:00:00",
+        },
+    )
+    # year 2023 == auto → clears the lone override → delete it + drop the
+    # now-meaningless DateAutoPrevious dirty flag.
+    writes, _ = compute_pix_writes({"year": "2023"}, meta)
+    assert writes == {PIX_DATE_OVERRIDE: "", PIX_DATE_AUTO_PREVIOUS: ""}

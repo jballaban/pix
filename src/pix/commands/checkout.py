@@ -16,24 +16,31 @@ output. The materialization itself runs under the library lock.
 from __future__ import annotations
 
 import time
+from datetime import datetime
 from pathlib import Path
 
 import typer
 
 from pix import banner
+from pix.apply import ApplyError, apply_plan
 from pix.checkout import (
     CheckoutError,
     CheckoutExists,
     CheckoutScopeError,
     CheckoutUnmigratedError,
+    CommitDiff,
+    Snapshot,
     checkout_dir,
+    compute_pix_writes,
     create_checkout,
+    diff_workspace,
     discard,
     is_open,
     read_snapshot,
     validate_checkout_template,
 )
 from pix.duration import format_duration_precise
+from pix.editor import open_in_editor, parse_kept_line_ids, prompt_apply
 from pix.library_lock import LockHeld, acquire as acquire_lock
 from pix.metadata import (
     ExifToolFailed,
@@ -44,6 +51,7 @@ from pix.metadata import (
 )
 from pix.metadata_cache import PerFileCache
 from pix.organize import OrganizeError, Template, parse_template
+from pix.plan import Action, Plan, PlanLine, attach_paths
 from pix.progress import LiveProgress
 from pix.root import NoLibraryRoot, resolve as resolve_root
 from pix.scan import walk_source_files
@@ -74,11 +82,8 @@ def run_checkout(
         _do_reset()
         return
     if commit:
-        banner()
-        typer.echo(
-            "Error: `pix checkout --commit` is not yet implemented.", err=True
-        )
-        raise typer.Exit(code=1)
+        _do_commit()
+        return
 
     if path is None and template_str is None:
         _do_status()
@@ -144,6 +149,214 @@ def _do_reset() -> None:
         typer.echo("Checkout discarded; the library is no longer frozen.")
     else:
         typer.echo("No checkout to reset.")
+
+
+# --- commit ------------------------------------------------------------------
+
+
+def _do_commit() -> None:
+    """Apply the open checkout's tag edits, then tear it down."""
+    try:
+        root = resolve_root(start=None)
+    except SchemaUpgradeRequired as e:
+        banner()
+        typer.echo(f"{e} Run `pix upgrade`.", err=True)
+        raise typer.Exit(code=1) from e
+    except (NoLibraryRoot, SchemaTooNew) as e:
+        banner()
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+
+    banner(schema_version=SCHEMA_VERSION)
+
+    if not is_open(root):
+        typer.echo("No checkout open; nothing to commit.")
+        return
+
+    snap = read_snapshot(root)
+    if snap is None:
+        typer.echo(
+            "Error: the checkout snapshot is missing or unreadable. Run "
+            "`pix checkout --reset` and start the checkout over.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        template = parse_template(snap.template)
+        validate_checkout_template(template)
+    except (OrganizeError, CheckoutError) as e:
+        typer.echo(f"Error: invalid template in snapshot: {e}", err=True)
+        raise typer.Exit(code=1) from e
+
+    try:
+        with acquire_lock(root, "checkout-commit"):
+            _run_commit(root, template, snap)
+    except LockHeld as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+
+
+def _run_commit(root: Path, template: Template, snap: Snapshot) -> None:
+    """Diff → plan → confirm → apply → teardown, under the library lock."""
+    diff = diff_workspace(root, template, snap)
+
+    # Re-read current metadata for the files that moved — the override
+    # math needs each file's live DateAuto/EventAuto (valid under the
+    # freeze). Only the changed files, not the whole library.
+    meta_by_path: dict[Path, FileMetadata] = {}
+    assign_paths = [a.library_path for a in diff.assigns]
+    if assign_paths:
+        try:
+            meta_by_path = read_metadata_batched(assign_paths, cache=None)
+        except ExifToolNotFound as e:
+            typer.echo(f"Error: {e}", err=True)
+            raise typer.Exit(code=1) from e
+        except ExifToolFailed as e:
+            typer.echo(f"Error: exiftool failed.\n{e}", err=True)
+            raise typer.Exit(code=1) from e
+
+    run_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    runs_dir = root / ".pix" / "runs" / run_id
+    runs_dir.mkdir(parents=True)
+
+    lines: list[PlanLine] = []
+    for assign in diff.assigns:
+        meta = meta_by_path.get(assign.library_path) or FileMetadata(
+            path=assign.library_path,
+            raw={"SourceFile": str(assign.library_path)},
+        )
+        writes, details = compute_pix_writes(assign.token_changes, meta)
+        if not writes:
+            continue  # move resolved to a no-op (value already effective)
+        try:
+            rel = assign.library_path.relative_to(root).as_posix()
+        except ValueError:
+            rel = str(assign.library_path)
+        ln = PlanLine(
+            line_id=f"L{len(lines) + 1:03d}",
+            action=Action.TAG,
+            rel_path=rel,
+            details=details,
+            abs_path=assign.library_path,
+            pix_writes=writes,
+        )
+        lines.append(attach_paths(ln, runs_dir, runs_dir / "staging"))
+
+    _report_skips(diff)
+
+    if not lines:
+        typer.echo(
+            "Nothing to commit; checkout left open "
+            "(use `pix checkout --reset` to discard it)."
+        )
+        return
+
+    plan = Plan(
+        source=root,
+        run_id=run_id,
+        generated_at=datetime.now(),
+        lines=lines,
+    )
+    plan_path = runs_dir / "plan.txt"
+    plan_path.write_text(
+        _commit_plan_text(root, run_id, snap, lines), encoding="utf-8"
+    )
+
+    typer.echo(f"Plan written: {plan_path}")
+    typer.echo(f"Summary: {len(lines)} TAG.")
+
+    kept = {ln.line_id for ln in lines}
+    while True:
+        typer.echo("")
+        choice = prompt_apply()
+        if choice == "n":
+            typer.echo("Aborted; checkout left open.")
+            return
+        if choice == "e":
+            open_in_editor(plan_path)
+            kept = parse_kept_line_ids(plan_path.read_text(encoding="utf-8"))
+            typer.echo("")
+            typer.echo(
+                f"After edit: {sum(1 for ln in lines if ln.line_id in kept)} TAG."
+            )
+            continue
+        break  # 'y'
+
+    apply_log_path = runs_dir / "apply.log"
+    try:
+        try:
+            completed, _ = apply_plan(
+                plan=plan,
+                plan_path=plan_path,
+                run_dir=runs_dir,
+                kept_line_ids=kept,
+            )
+        except ApplyError as e:
+            typer.echo(f"Error: apply failed: {e}", err=True)
+            raise typer.Exit(code=1) from e
+
+        # Success → tear the workspace down and lift the freeze.
+        discard(root)
+        typer.echo("")
+        typer.echo(f"Committed {completed} change(s); checkout closed.")
+    finally:
+        typer.echo(f"Log: {apply_log_path}")
+
+
+def _report_skips(diff: CommitDiff) -> None:
+    """Surface non-edit classifications (informational, to stderr)."""
+
+    def _sample(paths: list[Path], limit: int = 5) -> None:
+        for p in paths[:limit]:
+            typer.echo(f"  {p}", err=True)
+        if len(paths) > limit:
+            typer.echo(f"  ... and {len(paths) - limit} more", err=True)
+
+    if diff.skipped_removals:
+        typer.echo(
+            f"{len(diff.skipped_removals)} file(s) had a tag removed/cleared "
+            f"— not supported in v1, skipped:",
+            err=True,
+        )
+        _sample(diff.skipped_removals)
+    if diff.foreign:
+        typer.echo(
+            f"{len(diff.foreign)} file(s) in the workspace aren't part of "
+            f"this checkout — ignored:",
+            err=True,
+        )
+        _sample(diff.foreign)
+    if diff.ambiguous:
+        typer.echo(
+            f"{len(diff.ambiguous)} link(s) were ambiguous (duplicate or "
+            f"nested too deep) — skipped:",
+            err=True,
+        )
+        _sample(diff.ambiguous)
+
+
+def _commit_plan_text(
+    root: Path, run_id: str, snap: Snapshot, lines: list[PlanLine]
+) -> str:
+    """Serialize the commit plan.txt (mirrors migrate's editable format)."""
+    header = [
+        f"# Commit plan: {root}",
+        f"# Generated {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        f"# Run ID: {run_id}",
+        f"# Template: {snap.template}",
+        f"# Source: checkout started {snap.created}",
+        "#",
+        "# Delete a line to skip that file this commit. "
+        'Commented "#" lines are info only.',
+        "# Format: L<line-id> | ACTION | path | details",
+        "",
+    ]
+    body = [
+        f"{ln.line_id} | {ln.action.value:<3} | {ln.rel_path} | {ln.details}"
+        for ln in lines
+    ]
+    return "\n".join(header + body + ["", f"# Summary: {len(lines)} TAG", ""])
 
 
 # --- start -------------------------------------------------------------------
