@@ -259,9 +259,9 @@ def test_trailing_null_rests_in_parent(tmp_path: Path) -> None:
     assert not (checkout_dir(root) / "2023" / "(none)").exists()
 
 
-def test_non_trailing_null_uses_flat_none_bucket(tmp_path: Path) -> None:
-    """{event}/{year} with no event → file sits flat in (none)/, with NO
-    year breakdown beneath it (the missing value is non-trailing)."""
+def test_no_event_in_event_first_template_rests_in_root(tmp_path: Path) -> None:
+    """{event}/{year} with no event → file sits in the workspace root
+    (we stop at the first missing value; no bucket, no year breakdown)."""
     root = tmp_path / "lib"
     (root / ".pix").mkdir(parents=True)
     p = root / "2023-08-15_143205.jpg"
@@ -281,9 +281,9 @@ def test_non_trailing_null_uses_flat_none_bucket(tmp_path: Path) -> None:
         template=parse_template("{event}/{year}"),
         cache=cache,
     )
-    assert (checkout_dir(root) / "(none)" / "2023-08-15_143205.jpg").exists()
-    # No year subfolder under (none).
-    assert not (checkout_dir(root) / "(none)" / "2023").exists()
+    assert (checkout_dir(root) / "2023-08-15_143205.jpg").exists()
+    assert not (checkout_dir(root) / "(none)").exists()
+    assert not (checkout_dir(root) / "2023").exists()
 
 
 def test_checkout_template_must_be_single_bare_tokens() -> None:

@@ -44,13 +44,6 @@ from pix.plan import PIX_ORIGINAL_PATH, effective_date
 CHECKOUT_DIRNAME: str = "checkout"
 SNAPSHOT_FILENAME: str = "snapshot.json"
 
-# Bucket folder for a file with no value at a *non-trailing* level (e.g.
-# a no-event file in an `{event}/{year}` checkout). It's flat — deeper
-# levels aren't rendered under it — so those files are an "unsorted at
-# this level" pile you drag out of. A missing *trailing* value needs no
-# bucket: the file just rests in its parent folder.
-NONE_BUCKET: str = "(none)"
-
 
 # --- Errors ------------------------------------------------------------------
 
@@ -272,24 +265,19 @@ def render_checkout_path(
 ) -> str:
     """Workspace-relative folder for a file (single-tag-per-level template).
 
-    - A token with a value → its sanitized folder name.
-    - A null token with a non-null token still after it (non-trailing) →
-      a flat `(none)` bucket; deeper levels are NOT rendered, so the file
-      rests directly in `(none)`.
-    - A null token with only nulls after it (trailing) → nothing; the
-      file rests in the parent.
-
-    Returns "" when the first level is already null/trailing (file rests
-    in the workspace root). See spec/tag-editing.md → Workspace layout.
+    Uniform rule: render each level's value as a folder and **stop at the
+    first level the file has no value for** — the file rests in whatever
+    folder's been built so far, which is the workspace **root** when the
+    very first level is missing (e.g. a no-event file in `{event}/{year}`).
+    Because we stop at the first gap, a later level's folder never appears
+    where it could be mistaken for an earlier token. See spec/tag-editing.md
+    → Workspace layout.
     """
-    names = _level_token_names(template)
     parts: list[str] = []
-    for i, name in enumerate(names):
+    for name in _level_token_names(template):
         val = values.get(name)
         if val is None:
-            if any(values.get(n) is not None for n in names[i + 1 :]):
-                parts.append(NONE_BUCKET)  # non-trailing null → flat bucket
-            break  # trailing null → nothing (rest in parent)
+            break
         parts.append(sanitize_folder_name(val))
     return "/".join(parts)
 
