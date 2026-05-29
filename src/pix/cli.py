@@ -86,15 +86,16 @@ def organize(
         ),
     ],
     template: Annotated[
-        str,
+        str | None,
         typer.Argument(
             help=(
                 "Folder template, e.g. '{year}/{month}/{event}'. Tokens: "
                 "{year}, {month}, {day}, {date}, {event}. Levels separated "
-                "by `/`. Persisted as the active template on successful apply."
+                "by `/`. Persisted as the active template on successful "
+                "apply. Omit to re-apply the stored default shape."
             ),
         ),
-    ],
+    ] = None,
 ) -> None:
     """Re-shape the library to match a folder template (library-wide MOVE)."""
     organize_library(path=path, template_str=template)

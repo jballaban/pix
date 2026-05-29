@@ -48,7 +48,7 @@ from pix.scan import walk_source_files
 from pix.schema import SCHEMA_VERSION, SchemaTooNew, SchemaUpgradeRequired
 
 
-def organize_library(path: Path, template_str: str) -> None:
+def organize_library(path: Path, template_str: str | None) -> None:
     """End-to-end organize: parse, plan, edit, confirm, apply.
 
     `path` is anywhere inside (or at) the library root. Resolution
@@ -81,14 +81,28 @@ def organize_library(path: Path, template_str: str) -> None:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
 
+    config_path = root / ".pix" / "config.yaml"
+    config = Config.load(config_path)  # validates current config
+
+    # No template given → re-apply the stored default shape (the
+    # `organize.template` persisted by the last successful organize).
+    # See spec/organize.md → Active template persistence.
+    if template_str is None:
+        template_str = config.organize_template
+        if template_str is None:
+            typer.echo(
+                "Error: no template given and none stored yet. Run "
+                "`pix organize <path> <template>` once to set the default "
+                "shape; after that, bare `pix organize <path>` re-applies it.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
     try:
         template = parse_template(template_str)
     except OrganizeError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
-
-    config_path = root / ".pix" / "config.yaml"
-    Config.load(config_path)  # validates current config; parsed value not used here
 
     try:
         with acquire_lock(root, "organize"):
