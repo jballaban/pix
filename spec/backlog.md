@@ -48,9 +48,9 @@ Cross-cutting pieces this needs:
 - Prereq check: all files migrated (`pix:OriginalPath`); no hash requirement.
 - Face checkout (`{face}`) stays **deferred** with migrate-time face detection.
 
-## 8. Bare `pix organize` re-applies the stored template — **designed, not yet built**
+## 8. Bare `pix organize` re-applies the stored template — **done in v0.1.92**
 
-`organize.template` was previously read only by commit's auto-trigger; commit no longer organizes (see [tag-editing.md](tag-editing.md)), so the key is repurposed: a no-argument `pix organize` re-applies the stored default shape; errors if none is stored. Code change is to `commands/organize.py` (make the template arg optional, fall back to `config.organize.template`). See [organize.md → Active template persistence](organize.md#active-template-persistence).
+`organize.template` was previously read only by commit's auto-trigger; commit no longer organizes (see [tag-editing.md](tag-editing.md)), so the key was repurposed: `pix organize <path>` with the template omitted re-applies the stored default shape (errors with guidance if none is stored). `commands/organize.py` makes the template arg optional and falls back to `config.organize_template` before parsing. See [organize.md → Active template persistence](organize.md#active-template-persistence).
 
 ## 5. Tiered duration format — **done in v0.1.53**
 
