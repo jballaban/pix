@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from pix.dates import (
+    date_candidates,
     derive_date_auto,
     format_pix_datetime,
     parse_exiftool_datetime,
@@ -163,3 +164,116 @@ def test_derive_uses_original_parent_folder(tmp_path: Path) -> None:
     )
     # Original parent "2023-08-15-trip" matches folder pattern.
     assert derive_date_auto(meta) == datetime(2023, 8, 15, 0, 0, 0)
+
+
+# --- future-date rejection ---------------------------------------------------
+
+
+def test_derive_ignores_future_metadata_date() -> None:
+    """A bogus future QuickTime date is skipped; the next source wins."""
+    meta = _meta(
+        "F:/src/clip.mp4",
+        **{
+            "QuickTime:CreateDate": "2099:02:06 06:28:16",
+            "File:FileModifyDate": "2015:08:30 12:00:00",
+        },
+    )
+    assert derive_date_auto(meta) == datetime(2015, 8, 30, 12, 0, 0)
+
+
+def test_derive_ignores_future_across_all_video_metadata() -> None:
+    meta = _meta(
+        "F:/src/clip.mp4",
+        **{
+            "QuickTime:CreateDate": "2099:01:01 00:00:00",
+            "QuickTime:MediaCreateDate": "2099:01:01 00:00:00",
+            "File:FileModifyDate": "2010:01:01 00:00:00",
+        },
+    )
+    assert derive_date_auto(meta) == datetime(2010, 1, 1, 0, 0, 0)
+
+
+def test_future_grace_accepts_near_future() -> None:
+    """Within the 48h grace (timezone skew on fresh imports) is still kept."""
+    near = (datetime.now() + timedelta(hours=1)).replace(microsecond=0)
+    meta = _meta(
+        "F:/src/clip.mp4",
+        **{"QuickTime:CreateDate": near.strftime("%Y:%m:%d %H:%M:%S")},
+    )
+    assert derive_date_auto(meta) == near
+
+
+def test_future_grace_rejects_beyond_window() -> None:
+    far = datetime.now() + timedelta(days=10)
+    meta = _meta(
+        "F:/src/clip.mp4",
+        **{
+            "QuickTime:CreateDate": far.strftime("%Y:%m:%d %H:%M:%S"),
+            "File:FileModifyDate": "2012:06:01 08:00:00",
+        },
+    )
+    assert derive_date_auto(meta) == datetime(2012, 6, 1, 8, 0, 0)
+
+
+def test_future_date_in_candidates_marked_ignored() -> None:
+    """The inspector shows a future source with no parsed value + a note."""
+    meta = _meta(
+        "F:/src/clip.mp4",
+        **{"QuickTime:CreateDate": "2099:02:06 06:28:16"},
+    )
+    cand = next(
+        c for c in date_candidates(meta) if c.label == "QuickTime:CreateDate"
+    )
+    assert cand.parsed is None
+    assert cand.note == "future (ignored)"
+    assert "2099" in cand.detail  # raw value still shown
+
+
+# --- date-only filenames + YYYY-MM-00 convention -----------------------------
+
+
+def test_derive_matches_date_only_dashed_filename() -> None:
+    """A date-only filename (no time component) resolves to that day."""
+    meta = _meta("F:/src/2015-08-30-1.m4v")
+    assert derive_date_auto(meta) == datetime(2015, 8, 30, 0, 0, 0)
+
+
+def test_derive_matches_bare_yyyymmdd_filename() -> None:
+    meta = _meta("F:/src/20150830.mp4")
+    assert derive_date_auto(meta) == datetime(2015, 8, 30, 0, 0, 0)
+
+
+def test_derive_prefers_timestamp_filename_over_date_only() -> None:
+    """A full-timestamp name keeps its time — the date-only fallback only
+    kicks in when no timestamp pattern matches."""
+    meta = _meta("F:/src/2015-08-30_141500.mp4")
+    assert derive_date_auto(meta) == datetime(2015, 8, 30, 14, 15, 0)
+
+
+def test_derive_normalizes_yyyy_mm_00_folder() -> None:
+    """The historical YYYY-MM-00 'day unknown' convention maps to the 1st."""
+    meta = _meta("F:/src/2015-08-00 L&L/clip.mp4")
+    assert derive_date_auto(meta) == datetime(2015, 8, 1, 0, 0, 0)
+
+
+def test_derive_normalizes_yyyy_mm_00_filename() -> None:
+    meta = _meta("F:/src/2015-08-00.jpg")
+    assert derive_date_auto(meta) == datetime(2015, 8, 1, 0, 0, 0)
+
+
+def test_derive_recovers_real_date_over_future_metadata() -> None:
+    """End-to-end of the reported bug: the bogus future QuickTime date is
+    skipped and the real date is recovered from the date-only OriginalPath
+    filename `2015-08-30-1.m4v`."""
+    meta = _meta(
+        "G:/pix/2036/L&L/02/2036-02-06_062816.mp4",
+        **{
+            "QuickTime:CreateDate": "2036:02:06 06:28:16",
+            "QuickTime:MediaCreateDate": "2036:02:06 06:28:16",
+            "XMP:OriginalPath": (
+                "G:/pix/raw/media/2015/2015-08-00 L&L/2015-08-30-1.m4v"
+            ),
+            "File:FileModifyDate": "2026:05:24 09:37:40",
+        },
+    )
+    assert derive_date_auto(meta) == datetime(2015, 8, 30, 0, 0, 0)

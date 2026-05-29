@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from pix import debug
@@ -20,6 +20,16 @@ from pix.metadata import FileMetadata
 
 # Format used in pix:DateAuto, pix:DateOverride, etc. See spec/tags.md.
 PIX_DATETIME_FORMAT: str = "%Y-%m-%d-%H:%M:%S"
+
+# A media file can't have been created in the future — a date past "now"
+# is garbage (notably HandBrake remuxes and some device firmwares stamp a
+# bogus future QuickTime CreateDate). We reject any candidate beyond a
+# small grace past the current moment, then fall through to the next
+# source. The grace absorbs timezone skew on genuinely fresh imports:
+# QuickTime stores UTC and pix treats timestamps as naïve local, so a
+# just-shot clip can read several hours ahead of local "now". 48h covers
+# any real-world offset (max ~26h span) while still catching 2036-style junk.
+_FUTURE_GRACE: timedelta = timedelta(hours=48)
 
 
 _EXIFTOOL_DATETIME_RE = re.compile(
@@ -68,7 +78,8 @@ _MTIME_KEY: str = "File:FileModifyDate"
 _ORIGINAL_PATH_KEY: str = "XMP:OriginalPath"
 
 
-# Filename patterns. Each matches `YYYY MM DD HH MM SS` in some shape.
+# Filename patterns carrying a full timestamp. Each matches
+# `YYYY MM DD HH MM SS` in some shape.
 _FILENAME_PATTERNS: tuple[re.Pattern[str], ...] = (
     # YYYY-MM-DD_HHMMSS or YYYY-MM-DD-HHMMSS (pix canonical, similar)
     re.compile(r"(\d{4})-(\d{2})-(\d{2})[_\-](\d{2})(\d{2})(\d{2})"),
@@ -78,8 +89,12 @@ _FILENAME_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?:^|[_\-])(\d{4})(\d{2})(\d{2})[_\-]?(\d{2})(\d{2})(\d{2})"),
 )
 
-# Folder-name patterns: date only (no time required).
-_FOLDER_PATTERNS: tuple[re.Pattern[str], ...] = (
+# Date-only patterns (no time). Used for folder names and as a filename
+# fallback (against the stem, so the `.ext` boundary doesn't block a bare
+# `YYYYMMDD`). Both the dashed `YYYY-MM-DD` and bare `YYYYMMDD` forms are
+# accepted; `_build_date` normalizes the historical `YYYY-MM-00` (unknown
+# day) convention to the 1st.
+_DATE_ONLY_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?:^|[_\- ])(\d{4})-(\d{2})-(\d{2})(?:$|[_\- ])"),
     re.compile(r"(?:^|[_\- ])(\d{4})(\d{2})(\d{2})(?:$|[_\- ])"),
 )
@@ -123,6 +138,10 @@ def derive_date_auto(meta: FileMetadata) -> datetime | None:
     5. Parent-folder pattern on the current parent.
     6. File modify time (`File:FileModifyDate`) — least trustworthy.
 
+    Any candidate that resolves to a date implausibly far in the future
+    (see `_FUTURE_GRACE`) is rejected as garbage and the search falls
+    through to the next source — a file can't have been created after now.
+
     Returns None when every candidate fails. Side effect: stores the
     selected source for `last_derivation_source()` to expose to callers
     that want to record provenance (debug logs, drift checks, etc.).
@@ -131,6 +150,7 @@ def derive_date_auto(meta: FileMetadata) -> datetime | None:
     _last_derivation_source = None
 
     debug.section("DateAuto derivation")
+    now = datetime.now()
     is_video = _is_video(meta.path)
     candidates = _VIDEO_DATE_KEYS if is_video else _PHOTO_DATE_KEYS
     debug.log(f"  Candidate set: {'video' if is_video else 'photo'}")
@@ -144,13 +164,20 @@ def derive_date_auto(meta: FileMetadata) -> datetime | None:
         if value:
             dt = parse_exiftool_datetime(value)
             if dt is not None:
-                debug.log(
-                    f"  {key:<32} {value!r}  ->  {dt.isoformat()}  ✓ matched"
-                )
-                result = dt
-                source_summary = f"{key} = {value!r}"
-                break
-            debug.log(f"  {key:<32} {value!r}  ->  unparseable")
+                if _is_future(dt, now):
+                    debug.log(
+                        f"  {key:<32} {value!r}  ->  {dt.isoformat()}  "
+                        f"✗ future, ignored"
+                    )
+                else:
+                    debug.log(
+                        f"  {key:<32} {value!r}  ->  {dt.isoformat()}  ✓ matched"
+                    )
+                    result = dt
+                    source_summary = f"{key} = {value!r}"
+                    break
+            else:
+                debug.log(f"  {key:<32} {value!r}  ->  unparseable")
         else:
             debug.log(f"  {key:<32} (absent)")
 
@@ -165,8 +192,8 @@ def derive_date_auto(meta: FileMetadata) -> datetime | None:
         original_parent_name = original_path.parent.name
 
         # 2. Original filename pattern
-        name_match = _match_first(_FILENAME_PATTERNS, original_name)
-        if name_match is not None:
+        name_match = _match_filename(original_name)
+        if name_match is not None and not _is_future(name_match, now):
             debug.log(
                 f"  Original-filename pattern matched on "
                 f"{original_name!r}: {name_match.isoformat()}  ✓"
@@ -174,6 +201,11 @@ def derive_date_auto(meta: FileMetadata) -> datetime | None:
             result = name_match
             source_summary = (
                 f"filename pattern on pix:OriginalPath name {original_name!r}"
+            )
+        elif name_match is not None:
+            debug.log(
+                f"  Original-filename pattern on {original_name!r}: "
+                f"{name_match.isoformat()}  ✗ future, ignored"
             )
         else:
             debug.log(
@@ -184,7 +216,7 @@ def derive_date_auto(meta: FileMetadata) -> datetime | None:
         # 3. Original parent-folder pattern
         if result is None:
             folder_match = _match_folder(original_parent_name)
-            if folder_match is not None:
+            if folder_match is not None and not _is_future(folder_match, now):
                 debug.log(
                     f"  Original-folder pattern matched on "
                     f"{original_parent_name!r}: "
@@ -194,6 +226,11 @@ def derive_date_auto(meta: FileMetadata) -> datetime | None:
                 source_summary = (
                     f"parent-folder pattern on pix:OriginalPath parent "
                     f"{original_parent_name!r}"
+                )
+            elif folder_match is not None:
+                debug.log(
+                    f"  Original-folder pattern on {original_parent_name!r}: "
+                    f"{folder_match.isoformat()}  ✗ future, ignored"
                 )
             else:
                 debug.log(
@@ -205,8 +242,8 @@ def derive_date_auto(meta: FileMetadata) -> datetime | None:
 
     # 4. Current filename pattern
     if result is None:
-        name_match = _match_first(_FILENAME_PATTERNS, meta.path.name)
-        if name_match is not None:
+        name_match = _match_filename(meta.path.name)
+        if name_match is not None and not _is_future(name_match, now):
             debug.log(
                 f"  Current-filename pattern matched: "
                 f"{name_match.isoformat()}  ✓"
@@ -214,6 +251,11 @@ def derive_date_auto(meta: FileMetadata) -> datetime | None:
             result = name_match
             source_summary = (
                 f"filename pattern on current name {meta.path.name!r}"
+            )
+        elif name_match is not None:
+            debug.log(
+                f"  Current-filename pattern: {name_match.isoformat()}  "
+                f"✗ future, ignored ({meta.path.name!r})"
             )
         else:
             debug.log(
@@ -223,7 +265,7 @@ def derive_date_auto(meta: FileMetadata) -> datetime | None:
     # 5. Current parent-folder pattern
     if result is None:
         folder_match = _match_folder(meta.path.parent.name)
-        if folder_match is not None:
+        if folder_match is not None and not _is_future(folder_match, now):
             debug.log(
                 f"  Current-folder pattern matched: "
                 f"{folder_match.isoformat()}  ✓"
@@ -232,6 +274,11 @@ def derive_date_auto(meta: FileMetadata) -> datetime | None:
             source_summary = (
                 f"parent-folder pattern on current parent "
                 f"{meta.path.parent.name!r}"
+            )
+        elif folder_match is not None:
+            debug.log(
+                f"  Current-folder pattern: {folder_match.isoformat()}  "
+                f"✗ future, ignored ({meta.path.parent.name!r})"
             )
         else:
             debug.log(
@@ -244,7 +291,7 @@ def derive_date_auto(meta: FileMetadata) -> datetime | None:
         mtime = meta.get_str(_MTIME_KEY)
         if mtime:
             dt = parse_exiftool_datetime(mtime)
-            if dt is not None:
+            if dt is not None and not _is_future(dt, now):
                 debug.log(
                     f"  File:FileModifyDate {mtime!r}  ->  "
                     f"{dt.isoformat()}  ✓ (last-resort fallback)"
@@ -252,6 +299,11 @@ def derive_date_auto(meta: FileMetadata) -> datetime | None:
                 result = dt
                 source_summary = (
                     f"File:FileModifyDate = {mtime!r} (last-resort mtime fallback)"
+                )
+            elif dt is not None:
+                debug.log(
+                    f"  File:FileModifyDate {mtime!r}  ->  {dt.isoformat()}  "
+                    f"✗ future, ignored"
                 )
             else:
                 debug.log(f"  File:FileModifyDate {mtime!r}  ->  unparseable")
@@ -292,9 +344,21 @@ def date_candidates(meta: FileMetadata) -> list[DateCandidate]:
     Unlike `derive_date_auto`, which short-circuits on the first match,
     this evaluates them all so the inspector can show, e.g., that the
     folder *would* have yielded a different date than the filename that
-    won. The winner is the first entry with a non-None `parsed`.
+    won. The winner is the first entry with a non-None `parsed`. A future
+    date is shown with its raw value but `parsed=None` and a "future
+    (ignored)" note, so it never wins — matching `derive_date_auto`.
     """
     out: list[DateCandidate] = []
+    now = datetime.now()
+
+    def _entry(
+        label: str, detail: str, dt: datetime | None, missing_note: str
+    ) -> DateCandidate:
+        if dt is None:
+            return DateCandidate(label, detail, None, missing_note)
+        if _is_future(dt, now):
+            return DateCandidate(label, detail, None, "future (ignored)")
+        return DateCandidate(label, detail, dt, "matched")
 
     keys = _VIDEO_DATE_KEYS if _is_video(meta.path) else _PHOTO_DATE_KEYS
     for key in keys:
@@ -302,30 +366,27 @@ def date_candidates(meta: FileMetadata) -> list[DateCandidate]:
         if not value:
             out.append(DateCandidate(key, "(absent)", None, "absent"))
             continue
-        dt = parse_exiftool_datetime(value)
         out.append(
-            DateCandidate(key, value, dt, "matched" if dt else "unparseable")
+            _entry(key, value, parse_exiftool_datetime(value), "unparseable")
         )
 
     original_raw = meta.get_str(_ORIGINAL_PATH_KEY)
     if original_raw:
         op = Path(original_raw)
-        nm = _match_first(_FILENAME_PATTERNS, op.name)
         out.append(
-            DateCandidate(
+            _entry(
                 "filename · OriginalPath",
                 op.name,
-                nm,
-                "matched" if nm else "no pattern",
+                _match_filename(op.name),
+                "no pattern",
             )
         )
-        fm = _match_folder(op.parent.name)
         out.append(
-            DateCandidate(
+            _entry(
                 "folder · OriginalPath",
                 op.parent.name,
-                fm,
-                "matched" if fm else "no pattern",
+                _match_folder(op.parent.name),
+                "no pattern",
             )
         )
     else:
@@ -334,22 +395,20 @@ def date_candidates(meta: FileMetadata) -> list[DateCandidate]:
                 DateCandidate(label, "(OriginalPath absent)", None, "absent")
             )
 
-    cnm = _match_first(_FILENAME_PATTERNS, meta.path.name)
     out.append(
-        DateCandidate(
+        _entry(
             "filename · current",
             meta.path.name,
-            cnm,
-            "matched" if cnm else "no pattern",
+            _match_filename(meta.path.name),
+            "no pattern",
         )
     )
-    cfm = _match_folder(meta.path.parent.name)
     out.append(
-        DateCandidate(
+        _entry(
             "folder · current",
             meta.path.parent.name,
-            cfm,
-            "matched" if cfm else "no pattern",
+            _match_folder(meta.path.parent.name),
+            "no pattern",
         )
     )
 
@@ -357,12 +416,38 @@ def date_candidates(meta: FileMetadata) -> list[DateCandidate]:
     if not mt:
         out.append(DateCandidate(_MTIME_KEY, "(absent)", None, "absent"))
     else:
-        dt = parse_exiftool_datetime(mt)
         out.append(
-            DateCandidate(_MTIME_KEY, mt, dt, "matched" if dt else "unparseable")
+            _entry(_MTIME_KEY, mt, parse_exiftool_datetime(mt), "unparseable")
         )
 
     return out
+
+
+def _is_future(dt: datetime, now: datetime) -> bool:
+    """True if `dt` is implausibly far in the future (see `_FUTURE_GRACE`)."""
+    return dt > now + _FUTURE_GRACE
+
+
+def _build_date(
+    year: int,
+    month: int,
+    day: int,
+    hour: int = 0,
+    minute: int = 0,
+    second: int = 0,
+) -> datetime | None:
+    """Construct a datetime, normalizing the `YYYY-MM-00` convention.
+
+    A day of `00` (used historically to mean "month known, day unknown")
+    is mapped to the 1st so it becomes a real date. Returns None if the
+    components still don't form a valid date (e.g. month 00, day 32).
+    """
+    if day == 0:
+        day = 1
+    try:
+        return datetime(year, month, day, hour, minute, second)
+    except ValueError:
+        return None
 
 
 def _match_first(
@@ -372,24 +457,35 @@ def _match_first(
         m = pattern.search(text)
         if m is None:
             continue
-        try:
-            year, month, day, hour, minute, second = (
-                int(g) for g in m.groups()
-            )
-            return datetime(year, month, day, hour, minute, second)
-        except ValueError:
-            continue
+        year, month, day, hour, minute, second = (int(g) for g in m.groups())
+        dt = _build_date(year, month, day, hour, minute, second)
+        if dt is not None:
+            return dt
     return None
+
+
+def _match_date_only(text: str) -> datetime | None:
+    """Match a date-only pattern (`YYYY-MM-DD` or `YYYYMMDD`) at midnight."""
+    for pattern in _DATE_ONLY_PATTERNS:
+        m = pattern.search(text)
+        if m is None:
+            continue
+        year, month, day = (int(g) for g in m.groups()[:3])
+        dt = _build_date(year, month, day)
+        if dt is not None:
+            return dt
+    return None
+
+
+def _match_filename(name: str) -> datetime | None:
+    """Date from a filename: a full timestamp first, else a date-only
+    fallback on the stem (so `2015-08-30-1.m4v` and `20150830.m4v` resolve
+    to that day at midnight, the `.ext` boundary notwithstanding)."""
+    dt = _match_first(_FILENAME_PATTERNS, name)
+    if dt is not None:
+        return dt
+    return _match_date_only(Path(name).stem)
 
 
 def _match_folder(name: str) -> datetime | None:
-    for pattern in _FOLDER_PATTERNS:
-        m = pattern.search(name)
-        if m is None:
-            continue
-        try:
-            year, month, day = (int(g) for g in m.groups()[:3])
-            return datetime(year, month, day, 0, 0, 0)
-        except ValueError:
-            continue
-    return None
+    return _match_date_only(name)

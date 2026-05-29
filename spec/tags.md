@@ -63,6 +63,10 @@ The field's presence is the dirty flag. Migrate itself doesn't surface dirty fil
 
 `pix:DateAuto` is set by migrate from the highest-priority date source available on the file. The candidate list is consulted in order; first match wins. If none match, `DateAuto` stays null and the file lands in `null/` for date-based templates (the user can still set `DateOverride` later via [tag-editing](tag-editing.md) to give it a date).
 
+**Future dates are rejected.** A candidate that resolves to a moment more than 48 hours past "now" is treated as garbage and skipped — the search falls through to the next source. A file can't have been created in the future; the usual culprit is a HandBrake remux or a device firmware that stamps a bogus future `QuickTime:CreateDate` (e.g. `2036:02:06`), which would otherwise win over the real date sitting in the filename or folder. The 48h grace absorbs timezone skew on genuinely fresh imports (QuickTime stores UTC; pix treats timestamps as naïve local, so a just-shot clip can read several hours ahead of local now).
+
+**Filename/folder date matching.** Beyond the timestamped patterns (`YYYY-MM-DD_HHMMSS`, `IMG_YYYYMMDD_HHMMSS`, …), a **date-only** name resolves to that day at midnight: both dashed `YYYY-MM-DD` and bare `YYYYMMDD` (matched against the filename stem so the `.ext` boundary doesn't interfere). The historical **`YYYY-MM-00`** convention (month known, day unknown) is normalized to the 1st of the month so it becomes a real date. Timestamped patterns are always preferred; the date-only fallback only applies when no timestamp matches.
+
 **Photos:**
 
 1. `EXIF:DateTimeOriginal`
