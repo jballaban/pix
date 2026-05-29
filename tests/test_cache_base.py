@@ -15,6 +15,8 @@ from pix.cache_base import (
     cache_path_for,
     cache_root_for,
     prune_orphans,
+    relocate_all,
+    remove_all,
 )
 
 
@@ -149,3 +151,55 @@ def test_no_cache_dir_is_a_noop(tmp_path: Path) -> None:
     library_root.mkdir()
     stats = prune_orphans(library_root, expected_paths=set())
     assert stats == PruneStats(orphans_removed=0, legacy_removed=0)
+
+
+def test_relocate_all_moves_every_sidecar(tmp_path: Path) -> None:
+    """A media move must carry .meta/.hash/.video to the new mirror.
+
+    Regression for the organize cache-loss bug: relocating only .meta
+    orphaned .hash/.video, which the next walk pruned — forcing a
+    needless re-`pix hash` after every organize.
+    """
+    library_root = tmp_path / "lib"
+    library_root.mkdir()
+    old_media = tmp_path / "lib" / "raw" / "2023-08-15_143205.jpg"
+    new_media = tmp_path / "lib" / "2023" / "Hawaii" / "2023-08-15_143205.jpg"
+
+    for suffix in (".meta", ".hash", ".video"):
+        _make_cache_file(library_root, old_media, suffix, b'{"k":1}')
+
+    relocate_all(library_root, old_media, new_media)
+
+    for suffix in (".meta", ".hash", ".video"):
+        assert not cache_path_for(library_root, old_media, suffix).exists()
+        new_side = cache_path_for(library_root, new_media, suffix)
+        assert new_side.is_file()
+        assert new_side.read_bytes() == b'{"k":1}'
+
+    # Orphan prune at the new location keeps them (media is "expected").
+    stats = prune_orphans(library_root, {new_media})
+    assert stats.orphans_removed == 0
+
+
+def test_remove_all_deletes_every_sidecar(tmp_path: Path) -> None:
+    library_root = tmp_path / "lib"
+    library_root.mkdir()
+    media = tmp_path / "lib" / "gone.jpg"
+    for suffix in (".meta", ".hash", ".video"):
+        _make_cache_file(library_root, media, suffix)
+
+    remove_all(library_root, media)
+
+    for suffix in (".meta", ".hash", ".video"):
+        assert not cache_path_for(library_root, media, suffix).exists()
+
+
+def test_relocate_all_best_effort_when_sidecars_absent(tmp_path: Path) -> None:
+    """Relocating a file that was never cached is a silent no-op."""
+    library_root = tmp_path / "lib"
+    library_root.mkdir()
+    relocate_all(
+        library_root,
+        tmp_path / "lib" / "a.jpg",
+        tmp_path / "lib" / "b.jpg",
+    )  # no raise

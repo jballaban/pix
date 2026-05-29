@@ -15,7 +15,7 @@ from pathlib import Path
 import typer
 
 from pix import banner, debug
-from pix.cache_base import prune_orphans
+from pix.cache_base import prune_orphans, remove_all
 from pix.checkout import CheckoutOpen, ensure_no_open_checkout
 from pix.dedupe import (
     DedupeApplyError,
@@ -198,13 +198,11 @@ def _run_dedupe(root: Path) -> None:
             )
     except UnmigratedFilesError as e:
         typer.echo(f"Error: {e}", err=True)
-        for p in e.paths:
-            typer.echo(f"  {p}", err=True)
+        _echo_sample(e.paths)
         raise typer.Exit(code=1) from e
     except MissingHashesError as e:
         typer.echo(f"Error: {e}", err=True)
-        for p in e.paths:
-            typer.echo(f"  {p}", err=True)
+        _echo_sample(e.paths)
         raise typer.Exit(code=1) from e
     _plog(
         plan_log_path,
@@ -262,11 +260,11 @@ def _run_dedupe(root: Path) -> None:
             typer.echo(f"Error: apply failed: {e}", err=True)
             raise typer.Exit(code=1) from e
 
-        # Cache mutation: each removed duplicate's cache entry goes away.
-        # Best-effort.
+        # Cache mutation: each removed duplicate's sidecars all go away
+        # (.meta/.hash/.video). Best-effort.
         for ln in result.plan.lines:
             if ln.line_id in kept_line_ids:
-                meta_cache.remove(ln.abs_path)
+                remove_all(root, ln.abs_path)
 
         typer.echo("")
         typer.echo(
@@ -277,6 +275,14 @@ def _run_dedupe(root: Path) -> None:
         # Always emit the log path on the way out — success, error, or
         # CTRL+C. Lets the user copy-paste straight into a tail/grep.
         typer.echo(f"Log: {apply_log_path}")
+
+
+def _echo_sample(paths: list[Path], limit: int = 10) -> None:
+    """Print up to `limit` offending paths to stderr, then an elision note."""
+    for p in paths[:limit]:
+        typer.echo(f"  {p}", err=True)
+    if len(paths) > limit:
+        typer.echo(f"  ... and {len(paths) - limit} more", err=True)
 
 
 def _plog(plan_log_path: Path, msg: str) -> None:

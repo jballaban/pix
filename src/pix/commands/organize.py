@@ -14,7 +14,7 @@ from pathlib import Path
 import typer
 
 from pix import banner, debug
-from pix.cache_base import prune_orphans
+from pix.cache_base import prune_orphans, relocate_all
 from pix.checkout import CheckoutOpen, ensure_no_open_checkout
 from pix.config import Config, set_organize_template
 from pix.duration import format_duration_precise
@@ -224,8 +224,7 @@ def _run_organize(
             )
     except UnmigratedFilesError as e:
         typer.echo(f"Error: {e}", err=True)
-        for p in e.paths:
-            typer.echo(f"  {p}", err=True)
+        _echo_sample(e.paths)
         typer.echo(
             f"Run `pix migrate {root}` (or the relevant subfolder) first.",
             err=True,
@@ -233,8 +232,7 @@ def _run_organize(
         raise typer.Exit(code=1) from e
     except MissingHashesError as e:
         typer.echo(f"Error: {e}", err=True)
-        for p in e.paths:
-            typer.echo(f"  {p}", err=True)
+        _echo_sample(e.paths)
         raise typer.Exit(code=1) from e
     _plog(
         plan_log_path,
@@ -287,11 +285,16 @@ def _run_organize(
             typer.echo(f"Error: apply failed: {e}", err=True)
             raise typer.Exit(code=1) from e
 
-        # Cache survives organize by following every MOVE: rename the
-        # .cache file alongside its media file. Best-effort.
+        # Cache survives organize by following every MOVE: relocate all
+        # sidecars (.meta/.hash/.video) alongside the media file. A MOVE
+        # leaves bytes/size/mtime untouched, so a valid hash/video entry
+        # stays valid at the new path. Relocating only .meta (the old
+        # behavior) orphaned .hash/.video, which the next walk pruned —
+        # forcing a needless re-`pix hash` after every organize.
+        # Best-effort.
         for ln in plan.lines:
             if ln.line_id in kept_line_ids and ln.target_path is not None:
-                meta_cache.rename(ln.abs_path, ln.target_path)
+                relocate_all(root, ln.abs_path, ln.target_path)
 
         # Persist the active template now that apply succeeded.
         set_organize_template(config_path, template_str)
@@ -302,6 +305,14 @@ def _run_organize(
         # Always emit the log path on the way out — success, error, or
         # CTRL+C. Lets the user copy-paste straight into a tail/grep.
         typer.echo(f"Log: {apply_log_path}")
+
+
+def _echo_sample(paths: list[Path], limit: int = 10) -> None:
+    """Print up to `limit` offending paths to stderr, then an elision note."""
+    for p in paths[:limit]:
+        typer.echo(f"  {p}", err=True)
+    if len(paths) > limit:
+        typer.echo(f"  ... and {len(paths) - limit} more", err=True)
 
 
 def _plog(plan_log_path: Path, msg: str) -> None:

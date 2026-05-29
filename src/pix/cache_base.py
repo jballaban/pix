@@ -154,6 +154,33 @@ def rename(old: Path, new: Path) -> None:
         pass
 
 
+def relocate_all(
+    library_root: Path, old_media: Path, new_media: Path
+) -> None:
+    """Move *every* cache sidecar (.meta/.hash/.video) with a media move.
+
+    A media MOVE/RENAME doesn't touch the file's bytes, size, or mtime,
+    so a valid hash/video entry stays valid at the new path — but only
+    if its sidecar follows. Relocating just `.meta` (the historical
+    behavior) left `.hash`/`.video` orphaned at the old mirror, where
+    the next walk's `prune_orphans` deleted them; the file then needed a
+    fresh `pix hash` / ffprobe pass for no reason. Best-effort per
+    suffix.
+    """
+    for suffix in LIVE_SUFFIXES:
+        rename(
+            cache_path_for(library_root, old_media, suffix),
+            cache_path_for(library_root, new_media, suffix),
+        )
+
+
+def remove_all(library_root: Path, media: Path) -> None:
+    """Delete every cache sidecar for a media file that's gone (DELETE/
+    STASH/CONVERT-source). Best-effort per suffix."""
+    for suffix in LIVE_SUFFIXES:
+        remove(cache_path_for(library_root, media, suffix))
+
+
 def _unmirror_path(
     cache_path: Path, library_root: Path
 ) -> Path | None:

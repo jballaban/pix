@@ -312,11 +312,11 @@ def generate_plan(
         p for p, m in cache.items() if m.get_str(PIX_ORIGINAL_PATH) is None
     ]
     if unmigrated:
-        raise UnmigratedFilesError(sorted(unmigrated)[:10])
+        raise UnmigratedFilesError(sorted(unmigrated))
 
     no_hash = [p for p in cache if hashes.get(p) is None]
     if no_hash:
-        raise MissingHashesError(sorted(no_hash)[:10])
+        raise MissingHashesError(sorted(no_hash))
 
     paths = sorted(cache.keys())
     candidates: list[_CandidateTarget] = []

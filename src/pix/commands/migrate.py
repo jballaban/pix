@@ -24,7 +24,7 @@ from pix.cleanup import (
     cleanup_rename_orphans,
     wipe_staging,
 )
-from pix.cache_base import prune_orphans
+from pix.cache_base import prune_orphans, relocate_all, remove_all
 from pix.config import Config
 from pix.convert import VideoProfile, probe_videos_parallel
 from pix.duration import format_duration_precise
@@ -439,37 +439,44 @@ def _post_apply_cache_update(
 ) -> None:
     """Update the per-file metadata cache to reflect apply's mutations.
 
-    Walks the applied plan lines and:
-    - DELETE / STASH: removes the cache entry.
-    - CONVERT+RENAME+TAG: removes the old entry; the new file's cache
-      was already written inside apply (via the live ExifTool session)
-      because it's the only path with access to the post-convert tags.
-    - RENAME: renames the cache file alongside the media rename.
-    - TAG: merges the written pix:* fields into the cached metadata.
-    - RENAME+TAG: rename the sidecar first (apply already moved the
+    Walks the applied plan lines and reflects each into ALL cache
+    sidecars (.meta/.hash/.video), not just .meta — a pure RENAME leaves
+    bytes/size/mtime untouched, so the .hash/.video entries stay valid
+    and must travel with the file instead of being orphaned and pruned:
+    - DELETE / STASH: removes every sidecar (file gone).
+    - CONVERT+RENAME+TAG: removes every old sidecar; the new file's
+      .meta was already written inside apply (via the live ExifTool
+      session); its .hash/.video are recomputed by a later pix hash /
+      migrate re-probe.
+    - RENAME: relocates every sidecar alongside the media rename.
+    - TAG: merges the written pix:* fields into the cached .meta
+      in place (the tag write changed mtime, so the .hash/.video at this
+      path are now stale — left for validation to reject on next read).
+    - RENAME+TAG: relocate every sidecar first (apply already moved the
       file), then update_metadata using `target_path` so cache.add
       stats the file at its current location. Calling update_metadata
       with abs_path here would silently fail the stat and leave the
       cache entry with the pre-tag size — guaranteed mismatch next run.
     """
+    root = cache.library_root
     for ln in plan.lines:
         if ln.line_id not in kept_line_ids:
             continue
         if ln.action == Action.DELETE:
-            cache.remove(ln.abs_path)
+            remove_all(root, ln.abs_path)
         elif ln.action == Action.STASH:
-            cache.remove(ln.abs_path)
+            remove_all(root, ln.abs_path)
         elif ln.action == Action.CONVERT_RENAME_TAG:
-            cache.remove(ln.abs_path)  # old file gone; new entry written in apply
+            remove_all(root, ln.abs_path)  # old file gone; new .meta written in apply
         elif ln.action == Action.RENAME:
             if ln.target_path is not None:
-                cache.rename(ln.abs_path, ln.target_path)
+                relocate_all(root, ln.abs_path, ln.target_path)
         elif ln.action == Action.TAG:
             if ln.pix_writes:
                 cache.update_metadata(ln.abs_path, dict(ln.pix_writes))
         elif ln.action == Action.RENAME_TAG:
             if ln.target_path is not None:
-                cache.rename(ln.abs_path, ln.target_path)
+                relocate_all(root, ln.abs_path, ln.target_path)
                 if ln.pix_writes:
                     cache.update_metadata(
                         ln.target_path, dict(ln.pix_writes)
