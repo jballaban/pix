@@ -215,15 +215,17 @@ def _run_dedupe(root: Path) -> None:
     )
     plan_path.write_text(plan_text, encoding="utf-8")
 
+    if not result.plan.lines:
+        # Terse no-op output, matching migrate/hash/organize: skip the
+        # Plan-written / Summary lines when there's nothing to apply.
+        typer.echo("No duplicates found; nothing to do.")
+        return
+
     typer.echo(f"Plan written: {plan_path}")
     typer.echo(
         f"Summary: {len(result.plan.lines)} DEDUP across "
         f"{len(result.groups)} group(s)."
     )
-
-    if not result.plan.lines:
-        typer.echo("No duplicates found; nothing to do.")
-        return
 
     kept_line_ids = {ln.line_id for ln in result.plan.lines}
     while True:
