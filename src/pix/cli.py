@@ -12,6 +12,7 @@ from pix.commands.checkout import run_checkout
 from pix.commands.dedupe import dedupe_library
 from pix.commands.hash import hash_library
 from pix.commands.init import init_library
+from pix.commands.meta import meta_file
 from pix.commands.migrate import migrate_folder
 from pix.commands.organize import organize_library
 from pix.commands.upgrade import upgrade_library
@@ -99,6 +100,19 @@ def organize(
 ) -> None:
     """Re-shape the library to match a folder template (library-wide MOVE)."""
     organize_library(path=path, template_str=template)
+
+
+@app.command("meta")
+def meta(
+    path: Annotated[
+        Path,
+        typer.Argument(
+            help="File to inspect (read-only; shows date sources + tags)."
+        ),
+    ],
+) -> None:
+    """Show pix's date candidates and notable tags for one file."""
+    meta_file(path)
 
 
 @app.command("checkout")

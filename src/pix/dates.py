@@ -11,6 +11,7 @@ include timezone offsets which we strip.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -268,6 +269,100 @@ def derive_date_auto(meta: FileMetadata) -> datetime | None:
 
     _last_derivation_source = source_summary
     return result
+
+
+@dataclass(frozen=True)
+class DateCandidate:
+    """One evaluated date source, for the `pix meta` inspector.
+
+    `parsed` is the datetime the source yields (None if it produced
+    nothing). `note` is a short human status: matched / unparseable /
+    absent / no pattern.
+    """
+
+    label: str
+    detail: str
+    parsed: datetime | None
+    note: str
+
+
+def date_candidates(meta: FileMetadata) -> list[DateCandidate]:
+    """Evaluate *every* date source in priority order (first parsed wins).
+
+    Unlike `derive_date_auto`, which short-circuits on the first match,
+    this evaluates them all so the inspector can show, e.g., that the
+    folder *would* have yielded a different date than the filename that
+    won. The winner is the first entry with a non-None `parsed`.
+    """
+    out: list[DateCandidate] = []
+
+    keys = _VIDEO_DATE_KEYS if _is_video(meta.path) else _PHOTO_DATE_KEYS
+    for key in keys:
+        value = meta.get_str(key)
+        if not value:
+            out.append(DateCandidate(key, "(absent)", None, "absent"))
+            continue
+        dt = parse_exiftool_datetime(value)
+        out.append(
+            DateCandidate(key, value, dt, "matched" if dt else "unparseable")
+        )
+
+    original_raw = meta.get_str(_ORIGINAL_PATH_KEY)
+    if original_raw:
+        op = Path(original_raw)
+        nm = _match_first(_FILENAME_PATTERNS, op.name)
+        out.append(
+            DateCandidate(
+                "filename · OriginalPath",
+                op.name,
+                nm,
+                "matched" if nm else "no pattern",
+            )
+        )
+        fm = _match_folder(op.parent.name)
+        out.append(
+            DateCandidate(
+                "folder · OriginalPath",
+                op.parent.name,
+                fm,
+                "matched" if fm else "no pattern",
+            )
+        )
+    else:
+        for label in ("filename · OriginalPath", "folder · OriginalPath"):
+            out.append(
+                DateCandidate(label, "(OriginalPath absent)", None, "absent")
+            )
+
+    cnm = _match_first(_FILENAME_PATTERNS, meta.path.name)
+    out.append(
+        DateCandidate(
+            "filename · current",
+            meta.path.name,
+            cnm,
+            "matched" if cnm else "no pattern",
+        )
+    )
+    cfm = _match_folder(meta.path.parent.name)
+    out.append(
+        DateCandidate(
+            "folder · current",
+            meta.path.parent.name,
+            cfm,
+            "matched" if cfm else "no pattern",
+        )
+    )
+
+    mt = meta.get_str(_MTIME_KEY)
+    if not mt:
+        out.append(DateCandidate(_MTIME_KEY, "(absent)", None, "absent"))
+    else:
+        dt = parse_exiftool_datetime(mt)
+        out.append(
+            DateCandidate(_MTIME_KEY, mt, dt, "matched" if dt else "unparseable")
+        )
+
+    return out
 
 
 def _match_first(
