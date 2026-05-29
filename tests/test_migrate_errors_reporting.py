@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import typer
 
 from pix import __version__ as PIX_VERSION
 from pix.commands.migrate import migrate_folder
@@ -100,6 +101,34 @@ def test_migrate_silent_when_errors_dir_clean(
     assert "Nothing to do." in captured.out
     assert "quarantined" not in captured.err
     assert "Could not restore" not in captured.err
+
+
+def test_migrate_reprocesses_orphaned_sidecar_less_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A sidecar-less .pix/errors/ file is moved back into the migrate folder
+    for another attempt.
+
+    We give it an unknown extension so migrate fast-fails on extension
+    validation *after* the orphan restore but *before* the exiftool-backed
+    metadata phase — letting us assert the relocation without ffmpeg/exiftool.
+    """
+    root = _make_library(tmp_path)
+    errors_dir = root / ".pix" / "errors"
+    errors_dir.mkdir(parents=True)
+    orphan = errors_dir / "2026-05-28_10-55-13_L1042.zzz"
+    orphan.write_bytes(b"orphan bytes")  # no .errorinfo sidecar
+
+    with pytest.raises(typer.Exit) as exc:
+        migrate_folder(root)
+    assert exc.value.exit_code == 1  # unknown-extension fast-fail
+
+    # Orphan was relocated out of errors/ into the migrate folder before
+    # the extension check tripped.
+    assert not orphan.exists()
+    assert (root / "2026-05-28_10-55-13_L1042.zzz").is_file()
+    err = capsys.readouterr().err
+    assert "Unknown file extensions" in err
 
 
 def test_migrate_reports_restored_older_version_file(

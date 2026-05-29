@@ -11,7 +11,9 @@ from pix import __version__ as PIX_VERSION
 from pix.errors import (
     ErrorSidecar,
     errors_dir_for,
+    find_orphaned_error_files,
     move_to_errors,
+    restore_orphaned_errors,
     restore_stale_errors,
     sidecar_path_for,
 )
@@ -214,7 +216,7 @@ def test_restore_stale_errors_treats_legacy_sidecar_as_stale(
         encoding="utf-8",
     )
 
-    restored, skipped, kept = restore_stale_errors(root)
+    restored, _skipped, kept = restore_stale_errors(root)
     assert len(restored) == 1
     assert restored[0].sidecar_pix_version == ""
     assert kept == 0
@@ -238,12 +240,98 @@ def test_restore_stale_errors_skips_when_target_exists(
     src.parent.mkdir(parents=True, exist_ok=True)
     src.write_bytes(b"manually-restored")
 
-    restored, skipped, kept = restore_stale_errors(root)
+    restored, skipped, _kept = restore_stale_errors(root)
     assert restored == []
     assert len(skipped) == 1
     assert "already exists" in skipped[0].reason
     # Manual restore stays as-is.
     assert src.read_bytes() == b"manually-restored"
+
+
+def test_find_orphaned_error_files_only_returns_sidecar_less_data(
+    tmp_path: Path,
+) -> None:
+    """A data file with no adjacent .errorinfo is an orphan; ones with a
+    sidecar, and lone sidecars, are not."""
+    root = tmp_path / "lib"
+    errors_dir = errors_dir_for(root)
+    errors_dir.mkdir(parents=True)
+
+    orphan = errors_dir / "run_L001.mp4"
+    orphan.write_bytes(b"orphan")
+    # Properly-paired entry: data + sidecar.
+    paired = errors_dir / "run_L002.mp4"
+    paired.write_bytes(b"paired")
+    sidecar_path_for(paired).write_text("original_path: x\n", encoding="utf-8")
+    # Lone sidecar (no data) — not a data orphan.
+    (errors_dir / "run_L003.mp4.errorinfo").write_text(
+        "original_path: y\n", encoding="utf-8"
+    )
+
+    assert find_orphaned_error_files(root) == [orphan]
+
+
+def test_find_orphaned_error_files_empty_when_no_dir(tmp_path: Path) -> None:
+    assert find_orphaned_error_files(tmp_path / "lib") == []
+
+
+def test_restore_orphaned_errors_moves_into_target(tmp_path: Path) -> None:
+    """A sidecar-less errors file is moved into the migrate target folder."""
+    root = tmp_path / "lib"
+    errors_dir = errors_dir_for(root)
+    errors_dir.mkdir(parents=True)
+    orphan = errors_dir / "2026-05-28_10-55-13_L1042.mp4"
+    orphan.write_bytes(b"video bytes")
+    target = root / "2014"
+
+    restored, skipped = restore_orphaned_errors(root, target)
+
+    assert skipped == []
+    assert len(restored) == 1
+    moved = target / "2026-05-28_10-55-13_L1042.mp4"
+    assert restored[0].original_path == moved
+    assert restored[0].sidecar_pix_version == ""
+    assert moved.is_file()
+    assert moved.read_bytes() == b"video bytes"
+    assert not orphan.exists()  # gone from errors/
+
+
+def test_restore_orphaned_errors_skips_collision(tmp_path: Path) -> None:
+    """Never clobber an existing file in the target folder."""
+    root = tmp_path / "lib"
+    errors_dir = errors_dir_for(root)
+    errors_dir.mkdir(parents=True)
+    orphan = errors_dir / "run_L001.mp4"
+    orphan.write_bytes(b"orphan")
+    target = root / "2014"
+    target.mkdir(parents=True)
+    (target / "run_L001.mp4").write_bytes(b"already here")
+
+    restored, skipped = restore_orphaned_errors(root, target)
+
+    assert restored == []
+    assert len(skipped) == 1
+    assert "already exists" in skipped[0].reason
+    assert orphan.exists()  # left in place
+    assert (target / "run_L001.mp4").read_bytes() == b"already here"
+
+
+def test_restore_orphaned_errors_leaves_paired_entries_alone(
+    tmp_path: Path,
+) -> None:
+    """A data file that still has its sidecar is not an orphan — untouched."""
+    root = tmp_path / "lib"
+    errors_dir = errors_dir_for(root)
+    errors_dir.mkdir(parents=True)
+    paired = errors_dir / "run_L002.mp4"
+    paired.write_bytes(b"paired")
+    sidecar_path_for(paired).write_text("original_path: x\n", encoding="utf-8")
+
+    restored, skipped = restore_orphaned_errors(root, root / "src")
+
+    assert restored == []
+    assert skipped == []
+    assert paired.exists()
 
 
 def test_move_to_errors_opaque_name_avoids_collisions(

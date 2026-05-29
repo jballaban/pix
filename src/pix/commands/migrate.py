@@ -28,7 +28,7 @@ from pix.cache_base import prune_orphans, relocate_all, remove_all
 from pix.config import Config
 from pix.convert import VideoProfile, probe_videos_parallel
 from pix.duration import format_duration_precise
-from pix.errors import restore_stale_errors
+from pix.errors import restore_orphaned_errors, restore_stale_errors
 from pix.editor import open_in_editor, parse_kept_line_ids, prompt_apply
 from pix.library_lock import LockHeld, acquire as acquire_lock
 from pix.metadata import (
@@ -204,6 +204,31 @@ def _run_migrate(root: Path, folder: Path, config: Config) -> None:
         )
         for skip in restore_skipped:
             typer.echo(f"  {skip.entry_path.name}: {skip.reason}", err=True)
+
+    # Sidecar-less entries in .pix/errors/ (lost or never-written sidecar)
+    # have no recorded origin, so they can't be restored in place. Per
+    # design, just give them another shot: drop them into the folder being
+    # migrated so the walk below picks them up and plan-gen reprocesses
+    # them this run. If they fail again, apply re-quarantines them with a
+    # fresh sidecar. Silent on the console — they surface as ordinary plan
+    # lines (or, on re-failure, via the quarantine reporting above).
+    orphans_restored, orphans_skipped = restore_orphaned_errors(root, folder)
+    if orphans_restored:
+        _plog(
+            plan_log_path,
+            f"Restored {len(orphans_restored)} sidecar-less file(s) from "
+            f".pix/errors/ into {folder} for another processing attempt.",
+        )
+        for entry in orphans_restored:
+            _plog(plan_log_path, f"  restored {entry.original_path}")
+    if orphans_skipped:
+        _plog(
+            plan_log_path,
+            f"Left {len(orphans_skipped)} sidecar-less .pix/errors/ file(s) "
+            f"in place:",
+        )
+        for skip in orphans_skipped:
+            _plog(plan_log_path, f"  {skip.entry_path}: {skip.reason}")
 
     # Walk is sub-second on the libraries we care about (scandir-based
     # since v0.1.62), so no console ticker — the next phase's progress

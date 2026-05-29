@@ -259,3 +259,70 @@ def restore_stale_errors(library_root: Path) -> tuple[
         )
 
     return restored, skipped, kept
+
+
+def find_orphaned_error_files(library_root: Path) -> list[Path]:
+    """Data files in `.pix/errors/` that have no adjacent `.errorinfo`.
+
+    The sidecar is the only record of a quarantined file's original path,
+    so a data file without one can't be restored *in place* — but it's
+    still a real file we set aside, deserving another processing attempt.
+    Typically the residue of an interrupted quarantine: `move_to_errors`
+    moves the file, then writes the sidecar — a crash (or a lost sidecar)
+    between the two steps leaves the data file standing alone.
+    """
+    errors_dir = errors_dir_for(library_root)
+    if not errors_dir.is_dir():
+        return []
+    orphans: list[Path] = []
+    for entry in sorted(errors_dir.iterdir()):
+        if not entry.is_file():
+            continue
+        if entry.name.endswith(SIDECAR_SUFFIX):
+            continue
+        if sidecar_path_for(entry).exists():
+            continue
+        orphans.append(entry)
+    return orphans
+
+
+def restore_orphaned_errors(
+    library_root: Path, target_dir: Path
+) -> tuple[list[RestoredEntry], list[SkippedEntry]]:
+    """Move sidecar-less `.pix/errors/` files into `target_dir` to retry.
+
+    With no sidecar there's no recorded `original_path`, so we can't put
+    the file back where it came from. Instead we drop it into the folder
+    the current migrate is scanning, where plan-gen picks it up this run.
+    If processing fails again, apply re-quarantines it *with* a fresh
+    sidecar — so the next run has full provenance. This is the design
+    answer to a lost sidecar: just re-attempt, don't nag.
+
+    Never clobbers: a file whose opaque name already exists in
+    `target_dir` is skipped (collisions are near-impossible given the
+    `<run-id>_<line-id>` naming, but we don't overwrite on the off chance).
+    """
+    restored: list[RestoredEntry] = []
+    skipped: list[SkippedEntry] = []
+    for orphan in find_orphaned_error_files(library_root):
+        dest = target_dir / orphan.name
+        if dest.exists():
+            skipped.append(
+                SkippedEntry(
+                    entry_path=orphan,
+                    reason=f"target {dest} already exists — not overwriting",
+                )
+            )
+            continue
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(orphan), str(dest))
+        except OSError as e:
+            skipped.append(
+                SkippedEntry(entry_path=orphan, reason=f"move failed: {e}")
+            )
+            continue
+        restored.append(
+            RestoredEntry(original_path=dest, sidecar_pix_version="")
+        )
+    return restored, skipped
