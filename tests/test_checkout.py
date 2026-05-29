@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from pix.commands.checkout import _rekey_hashes
+from pix.hash_cache import read_cached_hash, write_cached_hash
 from pix.checkout import (
     CheckoutOpen,
     CheckoutUnmigratedError,
@@ -498,6 +500,39 @@ def test_diff_flags_foreign_file(tmp_path: Path) -> None:
     assert snap is not None
     diff = diff_workspace(root, parse_template("{year}/{event}"), snap)
     assert len(diff.foreign) == 1
+
+
+# --- commit: hash cache re-key ----------------------------------------------
+
+
+def test_rekey_hashes_revalidates_after_metadata_write(tmp_path: Path) -> None:
+    """A metadata-only write bumps size+mtime but not the content hash, so
+    re-keying must leave the cache entry valid again without a rehash."""
+    root = tmp_path / "lib"
+    (root / ".pix").mkdir(parents=True)
+    f = (root / "2023-08-15_143205.jpg").resolve()
+    f.write_bytes(b"original")
+    st = f.stat()
+    write_cached_hash(
+        root, f, hash_hex="deadbeef", size=st.st_size, mtime_ns=st.st_mtime_ns
+    )
+    assert read_cached_hash(root, f) == "deadbeef"
+
+    # Simulate the in-place TAG write: same logical content, new size+mtime.
+    pre = {f: "deadbeef"}
+    f.write_bytes(b"original + new metadata bytes")
+    assert read_cached_hash(root, f) is None  # stale: size/mtime changed
+
+    assert _rekey_hashes(root, pre) == 1
+    assert read_cached_hash(root, f) == "deadbeef"  # valid again, same value
+
+
+def test_rekey_hashes_skips_vanished_file(tmp_path: Path) -> None:
+    """A file that no longer exists is skipped, not counted."""
+    root = tmp_path / "lib"
+    (root / ".pix").mkdir(parents=True)
+    missing = (root / "gone.jpg").resolve()
+    assert _rekey_hashes(root, {missing: "deadbeef"}) == 0
 
 
 def test_writes_date_clear_reconciles_autoprevious() -> None:

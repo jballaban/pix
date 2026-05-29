@@ -249,6 +249,12 @@ runs/<run-id>/
 
 Conservation holds exactly as in migrate: nothing is destroyed without a capture. `pix rollback <run-id>` (deferred) reverses TAG writes from the `.xmp` sidecars and restores DELETE captures.
 
+### Hash cache re-key
+
+A TAG write only mutates metadata regions, which the content hash deliberately excludes (JPEG APPn segments, MP4 non-`mdat` boxes — see `content_hash.py`). The hash *value* is therefore unchanged. But the write bumps the file's size + mtime, and the hash cache validates entries against exactly those (`hash_cache.py`), so the entry would go stale and the next `pix organize` would refuse with "run `pix hash` first".
+
+Commit avoids that needless rehash: for each file it's about to TAG it captures the currently-cached hash (still valid under the freeze), and after a successful apply rewrites that entry against the post-write size + mtime. Files with no prior cached hash are left alone (organize would have refused them before the checkout too). This mirrors the cache-warming `_apply_convert` does for the metadata cache after a known mutation.
+
 ## Reset
 
 `pix checkout --reset` empties `.pix/checkout/` (deletes the snapshot + links, **keeping the folder**) and exits. No tags are written, no run folder is allocated, the library is untouched, and — with the snapshot gone — the freeze lifts. It's the throw-away for a checkout the user no longer wants to commit.

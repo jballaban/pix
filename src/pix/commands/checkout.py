@@ -41,6 +41,7 @@ from pix.checkout import (
 )
 from pix.duration import format_duration_precise
 from pix.editor import open_in_editor, parse_kept_line_ids, prompt_apply
+from pix.hash_cache import read_cached_hash, write_cached_hash
 from pix.library_lock import LockHeld, acquire as acquire_lock
 from pix.metadata import (
     ExifToolFailed,
@@ -283,6 +284,20 @@ def _run_commit(root: Path, template: Template, snap: Snapshot) -> None:
             continue
         break  # 'y'
 
+    # A TAG write only touches metadata regions, which the content hash
+    # deliberately excludes (see content_hash.py) — so the hash *value* is
+    # unchanged. But the write bumps the file's size+mtime, which is what
+    # the hash cache validates against, leaving the entry stale → organize
+    # would refuse with "run pix hash first". Capture each file's cached
+    # hash now (the freeze guarantees it's still valid) and re-key it to the
+    # post-write size+mtime after apply, so no needless rehash is forced.
+    applied_lines = [ln for ln in lines if ln.line_id in kept]
+    pre_hashes: dict[Path, str] = {}
+    for ln in applied_lines:
+        h = read_cached_hash(root, ln.abs_path)
+        if h is not None:
+            pre_hashes[ln.abs_path] = h
+
     apply_log_path = runs_dir / "apply.log"
     try:
         try:
@@ -296,12 +311,43 @@ def _run_commit(root: Path, template: Template, snap: Snapshot) -> None:
             typer.echo(f"Error: apply failed: {e}", err=True)
             raise typer.Exit(code=1) from e
 
+        rekeyed = _rekey_hashes(root, pre_hashes)
+
         # Success → tear the workspace down and lift the freeze.
         discard(root)
         typer.echo("")
         typer.echo(f"Committed {completed} change(s); checkout closed.")
+        if rekeyed:
+            typer.echo(
+                f"Re-keyed {rekeyed} hash cache entr(ies); no rehash needed."
+            )
     finally:
         typer.echo(f"Log: {apply_log_path}")
+
+
+def _rekey_hashes(root: Path, pre_hashes: dict[Path, str]) -> int:
+    """Rewrite each captured hash entry against the post-write size+mtime.
+
+    The hash value is metadata-invariant, so we keep the value we captured
+    before the TAG write and only refresh the `(size, mtime_ns)` key. A file
+    that vanished or can't be stat'd is skipped — the cache entry just stays
+    stale and the next `pix hash` recomputes it. Returns the count re-keyed.
+    """
+    rekeyed = 0
+    for path, hash_hex in pre_hashes.items():
+        try:
+            st = path.stat()
+        except OSError:
+            continue
+        write_cached_hash(
+            root,
+            path,
+            hash_hex=hash_hex,
+            size=st.st_size,
+            mtime_ns=st.st_mtime_ns,
+        )
+        rekeyed += 1
+    return rekeyed
 
 
 def _report_skips(diff: CommitDiff) -> None:
