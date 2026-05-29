@@ -38,15 +38,17 @@ apply.log now records sub-second timestamps, per-line `dur=…` durations, `size
 
 Added `src/pix/telemetry.py` (`LineRecord`, `write_summary`) and `format_duration_compact` + `format_size` helpers in `src/pix/duration.py`. Wired into migrate's `apply.apply_plan`, `commands/hash`, `dedupe.apply_plan`, and `organize.apply_plan`.
 
-## 7. `pix checkout` — tag editing via folder-shuffle — **designed, not yet built**
+## 7. `pix checkout` — tag editing via folder-shuffle — **v1 (assign) built; removal/blank deferred**
 
-Full design landed in [spec/tag-editing.md](tag-editing.md). Three actions on one command: `pix checkout <path> <template>` (scope to `<path>` and below like `pix migrate <folder>`; materialize a hard-link workspace under `.pix/checkout/` shaped by a compound single-valued template + write `snapshot.json`), `pix checkout --commit` (diff workspace vs. snapshot by NTFS file-ID, write inferred `DateOverride`/`EventOverride` edits as migrate-style TAG lines with XMP conservation capture into a run folder, then tear the workspace down), and `pix checkout --reset` (throw the workspace away). Commit writes **tags only** — no rename/relocate; the library is eventually consistent via the next migrate/organize. Scope bounds the file set but the freeze stays library-wide.
+Full design in [spec/tag-editing.md](tag-editing.md). Built (v0.1.89–v0.1.100):
+- `pix checkout <path> <template>` (start), bare `pix checkout` (status), `pix checkout --reset` (discard), `pix checkout --commit` (apply).
+- The **freeze** (`ensure_no_open_checkout`) wired into migrate/organize/dedupe/hash/upgrade.
+- Hard-link workspace + `snapshot.json` (NTFS file-ID identity); single-bare-token-per-level templates; `(none)`-free rendering (stop at first missing value → rest in parent/root).
+- **v1 commit = assign only**: drag into a value folder → set that tag's override (or clear-when-equals-auto, with `*AutoPrevious` reconciliation). Reuses migrate's `apply_plan` for the TAG writes (XMP sidecar capture + ExifTool `-overwrite_original`), tears the workspace down on success.
 
-Cross-cutting pieces this needs:
-- **The freeze.** Every command except `checkout --commit`/`--reset` must refuse when `.pix/checkout/` exists. New guard, separate from the library lock; wire into `migrate`, `organize`, `dedupe`, `hash`, `upgrade`.
-- **Reuse migrate's TAG/DELETE apply path** (per-file ExifTool `-overwrite_original`, `.xmp` sidecar capture, run-folder layout, `apply.log`) and the shared `Apply? [Y/e/n]` editor/confirm loop.
-- Prereq check: all files migrated (`pix:OriginalPath`); no hash requirement.
-- Face checkout (`{face}`) stays **deferred** with migrate-time face detection.
+Deferred (later builds, see the post-v1 sections of tag-editing.md):
+- **Removing / blanking a tag** (move-up-to-parent, the "set to nothing" representation) and the **`pix checkout --overrides`** review mode — commit currently reports these as skipped.
+- **Face checkout (`{face}`)** — needs migrate-time face detection (also deferred).
 
 ## 8. Bare `pix organize` re-applies the stored template — **done in v0.1.92**
 
