@@ -13,6 +13,9 @@ import typer
 
 from pix.commands.organize import organize_library
 from pix.config import DEFAULT_CONFIG_YAML
+from pix.hash_cache import write_cached_hash
+from pix.metadata_cache import PerFileCache
+from pix.plan import PIX_DATE_AUTO, PIX_EVENT_AUTO, PIX_ORIGINAL_PATH
 from pix.schema import SCHEMA_VERSION
 
 
@@ -55,3 +58,35 @@ def test_bare_organize_uses_stored_template(
     organize_library(path=root, template_str=None)  # no raise
     out = capsys.readouterr().out
     assert "empty" in out.lower()
+
+
+def test_noop_organize_is_terse(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A library already in the target shape prints just the no-op line —
+    no 'Plan written' / 'Summary' noise (matches migrate/hash)."""
+    root = _make_library(tmp_path, template="{year}/{event}")
+    # File already at its canonical target for {year}/{event}.
+    media = (root / "2023" / "Hawaii" / "2023-08-15_143205.jpg").resolve()
+    media.parent.mkdir(parents=True)
+    media.write_bytes(b"data")
+
+    # Seed both caches so plan-gen needs neither ExifTool nor a hash compute.
+    PerFileCache.for_library(root).add(
+        media,
+        {
+            PIX_ORIGINAL_PATH: "F:/source/x.jpg",
+            PIX_DATE_AUTO: "2023-08-15-14:32:05",
+            PIX_EVENT_AUTO: "Hawaii",
+        },
+    )
+    st = media.stat()
+    write_cached_hash(
+        root, media, hash_hex="h", size=st.st_size, mtime_ns=st.st_mtime_ns
+    )
+
+    organize_library(path=root, template_str="{year}/{event}")
+    out = capsys.readouterr().out
+    assert "nothing to do" in out.lower()
+    assert "Plan written" not in out
+    assert "Summary" not in out

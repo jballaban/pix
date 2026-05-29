@@ -256,16 +256,18 @@ def _run_organize(
     plan_path = runs_dir / "plan.txt"
     plan_path.write_text(plan.to_text(), encoding="utf-8")
 
+    if len(plan.lines) == 0:
+        # Terse no-op output, matching migrate/hash: skip the
+        # Plan-written / Template / Summary lines when there's nothing to
+        # apply. Still persist the active template so a bare
+        # `pix organize <path>` re-applies this shape.
+        typer.echo("Library already matches the template; nothing to do.")
+        set_organize_template(config_path, template_str)
+        return
+
     typer.echo(f"Plan written: {plan_path}")
     typer.echo(f"Template:     {template_str}")
     typer.echo(f"Summary: {_summarize(plan.lines)}")
-
-    if len(plan.lines) == 0:
-        typer.echo("Library already matches the template; nothing to do.")
-        # Even a no-op run persists the active template so commit's
-        # auto-trigger knows what shape the user intends.
-        set_organize_template(config_path, template_str)
-        return
 
     kept_line_ids = {ln.line_id for ln in plan.lines}
     while True:
