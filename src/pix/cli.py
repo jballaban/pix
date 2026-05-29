@@ -25,6 +25,25 @@ app: typer.Typer = typer.Typer(
 )
 
 
+def _force_utf8_output() -> None:
+    """Make stdout/stderr UTF-8 so non-ASCII never crashes a run.
+
+    Windows consoles default to cp1252, which can't encode many path
+    characters (accents, CJK) or the glyphs our output uses (→, …) —
+    echoing one raises UnicodeEncodeError and aborts the command. UTF-8
+    encodes everything, so the encode step is always safe even if the
+    terminal font can't render a particular glyph. No-op where the
+    stream doesn't support reconfigure (already-wrapped, redirected).
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8")
+            except (ValueError, OSError):
+                pass
+
+
 def main() -> None:
     """Real entry point. Catches Ctrl-C so the user gets a clean exit
     instead of a multi-frame rich traceback.
@@ -33,6 +52,7 @@ def main() -> None:
     already logged as `Interrupted` to apply.log by the apply loop, so
     the user can tail that file to see where we stopped.
     """
+    _force_utf8_output()
     try:
         app()
     except KeyboardInterrupt:
