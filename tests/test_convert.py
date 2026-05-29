@@ -95,6 +95,11 @@ def test_probe_video_profile_parses_output(
         (VideoProfile("h264", "High", "yuv420p"), True),
         (VideoProfile("h264", "Baseline", "yuv420p"), True),
         (VideoProfile("h264", "Constrained Baseline", "yuv420p"), True),
+        # Full-range 4:2:0 (yuvj420p) is 8-bit 4:2:0 — plays on Windows.
+        # Common in older consumer cameras/phones; must NOT re-encode.
+        (VideoProfile("h264", "Main", "yuvj420p"), True),
+        (VideoProfile("h264", "High", "yuvj420p"), True),
+        (VideoProfile("h264", "Baseline", "yuvj420p"), True),
         # The user's actual broken file from 2003-era camcorder.
         (VideoProfile("h264", "High 4:2:2", "yuvj422p"), False),
         (VideoProfile("h264", "High 4:4:4", "yuv444p"), False),

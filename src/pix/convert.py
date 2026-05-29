@@ -58,6 +58,18 @@ _WINDOWS_PLAYABLE_H264_PROFILES: frozenset[str] = frozenset(
     {"Constrained Baseline", "Baseline", "Main", "High"}
 )
 
+# 8-bit 4:2:0 pixel formats Windows' stock H.264 decoder handles. Both
+# entries are 4:2:0 8-bit; `yuvj420p` is just the full-range (JPEG
+# range, 0-255) flavor of `yuv420p` (limited range, 16-235) — the
+# chroma subsampling and bit depth are identical, so it plays fine.
+# Older consumer cameras/phones tag their H.264 as yuvj420p; treating
+# it as non-playable needlessly re-encodes huge volumes of footage.
+# The genuinely-unplayable formats (yuv422p/yuvj422p, yuv444p, 10-bit)
+# are deliberately absent.
+_WINDOWS_PLAYABLE_H264_PIX_FMTS: frozenset[str] = frozenset(
+    {"yuv420p", "yuvj420p"}
+)
+
 # Subprocess timeouts per spec/implementation.md → Subprocess hardening.
 _FFPROBE_TIMEOUT: float = 30.0       # codec probe; small read, generous margin
 _FFMPEG_REMUX_TIMEOUT: float = 300.0  # 5 min for `-c copy` (cheap; long for safety)
@@ -94,7 +106,7 @@ def is_windows_playable(profile: VideoProfile) -> bool:
     if profile.codec == "h264":
         if profile.profile not in _WINDOWS_PLAYABLE_H264_PROFILES:
             return False
-        if profile.pix_fmt != "yuv420p":
+        if profile.pix_fmt not in _WINDOWS_PLAYABLE_H264_PIX_FMTS:
             return False
         return True
     if profile.codec == "hevc":

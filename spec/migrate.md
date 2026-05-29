@@ -288,7 +288,7 @@ Migrate enforces "playable on stock Windows" as a CONVERT trigger so the canonic
 
 **Criteria.** A video file is Windows-playable iff:
 
-- **H.264** with profile in `{Constrained Baseline, Baseline, Main, High}` AND `pix_fmt = yuv420p` (8-bit), OR
+- **H.264** with profile in `{Constrained Baseline, Baseline, Main, High}` AND `pix_fmt ∈ {yuv420p, yuvj420p}` (8-bit 4:2:0; `yuvj420p` is the full-range/JPEG-range flavor of `yuv420p` — same chroma + bit depth, so it plays), OR
 - **HEVC** (any profile / pix_fmt — users opt in to HEVC playback via the Windows HEVC Video Extension; modern phone/camera HEVC is already yuv420p 8-bit).
 
 All other video streams (h264 with extended profiles or non-4:2:0 chroma; mpeg2video; mpeg4 ASP; etc.) are not Windows-playable and must be re-encoded.
