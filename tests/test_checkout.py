@@ -179,9 +179,6 @@ def test_create_checkout_links_and_snapshot(tmp_path: Path) -> None:
     assert link_b.exists()
     # Hard link, not a copy: same inode as the library file.
     assert file_id(link_a.stat()) == file_id(a.resolve().stat())
-    # pending-delete folder is materialized for the user to drag into.
-    assert (checkout_dir(root) / "pending-delete").is_dir()
-
     snap = read_snapshot(root)
     assert snap is not None
     assert snap.template == "{year}/{event}"
@@ -236,12 +233,13 @@ def test_create_checkout_refuses_unmigrated(tmp_path: Path) -> None:
     assert not is_open(root)
 
 
-def test_create_checkout_routes_null_to_null_folder(tmp_path: Path) -> None:
+def test_trailing_null_rests_in_parent(tmp_path: Path) -> None:
+    """{year}/{event} with no event → file sits in the year folder (no
+    bucket), since the missing value is trailing."""
     root = tmp_path / "lib"
     (root / ".pix").mkdir(parents=True)
     p = root / "2023-08-15_143205.jpg"
     p.write_bytes(b"")
-    # Migrated (has OriginalPath + date) but no event ⇒ event token null.
     cache = {
         p.resolve(): _meta(
             p.resolve(),
@@ -257,9 +255,44 @@ def test_create_checkout_routes_null_to_null_folder(tmp_path: Path) -> None:
         template=parse_template("{year}/{event}"),
         cache=cache,
     )
-    assert (
-        checkout_dir(root) / "2023" / "null" / "2023-08-15_143205.jpg"
-    ).exists()
+    assert (checkout_dir(root) / "2023" / "2023-08-15_143205.jpg").exists()
+    assert not (checkout_dir(root) / "2023" / "(none)").exists()
+
+
+def test_non_trailing_null_uses_flat_none_bucket(tmp_path: Path) -> None:
+    """{event}/{year} with no event → file sits flat in (none)/, with NO
+    year breakdown beneath it (the missing value is non-trailing)."""
+    root = tmp_path / "lib"
+    (root / ".pix").mkdir(parents=True)
+    p = root / "2023-08-15_143205.jpg"
+    p.write_bytes(b"")
+    cache = {
+        p.resolve(): _meta(
+            p.resolve(),
+            **{
+                PIX_ORIGINAL_PATH: "F:/source/x.jpg",
+                PIX_DATE_AUTO: "2023-08-15-14:32:05",
+            },
+        )
+    }
+    create_checkout(
+        library_root=root,
+        scope=root,
+        template=parse_template("{event}/{year}"),
+        cache=cache,
+    )
+    assert (checkout_dir(root) / "(none)" / "2023-08-15_143205.jpg").exists()
+    # No year subfolder under (none).
+    assert not (checkout_dir(root) / "(none)" / "2023").exists()
+
+
+def test_checkout_template_must_be_single_bare_tokens() -> None:
+    from pix.checkout import CheckoutError, validate_checkout_template
+
+    with pytest.raises(CheckoutError):
+        validate_checkout_template(parse_template("{year}-archive/{event}"))
+    # A clean single-tag-per-level template passes.
+    validate_checkout_template(parse_template("{year}/{event}"))
 
 
 # --- discard -----------------------------------------------------------------

@@ -31,6 +31,7 @@ from pix.checkout import (
     discard,
     is_open,
     read_snapshot,
+    validate_checkout_template,
 )
 from pix.duration import format_duration_precise
 from pix.library_lock import LockHeld, acquire as acquire_lock
@@ -186,7 +187,11 @@ def _do_start(path: Path, template_str: str) -> None:
 
     try:
         template = parse_template(template_str)
+        validate_checkout_template(template)
     except OrganizeError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+    except CheckoutError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
 

@@ -25,6 +25,17 @@ All tag-editing is expressed as actions on the single `pix checkout` command:
 
 Commit **only writes tags.** It does not rename files or move them between folders. The library therefore becomes *eventually consistent*: a committed date change is reflected in the file's canonical name on the next [`pix migrate`](library.md#canonical-filename) (RENAME) and in its folder location on the next [`pix organize`](organize.md) (MOVE). Commit captures intent; migrate/organize materialize it.
 
+## v1 scope (the first build)
+
+The rest of this spec describes the full eventual design (removing/blanking tags, the `--overrides` review mode, faces). **v1 deliberately builds only the assign path**, because it's the 90% use (fix a wrong date, drop files into an event) and it sidesteps every ambiguity around "empty":
+
+- **The one edit: drag a file into the folder for the value you want.** That tag becomes that value, written as an override — *unless* the value already equals what `_auto` derives, in which case no override is stored (and an existing one is cleared). You think in values; the auto/override layer is invisible and irrelevant.
+- **You cannot make a tag empty in v1.** No blanking, no removing, no deleting files. So there's no "blankable vs not" distinction, no "force-null" representation, no null folder you drag *into* — none of it exists yet.
+- **Workspace layout.** Files render by effective value. A missing **trailing** token → the file rests in its parent folder (`{year}/{event}`, no event → `2023/`). A missing **non-trailing** token → a flat **`(none)`** bucket at that level, with no deeper breakdown (`{event}/{year}`, no event → `(none)/`, not `(none)/2023/`). These valueless files are drag-*out* sources — you grab them and drop them into a value.
+- **Templates** must be one bare tag per level (`{year}/{event}`, not `{year}-archive/{event}`), since commit reverses folder names back into values.
+
+Deferred to a later build (separate design, with the "set to nothing" marker if wanted): removing/emptying a tag, the `pix checkout --overrides` review mode, and faces. The detailed folder-shuffle and face sections below describe that fuller design — they are **not** v1.
+
 ## The freeze — an open checkout locks the library
 
 While `.pix/checkout/` exists, **every pix command except `pix checkout --commit` and `pix checkout --reset` refuses up front**, with:

@@ -37,13 +37,19 @@ from pix.organize import (
     Template,
     Token,
     compute_values,
-    render_target_folder,
+    sanitize_folder_name,
 )
 from pix.plan import PIX_ORIGINAL_PATH, effective_date
 
 CHECKOUT_DIRNAME: str = "checkout"
 SNAPSHOT_FILENAME: str = "snapshot.json"
-PENDING_DELETE_DIRNAME: str = "pending-delete"
+
+# Bucket folder for a file with no value at a *non-trailing* level (e.g.
+# a no-event file in an `{event}/{year}` checkout). It's flat — deeper
+# levels aren't rendered under it — so those files are an "unsorted at
+# this level" pile you drag out of. A missing *trailing* value needs no
+# bucket: the file just rests in its parent folder.
+NONE_BUCKET: str = "(none)"
 
 
 # --- Errors ------------------------------------------------------------------
@@ -233,6 +239,61 @@ def template_token_names(template: Template) -> list[str]:
     return names
 
 
+def validate_checkout_template(template: Template) -> None:
+    """Reject templates whose levels aren't a single bare tag.
+
+    Commit reverses each folder name back into a tag value, so a level
+    must be exactly one token with no literal text — `{year}/{event}` ✅,
+    `{year}-archive/{event}` ❌. (The fuller organize grammar — literals,
+    multiple tokens per level — isn't reversible and isn't supported in
+    checkout.)
+    """
+    for level in template.levels:
+        if len(level.segments) != 1 or not isinstance(level.segments[0], Token):
+            raise CheckoutError(
+                "checkout template levels must each be a single tag with no "
+                "literal text (e.g. `{year}/{event}`). Multi-tag or literal-"
+                "bearing levels aren't supported in checkout."
+            )
+
+
+def _level_token_names(template: Template) -> list[str]:
+    """One token name per level, in order (assumes a validated template)."""
+    return [
+        seg.name
+        for level in template.levels
+        for seg in level.segments
+        if isinstance(seg, Token)
+    ]
+
+
+def render_checkout_path(
+    template: Template, values: dict[str, str | None]
+) -> str:
+    """Workspace-relative folder for a file (single-tag-per-level template).
+
+    - A token with a value → its sanitized folder name.
+    - A null token with a non-null token still after it (non-trailing) →
+      a flat `(none)` bucket; deeper levels are NOT rendered, so the file
+      rests directly in `(none)`.
+    - A null token with only nulls after it (trailing) → nothing; the
+      file rests in the parent.
+
+    Returns "" when the first level is already null/trailing (file rests
+    in the workspace root). See spec/tag-editing.md → Workspace layout.
+    """
+    names = _level_token_names(template)
+    parts: list[str] = []
+    for i, name in enumerate(names):
+        val = values.get(name)
+        if val is None:
+            if any(values.get(n) is not None for n in names[i + 1 :]):
+                parts.append(NONE_BUCKET)  # non-trailing null → flat bucket
+            break  # trailing null → nothing (rest in parent)
+        parts.append(sanitize_folder_name(val))
+    return "/".join(parts)
+
+
 # --- Materialization ---------------------------------------------------------
 
 
@@ -299,7 +360,7 @@ def create_checkout(
     for path in sorted(cache.keys()):
         meta = cache[path]
         values = compute_values(meta)
-        target_rel = render_target_folder(template, values)
+        target_rel = render_checkout_path(template, values)
         date = effective_date(meta)
         ext = path.suffix.lower().lstrip(".") or "bin"
         bare = (
@@ -321,7 +382,6 @@ def create_checkout(
     cdir = checkout_dir(library_root)
     try:
         cdir.mkdir(parents=True)
-        (cdir / PENDING_DELETE_DIRNAME).mkdir()
 
         links: list[SnapshotLink] = []
         for cand in candidates:
