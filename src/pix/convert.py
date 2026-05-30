@@ -236,6 +236,20 @@ def is_remuxable_video(path: Path) -> bool:
     return path.suffix.lower().lstrip(".") in _REMUXABLE_VIDEO_EXTS
 
 
+# Keep-policy image extensions that reach a TAG write (and so can hit a
+# tag-write failure). A re-encode via `convert_to_jpg` salvages them —
+# Pillow decodes by content (so a PNG mislabeled `.jpg`, or a JPEG with a
+# proprietary trailer ExifTool won't rewrite, still decodes) into a clean
+# JPEG that accepts tags. (.png/.bmp/.heic are `convert_to_jpg` policy, so
+# they go through CONVERT and never reach a keep TAG.)
+_REENCODABLE_IMAGE_EXTS: frozenset[str] = frozenset({"jpg", "jpeg"})
+
+
+def is_reencodable_image(path: Path) -> bool:
+    """True if `path` is a keep-policy image we can re-encode to repair."""
+    return path.suffix.lower().lstrip(".") in _REENCODABLE_IMAGE_EXTS
+
+
 def remux_repair(src: Path, dst: Path) -> None:
     """Remux `src` into a freshly written container at `dst` via `ffmpeg
     -c copy` — the salvage path for a structurally damaged video.

@@ -9,10 +9,12 @@ from pathlib import Path
 import pytest
 
 import pix.apply as apply_mod
+from pix.convert import ConvertFailed
+from pix.exiftool_session import ExifToolSession
+from pix.plan import Action, PlanLine
 
 _repair_video_container = apply_mod._repair_video_container  # pyright: ignore[reportPrivateUsage]
-from pix.convert import ConvertFailed
-from pix.plan import Action, PlanLine
+_repair_image = apply_mod._repair_image  # pyright: ignore[reportPrivateUsage]
 
 
 def _line(src: Path) -> PlanLine:
@@ -77,3 +79,43 @@ def test_repair_returns_false_and_leaves_original_when_ffmpeg_fails(
     # Original left in place for the caller to quarantine.
     assert src.exists() and src.read_bytes() == b"DAMAGED"
     assert not (run_dir / "data" / "L001_v.mp4.damaged").exists()
+
+
+class _StubExif(ExifToolSession):
+    """Records metadata-copy calls; spawns no subprocess."""
+
+    def __init__(self) -> None:
+        self.copied: list[tuple[Path, Path]] = []
+
+    def copy_metadata_and_write_tags(
+        self, source: Path, dest: Path, tags: dict[str, str]
+    ) -> None:
+        self.copied.append((source, dest))
+
+
+def test_repair_image_reencodes_copies_metadata_and_swaps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir = tmp_path / "runs" / "r"
+    run_dir.mkdir(parents=True)
+    staging = tmp_path / "staging"
+    src = tmp_path / "lib" / "photo.jpg"  # content is actually PNG/odd
+    src.parent.mkdir(parents=True)
+    src.write_bytes(b"NOT-REALLY-JPEG")
+
+    def fake_to_jpg(s: Path, d: Path) -> None:
+        d.write_bytes(b"CLEANJPG")
+
+    monkeypatch.setattr(apply_mod, "convert_to_jpg", fake_to_jpg)
+    stub = _StubExif()
+
+    ln = PlanLine(
+        line_id="L001", action=Action.TAG, rel_path="photo.jpg",
+        details="", abs_path=src,
+    )
+    assert _repair_image(ln, run_dir, staging, stub) is True
+    # Clean JPEG swapped in; EXIF copied onto it; original conserved.
+    assert src.read_bytes() == b"CLEANJPG"
+    assert stub.copied and stub.copied[0][0] == src
+    captured = run_dir / "data" / "L001_photo.jpg.original"
+    assert captured.exists() and captured.read_bytes() == b"NOT-REALLY-JPEG"

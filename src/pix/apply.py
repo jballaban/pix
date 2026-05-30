@@ -29,6 +29,7 @@ from pix.convert import (
     ConvertFailed,
     convert_to_jpg,
     convert_to_mp4,
+    is_reencodable_image,
     is_remuxable_video,
     remux_repair,
 )
@@ -116,6 +117,20 @@ def _quarantine_line(
     )
 
 
+def _swap_in_repaired(
+    ln: PlanLine, run_dir: Path, repaired: Path, suffix: str
+) -> None:
+    """Conserve the original to `runs/<id>/data/<line>_<name>.<suffix>`,
+    then move the salvaged file into the original's place. The capture
+    happens first, so the swap is rollback-safe."""
+    src = ln.abs_path
+    data_dir = run_dir / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    captured = data_dir / f"{ln.line_id}_{src.name}.{suffix}"
+    safe_rename(src, captured)
+    safe_rename(repaired, src)
+
+
 def _repair_video_container(
     ln: PlanLine, run_dir: Path, staging_dir: Path
 ) -> bool:
@@ -123,9 +138,9 @@ def _repair_video_container(
 
     Returns True if a clean, taggable file now sits at `ln.abs_path` (the
     caller re-runs the line); False if the file isn't a remuxable video or
-    ffmpeg couldn't salvage it (the caller quarantines). The damaged
-    original is conserved to `runs/<id>/data/<line>_<name>.damaged` before
-    the clean file is swapped into place, so the swap is rollback-safe.
+    ffmpeg couldn't salvage it (the caller quarantines). Lossless. The
+    damaged original is conserved to `runs/<id>/data/<line>_<name>.damaged`
+    before the clean file is swapped into place.
     """
     src = ln.abs_path
     if not is_remuxable_video(src):
@@ -145,11 +160,55 @@ def _repair_video_container(
             except OSError:
                 pass
         return False
-    data_dir = run_dir / "data"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    captured = data_dir / f"{ln.line_id}_{src.name}.damaged"
-    safe_rename(src, captured)
-    safe_rename(repaired, src)
+    _swap_in_repaired(ln, run_dir, repaired, "damaged")
+    return True
+
+
+def _repair_image(
+    ln: PlanLine,
+    run_dir: Path,
+    staging_dir: Path,
+    exiftool: ExifToolSession,
+) -> bool:
+    """Salvage an image ExifTool can't tag by re-encoding it to a clean
+    JPEG (Pillow decodes by content, so a PNG mislabeled `.jpg` or a JPEG
+    with a proprietary trailer / missing EOI still decodes), then copying
+    the source's metadata across so EXIF survives the re-encode.
+
+    Returns True if a clean, taggable file now sits at `ln.abs_path` (the
+    caller re-runs the line to write pix:* tags); False if it isn't a
+    re-encodable image or Pillow couldn't decode it. **Lossy** — the image
+    is re-compressed and any proprietary trailer (e.g. Samsung motion
+    photo) is dropped; the original is conserved to
+    `runs/<id>/data/<line>_<name>.original` before the swap.
+    """
+    src = ln.abs_path
+    if not is_reencodable_image(src):
+        return False
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    repaired = staging_dir / f"{ln.line_id}_repair.jpg"
+    if repaired.exists():
+        repaired.unlink()
+    try:
+        convert_to_jpg(src, repaired)
+    except (ConvertFailed, OperationTimeout):
+        if repaired.exists():
+            try:
+                repaired.unlink()
+            except OSError:
+                pass
+        return False
+    # Carry the source's EXIF/XMP/IPTC onto the clean JPEG (a bare
+    # re-encode drops it). Reading the original works even though writing
+    # it didn't. Best-effort: the file is taggable regardless, and the
+    # re-run writes pix:* tags next.
+    try:
+        exiftool.copy_metadata_and_write_tags(
+            source=src, dest=repaired, tags={}
+        )
+    except (ExifToolTimeout, RuntimeError):
+        pass
+    _swap_in_repaired(ln, run_dir, repaired, "original")
     return True
 
 
@@ -255,18 +314,29 @@ def apply_plan(
                     progress.advance()
                     continue
                 except TagWriteFailed as e:
-                    # A damaged container ExifTool can't write tags to. For a
-                    # video, try a remux-repair (salvage the playable portion
-                    # into a clean container) then re-run the line; only
-                    # quarantine if the repair didn't help (or it's not a
-                    # remuxable video). For TAG/RENAME+TAG the tag write runs
-                    # before the rename, so the file is still at `abs_path`.
-                    if staging_dir is not None and _repair_video_container(
-                        ln, run_dir, staging_dir
-                    ):
+                    # A file ExifTool can't write tags to. Try to salvage it
+                    # into a clean, taggable file, then re-run the line; only
+                    # quarantine if the repair didn't help. Videos remux
+                    # losslessly; images re-encode to a clean JPEG (lossy).
+                    # For TAG/RENAME+TAG the tag write runs before the
+                    # rename, so the file is still at `abs_path`.
+                    repaired = False
+                    if staging_dir is not None:
+                        if is_remuxable_video(ln.abs_path):
+                            repaired = _repair_video_container(
+                                ln, run_dir, staging_dir
+                            )
+                        elif (
+                            is_reencodable_image(ln.abs_path)
+                            and exiftool is not None
+                        ):
+                            repaired = _repair_image(
+                                ln, run_dir, staging_dir, exiftool
+                            )
+                    if repaired:
                         _log(
                             log, ln, "Repaired",
-                            detail="remuxed damaged container",
+                            detail="salvaged to a clean file, re-applying",
                             dur_seconds=time.monotonic() - t_start,
                         )
                         try:
