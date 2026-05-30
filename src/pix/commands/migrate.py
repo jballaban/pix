@@ -19,6 +19,7 @@ from pix.apply import ApplyError, apply_plan
 from pix.checkout import CheckoutOpen, ensure_no_open_checkout
 from pix.cleanup import (
     CleanupError,
+    cleanup_empty_pix_workdirs,
     cleanup_exiftool_tmp,
     cleanup_migrate_markers,
     cleanup_rename_orphans,
@@ -415,6 +416,7 @@ def _run_migrate(
 
     if len(plan.lines) == 0:
         typer.echo("Nothing to do.")
+        _reap_pix_workdirs(root, plan_log_path)
         return
 
     typer.echo(f"Plan written: {plan_path}")
@@ -483,6 +485,10 @@ def _run_migrate(
         # Always emit the log path on the way out — success, error, or
         # CTRL+C. Lets the user copy-paste straight into a tail/grep.
         typer.echo(f"Log: {apply_log_path}")
+        # Reap now-empty .pix workdirs (errors/staging/stash). Best-effort;
+        # runs on every exit path so an interrupted/failed run still tidies
+        # whatever became empty.
+        _reap_pix_workdirs(root, plan_log_path)
 
 
 def _post_apply_cache_update(
@@ -534,6 +540,20 @@ def _post_apply_cache_update(
                     cache.update_metadata(
                         ln.target_path, dict(ln.pix_writes)
                     )
+
+
+def _reap_pix_workdirs(root: Path, plan_log_path: Path) -> None:
+    """Remove now-empty .pix/{errors,staging,stash} dirs (best-effort).
+
+    Quiet: the removed names go to plan.log only — this is incidental
+    tidy-up, not something the console needs to narrate.
+    """
+    removed = cleanup_empty_pix_workdirs(root)
+    if removed:
+        _plog(
+            plan_log_path,
+            f"Removed empty .pix workdir(s): {', '.join(removed)}.",
+        )
 
 
 def _plog(plan_log_path: Path, msg: str) -> None:

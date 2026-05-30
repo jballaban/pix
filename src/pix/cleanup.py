@@ -21,6 +21,7 @@ See spec/migrate.md → Marker cleanup for the full state diagram.
 
 from __future__ import annotations
 
+import os
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -36,6 +37,46 @@ _EXIFTOOL_TMP_SUFFIX: str = "_exiftool_tmp"
 
 class CleanupError(Exception):
     """Raised when a marker can't be safely resolved during cleanup."""
+
+
+# `.pix/` working subfolders migrate owns and can reap once empty: errors
+# (quarantine; migrate restores/re-attempts its contents), staging (CONVERT
+# / repair scratch; wiped at the start of every migrate), and stash (the
+# STASH extension action; emptied only when the user deals with the files).
+_PIX_WORKDIRS: tuple[str, ...] = ("errors", "staging", "stash")
+
+
+def cleanup_empty_pix_workdirs(library_root: Path) -> list[str]:
+    """Remove now-empty `.pix/{errors,staging,stash}` trees (bottom-up).
+
+    These accumulate empty subdirectories as their contents are resolved
+    (errors restored, staging swept, stash cleared by the user). Removal is
+    **best-effort**: a tree that still holds files, or a directory a process
+    holds open (e.g. it's the user's current working directory on Windows),
+    simply fails `rmdir` and is left in place — no error. Returns the names
+    of the top-level workdirs actually removed, for logging.
+    """
+    pix = library_root / ".pix"
+    removed: list[str] = []
+    for name in _PIX_WORKDIRS:
+        top = pix / name
+        if not top.is_dir():
+            continue
+        # Bottom-up: drop empty subdirs first, then the top dir if empty.
+        for dirpath, _dirnames, _filenames in os.walk(top, topdown=False):
+            d = Path(dirpath)
+            if d == top:
+                continue
+            try:
+                d.rmdir()
+            except OSError:
+                pass  # not empty, or held open — leave it
+        try:
+            top.rmdir()
+            removed.append(name)
+        except OSError:
+            pass
+    return removed
 
 
 def cleanup_rename_orphans(folder: Path) -> list[Path]:
