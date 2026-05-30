@@ -54,6 +54,20 @@ Deferred (later builds, see the post-v1 sections of tag-editing.md):
 
 `organize.template` was previously read only by commit's auto-trigger; commit no longer organizes (see [tag-editing.md](tag-editing.md)), so the key was repurposed: `pix organize <path>` with the template omitted re-applies the stored default shape (errors with guidance if none is stored). `commands/organize.py` makes the template arg optional and falls back to `config.organize_template` before parsing. See [organize.md → Active template persistence](organize.md#active-template-persistence).
 
+## 9. Perceptual-hash near-duplicate dedupe — **not started**
+
+Today `pix dedupe` groups only by exact format-aware content hash (see [dedupe.md → What counts as a duplicate](dedupe.md#what-counts-as-a-duplicate)). That misses the **same image re-encoded** — visually identical but byte-different, so different hash. This is common in real libraries: the same photo arrives from two import paths (e.g. a `new_raw` copy and an MTP phone-transfer copy) and one gets re-compressed at lower JPEG quality somewhere in the pipeline. Concrete case seen 2025: `2025-08-01_192801.jpg` (4.96 MB) and its `_001` collision sibling (3.93 MB) — both 5712×4284, iPhone 15 Pro, identical `DateTimeOriginal`, but ~1 MB apart, so not grouped. The `_NNN` collision suffix only means "same canonical date + folder", never "same content", so these sit side by side forever.
+
+**Proposed approach — a perceptual-hash tier-2 pass:**
+- Compute a perceptual hash (pHash / dHash — decode, downscale to e.g. 8×8/9×8 grayscale, DCT or gradient, emit a 64-bit fingerprint) per image, cached in `.pix/cache/` alongside the exact `.hash` (own `(size, mtime_ns)` validity, own command or a `pix hash` extension — keep it off the migrate hot path like the exact hash).
+- Group candidates by Hamming distance under a threshold (≈ ≤5/64) rather than exact equality. Cluster within a distance, not just pairwise, to avoid transitivity surprises.
+- Keeper/merge/conservation reuse the existing dedupe primitives. The danger is **false positives** (burst frames, near-identical scenes are genuinely *different* photos), so a perceptual group must be **surfaced for confirmation**, not auto-removed — unlike exact-hash groups. Likely a distinct action label (e.g. `NEARDUP`) and a plan section the user opts into, with the exact-match dedupe staying fully automatic.
+- Images only (videos out of scope); the existing format-aware exact pass still runs first and handles true byte-dupes.
+
+**Cheaper interim heuristic (optional, ship-first candidate):** `pix:OriginalPath`-lineage matching — same source-device basename + same capture second is a strong "same shot" signal. In the example both originals are `2025-08-01-192801000*.jpg` (one suffixed `_1`). Looser than perceptual hashing and metadata-dependent, but near-free since `OriginalPath` is already stored. Could land as a low-confidence grouping that, like the perceptual tier, is surfaced rather than auto-applied.
+
+Both routes are explicitly deferred in [dedupe.md → Known v1 limitations](dedupe.md#known-v1-limitations) ("tier-2 perceptual hashing or `pix:OriginalPath`-chain detection").
+
 ## 5. Tiered duration format — **done in v0.1.53**
 
 New `src/pix/duration.py` exposes `format_duration` (integer-tiered for progress-line suffixes) and `format_duration_precise` (one decimal under 60s, for post-phase summaries). `progress.py` consumes `format_duration` for the `(Xs)` suffix; `commands/{migrate,dedupe,organize,hash}.py` consume `format_duration_precise` for the `Found N files in …` / `Read N files in …` / `Plan generated in …` summary lines. The placeholder `_format_duration` that lived in `commands/hash.py` is gone.
