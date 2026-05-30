@@ -14,7 +14,7 @@ Migrate honors the spec-wide metadata-preservation invariants: **CONVERT carries
 2. **Allocate run folder.** Create `<library-root>\.pix\runs\<run-id>\` where `<run-id>` is a timestamp like `2026-05-16_14-32-01`. The run-id is just a folder name on disk — no code reads it back, no marker carries it.
 3. **Build metadata cache.** Bulk-extract metadata for every file in `<folder>` into an in-memory cache (see [Metadata cache](#metadata-cache)). One ExifTool invocation reads thousands of files in a single subprocess; per-file `pyexiftool` calls would be ~100× slower at TB scale.
 4. **Generate plan.** Walk the cache and write the migration plan to `runs\<run-id>\plan.txt`. Plan generation never reads file metadata directly — it consults the cache.
-5. **Confirm.** CLI shows a summary of the generated plan (counts per action type) and prompts: `Apply? [Y/e/n]`. The prompt **defaults to Y** — pressing Enter applies the plan directly. Editing is opt-in:
+5. **Confirm.** CLI shows a summary of the generated plan (counts per action type) and prompts: `Apply? [Y/e/n]`. The prompt **defaults to Y** — pressing Enter applies the plan directly. `--no-prompt` skips this confirmation and applies the full plan (the plan is still written); it's what [`pix sync`](sync.md) uses. Editing is opt-in:
     - `y` (or Enter) → proceed to apply.
     - `e` → open the plan file in `$EDITOR` / `%EDITOR%` (fallback: notepad on Windows, vi on POSIX), wait for save+close, re-read the (possibly edited) plan, show the new summary, and re-prompt. The user can loop through edit cycles as many times as they want.
     - `n` → abort. The plan file stays on disk as-is and nothing else changes.

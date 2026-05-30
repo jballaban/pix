@@ -48,11 +48,17 @@ from pix.scan import walk_source_files
 from pix.schema import SCHEMA_VERSION, SchemaTooNew, SchemaUpgradeRequired
 
 
-def organize_library(path: Path, template_str: str | None) -> None:
+def organize_library(
+    path: Path, template_str: str | None, no_prompt: bool = False
+) -> None:
     """End-to-end organize: parse, plan, edit, confirm, apply.
 
     `path` is anywhere inside (or at) the library root. Resolution
     walks up from it to find the `.pix/` directory.
+
+    `no_prompt` skips the `Apply?` confirmation and applies the generated
+    plan directly (the plan is still written). Used by `pix sync`; also
+    exposed as `--no-prompt`.
     """
     user_path = str(path)
     path = path.resolve()
@@ -106,7 +112,10 @@ def organize_library(path: Path, template_str: str | None) -> None:
 
     try:
         with acquire_lock(root, "organize"):
-            _run_organize(root, template, template_str, config_path)
+            _run_organize(
+                root, template, template_str, config_path,
+                no_prompt=no_prompt,
+            )
     except LockHeld as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
@@ -117,6 +126,7 @@ def _run_organize(
     template: Template,
     template_str: str,
     config_path: Path,
+    no_prompt: bool = False,
 ) -> None:
     """Organize body, called under the library lock."""
     run_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -270,7 +280,7 @@ def _run_organize(
     typer.echo(f"Summary: {_summarize(plan.lines)}")
 
     kept_line_ids = {ln.line_id for ln in plan.lines}
-    while True:
+    while not no_prompt:
         typer.echo("")
         choice = prompt_apply()
         if choice == "n":

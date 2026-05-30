@@ -15,7 +15,14 @@ from pix.commands.init import init_library
 from pix.commands.meta import meta_file
 from pix.commands.migrate import migrate_folder
 from pix.commands.organize import organize_library
+from pix.commands.sync import sync_library
 from pix.commands.upgrade import upgrade_library
+
+# Shared help text for the `--no-prompt` confirmation-skip option.
+_NO_PROMPT_HELP = (
+    "Skip the confirmation prompt and apply the generated plan directly. "
+    "The plan is still written to the run folder."
+)
 
 app: typer.Typer = typer.Typer(
     name="pix",
@@ -90,9 +97,12 @@ def migrate(
             ),
         ),
     ],
+    no_prompt: Annotated[
+        bool, typer.Option("--no-prompt", help=_NO_PROMPT_HELP)
+    ] = False,
 ) -> None:
     """Normalize files in <folder> per the library's policy (in-place, per-file)."""
-    migrate_folder(folder=folder)
+    migrate_folder(folder=folder, no_prompt=no_prompt)
 
 
 @app.command("organize")
@@ -117,9 +127,12 @@ def organize(
             ),
         ),
     ] = None,
+    no_prompt: Annotated[
+        bool, typer.Option("--no-prompt", help=_NO_PROMPT_HELP)
+    ] = False,
 ) -> None:
     """Re-shape the library to match a folder template (library-wide MOVE)."""
-    organize_library(path=path, template_str=template)
+    organize_library(path=path, template_str=template, no_prompt=no_prompt)
 
 
 @app.command("meta")
@@ -183,9 +196,12 @@ def hash_(
             ),
         ),
     ],
+    no_prompt: Annotated[
+        bool, typer.Option("--no-prompt", help=_NO_PROMPT_HELP)
+    ] = False,
 ) -> None:
     """Populate the per-file content-hash cache for every stale/missing entry."""
-    hash_library(path=path)
+    hash_library(path=path, no_prompt=no_prompt)
 
 
 @app.command("dedupe")
@@ -199,9 +215,43 @@ def dedupe(
             ),
         ),
     ],
+    no_prompt: Annotated[
+        bool, typer.Option("--no-prompt", help=_NO_PROMPT_HELP)
+    ] = False,
 ) -> None:
     """Remove duplicate files sharing the same `pix:ContentHash` (library-wide)."""
-    dedupe_library(path=path)
+    dedupe_library(path=path, no_prompt=no_prompt)
+
+
+@app.command("sync")
+def sync(
+    path: Annotated[
+        Path,
+        typer.Argument(
+            help=(
+                "Path to run the pipeline over. Scopes `migrate` to this "
+                "folder and resolves the library root for the (library-wide) "
+                "hash / dedupe / organize steps. `.` for CWD."
+            ),
+        ),
+    ],
+    template: Annotated[
+        str | None,
+        typer.Argument(
+            help=(
+                "Folder template for the organize step (e.g. "
+                "'{year}/{month}/{event}'). Omit to use the library's "
+                "stored template."
+            ),
+        ),
+    ] = None,
+) -> None:
+    """Do everything: migrate → hash → dedupe → organize, non-interactively.
+
+    Each step auto-applies its plan (no prompts); plans are still written.
+    Stops at the first step that errors so a failure isn't buried.
+    """
+    sync_library(path=path, template_str=template)
 
 
 @app.command("upgrade")

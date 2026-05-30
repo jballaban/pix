@@ -50,3 +50,35 @@ def test_noop_dedupe_is_terse(
     assert "no duplicates found" in out.lower()
     assert "Plan written" not in out
     assert "Summary" not in out
+
+
+def test_no_prompt_applies_without_prompting(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`no_prompt=True` applies the dedupe plan with no `Apply?` prompt.
+
+    If the prompt were reached, `typer.prompt` would block on stdin and
+    the test would hang — completing proves the prompt was skipped. Two
+    byte-identical-by-hash migrated files (no date/event/override → no
+    MERGE line, so no ExifTool needed) leave one survivor."""
+    root = _make_library(tmp_path)
+    a = (root / "a.jpg").resolve()
+    b = (root / "b.jpg").resolve()
+    a.write_bytes(b"dup")
+    b.write_bytes(b"dup")
+
+    cache = PerFileCache.for_library(root)
+    for f in (a, b):
+        cache.add(f, {PIX_ORIGINAL_PATH: f"F:/source/{f.name}"})
+        st = f.stat()
+        write_cached_hash(
+            root, f, hash_hex="h", size=st.st_size, mtime_ns=st.st_mtime_ns
+        )
+
+    dedupe_library(path=root, no_prompt=True)
+
+    # Keeper is lex-smallest (a.jpg); the loser was removed from the library.
+    assert a.exists()
+    assert not b.exists()
+    out = capsys.readouterr().out
+    assert "Removed 1 duplicate(s)" in out

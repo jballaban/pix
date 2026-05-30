@@ -45,8 +45,13 @@ from pix.scan import walk_source_files
 from pix.schema import SCHEMA_VERSION, SchemaTooNew, SchemaUpgradeRequired
 
 
-def dedupe_library(path: Path) -> None:
-    """End-to-end dedupe: resolve, plan, edit, confirm, apply."""
+def dedupe_library(path: Path, no_prompt: bool = False) -> None:
+    """End-to-end dedupe: resolve, plan, edit, confirm, apply.
+
+    `no_prompt` skips the `Apply?` confirmation and applies the generated
+    plan directly (the plan is still written). Used by `pix sync`; also
+    exposed as `--no-prompt`.
+    """
     user_path = str(path)
     path = path.resolve()
     try:
@@ -76,13 +81,13 @@ def dedupe_library(path: Path) -> None:
 
     try:
         with acquire_lock(root, "dedupe"):
-            _run_dedupe(root)
+            _run_dedupe(root, no_prompt=no_prompt)
     except LockHeld as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
 
 
-def _run_dedupe(root: Path) -> None:
+def _run_dedupe(root: Path, no_prompt: bool = False) -> None:
     """Dedupe body, called under the library lock."""
     run_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     runs_dir = root / ".pix" / "runs" / run_id
@@ -235,7 +240,7 @@ def _run_dedupe(root: Path) -> None:
     )
 
     kept_line_ids = {ln.line_id for ln in result.plan.lines}
-    while True:
+    while not no_prompt:
         typer.echo("")
         choice = prompt_apply()
         if choice == "n":

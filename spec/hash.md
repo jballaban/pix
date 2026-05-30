@@ -60,7 +60,7 @@ Three phases, no editable plan:
 
 1. **Acquire library lock** (see [README.md → Concurrency](README.md#concurrency)). Fail fast if another pix op is running.
 2. **Allocate run folder.** Create `<library>\.pix\runs\<run-id>\` with the standard timestamp. Contains `apply.log` only. No `plan.txt` (the work set is mechanical — every file with a missing or stale cache entry); no `data/` (hash writes are purely additive and live in cache; conservation doesn't apply).
-3. **Discover.** Walk the library; for each file, check the cache. Collect the "needs hashing" set. Print `N files need hashing.` and prompt `Proceed? [Y/n]` (default Y; no edit option — there's no per-file decision to make).
+3. **Discover.** Walk the library; for each file, check the cache. Collect the "needs hashing" set. Print `N files need hashing.` and prompt `Proceed? [Y/n]` (default Y; no edit option — there's no per-file decision to make). `--no-prompt` skips this confirmation; used by [`pix sync`](sync.md).
 4. **Apply.** Sequential, one file at a time. For each file: compute the format-aware hash, write the cache entry atomically. Log Started / Completed / Failed to apply.log.
 
 Sequential in v1. Hashing parallelizes cleanly (per-file independent, no shared mutable state) and is the obvious candidate for a future worker-pool pass; see `spec/perf-backlog.md`.

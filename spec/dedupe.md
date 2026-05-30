@@ -139,7 +139,7 @@ Same policy as migrate and organize:
 
 - During plan-gen: silent except the single rewriting `NNN% Xphase - hashing <path>` progress line (front-of-line phase elapsed per [migrate.md → Console output](migrate.md#console-output)). All phase headers, file counts, per-file group assignments → `plan.log`.
 - During apply: single rewriting `NNN% Xphase - L042 DEDUP <path>` line.
-- After plan-gen: `Plan written: ...`, `Summary: N DEDUP, K MERGE across M group(s).`, `Apply? [Y/e/n]`.
+- After plan-gen: `Plan written: ...`, `Summary: N DEDUP, K MERGE across M group(s).`, `Apply? [Y/e/n]`. `--no-prompt` skips the confirmation and applies the full plan (still written); used by [`pix sync`](sync.md).
 - After apply: `Removed N duplicate(s) across M group(s).` plus `Merged tags onto K keeper(s).` when any merge applied.
 
 Errors and aborts still print directly to stderr.

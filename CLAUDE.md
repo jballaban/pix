@@ -26,6 +26,7 @@ Active codebase. The implementation lives in `src/pix/`; tests in `tests/`. **Co
 - [`spec/hash.md`](spec/hash.md) — `pix hash` command (implemented)
 - [`spec/dedupe.md`](spec/dedupe.md) — dedupe (implemented)
 - [`spec/organize.md`](spec/organize.md) — organize (implemented)
+- [`spec/sync.md`](spec/sync.md) — sync: migrate→hash→dedupe→organize wrapper + shared `--no-prompt` (implemented)
 - [`spec/tag-editing.md`](spec/tag-editing.md) — checkout/commit, face workflow (not yet implemented)
 - [`spec/export.md`](spec/export.md) — export (sketched, not implemented)
 - [`spec/implementation.md`](spec/implementation.md) — language, libs, env, perf notes, sync-client interaction

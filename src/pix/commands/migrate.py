@@ -54,11 +54,15 @@ from pix.schema import SCHEMA_VERSION, SchemaTooNew, SchemaUpgradeRequired
 from pix.video_cache import read_all_cached_profiles, write_cached_profile
 
 
-def migrate_folder(folder: Path) -> None:
+def migrate_folder(folder: Path, no_prompt: bool = False) -> None:
     """End-to-end migrate: plan, edit, confirm, apply.
 
     Per-file plan-generation reasoning streams to `<run-dir>/debug.log`
     on every run (see `pix.debug`). Constant memory; no flag.
+
+    `no_prompt` skips the `Apply?` confirmation and applies the generated
+    plan directly (the plan is still written to the run folder). Used by
+    `pix sync`; also exposed as `--no-prompt`.
     """
     user_path = str(folder)
     folder = folder.resolve()
@@ -89,13 +93,15 @@ def migrate_folder(folder: Path) -> None:
 
     try:
         with acquire_lock(root, "migrate"):
-            _run_migrate(root, folder, config)
+            _run_migrate(root, folder, config, no_prompt=no_prompt)
     except LockHeld as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
 
 
-def _run_migrate(root: Path, folder: Path, config: Config) -> None:
+def _run_migrate(
+    root: Path, folder: Path, config: Config, no_prompt: bool = False
+) -> None:
     """Migrate body, called under the library lock."""
     # Create the run dir up front so plan.log exists from the very
     # start of the planning phase. Plan-phase status (Library root,
@@ -416,9 +422,10 @@ def _run_migrate(root: Path, folder: Path, config: Config) -> None:
 
     # The editor pass is opt-in. By default we trust the generated plan
     # and apply directly; the user can pick `e` to review/edit and
-    # re-prompt as many times as they want.
+    # re-prompt as many times as they want. `--no-prompt` (and `pix sync`)
+    # skip the confirmation entirely and apply the whole plan.
     kept_line_ids = {ln.line_id for ln in plan.lines}
-    while True:
+    while not no_prompt:
         typer.echo("")
         choice = prompt_apply()
         if choice == "n":

@@ -44,8 +44,12 @@ from pix.timeout import OperationTimeout, run_with_timeout
 _HASH_TIMEOUT: float = 60.0
 
 
-def hash_library(path: Path) -> None:
-    """End-to-end hash: resolve root, discover stale files, prompt, hash."""
+def hash_library(path: Path, no_prompt: bool = False) -> None:
+    """End-to-end hash: resolve root, discover stale files, prompt, hash.
+
+    `no_prompt` skips the `Proceed?` confirmation. Used by `pix sync`;
+    also exposed as `--no-prompt`.
+    """
     user_path = str(path)
     path = path.resolve()
     try:
@@ -69,13 +73,13 @@ def hash_library(path: Path) -> None:
 
     try:
         with acquire_lock(root, "hash"):
-            _run_hash(root)
+            _run_hash(root, no_prompt=no_prompt)
     except LockHeld as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
 
 
-def _run_hash(root: Path) -> None:
+def _run_hash(root: Path, no_prompt: bool = False) -> None:
     """Inner workflow, called under the library lock."""
     run_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     runs_dir = root / ".pix" / "runs" / run_id
@@ -137,10 +141,11 @@ def _run_hash(root: Path) -> None:
         return
 
     typer.echo(f"{len(needs_hashing)} file(s) need hashing.")
-    typer.echo("")
-    if not prompt_proceed():
-        typer.echo("Aborted.")
-        return
+    if not no_prompt:
+        typer.echo("")
+        if not prompt_proceed():
+            typer.echo("Aborted.")
+            return
 
     try:
         _hash_apply(root, needs_hashing, apply_log_path)

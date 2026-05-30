@@ -10,7 +10,7 @@ The tool is named `pix`. The CLI is invoked as `pix <op> ...`.
 
 ## Operations
 
-Eight top-level operations. `init`, `migrate`, `hash`, `dedupe`, and `organize` are implemented; the rest are designed-pending-build, sketched, or deferred.
+Nine top-level operations. `init`, `migrate`, `hash`, `dedupe`, `organize`, and `sync` are implemented; the rest are designed-pending-build, sketched, or deferred.
 
 | Op | What it does | Spec | Status |
 |---|---|---|---|
@@ -20,8 +20,11 @@ Eight top-level operations. `init`, `migrate`, `hash`, `dedupe`, and `organize` 
 | `dedupe` | Find duplicates by content hash across the library and remove redundant copies. | [dedupe.md](dedupe.md) | **v1 implemented** |
 | `merge <src> <dst>` | Combine two already-migrated trees; reuses `dedupe`. | — | Deferred (after dedupe) |
 | `organize [<template>]` | Physically rearrange files per a template (bare = re-apply the stored default). Single-valued tags only. | [organize.md](organize.md) | **v1 implemented** |
+| `sync <path> [<template>]` | Run migrate → hash → dedupe → organize back-to-back, non-interactively (auto-apply, stop on first error). | [sync.md](sync.md) | **v1 implemented** |
 | `checkout <path> <template>` / `checkout --commit` / `checkout --reset` | Tag editing via folder-shuffle, scoped to `<path>` (like migrate). Compound single-valued templates; commit writes tags only. | [tag-editing.md](tag-editing.md) | **Designed (pending build)** |
 | `export <template>` | Produce a copy/link-based derived view at a separate path. Read-only. | [export.md](export.md) | Sketched |
+
+The plan-applying ops (`migrate`, `hash`, `dedupe`, `organize`) share a `--no-prompt` flag that skips the `Apply?` / `Proceed?` confirmation and applies the generated plan directly — the plan is still written to the run folder. `sync` is the composition of all four under `--no-prompt`.
 
 ## Cross-cutting invariants
 
