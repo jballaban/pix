@@ -223,6 +223,75 @@ def convert_to_mp4(src: Path, dst: Path) -> None:
         )
 
 
+# Video containers a damaged file can be salvaged into via `-c copy`.
+# Used by migrate's repair-on-tag-failure path; output keeps the source
+# extension so codecs stay compatible with their original container.
+_REMUXABLE_VIDEO_EXTS: frozenset[str] = frozenset(
+    {"mp4", "mov", "m4v", "mkv", "avi", "wmv", "webm", "3gp"}
+)
+
+
+def is_remuxable_video(path: Path) -> bool:
+    """True if `path`'s extension is a video container we can remux-repair."""
+    return path.suffix.lower().lstrip(".") in _REMUXABLE_VIDEO_EXTS
+
+
+def remux_repair(src: Path, dst: Path) -> None:
+    """Remux `src` into a freshly written container at `dst` via `ffmpeg
+    -c copy` — the salvage path for a structurally damaged video.
+
+    A truncated `mdat` / unknown trailer can make ExifTool refuse to write
+    tags. Copying the streams into a clean container recovers the playable
+    portion and drops the broken trailer, yielding a file that accepts
+    XMP. Lossless (no re-encode); container metadata carried via
+    `-map_metadata 0`. `dst` should share `src`'s extension so the
+    original codecs stay valid in the rewritten container.
+
+    Raises `ConvertFailed` if ffmpeg errors or produces no output (the
+    file is too damaged to salvage), `OperationTimeout` on timeout.
+    """
+    ffmpeg = _require_tool("ffmpeg")
+    cmd: list[str] = [
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(src),
+        "-c",
+        "copy",
+        "-map_metadata",
+        "0",
+        "-movflags",
+        "+faststart",
+        str(dst),
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+            timeout=_FFMPEG_REMUX_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise OperationTimeout(
+            f"ffmpeg timed out after {_FFMPEG_REMUX_TIMEOUT:.0f}s "
+            f"remux-repairing {src}"
+        ) from e
+    if (
+        proc.returncode != 0
+        or not dst.exists()
+        or dst.stat().st_size == 0
+    ):
+        raise ConvertFailed(
+            f"ffmpeg remux-repair failed for {src} "
+            f"(exit={proc.returncode}):\n{proc.stderr}"
+        )
+
+
 def probe_video_profile(src: Path) -> VideoProfile:
     """Return the first video stream's codec, profile, and pixel format.
 

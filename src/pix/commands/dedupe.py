@@ -302,17 +302,10 @@ def _run_dedupe(root: Path, no_prompt: bool = False) -> None:
             typer.echo("")
             typer.echo(
                 f"{len(quarantined)} keeper(s) could not be tagged "
-                f"(damaged/un-writable container) — moved to {errors_dir}:",
-                err=True,
-            )
-            for ln, err in quarantined:
-                typer.echo(f"  {ln.abs_path}", err=True)
-                typer.echo(f"    {err}", err=True)
-            typer.echo("", err=True)
-            typer.echo(
-                f"Each entry in {errors_dir} has a .errorinfo sidecar. To "
-                f"retry: repair the file (e.g. remux) and restore it to its "
-                f"path, then re-run.",
+                f"(damaged container) and were moved to:\n"
+                f"  {errors_dir}\n"
+                f"Each has a .errorinfo sidecar; review there, repair, and "
+                f"re-run to retry.",
                 err=True,
             )
             raise typer.Exit(code=1)

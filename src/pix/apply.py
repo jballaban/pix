@@ -25,9 +25,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import IO
 
-from pix.convert import ConvertFailed, convert_to_jpg, convert_to_mp4
+from pix.convert import (
+    ConvertFailed,
+    convert_to_jpg,
+    convert_to_mp4,
+    is_remuxable_video,
+    remux_repair,
+)
 from pix.errors import move_to_errors
-from pix.timeout import safe_rename
+from pix.timeout import OperationTimeout, safe_rename
 from pix.exiftool_session import (
     ExifToolSession,
     ExifToolTimeout,
@@ -51,6 +57,100 @@ class ApplyError(Exception):
 _RENAME_ACTIONS: frozenset[Action] = frozenset(
     {Action.RENAME, Action.RENAME_TAG, Action.CONVERT_RENAME_TAG}
 )
+
+
+def _quarantine_line(
+    ln: PlanLine,
+    run_dir: Path,
+    log: IO[str],
+    error: str,
+    dur: float,
+    size_bytes: int | None,
+    convert_failures: list[tuple[PlanLine, str]],
+    records: list[LineRecord],
+) -> None:
+    """Log the failure, move the file into `.pix/errors/`, and record it.
+
+    Shared by the CONVERT-failed and (unrepairable) TAG-write-failed paths.
+    Raises `ApplyError` only if the move itself fails (an environment
+    problem) — consistent with the rename-failure halt policy.
+    """
+    _log(log, ln, "Failed", detail=error, dur_seconds=dur)
+    # library_root = runs/<id>/ → runs/ → .pix/ → root.
+    library_root = run_dir.parent.parent.parent
+    run_id = run_dir.name
+    try:
+        dest = move_to_errors(
+            source=ln.abs_path,
+            library_root=library_root,
+            run_id=run_id,
+            line_id=ln.line_id,
+            error=error,
+        )
+    except Exception as move_err:
+        _log(
+            log, ln, "Failed",
+            detail=f"move to .pix/errors/ failed: {move_err}",
+        )
+        raise ApplyError(
+            f"{ln.line_id} ({ln.rel_path}): action failed and move to "
+            f".pix/errors/ also failed: {move_err}"
+        ) from move_err
+    # The errors tree mirrors the source path, so the sublocation carries
+    # the provenance, not just the bare filename.
+    try:
+        rel_dest = dest.relative_to(library_root / ".pix")
+    except ValueError:
+        rel_dest = Path(dest.name)
+    _log(log, ln, "Quarantined", detail=str(rel_dest).replace("\\", "/"))
+    convert_failures.append((ln, error))
+    records.append(
+        LineRecord(
+            line_id=ln.line_id,
+            action=ln.action.value,
+            duration_seconds=dur,
+            rel_path=ln.rel_path,
+            size_bytes=size_bytes,
+            failed=True,
+        )
+    )
+
+
+def _repair_video_container(
+    ln: PlanLine, run_dir: Path, staging_dir: Path
+) -> bool:
+    """Salvage a damaged video by remuxing it into a clean container.
+
+    Returns True if a clean, taggable file now sits at `ln.abs_path` (the
+    caller re-runs the line); False if the file isn't a remuxable video or
+    ffmpeg couldn't salvage it (the caller quarantines). The damaged
+    original is conserved to `runs/<id>/data/<line>_<name>.damaged` before
+    the clean file is swapped into place, so the swap is rollback-safe.
+    """
+    src = ln.abs_path
+    if not is_remuxable_video(src):
+        return False
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    repaired = staging_dir / f"{ln.line_id}_repair{src.suffix}"
+    if repaired.exists():
+        repaired.unlink()
+    try:
+        remux_repair(src, repaired)
+    except (ConvertFailed, OperationTimeout):
+        # Too damaged to salvage (or ffmpeg wedged): leave the original in
+        # place for the caller to quarantine.
+        if repaired.exists():
+            try:
+                repaired.unlink()
+            except OSError:
+                pass
+        return False
+    data_dir = run_dir / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    captured = data_dir / f"{ln.line_id}_{src.name}.damaged"
+    safe_rename(src, captured)
+    safe_rename(repaired, src)
+    return True
 
 
 def apply_plan(
@@ -144,64 +244,62 @@ def apply_plan(
                         dur_seconds=time.monotonic() - t_start,
                     )
                     raise
-                except (ConvertFailed, TagWriteFailed) as e:
-                    # Both are per-file data problems (a broken source that
-                    # won't encode, or a damaged container ExifTool can't
-                    # write tags to): quarantine the file and keep going,
-                    # rather than halting the whole run. For TAG/RENAME+TAG
-                    # the tag write runs before the rename, so the file is
-                    # still at `abs_path` when this fires.
-                    dur = time.monotonic() - t_start
-                    _log(log, ln, "Failed", detail=str(e), dur_seconds=dur)
-                    # Move the unprocessable source into .pix/errors/ so
-                    # subsequent migrate runs don't keep retrying it.
-                    # library_root = runs/<id>/ → runs/ → .pix/ → root.
-                    library_root = run_dir.parent.parent.parent
-                    run_id = run_dir.name
-                    try:
-                        dest = move_to_errors(
-                            source=ln.abs_path,
-                            library_root=library_root,
-                            run_id=run_id,
-                            line_id=ln.line_id,
-                            error=str(e),
-                        )
-                    except Exception as move_err:
-                        # The move itself failed — environment problem,
-                        # halt consistent with our rename-failure policy.
-                        _log(
-                            log, ln, "Failed",
-                            detail=f"move to .pix/errors/ failed: {move_err}",
-                        )
-                        raise ApplyError(
-                            f"{ln.line_id} ({ln.rel_path}): "
-                            f"action failed and move to .pix/errors/ "
-                            f"also failed: {move_err}"
-                        ) from move_err
-                    # Show the path under .pix/errors/ — the errors tree now
-                    # mirrors the source path, so the sublocation is the
-                    # provenance, not just the bare filename.
-                    try:
-                        rel_dest = dest.relative_to(library_root / ".pix")
-                    except ValueError:
-                        rel_dest = Path(dest.name)
-                    _log(
-                        log, ln, "Quarantined",
-                        detail=str(rel_dest).replace("\\", "/"),
-                    )
-                    convert_failures.append((ln, str(e)))
-                    records.append(
-                        LineRecord(
-                            line_id=ln.line_id,
-                            action=ln.action.value,
-                            duration_seconds=dur,
-                            rel_path=ln.rel_path,
-                            size_bytes=size_bytes,
-                            failed=True,
-                        )
+                except ConvertFailed as e:
+                    # Broken source that won't encode: quarantine and keep
+                    # going rather than halting the whole run.
+                    _quarantine_line(
+                        ln, run_dir, log, str(e),
+                        time.monotonic() - t_start, size_bytes,
+                        convert_failures, records,
                     )
                     progress.advance()
                     continue
+                except TagWriteFailed as e:
+                    # A damaged container ExifTool can't write tags to. For a
+                    # video, try a remux-repair (salvage the playable portion
+                    # into a clean container) then re-run the line; only
+                    # quarantine if the repair didn't help (or it's not a
+                    # remuxable video). For TAG/RENAME+TAG the tag write runs
+                    # before the rename, so the file is still at `abs_path`.
+                    if staging_dir is not None and _repair_video_container(
+                        ln, run_dir, staging_dir
+                    ):
+                        _log(
+                            log, ln, "Repaired",
+                            detail="remuxed damaged container",
+                            dur_seconds=time.monotonic() - t_start,
+                        )
+                        try:
+                            _apply_one(
+                                ln, run_dir, exiftool, staging_dir, meta_cache
+                            )
+                        except (ConvertFailed, TagWriteFailed) as e2:
+                            _quarantine_line(
+                                ln, run_dir, log, str(e2),
+                                time.monotonic() - t_start, size_bytes,
+                                convert_failures, records,
+                            )
+                            progress.advance()
+                            continue
+                        except Exception as e2:
+                            dur = time.monotonic() - t_start
+                            _log(
+                                log, ln, "Failed",
+                                detail=str(e2), dur_seconds=dur,
+                            )
+                            raise ApplyError(
+                                f"{ln.line_id} ({ln.rel_path}): {e2}"
+                            ) from e2
+                        # Repaired and applied — fall through to the normal
+                        # Completed/record path below.
+                    else:
+                        _quarantine_line(
+                            ln, run_dir, log, str(e),
+                            time.monotonic() - t_start, size_bytes,
+                            convert_failures, records,
+                        )
+                        progress.advance()
+                        continue
                 except Exception as e:
                     dur = time.monotonic() - t_start
                     _log(log, ln, "Failed", detail=str(e), dur_seconds=dur)

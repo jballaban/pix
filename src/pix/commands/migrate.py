@@ -475,18 +475,11 @@ def _run_migrate(
             typer.echo("")
             typer.echo(
                 f"{len(convert_failures)} file(s) could not be processed "
-                f"(broken source or un-writable/damaged container) — "
-                f"moved to {errors_dir}:",
-                err=True,
-            )
-            for ln, err in convert_failures:
-                typer.echo(f"  {ln.abs_path}", err=True)
-                typer.echo(f"    {err}", err=True)
-            typer.echo("", err=True)
-            typer.echo(
-                f"Each entry in {errors_dir} has a .errorinfo sidecar "
-                f"with original path and error. To retry: restore the "
-                f"original file at its source path and re-run migrate.",
+                f"(broken source or damaged container) and were moved to:\n"
+                f"  {errors_dir}\n"
+                f"Each has a .errorinfo sidecar with the original path and "
+                f"error. Restore a file to its source path and re-run to "
+                f"retry.",
                 err=True,
             )
             raise typer.Exit(code=1)
