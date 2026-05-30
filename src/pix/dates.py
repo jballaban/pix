@@ -59,6 +59,19 @@ def format_pix_datetime(dt: datetime) -> str:
     return dt.strftime(PIX_DATETIME_FORMAT)
 
 
+def parse_pix_datetime(value: str) -> datetime | None:
+    """Parse a pix-spec datetime string (`YYYY-MM-DD-HH:MM:SS`).
+
+    pix:* datetime fields (DateAuto, MergeDate, …) are stored as opaque
+    strings in this format, which `parse_exiftool_datetime` doesn't
+    accept (it wants a space/`T` between date and time, not a `-`).
+    """
+    try:
+        return datetime.strptime(value, PIX_DATETIME_FORMAT)
+    except ValueError:
+        return None
+
+
 # Candidate keys per spec/tags.md → "DateAuto derivation".
 # Group-prefixed exiftool keys (family 0).
 _PHOTO_DATE_KEYS: tuple[str, ...] = (
@@ -76,6 +89,9 @@ _VIDEO_DATE_KEYS: tuple[str, ...] = (
 )
 _MTIME_KEY: str = "File:FileModifyDate"
 _ORIGINAL_PATH_KEY: str = "XMP:OriginalPath"
+# Dedupe-consolidated date, consulted before every other source. See
+# spec/tags.md → Merge fields and spec/dedupe.md → Tag merge.
+PIX_MERGE_DATE: str = "XMP:MergeDate"
 
 
 # Filename patterns carrying a full timestamp. Each matches
@@ -157,6 +173,21 @@ def derive_date_auto(meta: FileMetadata) -> datetime | None:
 
     result: datetime | None = None
     source_summary: str | None = None
+
+    # 0. pix:MergeDate — dedupe-consolidated value, top priority when
+    # present (spec/tags.md → Merge fields). Stored in pix datetime
+    # format; tolerate the exiftool format too in case a future writer
+    # uses it.
+    merge_raw = meta.get_str(PIX_MERGE_DATE)
+    if merge_raw:
+        merge_dt = parse_pix_datetime(merge_raw) or parse_exiftool_datetime(
+            merge_raw
+        )
+        if merge_dt is not None and not _is_future(merge_dt, now):
+            debug.log(f"  pix:MergeDate {merge_raw!r}  ->  {merge_dt.isoformat()}  ✓ matched")
+            _last_derivation_source = f"pix:MergeDate = {merge_raw!r}"
+            return merge_dt
+        debug.log(f"  pix:MergeDate {merge_raw!r}  ->  unparseable or future, ignored")
 
     # 1. Metadata candidates
     for key in candidates:

@@ -28,6 +28,16 @@ Every tag has a paired `_auto` value (`date_auto`, `event_auto`, …):
 
 The split lets us upgrade `_auto` derivation logic and surface mismatches for review.
 
+### Merge fields (cross-duplicate consolidation)
+
+Each auto-derived tag also has an optional `pix:Merge*` companion: `pix:MergeDate`, `pix:MergeEvent`. These are **written only by [dedupe](dedupe.md)** when consolidating metadata across a duplicate group onto the keeper, and they sit at the **top of that tag's `_auto` derivation cascade** — so when present, the `_auto` value resolves to them.
+
+The merge field is the durable home for a value that the keeper's own bytes wouldn't otherwise produce (e.g. an earlier capture date that lived only on a now-removed duplicate). Because the keeper physically carries the field, every subsequent migrate re-derives the same value — no drift, no self-reverting. It's distinct from both `_auto` (a guess re-derivable from the file's own bytes) and the override (user intent): a `Merge*` value is a *tool consolidation across identical copies*, kept in its own namespace slot so it neither forges camera metadata nor pollutes the user-intent channel.
+
+**Reversible by deletion.** Delete a `pix:Merge*` field and the next migrate re-derives that tag's `_auto` from the file's own sources, exactly as if the merge never happened. Merge fields are absent on every file dedupe hasn't consolidated.
+
+Only the auto-derived tags (`date`, `event`) get merge fields. Overrides are user intent and are consolidated directly into the real override slot (see [dedupe.md → Tag merge](dedupe.md#tag-merge)); they have no `Merge*` companion.
+
 ### Date override is a wildcard string
 
 `pix:DateOverride` is a single string in the format `YYYY-MM-DD-HH:MM:SS`, with `*` permitted in any field. The effective `date` is computed by taking `pix:DateAuto` and replacing each non-`*` field of the override.
@@ -67,8 +77,11 @@ The field's presence is the dirty flag. Migrate itself doesn't surface dirty fil
 
 **Filename/folder date matching.** Beyond the timestamped patterns (`YYYY-MM-DD_HHMMSS`, `IMG_YYYYMMDD_HHMMSS`, …), a **date-only** name resolves to that day at midnight: both dashed `YYYY-MM-DD` and bare `YYYYMMDD` (matched against the filename stem so the `.ext` boundary doesn't interfere). The historical **`YYYY-MM-00`** convention (month known, day unknown) is normalized to the 1st of the month so it becomes a real date. Timestamped patterns are always preferred; the date-only fallback only applies when no timestamp matches.
 
+`pix:MergeDate`, when present, is consulted **before any other source** (it's a dedupe-consolidated value the file is meant to carry — see [Merge fields](#merge-fields-cross-duplicate-consolidation)). It's absent on all but deduped keepers, so for everything else the list below starts at item 1.
+
 **Photos:**
 
+0. `pix:MergeDate` (dedupe-written; top priority when present)
 1. `EXIF:DateTimeOriginal`
 2. `EXIF:CreateDate` / `EXIF:DateTimeDigitized`
 3. `XMP:DateCreated`
@@ -82,6 +95,7 @@ The field's presence is the dirty flag. Migrate itself doesn't surface dirty fil
 
 **Videos:**
 
+0. `pix:MergeDate` (dedupe-written; top priority when present)
 1. `QuickTime:CreateDate` (timezone-normalized)
 2. `QuickTime:MediaCreateDate`
 3. `XMP:CreateDate`
@@ -95,7 +109,9 @@ The same candidate list is re-consulted on every migrate, so improving the heuri
 
 ### `EventAuto` derivation
 
-`pix:EventAuto` is set by migrate from the **immediate parent folder name** of `pix:OriginalPath` (or, when OriginalPath isn't set yet — first migrate — the file's current parent folder).
+`pix:MergeEvent`, when present, is consulted **before the folder-name heuristic** — same rule as `pix:MergeDate` for dates (dedupe-written, top priority, reversible by deletion; see [Merge fields](#merge-fields-cross-duplicate-consolidation)). Absent on all but deduped keepers.
+
+Otherwise `pix:EventAuto` is set by migrate from the **immediate parent folder name** of `pix:OriginalPath` (or, when OriginalPath isn't set yet — first migrate — the file's current parent folder).
 
 The folder name is processed as:
 
@@ -155,9 +171,11 @@ Tag state is persisted in XMP, primarily in a custom `pix` namespace. Standard f
 | Camera-recorded original datetime (photo) | `EXIF:DateTimeOriginal` | Read-only for pix. Immutable provenance. |
 | Camera-recorded original datetime (video) | `QuickTime:CreateDate` | Read-only for pix. Immutable provenance. |
 | `date_auto` (heuristic-derived datetime) | `xmp:pix:DateAuto` (datetime, `YYYY-MM-DD-HH:MM:SS`) | Written by migrate. |
+| `date` merge (dedupe-consolidated) | `xmp:pix:MergeDate` (datetime, same format) | Written by [dedupe](dedupe.md) only. Top of the `DateAuto` cascade. Absent unless consolidated; deletable to revert. |
 | `date` override (wildcard) | `xmp:pix:DateOverride` (string, same format with `*` allowed) | Absent if not set. |
 | `date_auto` prior value (dirty flag) | `xmp:pix:DateAutoPrevious` (datetime) | Absent unless `DateAuto` has changed while an override was active; see [Auto-previous fields](#auto-previous-fields-dirty-flagging). |
 | `event_auto` | `xmp:pix:EventAuto` (string) | Written by migrate. |
+| `event` merge (dedupe-consolidated) | `xmp:pix:MergeEvent` (string) | Written by [dedupe](dedupe.md) only. Top of the `EventAuto` cascade. Absent unless consolidated; deletable to revert. |
 | `event` override | `xmp:pix:EventOverride` (string) | Absent if not set. |
 | `event_auto` prior value (dirty flag) | `xmp:pix:EventAutoPrevious` (string) | Absent unless `EventAuto` has changed while `EventOverride` was active. |
 | Face regions | `XMP-mwg-rs:RegionList` (primary) + `XMP-MP:RegionInfo` (mirror for Windows interop) | ExifTool writes both from one structure. |
@@ -187,7 +205,7 @@ Read at any time the tag value is needed (filename derivation, organize template
 
 ### Side effect
 
-Files the user has never overridden carry only `DateAuto`, `EventAuto`, `OriginalPath`, and any face regions. Override properties (`DateOverride`, `EventOverride`) and Previous fields (`DateAutoPrevious`, `EventAutoPrevious`) appear only on files where they're meaningful.
+Files the user has never overridden carry only `DateAuto`, `EventAuto`, `OriginalPath`, and any face regions. Override properties (`DateOverride`, `EventOverride`), Previous fields (`DateAutoPrevious`, `EventAutoPrevious`), and merge fields (`MergeDate`, `MergeEvent`) appear only on files where they're meaningful — the merge fields only on duplicate-group keepers that [dedupe](dedupe.md) consolidated metadata onto.
 
 ### Consequence: filename / EXIF dissonance under overrides
 

@@ -38,6 +38,7 @@ from pix.metadata import (
 )
 from pix.metadata_cache import PerFileCache
 from pix.organize import CwdInsideLibraryError, check_cwd_not_inside
+from pix.plan import Action
 from pix.progress import LiveProgress
 from pix.root import NoLibraryRoot, resolve as resolve_root
 from pix.scan import walk_source_files
@@ -221,9 +222,15 @@ def _run_dedupe(root: Path) -> None:
         typer.echo("No duplicates found; nothing to do.")
         return
 
+    dedup_total = sum(
+        1 for ln in result.plan.lines if ln.action == Action.DEDUP
+    )
+    merge_total = sum(
+        1 for ln in result.plan.lines if ln.action == Action.MERGE
+    )
     typer.echo(f"Plan written: {plan_path}")
     typer.echo(
-        f"Summary: {len(result.plan.lines)} DEDUP across "
+        f"Summary: {dedup_total} DEDUP, {merge_total} MERGE across "
         f"{len(result.groups)} group(s)."
     )
 
@@ -238,13 +245,20 @@ def _run_dedupe(root: Path) -> None:
             open_in_editor(plan_path)
             edited_text = plan_path.read_text(encoding="utf-8")
             kept_line_ids = parse_kept_line_ids(edited_text)
-            kept = sum(
-                1 for ln in result.plan.lines if ln.line_id in kept_line_ids
+            kept_dedup = sum(
+                1
+                for ln in result.plan.lines
+                if ln.line_id in kept_line_ids and ln.action == Action.DEDUP
+            )
+            kept_merge = sum(
+                1
+                for ln in result.plan.lines
+                if ln.line_id in kept_line_ids and ln.action == Action.MERGE
             )
             typer.echo("")
             typer.echo(
-                f"After edit: {kept} DEDUP "
-                f"(of {len(result.plan.lines)})."
+                f"After edit: {kept_dedup} DEDUP, {kept_merge} MERGE "
+                f"(of {dedup_total} / {merge_total})."
             )
             continue
         break  # 'y'
@@ -252,7 +266,7 @@ def _run_dedupe(root: Path) -> None:
     apply_log_path = runs_dir / "apply.log"
     try:
         try:
-            completed = apply_plan(
+            removed, merged = apply_plan(
                 plan=result.plan,
                 kept_line_ids=kept_line_ids,
                 run_dir=runs_dir,
@@ -262,17 +276,21 @@ def _run_dedupe(root: Path) -> None:
             typer.echo(f"Error: apply failed: {e}", err=True)
             raise typer.Exit(code=1) from e
 
-        # Cache mutation: each removed duplicate's sidecars all go away
-        # (.meta/.hash/.video). Best-effort.
+        # Cache mutation: a removed duplicate's sidecars all go away; a
+        # merged keeper's .meta/.hash are now stale (the in-place write
+        # changed its mtime), so drop them to be re-derived next run.
+        # Both reduce to remove_all on the applied line's path. Best-effort.
         for ln in result.plan.lines:
             if ln.line_id in kept_line_ids:
                 remove_all(root, ln.abs_path)
 
         typer.echo("")
         typer.echo(
-            f"Removed {completed} duplicate(s) across "
+            f"Removed {removed} duplicate(s) across "
             f"{len(result.groups)} group(s)."
         )
+        if merged:
+            typer.echo(f"Merged tags onto {merged} keeper(s).")
     finally:
         # Always emit the log path on the way out — success, error, or
         # CTRL+C. Lets the user copy-paste straight into a tail/grep.

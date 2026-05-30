@@ -22,6 +22,9 @@ PIX_EVENT_AUTO: str = "XMP:EventAuto"
 PIX_EVENT_AUTO_PREVIOUS: str = "XMP:EventAutoPrevious"
 PIX_EVENT_OVERRIDE: str = "XMP:EventOverride"
 PIX_ORIGINAL_PATH: str = "XMP:OriginalPath"
+# Dedupe-consolidated event, consulted before the folder-name heuristic.
+# See spec/tags.md → Merge fields and spec/dedupe.md → Tag merge.
+PIX_MERGE_EVENT: str = "XMP:MergeEvent"
 
 
 # Leading digits + common separators (-, _, ., space) that look like a
@@ -45,8 +48,9 @@ def effective_event(meta: FileMetadata) -> str | None:
 def derive_event_auto(meta: FileMetadata) -> str | None:
     """Return the derived `pix:EventAuto` value for `meta`, or None.
 
-    Source: parent folder of `pix:OriginalPath` (if set) or the file's
-    current parent (if not). The folder name is processed as:
+    `pix:MergeEvent` (dedupe-consolidated) wins outright when present.
+    Otherwise the source is the parent folder of `pix:OriginalPath` (if
+    set) or the file's current parent. The folder name is processed as:
 
     1. Strip a leading run of `[\\d\\-_. ]+` (digits + `-`, `_`, `.`, space).
     2. Trim trailing whitespace.
@@ -54,11 +58,20 @@ def derive_event_auto(meta: FileMetadata) -> str | None:
     4. Otherwise return the cleaned string (case + internal separators
        preserved).
     """
+    debug.section("EventAuto derivation")
+
+    # pix:MergeEvent — dedupe-consolidated value, consulted before the
+    # folder-name heuristic (spec/tags.md → Merge fields).
+    merge = meta.get_str(PIX_MERGE_EVENT)
+    if merge:
+        debug.log(f"  pix:MergeEvent present: {merge!r}")
+        debug.log(f"  Result: {merge!r}")
+        return merge
+
     original = meta.get_str(PIX_ORIGINAL_PATH)
     source = PurePath(original) if original else PurePath(str(meta.path))
     parent_name = source.parent.name
 
-    debug.section("EventAuto derivation")
     debug.log(
         f"  Source path: {source} ("
         f"{'from OriginalPath' if original else 'current path'})"

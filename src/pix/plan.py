@@ -61,6 +61,7 @@ class Action(str, Enum):
     RENAME = "RENAME"
     MOVE = "MOVE"
     DEDUP = "DEDUP"
+    MERGE = "MERGE"
     STASH = "STASH"
 
 

@@ -33,15 +33,9 @@ Both refusals exit non-zero before any plan is written.
 
 Within a duplicate group (≥ 2 files sharing a hash), one file is the **keeper** and the rest are **losers** (marked for removal).
 
-The rule is **lex-smallest library-relative path, with a tier-break for user investment**:
+The rule is simply the **lex-smallest library-relative path** (forward-slash-normalized, case-insensitive, ascending). There is no investment tier: the [tag merge](#tag-merge) below consolidates every file's user investment (and best auto values) onto whichever file survives, so keeper selection no longer has to protect against losing an override. It just needs to pick a deterministic survivor.
 
-1. **Invested vs pristine**: a file is "invested" if it has `pix:DateOverride` set OR `pix:EventOverride` set (any non-`*` slot in DateOverride counts; any non-null EventOverride counts). Files with face regions become a third investment signal once face detection ships — out of scope while migrate doesn't write regions.
-2. Within each tier (invested vs pristine), sort by **library-relative path** forward-slash-normalized, case-insensitive, ascending. First wins.
-3. Across tiers: invested beats pristine. If any file in the group is invested, the keeper is the lex-smallest invested file. Otherwise it's the lex-smallest pristine file.
-
-This means a duplicate group of two files where one has the user's `pix:DateOverride` set always keeps that one — the user's investment isn't silently thrown away by sort order alone.
-
-Year-prefixed canonical date folders (`2023/...`) happen to sort before letters in lex order, so the "in the date tree" file usually wins the pristine-tier tie-break — a happy accident rather than a designed property.
+Year-prefixed canonical date folders (`2023/...`) sort before letters in lex order, so the "in the date tree" file usually wins — and `organize` re-derives location from the effective date afterward regardless, so the keeper's starting location isn't a durable property worth optimizing for.
 
 ## Plan format
 
@@ -59,23 +53,50 @@ Grouped: comment header per duplicate set, one DEDUP line per loser.
 # Keeper: 2023/08/Hawaii/2023-08-15_143205.jpg
 L001 | DEDUP | imports/old/2023-08-15_143205.jpg | hash abc123…
 L002 | DEDUP | archive/2023-08-15_143205.jpg     | hash abc123…
+L003 | MERGE | 2023/08/Hawaii/2023-08-15_143205.jpg | event_auto →'Hawaii' (merge ←archive/…)
 
 # Group 2 — hash def456…, 2 files
 # Keeper: 2023/12/2023-12-25_090015.jpg
-L003 | DEDUP | imports/2023-12-25_090015.jpg     | hash def456…
+# WARNING: date_override: losers diverge ['2019-*-*-*:*:*', '2020-*-*-*:*:*'] — took '2019-*-*-*:*:*'
+L004 | DEDUP | imports/2023-12-25_090015.jpg     | hash def456…
+L005 | MERGE | 2023/12/2023-12-25_090015.jpg     | date_override →2019-*-*-*:*:*
 
-# Summary: 3 DEDUP across 2 groups
+# Summary: 3 DEDUP, 2 MERGE across 2 groups
 ```
 
 - Header per group: hash prefix (first 8–12 chars for readability), file count, keeper path.
 - One DEDUP line per loser. The user can delete a specific line to skip that one delete; other losers in the same group still go.
+- At most one MERGE line per group, on the keeper, listing the field consolidations (see [Tag merge](#tag-merge)). Deleting it skips the metadata merge but still removes the duplicates.
+- `# WARNING` lines (info-only comments) flag fill-empty divergence — which value was taken and which were dropped. The dropped values survive on the losers under `data/`.
 - Re-keeper is not directly editable via the plan in v1. To pick a different keeper, the user deletes the DEDUP line(s) for the would-be-new-keeper (so it survives) and lets the rest of the group's lines apply — the survivor becomes the keeper by virtue of being the only one left. Documented in the plan header as a usage tip.
+
+## Tag merge
+
+A duplicate group is the *same image* recorded in several copies, and the copies often disagree on metadata — one copy kept its EXIF while another was stripped on a download, one sits in an event-named folder while another doesn't, one carries a user override. Rather than pick a single "best file" and discard the rest's metadata, dedupe **assembles the best value of each tag across the group onto the keeper**. Which file is the keeper is therefore mostly irrelevant — it's the surviving path, not the surviving metadata.
+
+The merge is **per tag**, independent for each:
+
+| Tag | Merge rule |
+|---|---|
+| **date** (`pix:MergeDate`) | The **earliest** resolved `_auto` date across the group, written to `pix:MergeDate` on the keeper **if it's earlier than (or the keeper has no) resolved date**. `pix:DateAuto` is rewritten from it for immediate effect. Rationale: corruption almost always stamps *later* (copy mtimes, re-saves, downloads; future dates are already rejected), so the earliest observed date across identical copies is the best proxy for the true capture time — no source-tier ranking needed. `pix:MergeDate` sits at the top of the `DateAuto` cascade (see [tags.md](tags.md#dateauto-derivation)), so the keeper re-derives it durably and deleting it reverts cleanly. |
+| **event** (`pix:MergeEvent`) | **Fill-empty**: if the keeper's resolved `EventAuto` is empty and a loser has one, adopt it (written to `pix:MergeEvent`, with `pix:EventAuto` rewritten). Two different non-empty event texts can't be ranked, so we never overwrite the keeper's own. |
+| **`pix:DateOverride`** | **Fill-empty**: keep the keeper's own override if it has one; otherwise adopt a loser's. Overrides are user intent, so a merged override goes straight into the real override slot (no `Merge*` field) and never clobbers the keeper's own. |
+| **`pix:EventOverride`** | Same fill-empty rule as `DateOverride`. |
+| **`pix:OriginalPath`** | Keeper's own. Write-once provenance — not mergeable. |
+| **`*AutoPrevious`** | Not merged (per-file dirty flags). Dedupe sets `pix:DateAutoPrevious` only if its `MergeDate` change moves `DateAuto` while a pinning `DateOverride` is present — mirroring migrate's dirty-flag rule. |
+| **face regions** | Out of scope until face detection ships. |
+
+**Divergence.** For the fill-empty fields, when the keeper's slot is empty and **two or more losers contribute different values**, dedupe takes the value from the **lex-smallest contributor** (fully deterministic) and emits a `# WARNING` line in the plan naming the dropped value(s). Nothing is truly lost — every loser's full XMP is conserved under `data/` (below). `MergeDate` needs no divergence handling: `min()` is unambiguous.
+
+The merge produces at most one `MERGE` plan line per keeper (the bundle of field writes); a group whose keeper already holds the best of every tag produces none.
 
 ## Conservation
 
-Every DEDUP removal moves the loser into `runs/<run-id>/data/L<NNN>_<original-filename>`. The full file (with its XMP) lives there for rollback. No copy, no extra storage — a single atomic same-volume rename.
+Every DEDUP removal moves the loser into `runs/<run-id>/data/L<NNN>_<original-filename>`. The full file (with its XMP) lives there for rollback. No copy, no extra storage — a single atomic same-volume rename. A loser's metadata that didn't win the merge survives here.
 
-**Loser metadata is lost from the live library.** If a loser had user-set `pix:DateOverride` or `pix:EventOverride`, those values do not propagate to the keeper. The keeper-selection rule above prefers invested files specifically to minimize this case; when it happens despite that (e.g., two invested files with different overrides), the loser's overrides are preserved on the captured file under `data/` but not merged into the keeper. Future work: a tag-merge mode that surfaces conflicts and merges non-conflicting overrides.
+A `MERGE` write is also conservation-captured: before mutating the keeper, its prior XMP is exported to `runs/<run-id>/data/L<NNN>_<keeper-filename>.xmp` (same discipline as migrate's TAG writes). The keeper file itself is not moved — only its metadata changes — so the sidecar is the rollback record for the merge.
+
+Writing `pix:*` metadata changes the keeper's mtime, invalidating its `.meta`/`.hash` cache entries (recomputed next run). The **content hash is unchanged** — XMP lives in stripped-before-hashing regions (APP markers for JPEG, non-`mdat` for MP4; see [hash.md](hash.md)) — so the keeper stays in its duplicate class.
 
 ## Empty-folder cleanup
 
@@ -83,9 +104,11 @@ Same rule as organize: after all DEDUP moves apply, walk the library bottom-up a
 
 ## Atomicity and crash recovery
 
-Each DEDUP line is a single same-volume rename — atomic on its own. No markers. Mid-apply crashes leave some losers moved into `data/` and others still in place; the next `pix dedupe` re-plans from the current state (the keeper survives, fewer losers remain, the plan shrinks).
+Each DEDUP line is a single same-volume rename — atomic on its own. A MERGE line is a sidecar export followed by an in-place ExifTool write on the keeper. No markers.
 
-No special cleanup pass needed.
+**Apply order: MERGE before DEDUP.** All MERGE writes run before any loser removal. This is what makes a mid-apply crash recoverable: if the merge committed but the removals didn't, the next `pix dedupe` re-plans and finds the keeper already holds the merged values (so the merge is a no-op — see Idempotence) while the losers are still present. The reverse order would be lossy — removing the losers first, then crashing, would strand the to-be-merged values on files that are gone from the live library (still in `data/`, but no longer auto-consolidated).
+
+Mid-apply crashes otherwise leave some losers moved into `data/` and others still in place; the next run re-plans from current state (the keeper survives, fewer losers remain, the plan shrinks). No special cleanup pass needed.
 
 ## Run folder layout
 
@@ -100,12 +123,15 @@ runs/<run-id>/
   data/
     L001_<original-filename>     — captured losers
     L002_<original-filename>
+    L003_<keeper-filename>.xmp   — keeper's pre-merge XMP (one per MERGE line)
     ...
 ```
 
 ## Idempotence
 
-A library with no duplicates produces an empty plan. Re-running dedupe with no input changes produces no work. The plan summary lines reads `Summary: 0 DEDUP across 0 groups.`
+A library with no duplicates produces an empty plan. Re-running dedupe with no input changes produces no work. The plan summary line reads `Summary: 0 DEDUP, 0 MERGE across 0 groups.`
+
+Merges are idempotent too: once a keeper holds the consolidated values (`pix:MergeDate`/`pix:MergeEvent` written, overrides filled), a re-plan sees the keeper's own resolved values already equal the group's best, so no MERGE line is emitted. Every field write is compared against the keeper's current value and dropped when equal.
 
 ## Console output
 
@@ -113,18 +139,18 @@ Same policy as migrate and organize:
 
 - During plan-gen: silent except the single rewriting `NNN% Xphase - hashing <path>` progress line (front-of-line phase elapsed per [migrate.md → Console output](migrate.md#console-output)). All phase headers, file counts, per-file group assignments → `plan.log`.
 - During apply: single rewriting `NNN% Xphase - L042 DEDUP <path>` line.
-- After plan-gen: `Plan written: ...`, `Summary: ...`, `Apply? [Y/e/n]`.
-- After apply: `Removed N duplicate(s) across M group(s).`
+- After plan-gen: `Plan written: ...`, `Summary: N DEDUP, K MERGE across M group(s).`, `Apply? [Y/e/n]`.
+- After apply: `Removed N duplicate(s) across M group(s).` plus `Merged tags onto K keeper(s).` when any merge applied.
 
 Errors and aborts still print directly to stderr.
 
 ## Rollback (deferred)
 
-`pix rollback <run-id>` reads `plan.txt`, moves each `data/L###_<filename>` back to its original library-relative path. Sketched; full design deferred until rollback ships.
+`pix rollback <run-id>` reads `plan.txt`, moves each `data/L###_<filename>` back to its original library-relative path, and restores each keeper's pre-merge XMP from its `data/L###_<keeper>.xmp` sidecar (undoing the MERGE writes). Sketched; full design deferred until rollback ships.
 
 ## Known v1 limitations
 
 - **Cross-format duplicates are not detected.** A HEIC and its JPG conversion are content-equivalent but have different format-aware hashes. Future tier-2 perceptual hashing or `pix:OriginalPath`-chain detection will address this.
-- **Loser overrides are not merged into the keeper.** Captured for rollback but not propagated.
+- **Override divergence is resolved by lex order, not surfaced for choice.** When two losers contribute conflicting overrides to an empty keeper slot, dedupe takes the lex-smallest deterministically and warns; it doesn't pause for the user to pick. The dropped values remain on the losers under `data/`.
 - **No interactive keeper override.** The user can skip a delete (line deletion) but not directly say "make this file the keeper instead." Workaround: delete the lines for the file you want to keep, which lets it survive while the rest of the group is removed.
 - **No near-duplicate detection.** Only exact hash matches. Burst photos, slightly-edited versions, re-saved JPEGs are separate files to dedupe.
