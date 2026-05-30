@@ -301,11 +301,8 @@ def _run_dedupe(root: Path, no_prompt: bool = False) -> None:
             errors_dir = root / ".pix" / "errors"
             typer.echo("")
             typer.echo(
-                f"{len(quarantined)} keeper(s) could not be tagged "
-                f"(damaged container) and were moved to:\n"
-                f"  {errors_dir}\n"
-                f"Each has a .errorinfo sidecar; review there, repair, and "
-                f"re-run to retry.",
+                f"{len(quarantined)} file(s) could not be processed "
+                f"and were moved to {errors_dir}",
                 err=True,
             )
             raise typer.Exit(code=1)
