@@ -30,7 +30,7 @@ Commit **only writes tags.** It does not rename files or move them between folde
 The rest of this spec describes the full eventual design (removing/blanking tags, the `--overrides` review mode, faces). **v1 deliberately builds only the assign path**, because it's the 90% use (fix a wrong date, drop files into an event) and it sidesteps every ambiguity around "empty":
 
 - **The one edit: drag a file into the folder for the value you want.** That tag becomes that value, written as an override — *unless* the value already equals what `_auto` derives, in which case no override is stored (and an existing one is cleared). You think in values; the auto/override layer is invisible and irrelevant.
-- **You cannot make a tag empty in v1.** No blanking, no removing, no deleting files. So there's no "blankable vs not" distinction, no "force-null" representation, no null folder you drag *into* — none of it exists yet.
+- **You cannot make a tag empty in v1.** No blanking, no removing, no deleting files. So there's no "blankable vs not" distinction, no "force-null" representation, no `(null)` folder you drag *into* — none of it exists yet.
 - **Workspace layout (one uniform rule).** Render each level's value as a folder and **stop at the first level the file has no value for**; the file rests in whatever's built so far — the **root** if the first level is missing. So `{year}/{event}` with no event → `2023/`; `{event}/{year}` with no event → the root (no bucket, no year breakdown). Because we stop at the first gap, a later level's folder never appears where it could be mistaken for an earlier token. These valueless files are drag-*out* sources — you grab them and drop them into a value.
 - **Templates** must be one bare tag per level (`{year}/{event}`, not `{year}-archive/{event}`), since commit reverses folder names back into values.
 
@@ -144,12 +144,12 @@ Commit reconstructs intent purely from **where each link ended up**.
 | Action in the workspace | Inferred change |
 |---|---|
 | Move a link to a different **valued** folder at some level | Set that level's token to the destination value. |
-| Move a link into a level's **`null/`** folder | Clear that token (set the override field to `*` / remove the value). |
+| Move a link into a level's **`(null)/`** folder | Clear that token (set the override field to `*` / remove the value). |
 | Move a link across **multiple** levels at once | One change per affected token, **bundled into a single TAG line** for that file. |
 | **Hard-delete** a link (Del / Recycle Bin / move out of the workspace) | **Clear all editable tokens** for that file (revert every override the template covers back to `_auto`). Generalizes the single-token "delete = null" rule; reversible (conservation captures prior XMP) and surfaced in the commit plan before anything is written. |
-| Move a link into the workspace's **`pending-delete/`** folder | Mark the underlying **file** for deletion: captured into the commit run folder and removed from the library. |
+| Move a link into the workspace's **`(pending-delete)/`** folder | Mark the underlying **file** for deletion: captured into the commit run folder and removed from the library. |
 
-`null/` and `filtered/` levels follow the same per-level semantics organize uses (see [organize → Null and filtered placement](organize.md#null-and-filtered-placement)).
+`(null)/` and `(filtered)/` levels follow the same per-level semantics organize uses (see [organize → Null and filtered placement](organize.md#null-and-filtered-placement)).
 
 ### Date overrides are wildcard patches
 
@@ -159,7 +159,7 @@ Commit reconstructs intent purely from **where each link ended up**.
 |---|---|
 | `{year}` level `2023/` → `2022/` | Set the **year** field to `2022`; other fields unchanged. |
 | `{month}` level `08/` → `03/` | Set the **month** field to `03`. |
-| Any date-component level → `null/` | Clear that field (set to `*`). |
+| Any date-component level → `(null)/` | Clear that field (set to `*`). |
 
 If patching leaves the override all-`*`, the `pix:DateOverride` field is **removed** entirely (equivalent to absent — see the all-wildcards rule in tags.md). If no override existed and the patch introduces a non-`*` field, `DateOverride` is created.
 
@@ -182,11 +182,11 @@ Commit handles this implicitly as part of writing the override change; no separa
 
 1. **Acquire the library lock**; load `.pix/checkout/snapshot.json`.
 2. **Allocate a run folder** `<library-root>/.pix/runs/<run-id>/` (same shape and id format as migrate's).
-3. **Walk the workspace.** For each leaf link: split its workspace-relative path into level components (mapping each to its token via `template`; a `null/` component ⇒ that token is null), and `stat` it to get its `ino`. Collect any links under `pending-delete/` separately.
+3. **Walk the workspace.** For each leaf link: split its workspace-relative path into level components (mapping each to its token via `template`; a `(null)/` component ⇒ that token is null), and `stat` it to get its `ino`. Collect any links under `(pending-delete)/` separately.
    - **Change detection is name-based.** A token "changed" iff the link's current folder name for that level differs from `sanitize(snapshot value)` — comparing rendered name to rendered name, so a link left untouched in a pix-sanitized folder (e.g. `Birthday_Party`) is *not* a phantom change. The new value is read verbatim from the destination folder name.
    - **Foreign links are not accepted.** A link whose `ino` isn't in the snapshot (a copy or new file the user dropped in — pix didn't write it) is **ignored** and listed in the output as "ignored — not part of this checkout"; commit never creates a library entry from it. The rare ambiguous case (one `ino` appearing at two workspace paths) and a link moved to a depth the template can't express are likewise **skipped with a warning**, never aborting the whole commit.
 4. **Diff against the snapshot**, per snapshot record:
-   - In `pending-delete/` → emit a **`DELETE`** line for `library_path`.
+   - In `(pending-delete)/` → emit a **`DELETE`** line for `library_path`.
    - Present in the workspace with ≥1 changed token → re-read the file's current `pix:*` and compute the minimal override patch per token (set, or [clear-when-equals-auto](#date-overrides-are-wildcard-patches)). Bundle all of a file's edits into one **`TAG`** line.
    - Absent from the workspace (hard-deleted) → clear all editable tokens (emit a `TAG` line if it actually changes anything).
    - Defensive: if `library_path` no longer exists, the freeze was violated externally — abort with a clear error rather than guessing.
@@ -200,10 +200,10 @@ Commit handles this implicitly as part of writing the override change; no separa
 
 ### Worked example
 
-Checkout `{year}/{event}`. File `…143205.jpg` starts at `2023/Hawaii/`. The user drags its link to `2022/null/`.
+Checkout `{year}/{event}`. File `…143205.jpg` starts at `2023/Hawaii/`. The user drags its link to `2022/(null)/`.
 
 - Snapshot record: `ino=X, library_path=…/2023/Hawaii/2023-08-15_143205.jpg, values={year:2023, event:Hawaii}`.
-- Commit finds the link at `2022/null/…`, `stat`s it → `ino=X`, joins to the record.
+- Commit finds the link at `2022/(null)/…`, `stat`s it → `ino=X`, joins to the record.
 - Current tuple `{year:2022, event:null}` vs. snapshot `{year:2023, event:Hawaii}` ⇒ year `2023→2022`, event `Hawaii→cleared`.
 
 ```
@@ -226,7 +226,7 @@ After apply the file carries `DateOverride = 2022-*-*-*:*:*` and no `EventOverri
 
 L001 | TAG    | F:\photos\2023\Hawaii\2023-08-15_143205.jpg | date_override year *→2022; event_override "Hawaii"→cleared
 L002 | TAG    | F:\photos\2023\null\2023-09-01_120000.jpg   | event_override null→"Birthday"
-L003 | DELETE | F:\photos\2023\Hawaii\2023-08-15_143612.jpg | pending-delete
+L003 | DELETE | F:\photos\2023\Hawaii\2023-08-15_143612.jpg | (pending-delete)
 
 # Summary: 2 TAG, 1 DELETE
 ```
@@ -305,7 +305,7 @@ During migrate, a newly detected face's embedding is compared to confirmed ident
 | Move face from `?James/` to `James/` | Confirm the suggestion |
 | Move face from `James/` to `Mom/` | Re-identify (correct a confirmed mistake) |
 | Move face from `James/` to `?001/` | Reject identity; clear it back to unidentified |
-| Move face to `pending-delete/` | Remove that face region from the source file (false positive) |
+| Move face to `(pending-delete)/` | Remove that face region from the source file (false positive) |
 
 Bulk relabeling is just folder rename or many moves — no special command.
 

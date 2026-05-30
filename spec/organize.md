@@ -60,16 +60,16 @@ The full grammar (filter syntax, `null`, negation) is defined in [tags.md → Te
 
 ### Null and filtered placement
 
-A token resolving to `null` (no value) maps to a literal folder named `null/` **at that level**. The file's path-build stops at the first null on its traversal:
+A token resolving to null (no value) maps to a sentinel folder named **`(null)/`** **at that level**. The brackets keep it from colliding with a real tag value literally named `null` (a real event `null` renders to `null/`, the placeholder to `(null)/`). The sentinel names are defined once in `pix.special_folders` and shared across organize, checkout, and export. The file's path-build stops at the first null on its traversal:
 
 | Template | Tag values | Target path |
 |---|---|---|
 | `{year}/{event}` | year=2023, event=Hawaii | `2023/Hawaii/` |
-| `{year}/{event}` | year=2023, event=null | `2023/null/` |
-| `{year}/{event}` | year=null, event=Hawaii | `null/Hawaii/` |
-| `{year}/{event}` | year=null, event=null | `null/` |
+| `{year}/{event}` | year=2023, event=null | `2023/(null)/` |
+| `{year}/{event}` | year=null, event=Hawaii | `(null)/Hawaii/` |
+| `{year}/{event}` | year=null, event=null | `(null)/` |
 
-The same per-level rule applies to `filtered/` (files excluded by an explicit filter like `{event:Hawaii,Party}`).
+The same per-level rule applies to **`(filtered)/`** (files excluded by an explicit filter like `{event:Hawaii,Party}`).
 
 ### Folder-name sanitization
 
@@ -145,7 +145,7 @@ Same shape as migrate's plan.txt, with `MOVE` as the only action:
 L001 | MOVE | imports/2023-08-15_143205.jpg      | →2023/08/Hawaii/2023-08-15_143205.jpg
 L002 | MOVE | imports/2023-08-15_143205_001.jpg  | →2023/08/Hawaii/2023-08-15_143205_001.jpg
 L003 | MOVE | imports/2023-08-15_143612.jpg      | →2023/08/Hawaii/2023-08-15_143612.jpg
-L004 | MOVE | 2023/08/null/2023-09-01_120000.jpg | →2023/09/null/2023-09-01_120000.jpg
+L004 | MOVE | 2023/08/(null)/2023-09-01_120000.jpg | →2023/09/(null)/2023-09-01_120000.jpg
 L005 | MOVE | 2023/08/Hawaii/2023-08-15_143205_001.jpg | →2023/08/Hawaii/2023-08-15_143205.jpg
 
 # Summary: 5 MOVE

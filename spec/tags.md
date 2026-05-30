@@ -24,7 +24,7 @@ Every tag has a paired `_auto` value (`date_auto`, `event_auto`, …):
 
 - `_auto` is the tool's best guess — set by migrate, never overwritten by user edits, always re-derivable.
 - The bare name (`date`, `event`, …) is the user override. When set, it (partially or fully) wins over `_auto`. When unset, the tag value is exactly `_auto`.
-- "Unset" means the override property is **absent** from the file's XMP — not stored as null. Clearing an override (folder-shuffle to `null/`) translates to deleting that property entirely. Files in pristine state therefore carry no override properties at all.
+- "Unset" means the override property is **absent** from the file's XMP — not stored as null. Clearing an override (folder-shuffle to `(null)/`) translates to deleting that property entirely. Files in pristine state therefore carry no override properties at all.
 
 The split lets us upgrade `_auto` derivation logic and surface mismatches for review.
 
@@ -71,7 +71,7 @@ The field's presence is the dirty flag. Migrate itself doesn't surface dirty fil
 
 ### `DateAuto` derivation
 
-`pix:DateAuto` is set by migrate from the highest-priority date source available on the file. The candidate list is consulted in order; first match wins. If none match, `DateAuto` stays null and the file lands in `null/` for date-based templates (the user can still set `DateOverride` later via [tag-editing](tag-editing.md) to give it a date).
+`pix:DateAuto` is set by migrate from the highest-priority date source available on the file. The candidate list is consulted in order; first match wins. If none match, `DateAuto` stays null and the file lands in `(null)/` for date-based templates (the user can still set `DateOverride` later via [tag-editing](tag-editing.md) to give it a date).
 
 **Future dates are rejected.** A candidate that resolves to a moment more than 48 hours past "now" is treated as garbage and skipped — the search falls through to the next source. A file can't have been created in the future; the usual culprit is a HandBrake remux or a device firmware that stamps a bogus future `QuickTime:CreateDate` (e.g. `2036:02:06`), which would otherwise win over the real date sitting in the filename or folder. The 48h grace absorbs timezone skew on genuinely fresh imports (QuickTime stores UTC; pix treats timestamps as naïve local, so a just-shot clip can read several hours ahead of local now).
 
@@ -235,8 +235,10 @@ Templates may reference the derived components `{year}`, `{month}`, `{day}` (com
 | Folder | `organize` | `checkout` | `export` |
 |---|---|---|---|
 | Valued (`2023/`, `james/`) | yes | yes | yes |
-| `null/` (untagged) | yes by default | yes by default | only if filter explicitly includes `null` |
-| `filtered/` (excluded by explicit filter) | yes — must account for every file | yes | n/a — excluded files just don't appear |
+| `(null)/` (untagged) | yes by default | yes by default | only if filter explicitly includes `null` |
+| `(filtered)/` (excluded by explicit filter) | yes — must account for every file | yes | n/a — excluded files just don't appear |
+
+The rendered placeholder folders are **bracketed sentinels** — `(null)` and `(filtered)` — so they never collide with a real tag value of the same name. They're defined once in `pix.special_folders` and shared across all three operations. Note the distinction from the query language above: the user *types* the bare keyword `null` as a filter token (`{year:null,2020}`); it renders to the `(null)/` folder.
 
 ### Single-valued vs multi-valued
 

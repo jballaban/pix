@@ -8,8 +8,8 @@ See spec/organize.md for the full design. This module owns:
   template-relevant tag values for one file.
 - Target-path rendering (`render_target_folder`) — turns a parsed
   template + values into a relative folder path, with per-level
-  `null/` placement and trailing-null collapse, plus Windows folder-
-  name sanitization.
+  `(null)` placement and trailing-null collapse, plus Windows folder-
+  name sanitization. Sentinel names live in `pix.special_folders`.
 - Plan generation (`generate_plan`) — walks the cache, computes
   target paths, recomputes canonical filenames against per-target-
   folder peer sets (drops/reapplies `_NNN` suffixes from scratch),
@@ -48,6 +48,7 @@ from pix.plan import (
     effective_date,
 )
 from pix.progress import LiveProgress
+from pix.special_folders import NULL_FOLDER
 from pix.telemetry import LineRecord, write_summary
 
 
@@ -229,9 +230,9 @@ def render_target_folder(
     """Render the template into a forward-slash-joined relative path.
 
     Per-level null rule: any null token in a level renders the entire
-    level as `null/`. Trailing `null/null/...` chains collapse to a
-    single `null/` (so an all-null file lands at `null/foo.jpg`, not
-    `null/null/foo.jpg`).
+    level as the `(null)` sentinel (see `pix.special_folders`). Trailing
+    `(null)/(null)/...` chains collapse to a single `(null)/` (so an
+    all-null file lands at `(null)/foo.jpg`, not `(null)/(null)/foo.jpg`).
     """
     rendered_levels: list[str] = []
     for level in template.levels:
@@ -239,7 +240,7 @@ def render_target_folder(
             isinstance(s, Token) and values.get(s.name) is None
             for s in level.segments
         ):
-            rendered_levels.append("null")
+            rendered_levels.append(NULL_FOLDER)
             continue
         parts: list[str] = []
         for seg in level.segments:
@@ -251,11 +252,11 @@ def render_target_folder(
                 parts.append(seg.text)
         rendered_levels.append("".join(parts))
 
-    # Collapse trailing `null` chains.
+    # Collapse trailing null chains.
     while (
         len(rendered_levels) > 1
-        and rendered_levels[-1] == "null"
-        and rendered_levels[-2] == "null"
+        and rendered_levels[-1] == NULL_FOLDER
+        and rendered_levels[-2] == NULL_FOLDER
     ):
         rendered_levels.pop()
 

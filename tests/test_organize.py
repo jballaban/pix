@@ -110,17 +110,17 @@ def test_render_with_literal() -> None:
 def test_render_per_level_null() -> None:
     t = parse_template("{year}/{event}")
     assert (
-        render_target_folder(t, _values(event=None)) == "2023/null"
+        render_target_folder(t, _values(event=None)) == "2023/(null)"
     )
     assert (
-        render_target_folder(t, _values(year=None)) == "null/Hawaii"
+        render_target_folder(t, _values(year=None)) == "(null)/Hawaii"
     )
 
 
 def test_render_collapses_trailing_null_chain() -> None:
     t = parse_template("{year}/{event}")
     assert (
-        render_target_folder(t, _values(year=None, event=None)) == "null"
+        render_target_folder(t, _values(year=None, event=None)) == "(null)"
     )
 
 
@@ -128,13 +128,13 @@ def test_render_does_not_collapse_leading_or_middle_nulls() -> None:
     t = parse_template("{year}/{event}/{day}")
     assert (
         render_target_folder(t, _values(event=None, day=None))
-        == "2023/null"
+        == "2023/(null)"
     )
     # year=null event=Hawaii day=null → null at start AND end; only the
     # trailing one is alone, so no collapse mid-path.
     assert (
         render_target_folder(t, _values(year=None, day=None))
-        == "null/Hawaii/null"
+        == "(null)/Hawaii/(null)"
     )
 
 
@@ -144,9 +144,17 @@ def test_render_sanitizes_illegal_chars() -> None:
 
 
 def test_render_level_with_null_token_renders_whole_level_as_null() -> None:
-    """`{year}-archive` with year=null → 'null', not 'null-archive'."""
+    """`{year}-archive` with year=null → '(null)', not 'null-archive'."""
     t = parse_template("{year}-archive")
-    assert render_target_folder(t, _values(year=None)) == "null"
+    assert render_target_folder(t, _values(year=None)) == "(null)"
+
+
+def test_render_literal_null_value_does_not_collide_with_placeholder() -> None:
+    """An event literally named 'null' renders to 'null/', distinct from the
+    '(null)' untagged placeholder — the whole point of the bracket sentinel."""
+    t = parse_template("{year}/{event}")
+    assert render_target_folder(t, _values(event="null")) == "2023/null"
+    assert render_target_folder(t, _values(event=None)) == "2023/(null)"
 
 
 # --- Sanitization -----------------------------------------------------------
