@@ -46,6 +46,18 @@ PIX_EVENT_AUTO_PREVIOUS: str = "XMP:EventAutoPrevious"
 PIX_EVENT_OVERRIDE: str = "XMP:EventOverride"
 
 
+# Keep-policy extensions that are *not* renamed to the canonical date-based
+# filename. Insta360 360 media (.insv video, .insp photo) is kept verbatim:
+# a single recording's two lens files share a capture timestamp, so the
+# canonical name would collide them and a content-hash tiebreaker would
+# scramble lens identity — and Insta360 Studio pairs the lenses by their
+# original `VID_<date>_<time>_<lens>_<seq>` filename. These files are still
+# tagged (DateAuto/EventAuto/OriginalPath) and organized into folders by
+# date; only the rename is suppressed. See spec/library.md → canonical
+# filename, spec/migrate.md → name-preserving keep.
+NAME_PRESERVING_KEEP: frozenset[str] = frozenset({"insv", "insp"})
+
+
 class Action(str, Enum):
     """Top-level action label for a plan line.
 
@@ -536,6 +548,19 @@ def lookup_policy(
     return None
 
 
+def is_insta360_lrv(filename: str) -> bool:
+    """True if `filename` is an Insta360 LRV low-res proxy.
+
+    Insta360 cameras write a disposable `LRV_*.insv` low-resolution proxy
+    alongside each full-res `VID_*.insv` recording (used for fast preview/
+    scrubbing in the app). The proxy carries no archival value and the app
+    regenerates it on demand, so migrate deletes them rather than keeping
+    them. Built-in Insta360 knowledge, not a config extension policy.
+    """
+    name_lower = filename.lower()
+    return name_lower.startswith("lrv_") and name_lower.endswith(".insv")
+
+
 def _plan_one(
     path: Path,
     meta: FileMetadata,
@@ -633,6 +658,21 @@ def _plan_one(
                 target_ext=target_ext,
                 is_first_migrate=is_first_migrate,
                 playability_override=playability_override,
+            )
+
+        # Built-in Insta360 rule: LRV_*.insv are disposable low-res proxies
+        # the camera writes beside the full-res VID_*.insv. They regenerate
+        # and carry no archival value, so delete rather than keep. Only
+        # reachable on keep-policy .insv (target_ext is None here).
+        if is_insta360_lrv(path.name):
+            debug.section("Decision")
+            debug.log("  DELETE — Insta360 LRV low-res proxy.")
+            return PlanLine(
+                line_id="",
+                action=Action.DELETE,
+                rel_path=rel_str,
+                details="Insta360 LRV low-res proxy",
+                abs_path=path,
             )
 
         return _plan_keep(
@@ -832,19 +872,31 @@ def _plan_keep(
                 )
 
     # --- Canonical filename ---
-    canonical_ext = canonical_extension(path.suffix)
-    canonical_name = (
-        f"{effective.strftime('%Y-%m-%d_%H%M%S')}.{canonical_ext}"
-        if effective is not None
-        else None
-    )
-    needs_rename = canonical_name is not None and canonical_name != path.name
-
+    # Name-preserving keep formats (Insta360 .insv/.insp) keep their
+    # original camera filename — never renamed to the canonical date-based
+    # name. See NAME_PRESERVING_KEEP for the rationale (lens-pair identity
+    # lives in the filename). Tagging below still proceeds.
+    ext = path.suffix.lower().lstrip(".")
     debug.section("Rename check")
-    debug.log(f"  Canonical extension: .{canonical_ext}")
-    debug.log(f"  Canonical filename:  {canonical_name or '<no date>'}")
-    debug.log(f"  Current filename:    {path.name}")
-    debug.log(f"  Needs rename: {needs_rename}")
+    if ext in NAME_PRESERVING_KEEP:
+        canonical_name: str | None = None
+        needs_rename = False
+        debug.log(f"  Name-preserving keep (.{ext}) — rename suppressed.")
+        debug.log(f"  Current filename:    {path.name}")
+    else:
+        canonical_ext = canonical_extension(path.suffix)
+        canonical_name = (
+            f"{effective.strftime('%Y-%m-%d_%H%M%S')}.{canonical_ext}"
+            if effective is not None
+            else None
+        )
+        needs_rename = (
+            canonical_name is not None and canonical_name != path.name
+        )
+        debug.log(f"  Canonical extension: .{canonical_ext}")
+        debug.log(f"  Canonical filename:  {canonical_name or '<no date>'}")
+        debug.log(f"  Current filename:    {path.name}")
+        debug.log(f"  Needs rename: {needs_rename}")
 
     # --- Decide ---
     details_parts: list[str] = []

@@ -101,6 +101,8 @@ e.g. `2023-08-15_143205.jpg`. The components (`{year}`, `{month}`, `{day}`, `{ti
 
 The original source path is preserved in metadata (see *Original source path* below) so provenance — including the device-assigned filename — isn't lost.
 
+**Exception — name-preserving keep.** Insta360 `.insv`/`.insp` are kept under their **original camera filename** and never renamed to the canonical form. A recording's two lens files share a capture timestamp, so the canonical name would collide them and the collision tiebreaker would scramble lens identity, breaking the `VID_<date>_<time>_<lens>_<seq>` pairing Insta360 Studio depends on. These files are still dated/tagged and organized into folders by effective date — only the filename is left alone. See [migrate.md → Name-preserving keep](migrate.md#name-preserving-keep-insta360-insv--insp).
+
 The extension portion is canonicalized: `.jpeg`/`.JPG`/`.JPEG` all become `.jpg`; other extensions are lowercased. A file whose on-disk extension doesn't match its canonical form triggers a RENAME on the next migrate even if no other change is needed. Full extension-canonicalization rules live in [migrate.md](migrate.md#extension-canonicalization).
 
 ### Collision handling

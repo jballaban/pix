@@ -94,6 +94,8 @@ A canonical filename has two parts: the **bare** name derived from the file's ef
 5. Within each group, apply the [library.md collision rule](library.md#collision-handling): first file (sorted by content hash ascending) keeps the bare name; the rest get `_001`, `_002`, … suffixes.
 6. Final target path = target folder + resolved filename.
 
+**Name-preserving keep exception.** Insta360 `.insv`/`.insp` are never renamed (see [library.md → Canonical filename](library.md#canonical-filename)). For these, organize uses the file's **current filename** as the bare name instead of recomputing a canonical one — folder placement still follows the template, but the name (and thus lens-pair identity) is preserved. Because each lens file's original name is already distinct, they don't collide and never acquire a `_NNN` suffix.
+
 This means MOVE plan lines can do four things:
 
 | Current → Target | What changed | Example |

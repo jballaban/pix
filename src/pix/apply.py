@@ -42,7 +42,7 @@ from pix.exiftool_session import (
 )
 from pix.duration import format_duration_compact, format_size
 from pix.metadata_cache import PerFileCache
-from pix.plan import Action, Plan, PlanLine
+from pix.plan import NAME_PRESERVING_KEEP, Action, Plan, PlanLine
 from pix.progress import LiveProgress
 from pix.stash import stash_file
 from pix.telemetry import LineRecord, write_summary
@@ -320,8 +320,20 @@ def apply_plan(
                     # losslessly; images re-encode to a clean JPEG (lossy).
                     # For TAG/RENAME+TAG the tag write runs before the
                     # rename, so the file is still at `abs_path`.
+                    # Salvage carve-out for Insta360 360 media: a remux
+                    # (`ffmpeg -c copy`) or JPEG re-encode would strip the
+                    # proprietary Insta360 trailer (gyro + dual-fisheye lens
+                    # calibration), destroying reframe-ability — exactly the
+                    # data we kept these files for. Never salvage them; a
+                    # failed tag write quarantines the file untouched so the
+                    # user can inspect it. (Runt/truncated .insv are the
+                    # likely trigger.) See spec/migrate.md → salvage carve-out.
+                    is_360 = (
+                        ln.abs_path.suffix.lower().lstrip(".")
+                        in NAME_PRESERVING_KEEP
+                    )
                     repaired = False
-                    if staging_dir is not None:
+                    if staging_dir is not None and not is_360:
                         if is_remuxable_video(ln.abs_path):
                             repaired = _repair_video_container(
                                 ln, run_dir, staging_dir

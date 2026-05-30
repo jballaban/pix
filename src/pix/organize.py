@@ -41,6 +41,7 @@ from pix.events import effective_event
 from pix.metadata import FileMetadata
 from pix.timeout import safe_rename
 from pix.plan import (
+    NAME_PRESERVING_KEEP,
     PIX_ORIGINAL_PATH,
     Action,
     Plan,
@@ -342,7 +343,17 @@ def generate_plan(
             # is irrelevant — we recompute from effective date.
             date = effective_date(meta)
             ext = path.suffix.lower().lstrip(".") or "bin"
-            if date is not None:
+            if ext in NAME_PRESERVING_KEEP:
+                # Name-preserving keep (Insta360 .insv/.insp): never
+                # renamed — organize relocates by folder only and keeps
+                # the original camera filename. A recording's two lens
+                # files share a timestamp, so canonicalizing would collide
+                # them and a content-hash tiebreaker would scramble lens
+                # identity; their original VID_<date>_<time>_<lens>_<seq>
+                # names keep them distinct and Studio-pairable. See
+                # spec/organize.md → name-preserving relocation.
+                bare = path.name
+            elif date is not None:
                 bare = f"{date.strftime('%Y-%m-%d_%H%M%S')}.{ext}"
             else:
                 # No effective date: keep current filename. The file

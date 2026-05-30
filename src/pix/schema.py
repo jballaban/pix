@@ -57,7 +57,19 @@ from pix.config import DEFAULT_CONFIG_YAML
 #      for those — known limitation, not auto-handled).
 # v8 — Default config gains bmp → convert_to_jpg (uncompressed bitmap;
 #      Pillow decodes it natively, re-encode to JPEG reclaims space).
-SCHEMA_VERSION: int = 8
+# v9 — Default config flips insv / insp from stash → keep. Insta360 .insv
+#      (video) and .insp (photo) are MP4/JPEG containers carrying a
+#      proprietary Insta360 trailer (gyro + dual-fisheye lens calibration);
+#      exiftool writes pix:* XMP into them while preserving that trailer
+#      byte-for-byte, so they become first-class keep media (tagged,
+#      dated, organized, hashed, deduped). They are NOT renamed to the
+#      canonical date-based name — see plan.NAME_PRESERVING_KEEP — because
+#      each recording's two lens files share a timestamp and Insta360
+#      Studio pairs them by their original VID_<date>_<time>_<lens>_<seq>
+#      filename. Existing libraries hold `insv/insp: stash` (the v2
+#      default), so this flip surfaces as a config conflict the user
+#      resolves to `keep`.
+SCHEMA_VERSION: int = 9
 
 
 # --- Upgrades --------------------------------------------------------------
@@ -139,6 +151,15 @@ UPGRADES: dict[int, Upgrade] = {
         description=(
             "Default config gains bmp → convert_to_jpg (uncompressed "
             "bitmap; Pillow decodes natively, re-encode reclaims space)."
+        ),
+    ),
+    9: Upgrade(
+        add_extensions={"insv": "keep", "insp": "keep"},
+        description=(
+            "Default config flips insv / insp from stash → keep "
+            "(Insta360 360 media — tagged + organized in place, kept in "
+            "their proprietary format and original filename). Libraries "
+            "on the old `stash` default will see a conflict to resolve."
         ),
     ),
 }

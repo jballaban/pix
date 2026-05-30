@@ -254,6 +254,143 @@ def test_plan_m4v_renames_to_mp4_via_extension_alias(tmp_path: Path) -> None:
     assert "→2015-06-12_193000.mp4" in line.details
 
 
+# --- Insta360 .insv/.insp: name-preserving keep + LRV deletion ---
+
+
+def test_plan_insv_first_migrate_tags_without_rename(tmp_path: Path) -> None:
+    """A first-migrate .insv is tagged (OriginalPath + DateAuto) but NOT
+    renamed — name-preserving keep retains the camera filename so lens-pair
+    identity (in the VID_..._<lens>_<seq> name) survives."""
+    src = tmp_path / "src"
+    src.mkdir()
+    f = src / "VID_20230516_164835_00_010.insv"
+    f.write_bytes(b"")
+
+    cfg = _config(insv="keep")
+    cache = {
+        f.resolve(): _meta(
+            str(f),
+            **{"QuickTime:CreateDate": "2023:05:16 16:48:35"},
+        )
+    }
+
+    plan = generate_plan(
+        source=src.resolve(),
+        cache=cache,
+        config=cfg,
+        run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
+    )
+
+    assert len(plan.lines) == 1
+    line = plan.lines[0]
+    assert line.action == Action.TAG  # tagged, never renamed
+    assert line.is_first_migrate is True
+    assert line.target_filename is None  # the proof there's no rename
+    assert "original_path init" in line.details
+    assert "date_auto null→2023-05-16-16:48:35" in line.details
+
+
+def test_plan_insv_already_tagged_noncanonical_name_no_line(
+    tmp_path: Path,
+) -> None:
+    """An already-migrated .insv keeps its original (non-canonical) name and
+    produces no plan line when nothing drifts — the name is never the reason
+    to act for a name-preserving format."""
+    src = tmp_path / "src"
+    src.mkdir()
+    f = src / "VID_20230516_164835_10_010.insv"
+    f.write_bytes(b"")
+
+    cfg = _config(insv="keep")
+    cache = {
+        f.resolve(): _meta(
+            str(f),
+            **{
+                PIX_DATE_AUTO: "2023-05-16-16:48:35",
+                # Date-like parent → no EventAuto derivation, so the test
+                # stays focused on "non-canonical name is never a reason to
+                # act for a name-preserving format".
+                PIX_ORIGINAL_PATH: "G:/pix/2023-05/VID_20230516_164835_10_010.insv",
+            },
+        )
+    }
+
+    plan = generate_plan(
+        source=src.resolve(),
+        cache=cache,
+        config=cfg,
+        run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
+    )
+    assert plan.lines == []
+
+
+def test_plan_insp_first_migrate_tags_without_rename(tmp_path: Path) -> None:
+    """`.insp` 360 photos are name-preserving keep too — tagged, not renamed."""
+    src = tmp_path / "src"
+    src.mkdir()
+    f = src / "IMG_20230828_140342_00_013.insp"
+    f.write_bytes(b"")
+
+    cfg = _config(insp="keep")
+    cache = {
+        f.resolve(): _meta(
+            str(f),
+            **{"EXIF:DateTimeOriginal": "2023:08:28 14:03:42"},
+        )
+    }
+
+    plan = generate_plan(
+        source=src.resolve(),
+        cache=cache,
+        config=cfg,
+        run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
+    )
+
+    assert len(plan.lines) == 1
+    line = plan.lines[0]
+    assert line.action == Action.TAG
+    assert line.target_filename is None  # never renamed
+    assert "original_path init" in line.details
+    assert "date_auto null→2023-08-28-14:03:42" in line.details
+
+
+def test_plan_lrv_insv_proxy_is_deleted(tmp_path: Path) -> None:
+    """LRV_*.insv low-res proxies are deleted even though .insv policy is
+    keep — built-in Insta360 knowledge (the camera regenerates them)."""
+    src = tmp_path / "src"
+    src.mkdir()
+    f = src / "LRV_20230516_164835_11_010.insv"
+    f.write_bytes(b"")
+
+    cfg = _config(insv="keep")
+    cache = {
+        f.resolve(): _meta(
+            str(f),
+            **{"QuickTime:CreateDate": "2023:05:16 16:48:35"},
+        )
+    }
+
+    plan = generate_plan(
+        source=src.resolve(),
+        cache=cache,
+        config=cfg,
+        run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
+    )
+
+    assert len(plan.lines) == 1
+    line = plan.lines[0]
+    assert line.action == Action.DELETE
+    assert "LRV" in line.details
+
+
 def test_plan_rename_plus_tag_for_first_migrate_canonical_format(
     tmp_path: Path,
 ) -> None:

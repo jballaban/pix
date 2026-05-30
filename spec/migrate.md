@@ -149,7 +149,9 @@ Two policies, by action type:
   - **Video** → lossless remux (`ffmpeg -c copy`) into a clean container, recovering the playable portion and dropping the bad trailer.
   - **Image** (keep-policy `jpg`/`jpeg`) → re-encode to a clean JPEG via Pillow (decodes by content, so a mislabeled PNG or trailer-laden JPEG still decodes), copying the source's EXIF/XMP across. **Lossy** (re-compress; proprietary trailers like a Samsung motion photo are dropped).
 
-  The damaged original is conserved to `runs/<run-id>/data/` first, then the clean file is swapped in and the line re-runs. Only if salvage fails (or the type isn't salvageable) is the file moved into `.pix/errors/` and the run continues. **The failed write is never recorded into the metadata cache** — otherwise the cache would claim tags the file never received, and the file would masquerade as migrated until a later op (organize's `pix:OriginalPath` check, a re-read on cache miss) tripped over the divergence.
+  The damaged original is conserved to `runs/<run-id>/data/` first, then the clean file is swapped in and the line re-runs. Only if salvage fails (or the type isn't salvageable) is the file moved into `.pix/errors/` and the run continues.
+
+  **Salvage carve-out for Insta360 360 media.** `.insv`/`.insp` ([name-preserving keep](#name-preserving-keep-insta360-insv--insp)) are **never** salvaged — both the video remux and the image re-encode would strip the proprietary Insta360 trailer (gyro + dual-fisheye lens calibration), destroying exactly the reframe data the format is kept for. A `.insv`/`.insp` tag-write failure (the likely trigger being a truncated/runt file) skips salvage entirely and quarantines the file untouched into `.pix/errors/` so the user can inspect it. **The failed write is never recorded into the metadata cache** — otherwise the cache would claim tags the file never received, and the file would masquerade as migrated until a later op (organize's `pix:OriginalPath` check, a re-read on cache miss) tripped over the divergence.
 
 - **All other actions halt.** A failure in TAG that is *not* a non-persisting write (ExifTool wedged/errored otherwise), RENAME (filesystem error), or DELETE (filesystem error) halts the run on the first occurrence. These signal infrastructure problems, not per-file data quality — they're the same root cause for every file, so continuing wastes time. The user reads the error, fixes the root cause, and re-runs.
 
@@ -237,8 +239,8 @@ extensions:
   mpeg:    convert_to_mp4   # same format as .mpg, long extension
   vob:     convert_to_mp4   # DVD-Video object; MPEG-2 PS + DVD-specific extras
   dng:     stash            # Adobe Digital Negative — raw sensor data
-  insp:    stash            # Insta360 proprietary photo
-  insv:    stash            # Insta360 proprietary video
+  insp:    keep             # Insta360 360 photo — name-preserving keep (see below)
+  insv:    keep             # Insta360 360 video — name-preserving keep (see below)
   ds_store: delete    # macOS system junk
   thumbs.db: delete   # Windows system junk
   ini:     delete    # desktop.ini and other Windows config sidecars
@@ -289,6 +291,14 @@ That's the entire sidecar. The original filename, full source path, and timestam
 **Rollback**: deferred. The apply.log records source → stash mapping per line; the sidecar carries `origin`. Either is enough to reverse a stash (move file back to its source path).
 
 **Dedup of stashed files**: explicitly **out of scope for stash itself**. The same content imported from two different sources lands twice in `.pix/stash/`. A future operation (likely re-using migrate's plumbing) will scan stashed files, hash them, and propose dedup actions when the user decides to deal with them.
+
+### Name-preserving keep (Insta360 .insv / .insp)
+
+Insta360 360 media is a `keep` format with **one exception to the canonical-filename rule: these files are never renamed.** `.insv` (video) is an MP4/ISO-BMFF container and `.insp` (photo) is a JPEG container, each carrying a proprietary **Insta360 trailer** — gyro/IMU data plus the dual-fisheye lens calibration — appended after the media data. ExifTool writes `pix:*` XMP into the moov/EXIF while preserving that trailer byte-for-byte (it just relocates as the metadata grows), so these files are fully taggable: migrate writes `OriginalPath`, `DateAuto`, `EventAuto` like any keep file, and [organize](organize.md) places them into template folders by their effective date.
+
+What's suppressed is the **rename to the canonical `YYYY-MM-DD_HHMMSS` name**. The reason is lens pairing: a single recording is stored as two files, one per lens, distinguished only by the camera filename (`VID_<date>_<time>_00_<seq>.insv` and `…_10_…`). Both files share the same capture timestamp, so the canonical name would collide them, and the content-hash collision tiebreaker would assign `_NNN` suffixes in an order unrelated to lens identity — scrambling the pairing that Insta360 Studio relies on to reconstruct the 360. So name-preserving keep formats retain their original camera filename through both migrate and organize. The set is built-in (`plan.NAME_PRESERVING_KEEP = {insv, insp}`), not configurable — it encodes format-specific knowledge, like the [Windows playability check](#windows-playability-check). See [library.md → Canonical filename](library.md#canonical-filename).
+
+**LRV proxies are deleted.** Insta360 writes a disposable low-resolution proxy (`LRV_*.insv`) beside each full-res `VID_*.insv` for fast in-app preview. The app regenerates it on demand and it has no archival value, so migrate **deletes** any keep-policy `.insv` whose filename starts `LRV_` (built-in Insta360 rule, captured to the run folder like any other DELETE). Only the full-res `VID_*` lens files are kept.
 
 <a id="windows-playability-check"></a>
 ### Windows playability check

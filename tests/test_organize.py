@@ -315,6 +315,93 @@ def test_plan_moves_file_to_template_path(
     assert line.target_path == root / "2023" / "08" / "Hawaii" / "2023-08-15_143205.jpg"
 
 
+def test_plan_name_preserving_insv_relocates_without_rename(
+    tmp_path: Path, patched_hash_cache: dict[Path, str | None]
+) -> None:
+    """Insta360 .insv keeps its original camera filename when organize moves
+    it — folder placement follows the template, the name does not change."""
+    root = tmp_path / "lib"
+    root.mkdir()
+    p = root / "VID_20230516_164835_00_010.insv"
+    p.write_bytes(b"")
+    cache = {
+        p.resolve(): _meta(
+            p,
+            **{
+                PIX_ORIGINAL_PATH: "G:/raw/VID_20230516_164835_00_010.insv",
+                PIX_DATE_AUTO: "2023-05-16-16:48:35",
+                PIX_EVENT_AUTO: "Denmark",
+            },
+        )
+    }
+    for path in cache:
+        patched_hash_cache[path] = "h"
+    plan = generate_plan(
+        library_root=root,
+        template=parse_template("{year}/{event}"),
+        cache=cache,
+        hashes=patched_hash_cache,
+        run_id="test-run",
+        run_dir=tmp_path / "runs",
+    )
+    assert len(plan.lines) == 1
+    line = plan.lines[0]
+    assert line.action == Action.MOVE
+    assert line.target_path is not None
+    # Relocated into the template folder, original filename preserved.
+    assert line.target_path == (
+        root / "2023" / "Denmark" / "VID_20230516_164835_00_010.insv"
+    )
+
+
+def test_plan_name_preserving_lens_pair_no_collision_suffix(
+    tmp_path: Path, patched_hash_cache: dict[Path, str | None]
+) -> None:
+    """The two lens files of one recording share a timestamp but keep their
+    distinct original names — no canonical-name collision, no `_NNN` suffix."""
+    root = tmp_path / "lib"
+    root.mkdir()
+    lens0 = root / "VID_20230516_164835_00_010.insv"
+    lens1 = root / "VID_20230516_164835_10_010.insv"
+    lens0.write_bytes(b"")
+    lens1.write_bytes(b"")
+    cache = {
+        lens0.resolve(): _meta(
+            lens0,
+            **{
+                PIX_ORIGINAL_PATH: "G:/raw/VID_20230516_164835_00_010.insv",
+                PIX_DATE_AUTO: "2023-05-16-16:48:35",
+                PIX_EVENT_AUTO: "Denmark",
+            },
+        ),
+        lens1.resolve(): _meta(
+            lens1,
+            **{
+                PIX_ORIGINAL_PATH: "G:/raw/VID_20230516_164835_10_010.insv",
+                PIX_DATE_AUTO: "2023-05-16-16:48:35",
+                PIX_EVENT_AUTO: "Denmark",
+            },
+        ),
+    }
+    for i, path in enumerate(cache):
+        patched_hash_cache[path] = f"h{i}"
+    plan = generate_plan(
+        library_root=root,
+        template=parse_template("{year}/{event}"),
+        cache=cache,
+        hashes=patched_hash_cache,
+        run_id="test-run",
+        run_dir=tmp_path / "runs",
+    )
+    targets = sorted(
+        line.target_path.name for line in plan.lines if line.target_path
+    )
+    assert targets == [
+        "VID_20230516_164835_00_010.insv",
+        "VID_20230516_164835_10_010.insv",
+    ]
+
+
 def test_plan_idempotent_when_already_in_place(
     tmp_path: Path, patched_hash_cache: dict[Path, str | None]
 ) -> None:

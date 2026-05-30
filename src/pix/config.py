@@ -32,8 +32,8 @@ extensions:
   mpeg:    convert_to_mp4   # same format as .mpg with the long extension
   vob:     convert_to_mp4   # DVD-Video object (MPEG-2 PS); same re-encode path as mpg
   dng:     stash            # Adobe Digital Negative — raw sensor data; preserved for future processing
-  insp:    stash            # Insta360 proprietary photo
-  insv:    stash            # Insta360 proprietary video
+  insp:    keep             # Insta360 360 photo — kept verbatim (dual-fisheye + trailer); tagged, not renamed
+  insv:    keep             # Insta360 360 video — kept verbatim (dual-fisheye + trailer); tagged, not renamed
   ds_store: delete    # macOS system junk
   thumbs.db: delete   # Windows system junk
   ini:     delete    # desktop.ini and other Windows config sidecars
