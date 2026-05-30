@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -39,6 +40,34 @@ from pix.metadata import require_exiftool
 
 
 _READY_SENTINEL: str = "{ready}\n"
+
+# ExifTool prints "<N> image files updated" to stdout after a write. N==0
+# (paired with "<M> files weren't updated due to errors") means the write
+# did NOT persist — e.g. a truncated/damaged container where a hard error
+# isn't suppressed by `-m`. We parse this so a silent no-op write can't be
+# mistaken for success. See `write_tags`.
+_FILES_UPDATED_RE: re.Pattern[str] = re.compile(
+    r"(\d+) image files updated"
+)
+
+
+class TagWriteFailed(Exception):
+    """A `write_tags` call exited 0 but ExifTool reported 0 files updated.
+
+    The file's bytes are intact (ExifTool didn't touch it), but the tags
+    were not written — typically a structurally damaged file (truncated
+    `mdat`, unknown trailer) that ExifTool refuses to rewrite. Callers
+    quarantine the file rather than silently treating it as tagged.
+    """
+
+    def __init__(self, file: Path, detail: str) -> None:
+        super().__init__(
+            f"tag write did not persist for {file} "
+            f"(ExifTool: {detail or 'no files updated'}). The file is "
+            f"likely structurally damaged (e.g. truncated/partial)."
+        )
+        self.file = file
+        self.detail = detail
 
 # Per-`execute` timeout. 30s is the wedged-line per spec/implementation.md;
 # any single metadata op should finish in well under a second.
@@ -183,7 +212,18 @@ class ExifToolSession:
             args.append(f"-{key}={value}")
         args.append("-overwrite_original")
         args.append(str(file))
-        self.execute(*args)
+        out = self.execute(*args)
+
+        # Verify the write actually persisted. `-m` suppresses minor
+        # warnings, but a hard error (e.g. "Truncated mdat atom" on a
+        # partial file) still leaves the file untouched while ExifTool
+        # exits 0 — it prints "0 image files updated". Treat that as a
+        # failure so a no-op write isn't recorded as success (which would
+        # leave the cache claiming tags the file doesn't have).
+        m = _FILES_UPDATED_RE.search(out)
+        updated = int(m.group(1)) if m is not None else 0
+        if updated < 1:
+            raise TagWriteFailed(file, out.strip().replace("\n", "; "))
 
     def copy_metadata_and_write_tags(
         self,

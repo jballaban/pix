@@ -98,6 +98,8 @@ A `MERGE` write is also conservation-captured: before mutating the keeper, its p
 
 Writing `pix:*` metadata changes the keeper's mtime, invalidating its `.meta`/`.hash` cache entries (recomputed next run). The **content hash is unchanged** — XMP lives in stripped-before-hashing regions (APP markers for JPEG, non-`mdat` for MP4; see [hash.md](hash.md)) — so the keeper stays in its duplicate class.
 
+**Keeper that can't be tagged → quarantine.** If the MERGE write doesn't persist — a structurally damaged keeper (truncated `mdat`, etc.) where ExifTool reports `0 image files updated` and `write_tags` raises `TagWriteFailed` — dedupe moves that keeper into `.pix/errors/` (same mechanism as migrate's failure quarantine; bytes intact, ExifTool didn't touch it) and continues. The group's losers are still removed (all copies conserved under `data/` / `errors/`). This surfaces the damaged file rather than leaving it un-taggable in the library, where it would otherwise keep tripping a later organize. Dedupe exits non-zero when any keeper was quarantined.
+
 ## Empty-folder cleanup
 
 Same rule as organize: after all DEDUP moves apply, walk the library bottom-up and remove empty folders. Never touches `.pix/` and never removes the library root itself. A folder containing only `.pix/` at the top level is preserved.

@@ -28,7 +28,11 @@ from typing import IO
 from pix.convert import ConvertFailed, convert_to_jpg, convert_to_mp4
 from pix.errors import move_to_errors
 from pix.timeout import safe_rename
-from pix.exiftool_session import ExifToolSession, ExifToolTimeout
+from pix.exiftool_session import (
+    ExifToolSession,
+    ExifToolTimeout,
+    TagWriteFailed,
+)
 from pix.duration import format_duration_compact, format_size
 from pix.metadata_cache import PerFileCache
 from pix.plan import Action, Plan, PlanLine
@@ -140,7 +144,13 @@ def apply_plan(
                         dur_seconds=time.monotonic() - t_start,
                     )
                     raise
-                except ConvertFailed as e:
+                except (ConvertFailed, TagWriteFailed) as e:
+                    # Both are per-file data problems (a broken source that
+                    # won't encode, or a damaged container ExifTool can't
+                    # write tags to): quarantine the file and keep going,
+                    # rather than halting the whole run. For TAG/RENAME+TAG
+                    # the tag write runs before the rename, so the file is
+                    # still at `abs_path` when this fires.
                     dur = time.monotonic() - t_start
                     _log(log, ln, "Failed", detail=str(e), dur_seconds=dur)
                     # Move the unprocessable source into .pix/errors/ so
@@ -165,7 +175,7 @@ def apply_plan(
                         )
                         raise ApplyError(
                             f"{ln.line_id} ({ln.rel_path}): "
-                            f"convert failed and move to .pix/errors/ "
+                            f"action failed and move to .pix/errors/ "
                             f"also failed: {move_err}"
                         ) from move_err
                     # Show the path under .pix/errors/ — the errors tree now

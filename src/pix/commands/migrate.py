@@ -458,9 +458,11 @@ def _run_migrate(
             typer.echo(f"Error: apply failed: {e}", err=True)
             raise typer.Exit(code=1) from e
 
-        # Skip cache updates for plan lines whose CONVERT failed — the
-        # source file is still in place at its old name with its old
-        # metadata, so the cache entry remains correct as-is.
+        # Skip cache updates for quarantined plan lines (failed CONVERT, or
+        # a TAG write that didn't persist). The file was moved to
+        # .pix/errors/, so there's no live cache entry to update — and
+        # crucially, NOT recording the intended tag write here is what
+        # stops the cache from claiming tags the file never received.
         failed_ids = {ln.line_id for ln, _ in convert_failures}
         applied_ids = kept_line_ids - failed_ids
         _post_apply_cache_update(meta_cache, plan, applied_ids)
@@ -472,8 +474,9 @@ def _run_migrate(
             errors_dir = root / ".pix" / "errors"
             typer.echo("")
             typer.echo(
-                f"{len(convert_failures)} CONVERT line(s) failed — "
-                f"sources moved to {errors_dir}:",
+                f"{len(convert_failures)} file(s) could not be processed "
+                f"(broken source or un-writable/damaged container) — "
+                f"moved to {errors_dir}:",
                 err=True,
             )
             for ln, err in convert_failures:

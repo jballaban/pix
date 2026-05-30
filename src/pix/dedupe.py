@@ -52,7 +52,8 @@ from pix.events import (
     PIX_MERGE_EVENT,
     derive_event_auto,
 )
-from pix.exiftool_session import ExifToolSession
+from pix.errors import move_to_errors
+from pix.exiftool_session import ExifToolSession, TagWriteFailed
 from pix.metadata import FileMetadata
 from pix.organize import cleanup_empty_folders  # reused
 from pix.timeout import safe_rename
@@ -556,19 +557,28 @@ def apply_plan(
     kept_line_ids: set[str],
     run_dir: Path,
     library_root: Path,
-) -> tuple[int, int]:
+) -> tuple[int, int, list[tuple[PlanLine, str]]]:
     """Apply MERGE writes onto keepers, move losers into the run folder's
-    data/, then sweep empty library folders. Returns `(removed, merged)`.
+    data/, then sweep empty library folders. Returns
+    `(removed, merged, quarantined)` where `quarantined` is the list of
+    `(merge_line, error)` for keepers whose MERGE write didn't persist.
 
     MERGE lines run **before** DEDUP lines (spec/dedupe.md → Atomicity): a
     crash after the merge but before the removals re-plans cleanly (the
     keeper already holds the consolidated values), whereas removing losers
     first would strand the to-be-merged values on gone files.
+
+    A MERGE write that doesn't persist (a damaged/truncated keeper ExifTool
+    can't write to — `TagWriteFailed`) quarantines that keeper to
+    `.pix/errors/` and continues, rather than halting: its bytes are intact
+    (ExifTool didn't touch it), and surfacing it stops a file that can't
+    hold `pix:*` tags from later tripping organize's migrated-files check.
     """
     runnable = [ln for ln in plan.lines if ln.line_id in kept_line_ids]
     # Stable sort, MERGE first.
     runnable.sort(key=lambda ln: 0 if ln.action == Action.MERGE else 1)
     log_path = run_dir / "apply.log"
+    run_id = run_dir.name
     data_dir = run_dir / "data"
     if runnable:
         data_dir.mkdir(parents=True, exist_ok=True)
@@ -577,6 +587,7 @@ def apply_plan(
 
     removed = 0
     merged = 0
+    quarantined: list[tuple[PlanLine, str]] = []
     records: list[LineRecord] = []
     exiftool: ExifToolSession | None = None
     with (
@@ -598,6 +609,57 @@ def apply_plan(
                         _apply_merge(ln, exiftool)
                     else:
                         _apply_dedup(ln)
+                except TagWriteFailed as e:
+                    dur = time.monotonic() - t_start
+                    _log(log, ln, "Failed", detail=str(e), dur_seconds=dur)
+                    try:
+                        dest = move_to_errors(
+                            source=ln.abs_path,
+                            library_root=library_root,
+                            run_id=run_id,
+                            line_id=ln.line_id,
+                            error=str(e),
+                        )
+                    except Exception as move_err:
+                        _log(
+                            log, ln, "Failed",
+                            detail=f"move to .pix/errors/ failed: {move_err}",
+                        )
+                        records.append(
+                            LineRecord(
+                                line_id=ln.line_id,
+                                action=ln.action.value,
+                                duration_seconds=dur,
+                                rel_path=ln.rel_path,
+                                failed=True,
+                            )
+                        )
+                        write_summary(log, records)
+                        raise DedupeApplyError(
+                            f"{ln.line_id} ({ln.rel_path}): merge write "
+                            f"failed and move to .pix/errors/ also failed: "
+                            f"{move_err}"
+                        ) from move_err
+                    try:
+                        rel_dest = dest.relative_to(library_root / ".pix")
+                    except ValueError:
+                        rel_dest = Path(dest.name)
+                    _log(
+                        log, ln, "Quarantined",
+                        detail=str(rel_dest).replace("\\", "/"),
+                    )
+                    quarantined.append((ln, str(e)))
+                    records.append(
+                        LineRecord(
+                            line_id=ln.line_id,
+                            action=ln.action.value,
+                            duration_seconds=dur,
+                            rel_path=ln.rel_path,
+                            failed=True,
+                        )
+                    )
+                    progress.advance()
+                    continue
                 except Exception as e:
                     dur = time.monotonic() - t_start
                     _log(log, ln, "Failed", detail=str(e), dur_seconds=dur)
@@ -636,7 +698,7 @@ def apply_plan(
                 exiftool.close()
 
     cleanup_empty_folders(library_root)
-    return removed, merged
+    return removed, merged, quarantined
 
 
 def _apply_dedup(ln: PlanLine) -> None:

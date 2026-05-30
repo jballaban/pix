@@ -271,7 +271,7 @@ def _run_dedupe(root: Path, no_prompt: bool = False) -> None:
     apply_log_path = runs_dir / "apply.log"
     try:
         try:
-            removed, merged = apply_plan(
+            removed, merged, quarantined = apply_plan(
                 plan=result.plan,
                 kept_line_ids=kept_line_ids,
                 run_dir=runs_dir,
@@ -282,9 +282,9 @@ def _run_dedupe(root: Path, no_prompt: bool = False) -> None:
             raise typer.Exit(code=1) from e
 
         # Cache mutation: a removed duplicate's sidecars all go away; a
-        # merged keeper's .meta/.hash are now stale (the in-place write
-        # changed its mtime), so drop them to be re-derived next run.
-        # Both reduce to remove_all on the applied line's path. Best-effort.
+        # merged (or quarantined) keeper's .meta/.hash are now stale, so
+        # drop them to be re-derived next run. Both reduce to remove_all on
+        # the applied line's path. Best-effort.
         for ln in result.plan.lines:
             if ln.line_id in kept_line_ids:
                 remove_all(root, ln.abs_path)
@@ -296,6 +296,26 @@ def _run_dedupe(root: Path, no_prompt: bool = False) -> None:
         )
         if merged:
             typer.echo(f"Merged tags onto {merged} keeper(s).")
+
+        if quarantined:
+            errors_dir = root / ".pix" / "errors"
+            typer.echo("")
+            typer.echo(
+                f"{len(quarantined)} keeper(s) could not be tagged "
+                f"(damaged/un-writable container) — moved to {errors_dir}:",
+                err=True,
+            )
+            for ln, err in quarantined:
+                typer.echo(f"  {ln.abs_path}", err=True)
+                typer.echo(f"    {err}", err=True)
+            typer.echo("", err=True)
+            typer.echo(
+                f"Each entry in {errors_dir} has a .errorinfo sidecar. To "
+                f"retry: repair the file (e.g. remux) and restore it to its "
+                f"path, then re-run.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
     finally:
         # Always emit the log path on the way out — success, error, or
         # CTRL+C. Lets the user copy-paste straight into a tail/grep.

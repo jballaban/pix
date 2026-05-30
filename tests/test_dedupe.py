@@ -312,13 +312,13 @@ def test_apply_moves_loser_to_data_dir(
         run_id="r",
         run_dir=run_dir,
     )
-    removed, merged = apply_plan(
+    removed, merged, quarantined = apply_plan(
         plan=result.plan,
         kept_line_ids={ln.line_id for ln in result.plan.lines},
         run_dir=run_dir,
         library_root=root,
     )
-    assert (removed, merged) == (1, 0)
+    assert (removed, merged, quarantined) == (1, 0, [])
     # Keeper survived; loser moved.
     assert a.exists() and a.read_bytes() == b"keep"
     assert not b.exists()
@@ -632,13 +632,13 @@ def test_apply_runs_merge_and_dedup(
     fake = _FakeExifSession()
     monkeypatch.setattr(dedupe_mod, "ExifToolSession", lambda: fake)
 
-    removed, merged = apply_plan(
+    removed, merged, quarantined = apply_plan(
         plan=result.plan,
         kept_line_ids={ln.line_id for ln in result.plan.lines},
         run_dir=run_dir,
         library_root=root,
     )
-    assert (removed, merged) == (1, 1)
+    assert (removed, merged, quarantined) == (1, 1, [])
     # Keeper survived; loser captured.
     assert a.exists() and a.read_bytes() == b"keep"
     assert not b.exists()
@@ -649,3 +649,62 @@ def test_apply_runs_merge_and_dedup(
     assert written_file == a.resolve()
     assert written_tags[PIX_MERGE_EVENT] == "Hawaii"
     assert len(fake.sidecars) == 1 and fake.sidecars[0].exists()
+
+
+class _FailingMergeExif(_FakeExifSession):
+    """Sidecar export succeeds, but the tag write reports it didn't
+    persist — simulating a damaged/truncated keeper."""
+
+    def write_tags(self, file: Path, tags: dict[str, str]) -> None:
+        from pix.exiftool_session import TagWriteFailed
+
+        raise TagWriteFailed(file, "0 image files updated")
+
+
+def test_apply_quarantines_keeper_on_failed_merge_write(
+    tmp_path: Path,
+    patched_hash_cache: dict[Path, str | None],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A MERGE write that doesn't persist quarantines the keeper to
+    .pix/errors/ and continues — the loser is still removed, and the
+    failure is surfaced (not silently passed)."""
+    root = tmp_path / "lib"
+    (root / ".pix").mkdir(parents=True)
+    a = root / "a.jpg"  # keeper; empty event, would gain "Hawaii"
+    b = root / "b.jpg"  # loser
+    a.write_bytes(b"keep")
+    b.write_bytes(b"dup")
+    patched_hash_cache[a.resolve()] = "h"
+    patched_hash_cache[b.resolve()] = "h"
+    cache = {
+        a.resolve(): _with_original(a, "F:/2023/a.jpg"),
+        b.resolve(): _with_original(b, "F:/Hawaii/b.jpg"),
+    }
+    run_dir = tmp_path / "runs" / "r"
+    run_dir.mkdir(parents=True)
+    result = generate_plan(
+        library_root=root,
+        cache=cache,
+        hashes=patched_hash_cache,
+        run_id="r",
+        run_dir=run_dir,
+    )
+
+    monkeypatch.setattr(
+        dedupe_mod, "ExifToolSession", lambda: _FailingMergeExif()
+    )
+
+    removed, merged, quarantined = apply_plan(
+        plan=result.plan,
+        kept_line_ids={ln.line_id for ln in result.plan.lines},
+        run_dir=run_dir,
+        library_root=root,
+    )
+
+    assert removed == 1  # loser still removed
+    assert merged == 0  # merge didn't count
+    assert len(quarantined) == 1
+    assert not a.exists()  # keeper moved out of the library
+    assert (root / ".pix" / "errors").exists()
+    assert not b.exists()
