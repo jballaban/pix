@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -275,7 +274,7 @@ def test_plan_refuses_missing_content_hash(tmp_path: Path) -> None:
 
 
 def test_plan_moves_file_to_template_path(
-    tmp_path: Path, patched_hash_cache: dict[Path, str]
+    tmp_path: Path, patched_hash_cache: dict[Path, str | None]
 ) -> None:
     root = tmp_path / "lib"
     root.mkdir()
@@ -309,7 +308,7 @@ def test_plan_moves_file_to_template_path(
 
 
 def test_plan_idempotent_when_already_in_place(
-    tmp_path: Path, patched_hash_cache: dict[Path, str]
+    tmp_path: Path, patched_hash_cache: dict[Path, str | None]
 ) -> None:
     root = tmp_path / "lib"
     (root / "2023" / "08" / "Hawaii").mkdir(parents=True)
@@ -339,7 +338,7 @@ def test_plan_idempotent_when_already_in_place(
 
 
 def test_plan_drops_stale_collision_suffix(
-    tmp_path: Path, patched_hash_cache: dict[Path, str]
+    tmp_path: Path, patched_hash_cache: dict[Path, str | None]
 ) -> None:
     """A file in `imports/2023-08-15_143205_001.jpg` (collision in old folder)
     that has no peer at the target folder drops the `_001` on move."""
@@ -373,7 +372,7 @@ def test_plan_drops_stale_collision_suffix(
 
 
 def test_plan_applies_collision_suffix_at_target(
-    tmp_path: Path, patched_hash_cache: dict[Path, str]
+    tmp_path: Path, patched_hash_cache: dict[Path, str | None]
 ) -> None:
     """Two files with same effective date in different sources collide at
     the target folder; second one gets `_001`."""
@@ -422,7 +421,7 @@ def test_plan_applies_collision_suffix_at_target(
 
 
 def test_plan_event_override_wins_over_event_auto(
-    tmp_path: Path, patched_hash_cache: dict[Path, str]
+    tmp_path: Path, patched_hash_cache: dict[Path, str | None]
 ) -> None:
     """EventOverride determines the target folder, not EventAuto."""
     root = tmp_path / "lib"
@@ -458,7 +457,7 @@ def test_plan_event_override_wins_over_event_auto(
 
 
 def test_apply_moves_file_to_target(
-    tmp_path: Path, patched_hash_cache: dict[Path, str]
+    tmp_path: Path, patched_hash_cache: dict[Path, str | None]
 ) -> None:
     root = tmp_path / "lib"
     (root / "imports").mkdir(parents=True)
@@ -497,6 +496,68 @@ def test_apply_moves_file_to_target(
     assert expected.read_bytes() == b"hi"
     # Empty source folder is swept.
     assert not (root / "imports").exists()
+
+
+def test_apply_resolves_in_place_suffix_cycle(
+    tmp_path: Path, patched_hash_cache: dict[Path, str | None]
+) -> None:
+    """Three files already in their target folder whose content-hash suffix
+    assignment is a cyclic permutation (bare→_002→_001→bare) must all land
+    correctly — the scheduler breaks the cycle with a temp name instead of
+    failing with 'target already exists' (regression for the in-place
+    reshuffle crash)."""
+    root = tmp_path / "lib"
+    folder = root / "2023" / "Hawaii"
+    folder.mkdir(parents=True)
+    bare = folder / "2023-08-15_143205.jpg"
+    s1 = folder / "2023-08-15_143205_001.jpg"
+    s2 = folder / "2023-08-15_143205_002.jpg"
+    bare.write_bytes(b"C")
+    s1.write_bytes(b"A")
+    s2.write_bytes(b"B")
+
+    def m(p: Path) -> FileMetadata:
+        return _meta(
+            p,
+            **{
+                PIX_ORIGINAL_PATH: f"F:/source/{p.name}",
+                PIX_DATE_AUTO: "2023-08-15-14:32:05",
+                PIX_EVENT_AUTO: "Hawaii",
+            },
+        )
+
+    cache = {bare.resolve(): m(bare), s1.resolve(): m(s1), s2.resolve(): m(s2)}
+    # Hash order (asc) → bare/_001/_002 assignment: _001-file < _002-file <
+    # bare-file ⇒ _001→bare, _002→_001, bare→_002. A 3-cycle.
+    patched_hash_cache[s1.resolve()] = "a"
+    patched_hash_cache[s2.resolve()] = "b"
+    patched_hash_cache[bare.resolve()] = "c"
+
+    run_dir = tmp_path / "runs" / "r"
+    run_dir.mkdir(parents=True)
+    plan = generate_plan(
+        library_root=root,
+        template=parse_template("{year}/{event}"),
+        cache=cache,
+        hashes=patched_hash_cache,
+        run_id="r",
+        run_dir=run_dir,
+    )
+    assert len(plan.lines) == 3  # all three move (full permutation)
+
+    apply_plan(
+        plan=plan,
+        kept_line_ids={ln.line_id for ln in plan.lines},
+        run_dir=run_dir,
+        library_root=root,
+    )
+
+    # Final occupants by content: _001-file→bare, _002-file→_001, bare→_002.
+    assert bare.read_bytes() == b"A"
+    assert s1.read_bytes() == b"B"
+    assert s2.read_bytes() == b"C"
+    # No temp files left behind.
+    assert not list(folder.glob("*.__organize_tmp__"))
 
 
 # --- compute_values ----------------------------------------------------------

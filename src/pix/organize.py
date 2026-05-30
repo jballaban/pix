@@ -14,7 +14,10 @@ See spec/organize.md for the full design. This module owns:
   target paths, recomputes canonical filenames against per-target-
   folder peer sets (drops/reapplies `_NNN` suffixes from scratch),
   emits MOVE plan lines for any file that needs to move.
-- Apply (`apply_plan`) — sequential renames + bottom-up empty-folder
+- Apply (`apply_plan` / `_schedule_moves`) — schedules renames so a
+  slot is vacated before it's claimed (suffix permutations within a
+  destination folder form vacate-before-claim chains and cycles);
+  cycles are broken with a temporary name. Bottom-up empty-folder
   cleanup at the end.
 - CWD constraint (`check_cwd_not_inside`) — refuses to run if the
   user's CWD is a strict subfolder of the library (Windows holds a
@@ -26,7 +29,7 @@ from __future__ import annotations
 import os
 import re
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -442,27 +445,45 @@ def apply_plan(
     run_dir: Path,
     library_root: Path,
 ) -> int:
-    """Execute MOVE lines and then sweep empty folders. Returns the count."""
+    """Execute MOVE lines and then sweep empty folders. Returns the count.
+
+    Moves are **scheduled**, not run in plan order: a move whose target is
+    still occupied by another move's source must wait for that move to
+    vacate the slot first (`_schedule_moves`). Content-hash suffix
+    assignment (see spec/library.md → Collision handling) routinely
+    permutes `_NNN` suffixes among files already sharing a destination
+    folder, which forms vacate-before-claim chains and even cycles
+    (`bare → _002 → _001 → bare`); the scheduler topologically orders the
+    chains and breaks cycles via a temporary name. Without this, an
+    in-place reshuffle fails mid-apply with "target already exists".
+    """
     runnable = [
         ln for ln in plan.lines if ln.line_id in kept_line_ids
     ]
+    ops = _schedule_moves(runnable)
+
     log_path = run_dir / "apply.log"
     completed = 0
     records: list[LineRecord] = []
+    started: set[str] = set()
+    starts: dict[str, float] = {}
     with (
         log_path.open("a", encoding="utf-8") as log,
         LiveProgress(total=len(runnable)) as progress,
     ):
-        for ln in runnable:
-            progress.begin(
-                f"{ln.line_id} {ln.action.value}", str(ln.abs_path)
-            )
-            t_start = time.monotonic()
-            _log(log, ln, "Started")
+        for op in ops:
+            ln = op.line
+            if ln.line_id not in started:
+                started.add(ln.line_id)
+                starts[ln.line_id] = time.monotonic()
+                progress.begin(
+                    f"{ln.line_id} {ln.action.value}", str(ln.abs_path)
+                )
+                _log(log, ln, "Started")
             try:
-                _apply_move(ln)
+                _do_move(ln.line_id, op.src, op.dst)
             except Exception as e:
-                dur = time.monotonic() - t_start
+                dur = time.monotonic() - starts[ln.line_id]
                 _log(log, ln, "Failed", detail=str(e), dur_seconds=dur)
                 records.append(
                     LineRecord(
@@ -477,18 +498,19 @@ def apply_plan(
                 raise OrganizeApplyError(
                     f"{ln.line_id} ({ln.rel_path}): {e}"
                 ) from e
-            dur = time.monotonic() - t_start
-            _log(log, ln, "Completed", dur_seconds=dur)
-            records.append(
-                LineRecord(
-                    line_id=ln.line_id,
-                    action=ln.action.value,
-                    duration_seconds=dur,
-                    rel_path=ln.rel_path,
+            if op.final:
+                dur = time.monotonic() - starts[ln.line_id]
+                _log(log, ln, "Completed", dur_seconds=dur)
+                records.append(
+                    LineRecord(
+                        line_id=ln.line_id,
+                        action=ln.action.value,
+                        duration_seconds=dur,
+                        rel_path=ln.rel_path,
+                    )
                 )
-            )
-            progress.advance()
-            completed += 1
+                progress.advance()
+                completed += 1
 
         write_summary(log, records)
 
@@ -496,19 +518,85 @@ def apply_plan(
     return completed
 
 
-def _apply_move(ln: PlanLine) -> None:
-    if ln.target_path is None:
-        raise ValueError(f"{ln.line_id}: MOVE missing target_path")
-    target = ln.target_path
-    if target.exists():
-        # Either it's actually our source (case-only rename — rare for
-        # MOVE since folder structure usually differs) or a real conflict.
-        if target.resolve() != ln.abs_path.resolve():
-            raise OrganizeApplyError(
-                f"target {target} already exists"
-            )
-    target.parent.mkdir(parents=True, exist_ok=True)
-    safe_rename(ln.abs_path, target)
+@dataclass(frozen=True)
+class _MoveOp:
+    """One physical rename. A plan line is usually a single op
+    (`abs_path → target_path`); a cycle-broken line becomes two ops
+    (`abs_path → temp`, then `temp → target_path`)."""
+
+    line: PlanLine
+    src: Path
+    dst: Path
+    final: bool  # True when this op lands the line at its real target
+
+
+def _norm(p: Path) -> str:
+    """Case-insensitive, FS-independent absolute key for path identity."""
+    return os.path.normcase(os.path.abspath(str(p)))
+
+
+def _schedule_moves(runnable: list[PlanLine]) -> list[_MoveOp]:
+    """Order MOVEs so every claim happens after the slot it wants is
+    vacated; break cycles with a temporary name.
+
+    Dependency: line L is blocked by line M when M's source currently
+    occupies L's target slot — M must move first. Kahn's algorithm drains
+    the resulting DAG (chains and independent moves). Whatever is left is
+    cycle-involved: park each such file at a unique temp name (freeing its
+    source slot), then move every parked file to its real target — by then
+    every target is free (its occupant was either a DAG node that already
+    moved or another parked file).
+    """
+    for ln in runnable:
+        if ln.target_path is None:
+            raise ValueError(f"{ln.line_id}: MOVE missing target_path")
+
+    by_source: dict[str, PlanLine] = {
+        _norm(ln.abs_path): ln for ln in runnable
+    }
+    line_by_id: dict[str, PlanLine] = {ln.line_id: ln for ln in runnable}
+    blocks: dict[str, list[str]] = defaultdict(list)
+    indegree: dict[str, int] = {ln.line_id: 0 for ln in runnable}
+    for ln in runnable:
+        assert ln.target_path is not None
+        occupant = by_source.get(_norm(ln.target_path))
+        if occupant is not None and occupant.line_id != ln.line_id:
+            blocks[occupant.line_id].append(ln.line_id)
+            indegree[ln.line_id] += 1
+
+    ready: deque[str] = deque(
+        lid for lid, d in indegree.items() if d == 0
+    )
+    ops: list[_MoveOp] = []
+    placed: set[str] = set()
+    while ready:
+        lid = ready.popleft()
+        placed.add(lid)
+        ln = line_by_id[lid]
+        assert ln.target_path is not None
+        ops.append(_MoveOp(ln, ln.abs_path, ln.target_path, final=True))
+        for nxt in blocks[lid]:
+            indegree[nxt] -= 1
+            if indegree[nxt] == 0:
+                ready.append(nxt)
+
+    # Leftovers are cycle-involved. Park, then unpark to real targets.
+    leftover = [line_by_id[lid] for lid in indegree if lid not in placed]
+    for ln in leftover:
+        tmp = ln.abs_path.parent / f"{ln.line_id}.__organize_tmp__"
+        ops.append(_MoveOp(ln, ln.abs_path, tmp, final=False))
+    for ln in leftover:
+        assert ln.target_path is not None
+        tmp = ln.abs_path.parent / f"{ln.line_id}.__organize_tmp__"
+        ops.append(_MoveOp(ln, tmp, ln.target_path, final=True))
+    return ops
+
+
+def _do_move(line_id: str, src: Path, dst: Path) -> None:
+    if dst.exists() and _norm(dst) != _norm(src):
+        raise OrganizeApplyError(f"target {dst} already exists")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    safe_rename(src, dst)
 
 
 def _log(
