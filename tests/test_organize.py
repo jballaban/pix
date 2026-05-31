@@ -402,6 +402,92 @@ def test_plan_name_preserving_lens_pair_no_collision_suffix(
     ]
 
 
+def test_apply_cache_sidecars_follow_suffix_swap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: when a folder's `_NNN` suffixes permute (here a 2-cycle
+    swap), cache relocation must follow the media through the same
+    collision-safe schedule — vacate-before-claim ordering with temp parks
+    for cycles — instead of a naive plan-order pass that clobbers sidecars.
+
+    We record the relocations apply_plan issues (rather than touch the real,
+    deep cache tree, which overflows Windows' path limit under pytest tmp
+    dirs) and replay them: with the fix they permute the cache cleanly; the
+    old plan-order pass would lose entries. Pre-fix apply_plan issued no
+    relocations at all (the command did it afterward), so this also pins
+    that relocation now lives inside apply_plan.
+    """
+    from datetime import datetime
+
+    import pix.organize as organize_mod
+    from pix.organize import apply_plan
+    from pix.plan import Plan, PlanLine
+
+    root = tmp_path / "lib"
+    folder = root / "2023" / "Hawaii"
+    folder.mkdir(parents=True)
+    bare = folder / "2023-08-15_143205.mp4"
+    s001 = folder / "2023-08-15_143205_001.mp4"
+    bare.write_bytes(b"X")
+    s001.write_bytes(b"Y")
+
+    relocations: list[tuple[Path, Path]] = []
+
+    def rec(_lib: Path, old: Path, new: Path) -> None:
+        relocations.append((old, new))
+
+    monkeypatch.setattr(organize_mod, "relocate_all", rec)
+
+    # Swap the two names (X→_001, Y→bare): a 2-cycle the scheduler breaks
+    # with a temp park.
+    lines = [
+        PlanLine(
+            line_id="L001", action=Action.MOVE,
+            rel_path="2023/Hawaii/2023-08-15_143205.mp4", details="swap",
+            abs_path=bare, target_filename=s001.name, target_path=s001,
+        ),
+        PlanLine(
+            line_id="L002", action=Action.MOVE,
+            rel_path="2023/Hawaii/2023-08-15_143205_001.mp4", details="swap",
+            abs_path=s001, target_filename=bare.name, target_path=bare,
+        ),
+    ]
+    plan = Plan(
+        source=root, run_id="r", generated_at=datetime.now(), lines=lines
+    )
+    run_dir = root / ".pix" / "runs" / "r"
+    run_dir.mkdir(parents=True)
+
+    apply_plan(
+        plan=plan,
+        kept_line_ids={"L001", "L002"},
+        run_dir=run_dir,
+        library_root=root,
+    )
+
+    # Media swapped on disk.
+    assert bare.read_bytes() == b"Y"
+    assert s001.read_bytes() == b"X"
+
+    # One cache relocation per scheduled op (4 for a temp-broken 2-cycle),
+    # and at least one goes via a temp park (proves we follow the schedule,
+    # not naive plan order which would be 2 direct swaps).
+    assert len(relocations) == 4
+    assert any(
+        "__organize_tmp__" in old.name or "__organize_tmp__" in new.name
+        for old, new in relocations
+    )
+
+    # Replaying the recorded relocations (os.replace semantics) permutes the
+    # cache without loss: each path ends with the OTHER file's digest.
+    sim: dict[Path, str] = {bare: "HASHX", s001: "HASHY"}
+    for old, new in relocations:
+        if old in sim:
+            sim[new] = sim.pop(old)
+    assert sim.get(bare) == "HASHY"
+    assert sim.get(s001) == "HASHX"
+
+
 def test_plan_idempotent_when_already_in_place(
     tmp_path: Path, patched_hash_cache: dict[Path, str | None]
 ) -> None:

@@ -14,7 +14,7 @@ from pathlib import Path
 import typer
 
 from pix import banner, debug
-from pix.cache_base import prune_orphans, relocate_all
+from pix.cache_base import prune_orphans
 from pix.checkout import CheckoutOpen, ensure_no_open_checkout
 from pix.config import Config, set_organize_template
 from pix.duration import format_duration_precise
@@ -311,16 +311,12 @@ def _run_organize(
             typer.echo(f"Error: apply failed: {e}", err=True)
             raise typer.Exit(code=1) from e
 
-        # Cache survives organize by following every MOVE: relocate all
-        # sidecars (.meta/.hash/.video) alongside the media file. A MOVE
-        # leaves bytes/size/mtime untouched, so a valid hash/video entry
-        # stays valid at the new path. Relocating only .meta (the old
-        # behavior) orphaned .hash/.video, which the next walk pruned —
-        # forcing a needless re-`pix hash` after every organize.
-        # Best-effort.
-        for ln in plan.lines:
-            if ln.line_id in kept_line_ids and ln.target_path is not None:
-                relocate_all(root, ln.abs_path, ln.target_path)
+        # Cache sidecars (.meta/.hash/.video) are relocated inside
+        # apply_plan, per scheduled move op — so they follow the media
+        # through the same vacate-before-claim ordering and cycle-breaking
+        # the moves use. Doing it here in plan order instead would clobber
+        # sidecars whenever a folder's `_NNN` suffixes permute, forcing a
+        # needless re-hash/re-probe next run. See organize.apply_plan.
 
         # Persist the active template now that apply succeeded.
         set_organize_template(config_path, template_str)
