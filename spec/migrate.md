@@ -280,9 +280,21 @@ The on-disk filename is `<run-id>_<line-id><source-extension>`. Run-id is the ti
 ```yaml
 origin: F:\source\trip-2023\IMG_001.dng
 stashed_at: 2026-05-22T15:30:00
+pix_version: 0.1.119
 ```
 
-That's the entire sidecar. The original filename, full source path, and timestamp are all there. No hash, no original_filename field, no origins list. Anything we'd want to compute later (content hash for dedup, source-folder structure, multiple-imports detection) can be derived from these two facts on demand.
+The original filename, full source path, timestamp, and the pix version that stashed the file are all there. No hash, no original_filename field, no origins list. Anything we'd want to compute later (content hash for dedup, source-folder structure, multiple-imports detection) can be derived from these facts on demand. `pix_version` drives the version-gated auto-restore below; legacy sidecars without it are treated as stale.
+
+### Version-gated auto-restore
+
+Stash mirrors [`.pix/errors/`'s auto-retry-on-version-bump](#failure-handling): at the start of every migrate, **stale stash entries are restored to their origin** so plan-gen gets another look under the current code. This is what lets a format that flips its policy (e.g. `insv`/`insp` going `stash → keep` in schema v9) pull its already-stashed files back into the library automatically — no separate `unstash` command.
+
+Two rules distinguish it from errors:
+
+- **Folder-scoped.** Only entries whose sidecar `origin` falls **under the folder being migrated** are restored. They land exactly where this run's plan-gen will walk, and a targeted `migrate <subfolder>` doesn't fling hundreds of unrelated stash entries across the disk. Out-of-scope entries stay put (they restore when their own folder is migrated). Errors restores library-wide instead — failures are rare, but the stash can hold hundreds of files.
+- **Version-gated.** An entry whose `pix_version` equals the running `pix.__version__` is left in place — re-processing it would just re-stash it (the normal resting state; no console nag). A different or empty version is stale and gets restored. Restore recreates the **original camera filename and source location** from `origin`, so provenance (`OriginalPath`) and the keep/delete/re-stash decision all run correctly on the re-migrate. A file whose policy is still `stash` is restored, re-stashed, and **stamped with the current version** — so it settles after one cycle per version bump rather than churning every run.
+
+Restore is skipped (and surfaced) when the origin slot is already occupied, the sidecar is missing/unreadable (origin unknown), or the move fails. See `pix.stash.restore_stale_stash`.
 
 **Cross-volume**: source on a different volume from the library means the initial move is a copy+delete (via `shutil.move`). One-time cost per file; no clever dedup avoidance.
 

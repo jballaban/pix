@@ -51,6 +51,7 @@ from pix.plan import (
 from pix.progress import LiveProgress
 from pix.root import NoLibraryRoot, resolve as resolve_root
 from pix.scan import walk_source_files
+from pix.stash import restore_stale_stash
 from pix.schema import SCHEMA_VERSION, SchemaTooNew, SchemaUpgradeRequired
 from pix.video_cache import read_all_cached_profiles, write_cached_profile
 
@@ -236,6 +237,56 @@ def _run_migrate(
         )
         for skip in orphans_skipped:
             _plog(plan_log_path, f"  {skip.entry_path}: {skip.reason}")
+
+    # Restore stashed files whose .stashinfo predates the running pix
+    # version and whose origin is under the folder being migrated — a code
+    # change since the stash (e.g. a format that flipped stash→keep) means
+    # plan-gen should get another look. Restored to their original camera
+    # filename + location, so provenance and the new policy both apply.
+    # Files stashed by THIS version are left in place (the normal resting
+    # state — no console nag, unlike a quarantine).
+    stash_restored, stash_skipped, stash_kept = restore_stale_stash(
+        root, folder
+    )
+    if stash_restored:
+        _plog(
+            plan_log_path,
+            f"Restored {len(stash_restored)} file(s) from .pix/stash/ "
+            f"(stashed by an older pix version; re-processed this run).",
+        )
+        for entry in stash_restored:
+            _plog(
+                plan_log_path,
+                f"  restored {entry.origin} "
+                f"(prior version: {entry.sidecar_pix_version or '<unknown>'})",
+            )
+        # Mirror to the console — these files re-enter this run's plan.
+        typer.echo(
+            f"Restored {len(stash_restored)} file(s) from .pix/stash/ "
+            f"(stashed by an older pix version) — re-processing this run."
+        )
+    if stash_kept:
+        _plog(
+            plan_log_path,
+            f"Left {stash_kept} file(s) in .pix/stash/ (stashed by the "
+            f"current pix version).",
+        )
+    if stash_skipped:
+        _plog(
+            plan_log_path,
+            f"Could not restore {len(stash_skipped)} stash entr(ies); "
+            f"see details below:",
+        )
+        for skip in stash_skipped:
+            _plog(plan_log_path, f"  {skip.entry_path}: {skip.reason}")
+        # Occupied/unreadable/move-failed — won't resolve on a re-run.
+        typer.echo(
+            f"Could not restore {len(stash_skipped)} entr(ies) from "
+            f".pix/stash/ — needs attention:",
+            err=True,
+        )
+        for skip in stash_skipped:
+            typer.echo(f"  {skip.entry_path.name}: {skip.reason}", err=True)
 
     # Walk is sub-second on the libraries we care about (scandir-based
     # since v0.1.62), so no console ticker — the next phase's progress
