@@ -69,7 +69,12 @@ from pix.config import DEFAULT_CONFIG_YAML
 #      filename. Existing libraries hold `insv/insp: stash` (the v2
 #      default), so this flip surfaces as a config conflict the user
 #      resolves to `keep`.
-SCHEMA_VERSION: int = 9
+# v10 — Default config flips dng from stash → convert_to_jpg. Develop-able
+#      raws (e.g. iPhone ProRAW) decode in Pillow and become JPGs; raws
+#      Pillow can't decode (e.g. Insta360 360 Bayer dng) fail CONVERT and
+#      quarantine to .pix/errors/ (original preserved, nothing destroyed).
+#      Existing libraries on `dng: stash` see a config conflict to resolve.
+SCHEMA_VERSION: int = 10
 
 
 # --- Upgrades --------------------------------------------------------------
@@ -160,6 +165,15 @@ UPGRADES: dict[int, Upgrade] = {
             "(Insta360 360 media — tagged + organized in place, kept in "
             "their proprietary format and original filename). Libraries "
             "on the old `stash` default will see a conflict to resolve."
+        ),
+    ),
+    10: Upgrade(
+        add_extensions={"dng": "convert_to_jpg"},
+        description=(
+            "Default config flips dng from stash → convert_to_jpg "
+            "(develop-able raws become JPGs; un-developable raws fail "
+            "CONVERT and quarantine to .pix/errors/). Libraries on the "
+            "old `stash` default will see a conflict to resolve."
         ),
     ),
 }

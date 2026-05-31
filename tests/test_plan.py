@@ -360,6 +360,37 @@ def test_plan_insp_first_migrate_tags_without_rename(tmp_path: Path) -> None:
     assert "date_auto null→2023-08-28-14:03:42" in line.details
 
 
+def test_plan_dng_converts_to_jpg(tmp_path: Path) -> None:
+    """dng is convert_to_jpg: a develop-able raw plans CONVERT→jpg. (Raws
+    Pillow can't decode fail at apply and quarantine — not a plan concern.)"""
+    src = tmp_path / "src"
+    src.mkdir()
+    f = src / "IMG_0042.dng"
+    f.write_bytes(b"")
+
+    cfg = _config(dng="convert_to_jpg")
+    cache = {
+        f.resolve(): _meta(
+            str(f),
+            **{"EXIF:DateTimeOriginal": "2021:07:04 09:15:30"},
+        )
+    }
+
+    plan = generate_plan(
+        source=src.resolve(),
+        cache=cache,
+        config=cfg,
+        run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
+    )
+
+    assert len(plan.lines) == 1
+    line = plan.lines[0]
+    assert line.action == Action.CONVERT_RENAME_TAG
+    assert "→2021-07-04_091530.jpg" in line.details
+
+
 def test_plan_lrv_insv_proxy_is_deleted(tmp_path: Path) -> None:
     """LRV_*.insv low-res proxies are deleted even though .insv policy is
     keep — built-in Insta360 knowledge (the camera regenerates them)."""

@@ -31,7 +31,7 @@ extensions:
   mpg:     convert_to_mp4   # MPEG-1/MPEG-2 Program Stream; mandatory re-encode to H.265
   mpeg:    convert_to_mp4   # same format as .mpg with the long extension
   vob:     convert_to_mp4   # DVD-Video object (MPEG-2 PS); same re-encode path as mpg
-  dng:     stash            # Adobe Digital Negative — raw sensor data; preserved for future processing
+  dng:     convert_to_jpg   # raw photo — develop to JPG; un-developable raws (e.g. Insta360 360 Bayer) fail decode → quarantine to .pix/errors/
   insp:    keep             # Insta360 360 photo — kept verbatim (dual-fisheye + trailer); tagged, not renamed
   insv:    keep             # Insta360 360 video — kept verbatim (dual-fisheye + trailer); tagged, not renamed
   ds_store: delete    # macOS system junk

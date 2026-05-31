@@ -238,7 +238,7 @@ extensions:
   mpg:     convert_to_mp4   # MPEG-1/MPEG-2 Program Stream; mandatory re-encode
   mpeg:    convert_to_mp4   # same format as .mpg, long extension
   vob:     convert_to_mp4   # DVD-Video object; MPEG-2 PS + DVD-specific extras
-  dng:     stash            # Adobe Digital Negative — raw sensor data
+  dng:     convert_to_jpg   # raw photo — develop to JPG; un-developable raws (e.g. 360 Bayer) fail CONVERT → quarantine to .pix/errors/
   insp:    keep             # Insta360 360 photo — name-preserving keep (see below)
   insv:    keep             # Insta360 360 video — name-preserving keep (see below)
   ds_store: delete    # macOS system junk
@@ -252,7 +252,7 @@ extensions:
 ```
 
 Notable omissions — user must opt in by adding the extension:
-- Other RAW formats (`.cr2`, `.nef`, `.arw`, `.raf`, `.rw2`, `.orf`, `.pef`) — likely `stash` (same reasoning as `.dng`). Added on demand.
+- Other RAW formats (`.cr2`, `.nef`, `.arw`, `.raf`, `.rw2`, `.orf`, `.pef`) — likely `convert_to_jpg` (same as `.dng`: develop what Pillow can decode, the rest fail CONVERT and quarantine). Added on demand.
 - `.webp`, `.bmp`, `.tiff`/`.tif` — likely `convert_to_jpg`.
 - `.mkv`, `.wmv`, `.3gp`, `.webm`, `.m2ts` — likely `convert_to_mp4`.
 - Sidecar/metadata files (`.aae`, `.lrcat`, `.xmp`) — likely `delete`.
