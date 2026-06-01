@@ -34,7 +34,7 @@ from pix.convert import (
     remux_repair,
 )
 from pix.errors import move_to_errors
-from pix.timeout import OperationTimeout, safe_rename
+from pix.timeout import OperationTimeout, safe_move, safe_rename
 from pix.exiftool_session import (
     ExifToolSession,
     ExifToolTimeout,
@@ -127,8 +127,8 @@ def _swap_in_repaired(
     data_dir = run_dir / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     captured = data_dir / f"{ln.line_id}_{src.name}.{suffix}"
-    safe_rename(src, captured)
-    safe_rename(repaired, src)
+    safe_move(src, captured)  # capture → runs (may be on another volume)
+    safe_rename(repaired, src)  # staging → source, same volume
 
 
 def _repair_video_container(
@@ -537,10 +537,13 @@ def _apply_one(
 
 
 def _apply_delete(ln: PlanLine, run_dir: Path) -> None:
-    """Move the file into the run folder. Single atomic rename = capture+remove."""
+    """Move the file into the run folder (capture + remove in one move).
+
+    Uses `safe_move` so a `runs_dir` configured onto another volume works
+    (cross-volume copy+delete); same-volume stays an atomic rename."""
     if ln.capture_path is None:
         raise ApplyError(f"{ln.line_id}: DELETE missing capture_path")
-    safe_rename(ln.abs_path, ln.capture_path)
+    safe_move(ln.abs_path, ln.capture_path)
 
 
 def _apply_stash(ln: PlanLine) -> None:
@@ -694,8 +697,10 @@ def _apply_convert(
         )
     safe_rename(ln.staging_path, ln.marker_path)
 
-    # Step 3: capture original into the run folder.
-    safe_rename(src, ln.capture_path)
+    # Step 3: capture original into the run folder. safe_move so a
+    # relocated runs_dir on another volume works (copy+delete); the
+    # source survives until the copy completes, keeping the step crash-safe.
+    safe_move(src, ln.capture_path)
 
     # Step 4: finalize marker to canonical name.
     if ln.target_path.exists():

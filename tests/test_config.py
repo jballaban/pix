@@ -7,6 +7,35 @@ import pytest
 from pix.config import DEFAULT_CONFIG_YAML, Config
 
 
+def test_runs_base_defaults_to_pix_runs() -> None:
+    cfg = Config(extensions={})
+    assert cfg.runs_base(Path("G:/lib")) == Path("G:/lib") / ".pix" / "runs"
+
+
+def test_runs_base_honors_configured_runs_dir() -> None:
+    cfg = Config(extensions={}, runs_dir="F:/caps/runs")
+    assert cfg.runs_base(Path("G:/lib")) == Path("F:/caps/runs")
+
+
+def test_load_parses_runs_dir(tmp_path: Path) -> None:
+    p = tmp_path / "config.yaml"
+    p.write_text("extensions: {}\nruns_dir: F:/caps/runs\n", encoding="utf-8")
+    assert Config.load(p).runs_dir == "F:/caps/runs"
+
+
+def test_load_runs_dir_absent_is_none(tmp_path: Path) -> None:
+    p = tmp_path / "config.yaml"
+    p.write_text("extensions: {}\n", encoding="utf-8")
+    assert Config.load(p).runs_dir is None
+
+
+def test_load_rejects_non_string_runs_dir(tmp_path: Path) -> None:
+    p = tmp_path / "config.yaml"
+    p.write_text("extensions: {}\nruns_dir: 123\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="runs_dir"):
+        Config.load(p)
+
+
 def test_default_config_parses(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(DEFAULT_CONFIG_YAML, encoding="utf-8")

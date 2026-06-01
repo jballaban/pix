@@ -111,8 +111,12 @@ def _run_migrate(
     # so the console stays quiet — only the single rewriting `\r`
     # progress line shows during plan-gen.
     run_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    runs_dir = root / ".pix" / "runs" / run_id
-    runs_dir.mkdir(parents=True)
+    # Run folder (with its conserved-original captures) honors the optional
+    # `runs_dir` config key, so a full library drive can offload captures to
+    # another volume. Captures then move cross-volume via safe_move. Staging
+    # stays on the library volume (its renames must be same-volume/atomic).
+    runs_dir = config.runs_base(root) / run_id
+    runs_dir.mkdir(parents=True, exist_ok=True)
     plan_log_path = runs_dir / "plan.log"
     staging_dir = root / ".pix" / "staging"
 

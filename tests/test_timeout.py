@@ -7,7 +7,14 @@ from pathlib import Path
 
 import pytest
 
-from pix.timeout import OperationTimeout, run_with_timeout, safe_rename
+import errno
+
+from pix.timeout import (
+    OperationTimeout,
+    run_with_timeout,
+    safe_move,
+    safe_rename,
+)
 
 
 def test_run_with_timeout_returns_value_on_completion() -> None:
@@ -80,3 +87,49 @@ def test_safe_rename_times_out_with_slow_underlying_op(
     monkeypatch.setattr(Path, "rename", wedged)
     with pytest.raises(OperationTimeout):
         safe_rename(src, dst, timeout=0.2)
+
+
+def test_safe_move_same_volume_renames(tmp_path: Path) -> None:
+    """Same-volume target: plain rename, no copy fallback needed."""
+    src = tmp_path / "a.txt"
+    dst = tmp_path / "b.txt"
+    src.write_bytes(b"x")
+    safe_move(src, dst)
+    assert dst.read_bytes() == b"x"
+    assert not src.exists()
+
+
+def test_safe_move_falls_back_to_copy_on_cross_device(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A cross-device rename error triggers the copy+delete fallback so a
+    runs_dir on another volume works. (Path.rename is patched to raise
+    EXDEV; shutil.move's own os.rename is unpatched and succeeds.)"""
+    src = tmp_path / "a.txt"
+    dst = tmp_path / "b.txt"
+    src.write_bytes(b"hello")
+
+    def cross_device(self: Path, target: Path) -> Path:  # noqa: ARG001
+        raise OSError(errno.EXDEV, "Invalid cross-device link")
+
+    monkeypatch.setattr(Path, "rename", cross_device)
+    safe_move(src, dst)
+    assert dst.read_bytes() == b"hello"
+    assert not src.exists()
+
+
+def test_safe_move_propagates_non_cross_device_oserror(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A non-cross-device OSError (e.g. EACCES) propagates — no fallback."""
+    src = tmp_path / "a.txt"
+    dst = tmp_path / "b.txt"
+    src.write_bytes(b"x")
+
+    def eacces(self: Path, target: Path) -> Path:  # noqa: ARG001
+        raise OSError(errno.EACCES, "permission denied")
+
+    monkeypatch.setattr(Path, "rename", eacces)
+    with pytest.raises(OSError):
+        safe_move(src, dst)
+    assert src.exists()  # not moved

@@ -51,6 +51,22 @@ class Config:
 
     extensions: dict[str, ExtensionAction]
     organize_template: str | None = None
+    runs_dir: str | None = None
+
+    def runs_base(self, root: Path) -> Path:
+        """Directory that holds per-run folders (`<base>/<run-id>/`).
+
+        Defaults to `<root>/.pix/runs`. Can be repointed onto another
+        volume via the optional `runs_dir` config key — handy when the
+        library drive is full and the conserved originals (captures) are
+        large. Captures then move cross-volume via `timeout.safe_move`
+        (copy+delete) instead of an atomic same-volume rename. Only the
+        run folders relocate; staging, markers, and the media tree stay
+        on the library volume.
+        """
+        if self.runs_dir:
+            return Path(self.runs_dir)
+        return root / ".pix" / "runs"
 
     @classmethod
     def load(cls, path: Path) -> Config:
@@ -81,6 +97,7 @@ class Config:
             organize_template=_parse_organize_template(
                 path, data.get("organize")
             ),
+            runs_dir=_parse_runs_dir(path, data.get("runs_dir")),
         )
 
 
@@ -108,6 +125,17 @@ def set_organize_template(path: Path, template: str) -> None:
         yaml.safe_dump(data, default_flow_style=False, sort_keys=False),
         encoding="utf-8",
     )
+
+
+def _parse_runs_dir(path: Path, raw: object | None) -> str | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ValueError(
+            f"{path}: 'runs_dir' must be a string path, "
+            f"got {type(raw).__name__}"
+        )
+    return raw or None
 
 
 def _parse_organize_template(path: Path, raw: object | None) -> str | None:
