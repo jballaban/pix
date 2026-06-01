@@ -201,7 +201,7 @@ Read at any time the tag value is needed (filename derivation, organize template
 |---|---|---|---|
 | `pix:OriginalPath` | Written once on first migrate. Never overwritten. | Never. Pure historical fact (see [library.md](library.md#original-source-path-write-once-provenance)). | `pix migrate` |
 
-**Content hash is not a tag.** It used to live here as `pix:ContentHash`, but it's now stored in the per-file cache under `.pix/cache/` and computed by [`pix hash`](hash.md). The hash is a derived fact about the file's bytes, not user-curated metadata; the cache layer keys it on `(size, mtime_ns)` so it auto-invalidates, and avoids one ExifTool round-trip per file at TB scale. See [hash.md](hash.md) for the format-aware hashing algorithm and cache schema.
+**Content hash is not a tag.** It's stored in the per-file cache under `.pix/cache/` and computed by [`pix hash`](hash.md), not in the file's metadata. The hash is a derived fact about the file's bytes, not user-curated metadata; the cache layer keys it on `(size, mtime_ns)` so it auto-invalidates, and avoids one ExifTool round-trip per file at TB scale. See [hash.md](hash.md) for the format-aware hashing algorithm and cache schema.
 
 ### Side effect
 

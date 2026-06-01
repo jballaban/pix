@@ -259,7 +259,7 @@ The original filename, full source path, timestamp, and the pix version that sta
 
 ### Version-gated auto-restore
 
-Stash mirrors [`.pix/errors/`'s auto-retry-on-version-bump](#failure-handling): at the start of every migrate, **stale stash entries are restored to their origin** so plan-gen gets another look under the current code. This is what lets a format that flips its policy (e.g. `insv`/`insp` going `stash → keep` in schema v9) pull its already-stashed files back into the library automatically — no separate `unstash` command.
+Stash mirrors [`.pix/errors/`'s auto-retry-on-version-bump](#failure-handling): at the start of every migrate, **stale stash entries are restored to their origin** so plan-gen gets another look under the current code. This is what lets a format whose policy flips (e.g. `insv`/`insp` going from `stash` to `keep`) pull its already-stashed files back into the library automatically — no separate `unstash` command. (The sidecar records the pix version that stashed the file; a different running version triggers the restore.)
 
 Two rules distinguish it from errors:
 

@@ -31,7 +31,7 @@ The library root itself is fine as CWD — organize never removes the root, and 
 5. **Generate plan.** For each file: compute effective tag values, render the template to get the target folder, compute the **bare** canonical filename from effective date (ignoring any `_NNN` suffix on the current name — see [Filename recomputation](#filename-recomputation) below), assemble the tentative target path. Group all tentative targets by target folder, resolve collisions per group, and assign final names. Compare each final target path to the current path; emit a `MOVE` line if different. Write per-file decisions to `plan.log`. Detect empty-folder candidates.
 6. **Confirm, optionally edit, apply** — same `Apply? [Y/e/n]` flow as migrate (defaults to Y; `e` opens the plan for review/edit and re-prompts). `--no-prompt` skips the confirmation and applies the full plan (still written); used by [`pix sync`](sync.md).
 7. **Apply.** Execute the MOVE renames, **scheduled** so a destination slot is vacated before it's claimed. Each MOVE is a single same-volume rename — no markers needed (organize doesn't destroy bytes, just relocates them) — but they can't run in arbitrary order: content-hash suffix assignment (see [library.md → Collision handling](library.md#collision-handling)) routinely permutes `_NNN` suffixes among files already sharing a destination folder, producing vacate-before-claim chains and even cycles (`bare → _002 → _001 → bare`). Apply topologically orders the chains and breaks any cycle by parking one file at a temporary name (`<line-id>.__organize_tmp__`) before completing the rename. After all moves, bottom-up sweep of emptied folders.
-8. **Update active template.** On successful apply, write the template string to `.pix/config.yaml` under an `organize.template` key (created if absent). This becomes the library's "default" shape — see [Active template persistence](#active-template-persistence).
+8. **Update active template.** On successful apply, write the template string to `.pix/pix.yaml` under an `organize.template` key (created if absent). This becomes the library's "default" shape — see [Active template persistence](#active-template-persistence).
 
 No folder lock — single-user, single-active-run assumption (same as migrate).
 
@@ -165,19 +165,16 @@ Files already at their target path produce no plan line (idempotence). The curre
 
 ## Active template persistence
 
-On successful apply, the template string is written to `.pix/config.yaml` under an optional `organize.template` key:
+On successful apply, the template string is written to `.pix/pix.yaml` under an optional `organize.template` key:
 
 ```yaml
-extensions:
-  jpg: keep
-  # ...
 organize:
   template: "{year}/{month}/{event}"
 ```
 
 This is the library's **default shape**. A bare **`pix organize`** (no template argument) re-applies the stored template — re-shaping the library back to its default after, e.g., a [`pix checkout --commit`](tag-editing.md) changed some tags and left files where they no longer belong. If no template is stored yet, bare `pix organize` errors and asks for one.
 
-The key is **optional** — its addition to config doesn't bump `SCHEMA_VERSION` (see [library.md → Schema versioning](library.md#schema-versioning)). A subsequent `pix organize <different-template>` overwrites the key. There's no separate "set template" command.
+The key is **optional**. Writing it preserves the other key pix manages (`runs_dir`) and drops anything else (unknown keys, comments). A subsequent `pix organize <different-template>` overwrites it. There's no separate "set template" command.
 
 Note: commit does **not** auto-trigger organize. Commit writes tags only; re-shaping the library to match changed tags is an explicit `pix organize` the user runs when ready. See [tag-editing.md](tag-editing.md) for the eventual-consistency model.
 
@@ -196,7 +193,7 @@ No `data/` (nothing destroyed; no captures). No `debug.log` unless we extend the
 
 ## Rollback (deferred)
 
-`pix rollback <run-id>` for an organize run reads `plan.txt`, reverses each MOVE (target → source), and reverts the active template in `config.yaml` if it was changed by this run. Sketched; full design deferred.
+`pix rollback <run-id>` for an organize run reads `plan.txt`, reverses each MOVE (target → source), and reverts the active template in `pix.yaml` if it was changed by this run. Sketched; full design deferred.
 
 ## Idempotence
 
