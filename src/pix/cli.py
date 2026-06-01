@@ -15,6 +15,7 @@ from pix.commands.init import init_library
 from pix.commands.meta import meta_file
 from pix.commands.migrate import migrate_folder
 from pix.commands.organize import organize_library
+from pix.commands.set import set_override
 from pix.commands.sync import sync_library
 
 # Shared help text for the `--no-prompt` confirmation-skip option.
@@ -132,6 +133,54 @@ def organize(
 ) -> None:
     """Re-shape the library to match a folder template (library-wide MOVE)."""
     organize_library(path=path, template_str=template, no_prompt=no_prompt)
+
+
+@app.command("set")
+def set_(
+    tag: Annotated[
+        str,
+        typer.Argument(help="Tag to override: 'event' or 'date'."),
+    ],
+    value: Annotated[
+        str,
+        typer.Argument(
+            help=(
+                'Override value. Empty string "" clears the override. For '
+                "date: a YYYY-MM-DD-HH:MM:SS pattern with `*` for any "
+                "unpinned part, e.g. 2022-*-*-*:*:*"
+            ),
+        ),
+    ],
+    paths: Annotated[
+        list[Path],
+        typer.Argument(
+            help="One or more files to set the override on (all under one library)."
+        ),
+    ],
+    no_prompt: Annotated[
+        bool, typer.Option("--no-prompt", help=_NO_PROMPT_HELP)
+    ] = False,
+) -> None:
+    """Set a tag override on specific files; run `pix organize` after."""
+    set_override(tag=tag, value=value, paths=paths, no_prompt=no_prompt)
+
+
+@app.command("clear")
+def clear_(
+    tag: Annotated[
+        str,
+        typer.Argument(help="Tag whose override to remove: 'event' or 'date'."),
+    ],
+    paths: Annotated[
+        list[Path],
+        typer.Argument(help="One or more files to clear the override on."),
+    ],
+    no_prompt: Annotated[
+        bool, typer.Option("--no-prompt", help=_NO_PROMPT_HELP)
+    ] = False,
+) -> None:
+    """Remove a tag override from specific files (the inverse of `pix set`)."""
+    set_override(tag=tag, value="", paths=paths, no_prompt=no_prompt, clear=True)
 
 
 @app.command("meta")
