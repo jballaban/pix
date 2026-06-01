@@ -1,7 +1,9 @@
 """Implementation of `pix init`.
 
-Creates a library root at <path> (or CWD), writes a default `config.yaml` into
-`<path>/.pix/`. Refuses to nest a library inside an existing one.
+Creates a library root at <path> (or CWD) with a `.pix/` directory and a
+`pix.yaml` settings file. Refuses to nest a library inside an existing one.
+The format policy is a property of the pix build (see config.EXTENSION_POLICY),
+not written per library; the library is version-less (no schema/upgrade).
 """
 
 from __future__ import annotations
@@ -11,13 +13,21 @@ from pathlib import Path
 import typer
 
 from pix import banner
-from pix.config import DEFAULT_CONFIG_YAML
-from pix.schema import SCHEMA_VERSION
+from pix.config import CONFIG_FILENAME
 
 SYNC_REMINDER = """\
 Reminder: exclude .pix/ from any file-sync clients (Synology Drive, OneDrive,
 Dropbox, ...). .pix/runs/ accumulates full file captures from every migrate
 run, which would roughly double cloud storage per run.
+"""
+
+# Seed contents of pix.yaml: just a header comment. Settings (runs_dir,
+# organize.template) are added on demand — by hand or by `pix organize`.
+_SETTINGS_HEADER = """\
+# pix per-library settings. Optional keys:
+#   runs_dir: D:\\some\\path        # relocate run folders (captures) off this volume
+#   organize:
+#     template: '{year}/{event}/{month}'   # set automatically by `pix organize`
 """
 
 
@@ -45,11 +55,8 @@ def init_library(path: Path | None) -> None:
 
     target.mkdir(parents=True, exist_ok=True)
     pix_dir.mkdir()
-    (pix_dir / "config.yaml").write_text(DEFAULT_CONFIG_YAML, encoding="utf-8")
-    (pix_dir / "state.yaml").write_text(
-        f"schema_version: {SCHEMA_VERSION}\n", encoding="utf-8"
-    )
+    (pix_dir / CONFIG_FILENAME).write_text(_SETTINGS_HEADER, encoding="utf-8")
 
-    typer.echo(f"Initialized pix library root at {target} (schema v{SCHEMA_VERSION}).")
+    typer.echo(f"Initialized pix library root at {target}.")
     typer.echo()
     typer.echo(SYNC_REMINDER)

@@ -10,25 +10,26 @@ from pix.cli import app
 runner = CliRunner()
 
 
-def test_init_creates_pix_dir_and_default_config(tmp_path: Path) -> None:
+def test_init_creates_pix_dir_and_settings_file(tmp_path: Path) -> None:
     target = tmp_path / "library"
     result = runner.invoke(app, ["init", str(target)])
 
     assert result.exit_code == 0, result.output
     assert (target / ".pix").is_dir()
 
-    config_path = target / ".pix" / "config.yaml"
-    assert config_path.is_file()
+    # Settings file is pix.yaml now (format policy is a build constant, not
+    # written per-library); no state.yaml (the library is version-less).
+    assert (target / ".pix" / "pix.yaml").is_file()
+    assert not (target / ".pix" / "state.yaml").exists()
+    assert not (target / ".pix" / "config.yaml").exists()
 
-    config_text = config_path.read_text(encoding="utf-8")
-    assert "jpg:" in config_text
-    assert "heic:" in config_text
-    assert "mov:" in config_text
-    assert "thumbs.db" in config_text
+    # A fresh settings file loads to defaults (build policy).
+    from pix.config import Config, settings_path
 
-    state_path = target / ".pix" / "state.yaml"
-    assert state_path.is_file()
-    assert "schema_version:" in state_path.read_text(encoding="utf-8")
+    cfg = Config.load(settings_path(target))
+    assert cfg.extensions["jpg"] == "keep"
+    assert cfg.runs_dir is None
+    assert cfg.organize_template is None
 
 
 def test_init_fails_if_already_initialized(tmp_path: Path) -> None:

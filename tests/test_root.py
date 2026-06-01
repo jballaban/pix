@@ -5,17 +5,13 @@ from pathlib import Path
 import pytest
 
 from pix.root import NoLibraryRoot, resolve
-from pix.schema import SCHEMA_VERSION, SchemaUpgradeRequired
 
 
 def _make_lib(parent: Path, name: str = "library") -> Path:
-    """Create a library root with .pix/ and a current-version state.yaml."""
+    """Create a library root (just a `.pix/` dir — the library is version-less)."""
     root = parent / name
     root.mkdir()
     (root / ".pix").mkdir()
-    (root / ".pix" / "state.yaml").write_text(
-        f"schema_version: {SCHEMA_VERSION}\n", encoding="utf-8"
-    )
     return root
 
 
@@ -28,9 +24,6 @@ def test_resolve_walks_up_from_start(tmp_path: Path) -> None:
 
 def test_resolve_returns_start_when_pix_at_start(tmp_path: Path) -> None:
     (tmp_path / ".pix").mkdir()
-    (tmp_path / ".pix" / "state.yaml").write_text(
-        f"schema_version: {SCHEMA_VERSION}\n", encoding="utf-8"
-    )
     assert resolve(start=tmp_path) == tmp_path
 
 
@@ -85,26 +78,11 @@ def test_start_takes_precedence_over_env(
     assert resolve(start=a) == a
 
 
-def test_resolve_raises_schema_upgrade_required_when_old(
+def test_resolve_is_version_less(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An older schema_version is no longer auto-fixed."""
-    root = tmp_path / "library"
-    root.mkdir()
-    (root / ".pix").mkdir()
-    # Pretend the library is at v1 while pix expects v2+.
-    (root / ".pix" / "state.yaml").write_text(
-        "schema_version: 1\n", encoding="utf-8"
-    )
-    monkeypatch.delenv("PIX_ROOT", raising=False)
-    with pytest.raises(SchemaUpgradeRequired):
-        resolve(start=root)
-
-
-def test_resolve_check_schema_false_skips_version_check(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """`pix upgrade` resolves without the schema check."""
+    """No schema gate: a `.pix/` resolves regardless of any version file
+    (a stray legacy state.yaml is ignored, not a barrier)."""
     root = tmp_path / "library"
     root.mkdir()
     (root / ".pix").mkdir()
@@ -112,5 +90,4 @@ def test_resolve_check_schema_false_skips_version_check(
         "schema_version: 1\n", encoding="utf-8"
     )
     monkeypatch.delenv("PIX_ROOT", raising=False)
-    # Would raise without `check_schema=False`.
-    assert resolve(start=root, check_schema=False) == root
+    assert resolve(start=root) == root

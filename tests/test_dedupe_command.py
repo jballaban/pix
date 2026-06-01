@@ -7,21 +7,14 @@ from pathlib import Path
 import pytest
 
 from pix.commands.dedupe import dedupe_library
-from pix.config import DEFAULT_CONFIG_YAML
 from pix.hash_cache import write_cached_hash
 from pix.metadata_cache import PerFileCache
 from pix.plan import PIX_ORIGINAL_PATH
-from pix.schema import SCHEMA_VERSION
 
 
 def _make_library(tmp_path: Path) -> Path:
     root = tmp_path / "lib"
-    pix = root / ".pix"
-    pix.mkdir(parents=True)
-    (pix / "config.yaml").write_text(DEFAULT_CONFIG_YAML, encoding="utf-8")
-    (pix / "state.yaml").write_text(
-        f"schema_version: {SCHEMA_VERSION}\n", encoding="utf-8"
-    )
+    (root / ".pix").mkdir(parents=True)  # version-less; settings file optional
     return root
 
 

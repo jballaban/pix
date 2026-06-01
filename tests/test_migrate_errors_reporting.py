@@ -16,20 +16,13 @@ import typer
 
 from pix import __version__ as PIX_VERSION
 from pix.commands.migrate import migrate_folder
-from pix.config import DEFAULT_CONFIG_YAML
 from pix.errors import ErrorSidecar, move_to_errors, sidecar_path_for
-from pix.schema import SCHEMA_VERSION
 
 
 def _make_library(tmp_path: Path) -> Path:
     """Create an empty library root with a valid .pix/ scaffold."""
     root = tmp_path / "lib"
-    pix = root / ".pix"
-    pix.mkdir(parents=True)
-    (pix / "config.yaml").write_text(DEFAULT_CONFIG_YAML, encoding="utf-8")
-    (pix / "state.yaml").write_text(
-        f"schema_version: {SCHEMA_VERSION}\n", encoding="utf-8"
-    )
+    (root / ".pix").mkdir(parents=True)  # version-less; settings file optional
     return root
 
 
@@ -168,7 +161,7 @@ def test_migrate_reprocesses_orphaned_sidecar_less_file(
     assert not orphan.exists()
     assert (root / "2026-05-28_10-55-13_L1042.zzz").is_file()
     err = capsys.readouterr().err
-    assert "Unknown file extensions" in err
+    assert "doesn't handle" in err
 
 
 def test_migrate_reports_restored_older_version_file(

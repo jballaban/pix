@@ -192,7 +192,7 @@ User overrides on `_auto` values are **not** edited from the migrate plan. They 
 
 ## Extension policy
 
-Every source extension must have an explicit action in `<library-root>\.pix\config.yaml`. Unknown extensions abort migrate before plan generation. Lookup is case-insensitive.
+Every source extension must have an explicit action in the build's **`config.EXTENSION_POLICY`** constant — the policy is a property of this pix build, not a per-library setting (no library copy, no override). Updating pix updates the policy for every library with zero migration. Extensions not in the policy abort migrate before plan generation. Lookup is case-insensitive.
 
 ### Actions
 
@@ -219,41 +219,13 @@ The canonical extension is always lowercase, and certain aliases collapse to a s
 
 A file whose name on disk doesn't match its canonical extension triggers a RENAME even if no other change is needed.
 
-### Default config
+### The policy (build constant)
 
-Created on first run if absent:
+The policy is `config.EXTENSION_POLICY` in the binary — not a file. Current mappings: `keep` for jpg/jpeg/mp4/m4v/insp/insv; `convert_to_jpg` for heic/heif/png/bmp/dng; `convert_to_mp4` for mov/avi/mts/mpg/mpeg/vob; `delete` for ds_store/thumbs.db/ini/txt/json/gif/webp/jwt. (`stash` is a valid action but currently unmapped — kept for future raw formats.) Editing the policy is a one-line change to the constant for an existing action; a new *target* action needs a converter (code).
 
-```yaml
-extensions:
-  jpg:     keep
-  jpeg:    keep
-  mp4:     keep
-  m4v:     keep            # Apple-branded MP4; same bytes, different extension
-  heic:    convert_to_jpg
-  heif:    convert_to_jpg
-  png:     convert_to_jpg
-  mov:     convert_to_mp4
-  avi:     convert_to_mp4
-  mts:     convert_to_mp4   # AVCHD camcorder MPEG-TS; usually H.264, remuxes cheaply
-  mpg:     convert_to_mp4   # MPEG-1/MPEG-2 Program Stream; mandatory re-encode
-  mpeg:    convert_to_mp4   # same format as .mpg, long extension
-  vob:     convert_to_mp4   # DVD-Video object; MPEG-2 PS + DVD-specific extras
-  dng:     convert_to_jpg   # raw photo — develop to JPG; un-developable raws (e.g. 360 Bayer) fail CONVERT → quarantine to .pix/errors/
-  insp:    keep             # Insta360 360 photo — name-preserving keep (see below)
-  insv:    keep             # Insta360 360 video — name-preserving keep (see below)
-  ds_store: delete    # macOS system junk
-  thumbs.db: delete   # Windows system junk
-  ini:     delete    # desktop.ini and other Windows config sidecars
-  txt:     delete    # plain text files (notes, release-notes, manifests)
-  json:    delete    # metadata exports, sidecars
-  gif:     delete    # web-format animated images (memes, downloads)
-  webp:    delete    # web image format (downloads, screenshots)
-  jwt:     delete    # Microsoft auth-broker trust manifests synced by OneDrive
-```
-
-Notable omissions — user must opt in by adding the extension:
-- Other RAW formats (`.cr2`, `.nef`, `.arw`, `.raf`, `.rw2`, `.orf`, `.pef`) — likely `convert_to_jpg` (same as `.dng`: develop what Pillow can decode, the rest fail CONVERT and quarantine). Added on demand.
-- `.webp`, `.bmp`, `.tiff`/`.tif` — likely `convert_to_jpg`.
+Not yet in the policy (add on demand, in the constant):
+- Other RAW formats (`.cr2`, `.nef`, `.arw`, `.raf`, `.rw2`, `.orf`, `.pef`) — likely `convert_to_jpg` (same as `.dng`: develop what Pillow can decode, the rest fail CONVERT and quarantine).
+- `.tiff`/`.tif` — likely `convert_to_jpg`.
 - `.mkv`, `.wmv`, `.3gp`, `.webm`, `.m2ts` — likely `convert_to_mp4`.
 - Sidecar/metadata files (`.aae`, `.lrcat`, `.xmp`) — likely `delete`.
 
@@ -349,16 +321,14 @@ Before generating a plan, migrate walks the source and collects all distinct ext
 ```
 $ pix migrate F:\source\trip-2023
 
-Unknown file extensions found in source:
-  .webp   (e.g. F:\source\trip-2023\downloaded.webp)
-  .bmp    (e.g. F:\source\trip-2023\old_scan.bmp)
+File extensions this pix build doesn't handle were found in source:
   .lrcat  (e.g. F:\source\trip-2023\catalog.lrcat)
+  .psd    (e.g. F:\source\trip-2023\edit.psd)
 
-Edit <library-root>/.pix/config.yaml and set an action for each, then re-run.
-Available actions: keep, convert_to_jpg, convert_to_mp4, delete
-(Adding a new target format requires code changes.)
-
-Aborted; no changes made.
+The format policy is built into pix (config.EXTENSION_POLICY), not
+per-library. Add the extension there (a one-line change for an existing
+action; a new target format needs a converter), or remove these files
+from the source. Aborted; no changes made.
 ```
 
 Exit non-zero. No plan file written.

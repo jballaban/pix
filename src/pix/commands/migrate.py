@@ -26,7 +26,7 @@ from pix.cleanup import (
     wipe_staging,
 )
 from pix.cache_base import prune_orphans, relocate_all, remove_all
-from pix.config import Config
+from pix.config import Config, settings_path
 from pix.convert import VideoProfile, probe_videos_parallel
 from pix.duration import format_duration_precise
 from pix.errors import restore_orphaned_errors, restore_stale_errors
@@ -52,7 +52,6 @@ from pix.progress import LiveProgress
 from pix.root import NoLibraryRoot, resolve as resolve_root
 from pix.scan import walk_source_files
 from pix.stash import restore_stale_stash
-from pix.schema import SCHEMA_VERSION, SchemaTooNew, SchemaUpgradeRequired
 from pix.video_cache import read_all_cached_profiles, write_cached_profile
 
 
@@ -66,20 +65,15 @@ def migrate_folder(folder: Path, no_prompt: bool = False) -> None:
     plan directly (the plan is still written to the run folder). Used by
     `pix sync`; also exposed as `--no-prompt`.
     """
-    user_path = str(folder)
     folder = folder.resolve()
     try:
         root = resolve_root(start=folder)
-    except SchemaUpgradeRequired as e:
-        banner()
-        typer.echo(f"{e} Run `pix upgrade {user_path}`", err=True)
-        raise typer.Exit(code=1) from e
-    except (NoLibraryRoot, SchemaTooNew) as e:
+    except NoLibraryRoot as e:
         banner()
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
 
-    banner(schema_version=SCHEMA_VERSION)
+    banner()
 
     try:
         ensure_no_open_checkout(root)
@@ -91,7 +85,7 @@ def migrate_folder(folder: Path, no_prompt: bool = False) -> None:
         typer.echo(f"Error: {folder} is not a directory.", err=True)
         raise typer.Exit(code=1)
 
-    config = Config.load(root / ".pix" / "config.yaml")
+    config = Config.load(settings_path(root))
 
     try:
         with acquire_lock(root, "migrate"):
@@ -666,18 +660,18 @@ def _validate_extensions(
         return
 
     typer.echo("", err=True)
-    typer.echo("Unknown file extensions found in source:", err=True)
+    typer.echo(
+        "File extensions this pix build doesn't handle were found in source:",
+        err=True,
+    )
     for key, example in sorted(unknown.items()):
         typer.echo(f"  .{key}   (e.g. {example})", err=True)
     typer.echo("", err=True)
     typer.echo(
-        "Edit <library-root>/.pix/config.yaml and set an action for each, "
-        "then re-run.",
+        "The format policy is built into pix (config.EXTENSION_POLICY), not "
+        "per-library. Add the extension there (a one-line change for an "
+        "existing action; a new target format needs a converter), or remove "
+        "these files from the source. Aborted; no changes made.",
         err=True,
     )
-    typer.echo(
-        "Available actions: keep, convert_to_jpg, convert_to_mp4, delete",
-        err=True,
-    )
-    typer.echo("Aborted; no changes made.", err=True)
     raise typer.Exit(code=1)

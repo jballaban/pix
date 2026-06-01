@@ -16,7 +16,7 @@ import typer
 from pix import banner, debug
 from pix.cache_base import prune_orphans
 from pix.checkout import CheckoutOpen, ensure_no_open_checkout
-from pix.config import Config, set_organize_template
+from pix.config import Config, set_organize_template, settings_path
 from pix.duration import format_duration_precise
 from pix.editor import open_in_editor, parse_kept_line_ids, prompt_apply
 from pix.hash_cache import read_all_cached_hashes
@@ -45,7 +45,6 @@ from pix.organize import (
 from pix.plan import PlanLine
 from pix.root import NoLibraryRoot, resolve as resolve_root
 from pix.scan import walk_source_files
-from pix.schema import SCHEMA_VERSION, SchemaTooNew, SchemaUpgradeRequired
 
 
 def organize_library(
@@ -60,20 +59,15 @@ def organize_library(
     plan directly (the plan is still written). Used by `pix sync`; also
     exposed as `--no-prompt`.
     """
-    user_path = str(path)
     path = path.resolve()
     try:
         root = resolve_root(start=path)
-    except SchemaUpgradeRequired as e:
-        banner()
-        typer.echo(f"{e} Run `pix upgrade {user_path}`", err=True)
-        raise typer.Exit(code=1) from e
-    except (NoLibraryRoot, SchemaTooNew) as e:
+    except NoLibraryRoot as e:
         banner()
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
 
-    banner(schema_version=SCHEMA_VERSION)
+    banner()
 
     try:
         ensure_no_open_checkout(root)
@@ -87,8 +81,8 @@ def organize_library(
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
 
-    config_path = root / ".pix" / "config.yaml"
-    config = Config.load(config_path)  # validates current config
+    config_path = settings_path(root)
+    config = Config.load(config_path)  # validates current settings
 
     # No template given → re-apply the stored default shape (the
     # `organize.template` persisted by the last successful organize).

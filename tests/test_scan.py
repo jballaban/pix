@@ -16,7 +16,7 @@ def test_walk_skips_pix_state_directory(tmp_path: Path) -> None:
     (pix_dir / "runs" / "2026-05-18_18-00-00" / "plan.txt").write_text("x")
     (pix_dir / "staging").mkdir()
     (pix_dir / "staging" / "scratch.tmp").write_text("x")
-    (pix_dir / "config.yaml").write_text("extensions: {}")
+    (pix_dir / "pix.yaml").write_text("")
 
     # Real source files that should be picked up.
     (root / "photo.jpg").write_bytes(b"")

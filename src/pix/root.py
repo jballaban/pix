@@ -10,9 +10,10 @@ Resolution order, per spec/library.md:
   3. Walk up from CWD — interactive fallback when the user is inside a
      library and didn't bother to pass a path.
 
-After resolving, the schema version is checked via `pix.schema.ensure_current`
-unless `check_schema=False` (only `pix upgrade` passes False, since
-upgrade is the command that fixes the schema mismatch).
+The library is version-less — there's no schema check or upgrade step.
+Format drift in `.pix/` is handled structurally (regenerable caches are
+rebuilt; only-copy provenance is restored from its stable path field;
+run folders are left as-is). See spec/library.md.
 """
 
 from __future__ import annotations
@@ -20,29 +21,16 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from pix.schema import ensure_current
-
 
 class NoLibraryRoot(Exception):
     """Raised when no library root can be resolved."""
 
 
-def resolve(
-    start: Path | None = None,
-    *,
-    check_schema: bool = True,
-) -> Path:
-    """Resolve the library root.
-
-    Raises `NoLibraryRoot` if no root is found. When `check_schema=True`
-    (the default), may also raise `pix.schema.SchemaUpgradeRequired`
-    or `pix.schema.SchemaTooNew`.
-    """
+def resolve(start: Path | None = None) -> Path:
+    """Resolve the library root. Raises `NoLibraryRoot` if none is found."""
     if start is not None:
         found = _walk_up(start.resolve())
         if found is not None:
-            if check_schema:
-                ensure_current(found)
             return found
 
     env_root = os.environ.get("PIX_ROOT")
@@ -53,14 +41,10 @@ def resolve(
                 f"PIX_ROOT={candidate} does not contain a .pix directory. "
                 f"Run 'pix init {candidate}' to establish one."
             )
-        if check_schema:
-            ensure_current(candidate)
         return candidate
 
     found = _walk_up(Path.cwd().resolve())
     if found is not None:
-        if check_schema:
-            ensure_current(found)
         return found
 
     raise NoLibraryRoot(

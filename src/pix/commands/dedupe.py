@@ -42,7 +42,6 @@ from pix.plan import Action
 from pix.progress import LiveProgress
 from pix.root import NoLibraryRoot, resolve as resolve_root
 from pix.scan import walk_source_files
-from pix.schema import SCHEMA_VERSION, SchemaTooNew, SchemaUpgradeRequired
 
 
 def dedupe_library(path: Path, no_prompt: bool = False) -> None:
@@ -52,20 +51,15 @@ def dedupe_library(path: Path, no_prompt: bool = False) -> None:
     plan directly (the plan is still written). Used by `pix sync`; also
     exposed as `--no-prompt`.
     """
-    user_path = str(path)
     path = path.resolve()
     try:
         root = resolve_root(start=path)
-    except SchemaUpgradeRequired as e:
-        banner()
-        typer.echo(f"{e} Run `pix upgrade {user_path}`", err=True)
-        raise typer.Exit(code=1) from e
-    except (NoLibraryRoot, SchemaTooNew) as e:
+    except NoLibraryRoot as e:
         banner()
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
 
-    banner(schema_version=SCHEMA_VERSION)
+    banner()
 
     try:
         ensure_no_open_checkout(root)

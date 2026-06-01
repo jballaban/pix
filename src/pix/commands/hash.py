@@ -26,16 +26,11 @@ from pix.duration import (
     format_size,
 )
 from pix.editor import prompt_proceed
-from pix.hash_cache import (
-    find_missing_hashes,
-    read_cached_hash,
-    write_cached_hash,
-)
+from pix.hash_cache import find_missing_hashes, write_cached_hash
 from pix.library_lock import LockHeld, acquire as acquire_lock
 from pix.progress import LiveProgress
 from pix.root import NoLibraryRoot, resolve as resolve_root
 from pix.scan import walk_source_files
-from pix.schema import SCHEMA_VERSION, SchemaTooNew, SchemaUpgradeRequired
 from pix.telemetry import LineRecord, write_summary
 from pix.timeout import OperationTimeout, run_with_timeout
 
@@ -50,20 +45,15 @@ def hash_library(path: Path, no_prompt: bool = False) -> None:
     `no_prompt` skips the `Proceed?` confirmation. Used by `pix sync`;
     also exposed as `--no-prompt`.
     """
-    user_path = str(path)
     path = path.resolve()
     try:
         root = resolve_root(start=path)
-    except SchemaUpgradeRequired as e:
-        banner()
-        typer.echo(f"{e} Run `pix upgrade {user_path}`", err=True)
-        raise typer.Exit(code=1) from e
-    except (NoLibraryRoot, SchemaTooNew) as e:
+    except NoLibraryRoot as e:
         banner()
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
 
-    banner(schema_version=SCHEMA_VERSION)
+    banner()
 
     try:
         ensure_no_open_checkout(root)

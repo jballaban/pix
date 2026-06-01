@@ -12,11 +12,9 @@ import pytest
 import typer
 
 from pix.commands.organize import organize_library
-from pix.config import DEFAULT_CONFIG_YAML
 from pix.hash_cache import write_cached_hash
 from pix.metadata_cache import PerFileCache
 from pix.plan import PIX_DATE_AUTO, PIX_EVENT_AUTO, PIX_ORIGINAL_PATH
-from pix.schema import SCHEMA_VERSION
 
 
 def _make_library(tmp_path: Path, *, template: str | None = None) -> Path:
@@ -24,13 +22,10 @@ def _make_library(tmp_path: Path, *, template: str | None = None) -> Path:
     root = tmp_path / "lib"
     pix = root / ".pix"
     pix.mkdir(parents=True)
-    config_text = DEFAULT_CONFIG_YAML
     if template is not None:
-        config_text += f'\norganize:\n  template: "{template}"\n'
-    (pix / "config.yaml").write_text(config_text, encoding="utf-8")
-    (pix / "state.yaml").write_text(
-        f"schema_version: {SCHEMA_VERSION}\n", encoding="utf-8"
-    )
+        (pix / "pix.yaml").write_text(
+            f'organize:\n  template: "{template}"\n', encoding="utf-8"
+        )
     return root
 
 

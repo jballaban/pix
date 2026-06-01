@@ -63,7 +63,7 @@ Lock files live in `.pix/lock` so they're excluded from sync clients alongside t
 
 This is intentionally a coarse lock: one operation at a time, library-wide. Finer-grained locking (e.g., letting `pix hash` run concurrently with `pix migrate` on disjoint subtrees) is a future-work concession, not a v1 design goal.
 
-**Checkout freeze.** Separately from the per-invocation lock, an **open tag-editing checkout freezes the whole library**: while `<library>\.pix\checkout\` exists, every command except `pix checkout --commit` and `pix checkout --reset` refuses up front. A checkout materializes hard links whose identity commit relies on (NTFS file-ID); migrate/dedupe/organize/upgrade would all invalidate that identity if they ran mid-session. The freeze is enforced by folder presence (a checkout session spans many invocations, so the lock can't cover it). See [tag-editing.md → The freeze](tag-editing.md#the-freeze--an-open-checkout-locks-the-library).
+**Checkout freeze.** Separately from the per-invocation lock, an **open tag-editing checkout freezes the whole library**: while `<library>\.pix\checkout\` exists, every command except `pix checkout --commit` and `pix checkout --reset` refuses up front. A checkout materializes hard links whose identity commit relies on (NTFS file-ID); migrate/dedupe/organize would all invalidate that identity if they ran mid-session. The freeze is enforced by folder presence (a checkout session spans many invocations, so the lock can't cover it). See [tag-editing.md → The freeze](tag-editing.md#the-freeze--an-open-checkout-locks-the-library).
 
 ## Open decisions
 

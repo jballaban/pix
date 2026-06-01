@@ -1,8 +1,17 @@
-"""Configuration handling for `<library-root>/.pix/config.yaml`."""
+"""Per-library settings (`<library-root>/.pix/pix.yaml`).
+
+The format policy (which action each extension gets) is **not** per-library
+— it's a property of this pix build, so it lives in the `EXTENSION_POLICY`
+constant below, not in any file. `pix.yaml` holds only genuinely
+library-specific settings: the optional `runs_dir` (relocate run folders)
+and `organize.template` (the library's canonical shape). It's a small,
+hand-editable file; pix preserves the keys it knows and drops anything
+else (unknown keys, comments) when it rewrites the file.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, cast
 
@@ -11,58 +20,77 @@ import yaml
 ExtensionAction = Literal[
     "keep", "convert_to_jpg", "convert_to_mp4", "delete", "stash"
 ]
-VALID_ACTIONS: frozenset[str] = frozenset(
-    {"keep", "convert_to_jpg", "convert_to_mp4", "delete", "stash"}
-)
 
-DEFAULT_CONFIG_YAML: str = """\
-extensions:
-  jpg:     keep
-  jpeg:    keep
-  mp4:     keep
-  m4v:     keep            # Apple-branded MP4; same bytes, different extension
-  heic:    convert_to_jpg
-  heif:    convert_to_jpg
-  png:     convert_to_jpg
-  bmp:     convert_to_jpg   # uncompressed bitmap; re-encode to JPEG to reclaim space
-  mov:     convert_to_mp4
-  avi:     convert_to_mp4
-  mts:     convert_to_mp4   # AVCHD camcorder MPEG-TS; usually H.264, remuxes cheaply
-  mpg:     convert_to_mp4   # MPEG-1/MPEG-2 Program Stream; mandatory re-encode to H.265
-  mpeg:    convert_to_mp4   # same format as .mpg with the long extension
-  vob:     convert_to_mp4   # DVD-Video object (MPEG-2 PS); same re-encode path as mpg
-  dng:     convert_to_jpg   # raw photo — develop to JPG; un-developable raws (e.g. Insta360 360 Bayer) fail decode → quarantine to .pix/errors/
-  insp:    keep             # Insta360 360 photo — kept verbatim (dual-fisheye + trailer); tagged, not renamed
-  insv:    keep             # Insta360 360 video — kept verbatim (dual-fisheye + trailer); tagged, not renamed
-  ds_store: delete    # macOS system junk
-  thumbs.db: delete   # Windows system junk
-  ini:     delete    # desktop.ini and other Windows config sidecars
-  txt:     delete    # plain text files (notes, release-notes, manifests)
-  json:    delete    # metadata exports, sidecars
-  gif:     delete    # web-format animated images (memes, downloads)
-  webp:    delete    # web image format (downloads, screenshots)
-  jwt:     delete    # Microsoft auth-broker trust manifests synced by OneDrive
-"""
+# Per-library settings file. (Was `config.yaml`; renamed since it no longer
+# holds the format policy — it's pix's small per-library settings file.)
+CONFIG_FILENAME: str = "pix.yaml"
+
+
+def settings_path(root: Path) -> Path:
+    """Path to a library's settings file: `<root>/.pix/pix.yaml`."""
+    return root / ".pix" / CONFIG_FILENAME
+
+
+# The format policy — what action each source extension gets. This is a
+# property of the pix *build*, not of any library, so it lives here as a
+# constant (no per-library copy, no override). Updating pix updates the
+# policy for every library with zero migration. Unknown extensions abort
+# migrate (see plan.lookup_policy). Adding a new *target* action still
+# requires code (a converter); adding an extension to an existing action
+# is a one-line edit here.
+EXTENSION_POLICY: dict[str, ExtensionAction] = {
+    "jpg": "keep",
+    "jpeg": "keep",
+    "mp4": "keep",
+    "m4v": "keep",  # Apple-branded MP4; same bytes, different extension
+    "heic": "convert_to_jpg",
+    "heif": "convert_to_jpg",
+    "png": "convert_to_jpg",
+    "bmp": "convert_to_jpg",  # uncompressed bitmap; re-encode reclaims space
+    "mov": "convert_to_mp4",
+    "avi": "convert_to_mp4",
+    "mts": "convert_to_mp4",  # AVCHD camcorder MPEG-TS
+    "mpg": "convert_to_mp4",  # MPEG-1/2 Program Stream
+    "mpeg": "convert_to_mp4",
+    "vob": "convert_to_mp4",  # DVD-Video object (MPEG-2 PS)
+    "dng": "convert_to_jpg",  # raw photo → JPG; un-developable raws fail → .pix/errors/
+    "insp": "keep",  # Insta360 360 photo — kept verbatim, tagged, not renamed
+    "insv": "keep",  # Insta360 360 video — kept verbatim, tagged, not renamed
+    "ds_store": "delete",  # macOS junk
+    "thumbs.db": "delete",  # Windows junk
+    "ini": "delete",  # desktop.ini etc.
+    "txt": "delete",
+    "json": "delete",
+    "gif": "delete",  # web-format throwaways
+    "webp": "delete",
+    "jwt": "delete",  # MSAL broker manifests OneDrive syncs in
+}
 
 
 @dataclass(frozen=True)
 class Config:
-    """Parsed pix configuration."""
+    """A library's settings.
 
-    extensions: dict[str, ExtensionAction]
+    `extensions` is the build's `EXTENSION_POLICY` (never read from the
+    settings file); the field exists so callers and tests can inject a
+    policy, but `load` always populates it from the constant.
+    """
+
+    extensions: dict[str, ExtensionAction] = field(
+        default_factory=lambda: dict(EXTENSION_POLICY)
+    )
     organize_template: str | None = None
     runs_dir: str | None = None
 
     def runs_base(self, root: Path) -> Path:
         """Directory that holds per-run folders (`<base>/<run-id>/`).
 
-        Defaults to `<root>/.pix/runs`. Can be repointed onto another
-        volume via the optional `runs_dir` config key — handy when the
-        library drive is full and the conserved originals (captures) are
-        large. Captures then move cross-volume via `timeout.safe_move`
-        (copy+delete) instead of an atomic same-volume rename. Only the
-        run folders relocate; staging, markers, and the media tree stay
-        on the library volume.
+        Defaults to `<root>/.pix/runs`. Repointable onto another volume via
+        the optional `runs_dir` setting — handy when the library drive is
+        full and the conserved-original captures are large. Captures then
+        move cross-volume via `timeout.safe_move` (copy+delete) instead of
+        an atomic same-volume rename. Only the run folders relocate;
+        staging, markers, and the media tree stay on the library volume.
         """
         if self.runs_dir:
             return Path(self.runs_dir)
@@ -70,22 +98,16 @@ class Config:
 
     @classmethod
     def load(cls, path: Path) -> Config:
-        text = path.read_text(encoding="utf-8")
+        """Load a library's settings. Missing or empty file → defaults.
 
-        # An upgrade may have inserted git-style conflict markers when
-        # the user's existing value differed from a new default. Detect
-        # before YAML parses, since markers are not valid YAML and a
-        # generic parse error would be confusing.
-        if "<<<<<<< " in text or "\n=======" in text or ">>>>>>> " in text:
-            raise ValueError(
-                f"{path}: unresolved upgrade conflict markers present. "
-                f"Edit the file to remove `<<<<<<<`, `=======`, and "
-                f"`>>>>>>>` markers, keeping only the line you want for "
-                f"each conflicted entry."
-            )
-
-        loaded: object = yaml.safe_load(text)
-
+        Never reads format policy from the file — `extensions` is always
+        the build's `EXTENSION_POLICY`.
+        """
+        if not path.is_file():
+            return cls()
+        loaded: object = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if loaded is None:
+            return cls()
         if not isinstance(loaded, dict):
             raise ValueError(
                 f"{path}: top-level must be a mapping, "
@@ -93,7 +115,6 @@ class Config:
             )
         data = cast("dict[str, object]", loaded)
         return cls(
-            extensions=_parse_extensions(path, data.get("extensions")),
             organize_template=_parse_organize_template(
                 path, data.get("organize")
             ),
@@ -102,27 +123,29 @@ class Config:
 
 
 def set_organize_template(path: Path, template: str) -> None:
-    """Persist `template` to `config.yaml` under `organize.template`.
+    """Persist `template` as `organize.template` in `pix.yaml`.
 
-    Round-trips the full YAML file; comments and key ordering are not
-    preserved (yaml.safe_dump output). The default config has no
-    user-customized comments to lose at v1.
+    Writes only the keys pix knows (`runs_dir`, `organize.template`),
+    preserving an existing `runs_dir`; unknown keys and comments are
+    dropped (the file is pix-managed, hand-editable for the known keys).
     """
-    with path.open(encoding="utf-8") as f:
-        loaded: object = yaml.safe_load(f) or {}
-    if not isinstance(loaded, dict):
-        raise ValueError(
-            f"{path}: top-level must be a mapping, "
-            f"got {type(loaded).__name__}"
-        )
-    data = cast("dict[str, object]", loaded)
-    organize = data.get("organize")
-    if not isinstance(organize, dict):
-        organize = {}
-    cast("dict[str, object]", organize)["template"] = template
-    data["organize"] = organize
+    existing = Config.load(path)
+    _write_settings(path, runs_dir=existing.runs_dir, organize_template=template)
+
+
+def _write_settings(
+    path: Path, *, runs_dir: str | None, organize_template: str | None
+) -> None:
+    data: dict[str, object] = {}
+    if runs_dir:
+        data["runs_dir"] = runs_dir
+    if organize_template:
+        data["organize"] = {"template": organize_template}
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        yaml.safe_dump(data, default_flow_style=False, sort_keys=False),
+        yaml.safe_dump(data, default_flow_style=False, sort_keys=False)
+        if data
+        else "",
         encoding="utf-8",
     )
 
@@ -155,27 +178,3 @@ def _parse_organize_template(path: Path, raw: object | None) -> str | None:
             f"got {type(template).__name__}"
         )
     return template
-
-
-def _parse_extensions(
-    path: Path, raw: object | None
-) -> dict[str, ExtensionAction]:
-    if raw is None:
-        return {}
-    if not isinstance(raw, dict):
-        raise ValueError(
-            f"{path}: 'extensions' must be a mapping, "
-            f"got {type(raw).__name__}"
-        )
-    raw_dict = cast("dict[object, object]", raw)
-
-    extensions: dict[str, ExtensionAction] = {}
-    for ext_raw, action in raw_dict.items():
-        ext = str(ext_raw).lower().lstrip(".")
-        if action not in VALID_ACTIONS:
-            raise ValueError(
-                f"{path}: invalid action {action!r} for extension {ext!r}. "
-                f"Must be one of {sorted(VALID_ACTIONS)}."
-            )
-        extensions[ext] = cast(ExtensionAction, action)
-    return extensions

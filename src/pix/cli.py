@@ -16,7 +16,6 @@ from pix.commands.meta import meta_file
 from pix.commands.migrate import migrate_folder
 from pix.commands.organize import organize_library
 from pix.commands.sync import sync_library
-from pix.commands.upgrade import upgrade_library
 
 # Shared help text for the `--no-prompt` confirmation-skip option.
 _NO_PROMPT_HELP = (
@@ -81,7 +80,7 @@ def init(
         ),
     ] = None,
 ) -> None:
-    """Establish a library root, creating .pix/ with a default config.yaml."""
+    """Establish a library root, creating .pix/ and a pix.yaml settings file."""
     init_library(path)
 
 
@@ -252,19 +251,3 @@ def sync(
     Stops at the first step that errors so a failure isn't buried.
     """
     sync_library(path=path, template_str=template)
-
-
-@app.command("upgrade")
-def upgrade(
-    path: Annotated[
-        Path,
-        typer.Argument(
-            help=(
-                "Path inside (or at) the library root to upgrade. The "
-                "library is resolved by walking up from this path."
-            ),
-        ),
-    ],
-) -> None:
-    """Archive the library's prior .pix/ contents and reset to current defaults."""
-    upgrade_library(path=path)

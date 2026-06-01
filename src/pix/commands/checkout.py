@@ -56,7 +56,6 @@ from pix.plan import Action, Plan, PlanLine, attach_paths
 from pix.progress import LiveProgress
 from pix.root import NoLibraryRoot, resolve as resolve_root
 from pix.scan import walk_source_files
-from pix.schema import SCHEMA_VERSION, SchemaTooNew, SchemaUpgradeRequired
 
 
 def run_checkout(
@@ -108,7 +107,7 @@ def run_checkout(
 def _do_status() -> None:
     """Print whether a checkout is open and its details."""
     try:
-        root = resolve_root(start=None, check_schema=False)
+        root = resolve_root(start=None)
     except NoLibraryRoot as e:
         banner()
         typer.echo(f"Error: {e}", err=True)
@@ -139,7 +138,7 @@ def _do_status() -> None:
 def _do_reset() -> None:
     """Discard the open checkout (the `--reset` action / unfreeze escape hatch)."""
     try:
-        root = resolve_root(start=None, check_schema=False)
+        root = resolve_root(start=None)
     except NoLibraryRoot as e:
         banner()
         typer.echo(f"Error: {e}", err=True)
@@ -159,16 +158,12 @@ def _do_commit() -> None:
     """Apply the open checkout's tag edits, then tear it down."""
     try:
         root = resolve_root(start=None)
-    except SchemaUpgradeRequired as e:
-        banner()
-        typer.echo(f"{e} Run `pix upgrade`.", err=True)
-        raise typer.Exit(code=1) from e
-    except (NoLibraryRoot, SchemaTooNew) as e:
+    except NoLibraryRoot as e:
         banner()
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
 
-    banner(schema_version=SCHEMA_VERSION)
+    banner()
 
     if not is_open(root):
         typer.echo("No checkout open; nothing to commit.")
@@ -410,20 +405,15 @@ def _commit_plan_text(
 
 def _do_start(path: Path, template_str: str) -> None:
     """Materialize a new scoped checkout workspace."""
-    user_path = str(path)
     scope = path.resolve()
     try:
         root = resolve_root(start=scope)
-    except SchemaUpgradeRequired as e:
-        banner()
-        typer.echo(f"{e} Run `pix upgrade {user_path}`", err=True)
-        raise typer.Exit(code=1) from e
-    except (NoLibraryRoot, SchemaTooNew) as e:
+    except NoLibraryRoot as e:
         banner()
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
 
-    banner(schema_version=SCHEMA_VERSION)
+    banner()
 
     if is_open(root):
         typer.echo(f"Error: {CheckoutExists(checkout_dir(root))}", err=True)
