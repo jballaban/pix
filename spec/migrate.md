@@ -200,7 +200,7 @@ Every source extension must have an explicit action in `<library-root>\.pix\conf
 |---|---|
 | `keep` | Already canonical. Extension is normalized (case + alias, see below); content untouched. |
 | `convert_to_jpg` | Decode + re-encode as JPG (quality 95). Pillow + pillow-heif. EXIF/XMP preserved. |
-| `convert_to_mp4` | Container → MP4, Windows-playable codec. Re-mux (`ffmpeg -c copy`) only when the source already meets the [Windows-playable](#windows-playability-check) criteria; otherwise re-encode `-c:v libx264 -profile:v main -pix_fmt yuv420p -crf 18 -c:a aac -b:a 192k`. Container metadata copied (`-map_metadata 0`). |
+| `convert_to_mp4` | Container → MP4 in the [canonical codec (HEVC)](#canonical-video-codec). Re-mux (`ffmpeg -c copy`) only when the source is already HEVC; otherwise re-encode `-c:v libx265 -preset medium -crf 22 -pix_fmt yuv420p -tag:v hvc1 -c:a aac -b:a 192k`. Container metadata copied (`-map_metadata 0`). |
 | `delete` | Capture the file into the run folder during migrate, then remove from source. Conservation applies. |
 | `stash` | Move the file into `<library-root>/.pix/stash/` for future processing (RAW formats, proprietary 360 sources, anything we can't canonically process in v1). Whole-file BLAKE3 dedups across stash entries: same content from multiple sources lands once with a multi-origin sidecar. See [Stash action](#stash-action) below. |
 
@@ -308,46 +308,39 @@ Restore is skipped (and surfaced) when the origin slot is already occupied, the 
 
 Insta360 360 media is a `keep` format with **one exception to the canonical-filename rule: these files are never renamed.** `.insv` (video) is an MP4/ISO-BMFF container and `.insp` (photo) is a JPEG container, each carrying a proprietary **Insta360 trailer** — gyro/IMU data plus the dual-fisheye lens calibration — appended after the media data. ExifTool writes `pix:*` XMP into the moov/EXIF while preserving that trailer byte-for-byte (it just relocates as the metadata grows), so these files are fully taggable: migrate writes `OriginalPath`, `DateAuto`, `EventAuto` like any keep file, and [organize](organize.md) places them into template folders by their effective date.
 
-What's suppressed is the **rename to the canonical `YYYY-MM-DD_HHMMSS` name**. The reason is lens pairing: a single recording is stored as two files, one per lens, distinguished only by the camera filename (`VID_<date>_<time>_00_<seq>.insv` and `…_10_…`). Both files share the same capture timestamp, so the canonical name would collide them, and the content-hash collision tiebreaker would assign `_NNN` suffixes in an order unrelated to lens identity — scrambling the pairing that Insta360 Studio relies on to reconstruct the 360. So name-preserving keep formats retain their original camera filename through both migrate and organize. The set is built-in (`plan.NAME_PRESERVING_KEEP = {insv, insp}`), not configurable — it encodes format-specific knowledge, like the [Windows playability check](#windows-playability-check). See [library.md → Canonical filename](library.md#canonical-filename).
+What's suppressed is the **rename to the canonical `YYYY-MM-DD_HHMMSS` name**. The reason is lens pairing: a single recording is stored as two files, one per lens, distinguished only by the camera filename (`VID_<date>_<time>_00_<seq>.insv` and `…_10_…`). Both files share the same capture timestamp, so the canonical name would collide them, and the content-hash collision tiebreaker would assign `_NNN` suffixes in an order unrelated to lens identity — scrambling the pairing that Insta360 Studio relies on to reconstruct the 360. So name-preserving keep formats retain their original camera filename through both migrate and organize. The set is built-in (`plan.NAME_PRESERVING_KEEP = {insv, insp}`), not configurable — it encodes format-specific knowledge, like the [canonical video codec](#canonical-video-codec). See [library.md → Canonical filename](library.md#canonical-filename).
 
 **LRV proxies are deleted.** Insta360 writes a disposable low-resolution proxy (`LRV_*.insv`) beside each full-res `VID_*.insv` for fast in-app preview. The app regenerates it on demand and it has no archival value, so migrate **deletes** any keep-policy `.insv` whose filename starts `LRV_` (built-in Insta360 rule, captured to the run folder like any other DELETE). Only the full-res `VID_*` lens files are kept.
 
-<a id="windows-playability-check"></a>
-### Windows playability check
+<a id="canonical-video-codec"></a>
+### Canonical video codec (HEVC)
 
-Windows's built-in H.264 decoder (Windows Media Player, Movies & TV, the system Media Foundation decoder) supports only 4:2:0 chroma sampling. Camcorder-era files encoded as H.264 High 4:2:2 / High 4:4:4 / High 10, or with pixel formats like `yuvj422p`, `yuv422p`, `yuv444p`, will not play in Windows even though ffmpeg, VLC, and MPC-HC handle them fine. Stock Windows just shows "can't play this format" — same surface error as a corrupt file, which is misleading.
+pix normalizes every kept video to one archival codec — **HEVC / H.265** — so the library converges on a single efficient format. This supersedes the earlier "x264, universally stock-Windows-playable" policy: HEVC plays on Windows via the free **HEVC Video Extension** (an opt-in pix now assumes is present), and it roughly halves the bloated x264-CRF18 files at no perceptible cost (VMAF ~97–99 vs source on representative library footage). The trade-off is explicit — the library no longer plays on *stock* Windows without that extension.
 
-Migrate enforces "playable on stock Windows" as a CONVERT trigger so the canonical library is universally playable.
+**Criterion.** A kept video is canonical iff its codec is **HEVC**. Codec identity is the whole test — profile and pixel format don't matter (any HEVC is left alone). This makes the pass **idempotent**: a re-encoded HEVC file is canonical and never touched again, so re-running migrate over a converged library does no video work.
 
-**Criteria.** A video file is Windows-playable iff:
+**Probe.** During plan-gen, migrate runs `ffprobe -show_entries stream=codec_name,profile,pix_fmt` on every keep-policy mp4/m4v candidate (thread pool, 32 workers). Results cache at `<library>/.pix/cache/<absolute-path-mirror>/<filename>.video` keyed on `(size, mtime_ns)` — first migrate pays the ffprobe cost; unchanged libraries skip it. A CONVERT rewrites the file → mtime shifts → next migrate re-probes and finds the now-HEVC output (canonical → done). `convert_to_mp4`-policy sources go through CONVERT regardless and probe internally, so they aren't in the plan-gen probe set.
 
-- **H.264** with profile in `{Constrained Baseline, Baseline, Main, High}` AND `pix_fmt ∈ {yuv420p, yuvj420p}` (8-bit 4:2:0; `yuvj420p` is the full-range/JPEG-range flavor of `yuv420p` — same chroma + bit depth, so it plays), OR
-- **HEVC** (any profile / pix_fmt — users opt in to HEVC playback via the Windows HEVC Video Extension; modern phone/camera HEVC is already yuv420p 8-bit).
-
-All other video streams (h264 with extended profiles or non-4:2:0 chroma; mpeg2video; mpeg4 ASP; etc.) are not Windows-playable and must be re-encoded.
-
-**Probe.** During plan-gen, migrate runs `ffprobe -show_entries stream=codec_name,profile,pix_fmt` on every keep-policy mp4/m4v candidate. The probe runs in a thread pool (32 workers; ffprobe is process-startup-bound, not CPU-bound) so the phase scales with hundreds of videos. Results land in `<library>/.pix/cache/<absolute-path-mirror>/<filename>.video` keyed on `(size, mtime_ns)` — identical layout to the content-hash cache. First migrate pays the ffprobe cost; subsequent migrates over an unchanged library skip the ffprobe pass entirely (cache hit on every candidate). CONVERT rewrites a video → mtime shifts → next migrate re-probes (and finds the now-playable libx264 yuv420p output).
-
-Source files matching the `convert_to_mp4` policy already go through CONVERT regardless and probe internally at apply time, so they aren't part of the plan-gen probe set.
+**Name-preserving keep is excluded.** `.insv`/`.insp` are never re-encoded — that would strip the Insta360 trailer (gyro + dual-fisheye calibration). Their canonical extension isn't `mp4` so they're not in the probe set, and `plan._plan_one` additionally guards on `NAME_PRESERVING_KEEP` so the exclusion is explicit, not incidental.
 
 Result feeds the action decision in plan-gen:
 
-- `keep` policy + Windows-playable → no plan line (or RENAME/TAG only, per the usual idempotence rules).
-- `keep` policy + **not** Windows-playable → **CONVERT+RENAME+TAG**, re-encoding under the criteria below.
-- `convert_to_mp4` policy + source Windows-playable → re-mux (`-c copy`) as before.
-- `convert_to_mp4` policy + source **not** Windows-playable → re-encode under the criteria below.
+- `keep` + already HEVC → no plan line (or RENAME/TAG only, per idempotence).
+- `keep` + **not** HEVC → **CONVERT+RENAME+TAG**, re-encoding to HEVC (plan detail notes `transcode to HEVC`).
+- `convert_to_mp4` + source already HEVC → re-mux (`-c copy`), just rewrapping into MP4.
+- `convert_to_mp4` + source **not** HEVC → re-encode to HEVC.
 
 **Re-encode target.**
 
-- Video: `-c:v libx264 -profile:v main -pix_fmt yuv420p -crf 18`. CRF 18 is visually lossless for typical handheld content; this is an archive pass, not a streaming pass.
-- Audio: `-c:a aac -b:a 192k` (unchanged from prior policy).
-- Container metadata: `-map_metadata 0` (unchanged).
+- Video: `-c:v libx265 -preset medium -crf 22 -pix_fmt yuv420p -tag:v hvc1`. CRF 22 is visually transparent for archival content; `hvc1` tagging makes Windows/Apple players recognize the stream.
+- Audio: `-c:a aac -b:a 192k`.
+- Container metadata: `-map_metadata 0`.
 
-This replaces the prior libx265-CRF-23 re-encode target: x264 + 4:2:0 is the universally playable lowest-common-denominator. Larger files vs HEVC, but the user can run a future `pix transcode` op if they later want HEVC for storage savings.
+**Re-processing already-migrated files.** Files with `pix:OriginalPath` set are *not* exempt — a previously-migrated x264 file is non-HEVC, so migrate re-CONVERTs it. This is deliberate: the first `pix migrate <library-root>` after this change re-encodes every H.264 file in the library to HEVC **once** (a large, hours-to-days pass), then the library is uniformly HEVC and subsequent migrates skip it. Each original is captured to `runs/<run-id>/data/`. **Caveat:** this is a *lossy second-generation* re-encode (the prior x264 was already lossy and the true camera originals are usually gone), so the run-folder capture is the only rollback — don't delete the run folder until the result is verified.
 
-**Re-processing already-migrated files.** Files with `pix:OriginalPath` already set are *not* exempt from the playability check — migrate re-CONVERTs them under the new policy. This is deliberate: when the user runs `pix migrate <library-root>` after this spec change, every previously-migrated yuvj422p/High-4:2:2 file gets re-encoded once, and the library becomes uniformly playable. Originals are captured to `runs/<run-id>/data/` so the operation is reversible.
+The XMP layer carries over (per the cross-cutting CONVERT invariant) so `pix:OriginalPath`, `pix:DateAuto`, user overrides etc. all survive. The `.pix/cache/<…>.hash` cache for each re-encoded file goes stale (size + mtime change); `pix hash` regenerates next run.
 
-The XMP layer carries over (per the cross-cutting CONVERT invariant) so `pix:OriginalPath`, `pix:DateAuto`, user `DateOverride` / `EventOverride` etc. all survive the re-encode. The `.pix/cache/<…>.hash` cache for each re-encoded file becomes stale (size + mtime change); `pix hash` regenerates on next run.
+> **Skip-lean (deferred).** Re-encoding *every* non-HEVC file includes already-lean clips where HEVC saves little. CRF-22 is quality-targeted so it won't bloat them, but it's a wasted generation of loss. A future refinement could skip files below a bitrate-per-pixel threshold — it needs the probe/cache to carry bitrate + dimensions, so it's out of scope here.
 
 ### Fail-fast on unknown extensions
 

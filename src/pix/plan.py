@@ -21,7 +21,7 @@ from pathlib import Path
 
 from pix import debug
 from pix.config import Config, ExtensionAction
-from pix.convert import VideoProfile, is_windows_playable
+from pix.convert import VideoProfile, is_canonical_video_codec
 from pix.dates import (
     PIX_DATETIME_FORMAT,
     derive_date_auto,
@@ -212,9 +212,9 @@ def generate_plan(
     pre-compute every path apply will need, so apply is a pure executor.
 
     `video_profiles` is the precomputed `{path: VideoProfile|None}` for
-    keep-policy video candidates (per spec/migrate.md → Windows playability
-    check). When a file's profile fails the playability check, plan-gen
-    routes it to CONVERT instead of keep. Built once in commands/migrate.py
+    keep-policy video candidates (per spec/migrate.md → Canonical video
+    codec). When a file's codec isn't the canonical one (HEVC), plan-gen
+    routes it to CONVERT for re-encode. Built once in commands/migrate.py
     via `convert.probe_videos_parallel`.
     """
     generated_at = now or datetime.now()
@@ -615,40 +615,41 @@ def _plan_one(
         )
         debug.log(f"  First migrate: {'yes' if is_first_migrate else 'no'}")
 
-        # Windows-playability override per spec/migrate.md → Windows
-        # playability check. Files where the extension policy says
-        # `keep` (target_ext is None) but the actual codec/profile/pixel
-        # format isn't Windows-playable get routed to CONVERT, which
-        # re-encodes to libx264 Main + yuv420p.
-        playability_override = False
+        # Canonical-video-codec override per spec/migrate.md → Canonical
+        # video codec. A keep-policy video (target_ext is None) whose codec
+        # isn't HEVC is re-encoded to HEVC so the library converges to one
+        # efficient codec. Already-HEVC files pass untouched (idempotent).
+        # Name-preserving keep formats (.insv/.insp) are excluded — they're
+        # never re-encoded (would strip the Insta360 trailer). They aren't
+        # in the probe set today, but the guard makes that contract explicit.
+        ext = path.suffix.lower().lstrip(".")
+        transcode_override = False
         if (
             target_ext is None
+            and ext not in NAME_PRESERVING_KEEP
             and video_profiles is not None
             and path in video_profiles
         ):
             profile = video_profiles[path]
-            debug.section("Windows playability")
+            debug.section("Canonical video codec")
             if profile is None:
                 debug.log(
                     "  ffprobe failed or returned no video stream — "
                     "leaving action unchanged."
                 )
-            elif not is_windows_playable(profile):
+            elif not is_canonical_video_codec(profile):
                 debug.log(
                     f"  Codec: {profile.codec}, profile: {profile.profile!r}, "
                     f"pix_fmt: {profile.pix_fmt}"
                 )
                 debug.log(
-                    "  Not Windows-playable — forcing CONVERT to re-encode."
+                    "  Not HEVC — forcing CONVERT to re-encode to canonical "
+                    "codec."
                 )
                 target_ext = "mp4"
-                playability_override = True
+                transcode_override = True
             else:
-                debug.log(
-                    f"  Codec: {profile.codec}, profile: {profile.profile!r}, "
-                    f"pix_fmt: {profile.pix_fmt}"
-                )
-                debug.log("  Windows-playable — no override.")
+                debug.log("  Already HEVC — canonical; no override.")
 
         if target_ext is not None:
             return _plan_convert(
@@ -657,7 +658,7 @@ def _plan_one(
                 rel_str=rel_str,
                 target_ext=target_ext,
                 is_first_migrate=is_first_migrate,
-                playability_override=playability_override,
+                transcode_override=transcode_override,
             )
 
         # Built-in Insta360 rule: LRV_*.insv are disposable low-res proxies
@@ -689,14 +690,14 @@ def _plan_convert(
     rel_str: str,
     target_ext: str,
     is_first_migrate: bool,
-    playability_override: bool = False,
+    transcode_override: bool = False,
 ) -> PlanLine:
     canonical_name = _canonical_filename(meta=meta, ext=target_ext)
     details_parts: list[str] = [
         f"→{canonical_name}" if canonical_name else "→<unknown-date>"
     ]
-    if playability_override:
-        details_parts.append("windows-playability re-encode")
+    if transcode_override:
+        details_parts.append("transcode to HEVC")
     pix_writes: dict[str, str] = {}
 
     if is_first_migrate:

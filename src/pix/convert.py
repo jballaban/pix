@@ -51,29 +51,23 @@ class ToolNotFound(Exception):
 
 JPG_QUALITY: int = 95
 
-# Windows-playable H.264 profile names per spec/migrate.md → Windows
-# playability check. ffprobe reports `profile` as a human-readable
-# string; these are the values we accept for `-c copy`.
-_WINDOWS_PLAYABLE_H264_PROFILES: frozenset[str] = frozenset(
-    {"Constrained Baseline", "Baseline", "Main", "High"}
-)
+# pix's canonical archival video codec. migrate normalizes every kept
+# video to HEVC/H.265 (see spec/migrate.md → Canonical video codec): it
+# re-muxes when the source is already HEVC and re-encodes otherwise, so
+# the library converges to one efficient codec. HEVC playback needs the
+# (free) Windows HEVC Video Extension — an opt-in pix assumes is present.
+CANONICAL_VIDEO_CODEC: str = "hevc"
 
-# 8-bit 4:2:0 pixel formats Windows' stock H.264 decoder handles. Both
-# entries are 4:2:0 8-bit; `yuvj420p` is just the full-range (JPEG
-# range, 0-255) flavor of `yuv420p` (limited range, 16-235) — the
-# chroma subsampling and bit depth are identical, so it plays fine.
-# Older consumer cameras/phones tag their H.264 as yuvj420p; treating
-# it as non-playable needlessly re-encodes huge volumes of footage.
-# The genuinely-unplayable formats (yuv422p/yuvj422p, yuv444p, 10-bit)
-# are deliberately absent.
-_WINDOWS_PLAYABLE_H264_PIX_FMTS: frozenset[str] = frozenset(
-    {"yuv420p", "yuvj420p"}
-)
+# Re-encode quality. CRF 22 on x265 is visually transparent for archival
+# content (VMAF ~97-99 vs the source on representative library footage)
+# while roughly halving the bloated x264-CRF18 files. 8-bit 4:2:0 (Main
+# profile), `hvc1` tag so Windows/Apple players recognize the stream.
+_X265_CRF: str = "22"
 
 # Subprocess timeouts per spec/implementation.md → Subprocess hardening.
 _FFPROBE_TIMEOUT: float = 30.0       # codec probe; small read, generous margin
 _FFMPEG_REMUX_TIMEOUT: float = 300.0  # 5 min for `-c copy` (cheap; long for safety)
-_FFMPEG_REENCODE_TIMEOUT: float = 3600.0  # 1 hour for libx264 re-encode
+_FFMPEG_REENCODE_TIMEOUT: float = 7200.0  # 2 hours — libx265 medium is slow on long/4K clips
 _PILLOW_TIMEOUT: float = 60.0         # Pillow JPG decode + encode
 
 # Parallel-probe pool size — ffprobe is dominated by process startup,
@@ -87,8 +81,9 @@ class VideoProfile:
     """Codec / profile / pixel format triple from `ffprobe`.
 
     All fields are lowercased except `profile`, which preserves
-    ffprobe's casing (e.g. `Main`, `High 4:2:2`) because the H.264
-    playability check compares to canonical profile names.
+    ffprobe's casing (e.g. `Main`, `High 4:2:2`). Only `codec` drives the
+    convert decision now (HEVC = canonical); `profile`/`pix_fmt` are kept
+    for diagnostics and error messages.
     """
 
     codec: str
@@ -96,22 +91,14 @@ class VideoProfile:
     pix_fmt: str
 
 
-def is_windows_playable(profile: VideoProfile) -> bool:
-    """Return True iff the stream plays in stock Windows H.264/HEVC decoders.
+def is_canonical_video_codec(profile: VideoProfile) -> bool:
+    """True iff the stream is already in pix's canonical codec (HEVC).
 
-    See spec/migrate.md → Windows playability check. H.264 must be
-    Baseline/Main/High (4:2:0) at 8-bit. HEVC is accepted unconditionally
-    — the user opts in via the Windows HEVC Video Extension.
+    A canonical-codec source only needs re-muxing into MP4 (`-c copy`);
+    anything else is re-encoded to HEVC. See spec/migrate.md → Canonical
+    video codec.
     """
-    if profile.codec == "h264":
-        if profile.profile not in _WINDOWS_PLAYABLE_H264_PROFILES:
-            return False
-        if profile.pix_fmt not in _WINDOWS_PLAYABLE_H264_PIX_FMTS:
-            return False
-        return True
-    if profile.codec == "hevc":
-        return True
-    return False
+    return profile.codec == CANONICAL_VIDEO_CODEC
 
 
 def convert_to_jpg(src: Path, dst: Path) -> None:
@@ -142,17 +129,17 @@ def convert_to_jpg(src: Path, dst: Path) -> None:
 def convert_to_mp4(src: Path, dst: Path) -> None:
     """Convert `src` to MP4 at `dst` via ffmpeg.
 
-    Re-muxes (`-c copy`) when the source meets the Windows-playable
-    criteria (see spec/migrate.md → Windows playability check).
-    Otherwise re-encodes with libx264 Main + yuv420p + AAC, the
-    universally playable lowest-common-denominator. Container-level
-    metadata copied via `-map_metadata 0`; pix:* fields are written
-    separately by the apply layer.
+    Re-muxes (`-c copy`) when the source is already in the canonical
+    codec (HEVC) — just rewrapping into MP4. Otherwise re-encodes to
+    HEVC (libx265 CRF 22, 8-bit yuv420p, `hvc1` tag) + AAC audio, the
+    canonical archival format (see spec/migrate.md → Canonical video
+    codec). Container-level metadata copied via `-map_metadata 0`;
+    pix:* fields are written separately by the apply layer.
     """
     ffmpeg = _require_tool("ffmpeg")
     profile = probe_video_profile(src)
 
-    if is_windows_playable(profile):
+    if is_canonical_video_codec(profile):
         cmd: list[str] = [
             ffmpeg,
             "-hide_banner",
@@ -180,13 +167,15 @@ def convert_to_mp4(src: Path, dst: Path) -> None:
             "-i",
             str(src),
             "-c:v",
-            "libx264",
-            "-profile:v",
-            "main",
+            "libx265",
+            "-preset",
+            "medium",
+            "-crf",
+            _X265_CRF,
             "-pix_fmt",
             "yuv420p",
-            "-crf",
-            "18",
+            "-tag:v",
+            "hvc1",
             "-c:a",
             "aac",
             "-b:a",

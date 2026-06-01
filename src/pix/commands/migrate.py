@@ -368,9 +368,9 @@ def _run_migrate(
                 path=path, raw={"SourceFile": str(path)}
             )
 
-    # Windows-playability probe per spec/migrate.md → Windows playability
-    # check. Probe every keep-policy mp4/m4v candidate so plan-gen knows
-    # whether to route to CONVERT for re-encode. Cached at
+    # Canonical-codec probe per spec/migrate.md → Canonical video codec.
+    # Probe every keep-policy mp4/m4v candidate so plan-gen knows whether
+    # it's already HEVC (keep) or needs CONVERT to re-encode. Cached at
     # <library>/.pix/cache/<...>.video keyed on (size, mtime_ns), so
     # subsequent runs over an unchanged library skip the ffprobe pass
     # entirely. Source files matching `convert_to_mp4` policy already go
@@ -386,7 +386,7 @@ def _run_migrate(
         t0 = time.monotonic()
         _plog(
             plan_log_path,
-            f"Probing {len(video_candidates_meta)} video(s) for playability...",
+            f"Probing {len(video_candidates_meta)} video(s) for codec...",
         )
         # Parallel cache lookup first.
         with LiveProgress(

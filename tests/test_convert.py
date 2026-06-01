@@ -1,7 +1,8 @@
-"""Tests for `pix.convert` codec/profile probing and playability check.
+"""Tests for `pix.convert` codec/profile probing and canonical-codec check.
 
 Covers `probe_video_profile` output parsing (multi-field ffprobe) and the
-`is_windows_playable` decision matrix that drives re-mux vs re-encode.
+`is_canonical_video_codec` check (HEVC = canonical) that drives re-mux vs
+re-encode.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from pix import convert
 from pix.convert import (
     VideoProfile,
     convert_to_jpg,
-    is_windows_playable,
+    is_canonical_video_codec,
     probe_video_profile,
 )
 
@@ -93,7 +94,7 @@ def _fake_run(stdout: str, returncode: int = 0):
             VideoProfile(codec="h264", profile="High", pix_fmt="yuv420p"),
         ),
         # Tolerate missing tail values (some old containers don't expose
-        # profile or pix_fmt) — they pad to "" and the playability check
+        # profile or pix_fmt) — they pad to "" and the codec check
         # will route to re-encode.
         (
             "mpeg2video\n\n\n",
@@ -120,35 +121,27 @@ def test_probe_video_profile_parses_output(
 
 
 @pytest.mark.parametrize(
-    "profile,playable",
+    "profile,canonical",
     [
-        # H.264: only 4:2:0 + standard profiles play on stock Windows.
-        (VideoProfile("h264", "Main", "yuv420p"), True),
-        (VideoProfile("h264", "High", "yuv420p"), True),
-        (VideoProfile("h264", "Baseline", "yuv420p"), True),
-        (VideoProfile("h264", "Constrained Baseline", "yuv420p"), True),
-        # Full-range 4:2:0 (yuvj420p) is 8-bit 4:2:0 — plays on Windows.
-        # Common in older consumer cameras/phones; must NOT re-encode.
-        (VideoProfile("h264", "Main", "yuvj420p"), True),
-        (VideoProfile("h264", "High", "yuvj420p"), True),
-        (VideoProfile("h264", "Baseline", "yuvj420p"), True),
-        # The user's actual broken file from 2003-era camcorder.
-        (VideoProfile("h264", "High 4:2:2", "yuvj422p"), False),
-        (VideoProfile("h264", "High 4:4:4", "yuv444p"), False),
-        (VideoProfile("h264", "High 10", "yuv420p10le"), False),
-        (VideoProfile("h264", "Main", "yuvj422p"), False),  # right profile, wrong fmt
-        (VideoProfile("h264", "High 4:2:2", "yuv420p"), False),  # right fmt, wrong profile
-        # HEVC: accepted unconditionally (Windows HEVC Video Extension).
+        # HEVC is the canonical codec — re-mux only, any profile/pix_fmt.
         (VideoProfile("hevc", "Main", "yuv420p"), True),
         (VideoProfile("hevc", "Main 10", "yuv420p10le"), True),
         (VideoProfile("hevc", "Rext", "yuv422p"), True),
-        # Other codecs: never re-muxable. Must re-encode.
+        # Everything else re-encodes to HEVC — including formerly
+        # "Windows-playable" H.264 4:2:0 (now still re-encoded for efficiency).
+        (VideoProfile("h264", "Main", "yuv420p"), False),
+        (VideoProfile("h264", "High", "yuvj420p"), False),
+        (VideoProfile("h264", "High 4:2:2", "yuvj422p"), False),
+        (VideoProfile("h264", "High 10", "yuv420p10le"), False),
         (VideoProfile("mpeg2video", "Main", "yuv420p"), False),
         (VideoProfile("mpeg4", "Simple Profile", "yuv420p"), False),
         (VideoProfile("vp9", "Profile 0", "yuv420p"), False),
+        (VideoProfile("av1", "Main", "yuv420p"), False),
         # Unknown / probe-incomplete.
         (VideoProfile("", "", ""), False),
     ],
 )
-def test_is_windows_playable(profile: VideoProfile, playable: bool) -> None:
-    assert is_windows_playable(profile) is playable
+def test_is_canonical_video_codec(
+    profile: VideoProfile, canonical: bool
+) -> None:
+    assert is_canonical_video_codec(profile) is canonical

@@ -360,6 +360,115 @@ def test_plan_insp_first_migrate_tags_without_rename(tmp_path: Path) -> None:
     assert "date_auto null→2023-08-28-14:03:42" in line.details
 
 
+def test_plan_keep_h264_mp4_transcodes_to_hevc(tmp_path: Path) -> None:
+    """A keep-policy mp4 whose codec isn't HEVC is routed to CONVERT
+    (re-encode to the canonical codec)."""
+    from pix.convert import VideoProfile
+
+    src = tmp_path / "src"
+    src.mkdir()
+    f = src / "2023-08-15_143205.mp4"
+    f.write_bytes(b"")
+
+    cfg = _config(mp4="keep")
+    cache = {
+        f.resolve(): _meta(
+            str(f),
+            **{
+                PIX_DATE_AUTO: "2023-08-15-14:32:05",
+                PIX_ORIGINAL_PATH: "F:/2023-08/clip.mp4",
+            },
+        )
+    }
+    profiles: dict[Path, VideoProfile | None] = {f.resolve(): VideoProfile("h264", "High", "yuv420p")}
+
+    plan = generate_plan(
+        source=src.resolve(),
+        cache=cache,
+        config=cfg,
+        run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
+        video_profiles=profiles,
+    )
+
+    assert len(plan.lines) == 1
+    line = plan.lines[0]
+    assert line.action == Action.CONVERT_RENAME_TAG
+    assert "transcode to HEVC" in line.details
+
+
+def test_plan_keep_hevc_mp4_is_left_alone(tmp_path: Path) -> None:
+    """An already-HEVC mp4 (canonical) produces no line — idempotent, so a
+    re-run over a converged library does no work."""
+    from pix.convert import VideoProfile
+
+    src = tmp_path / "src"
+    src.mkdir()
+    f = src / "2023-08-15_143205.mp4"
+    f.write_bytes(b"")
+
+    cfg = _config(mp4="keep")
+    cache = {
+        f.resolve(): _meta(
+            str(f),
+            **{
+                PIX_DATE_AUTO: "2023-08-15-14:32:05",
+                PIX_ORIGINAL_PATH: "F:/2023-08/clip.mp4",
+            },
+        )
+    }
+    profiles: dict[Path, VideoProfile | None] = {f.resolve(): VideoProfile("hevc", "Main", "yuv420p")}
+
+    plan = generate_plan(
+        source=src.resolve(),
+        cache=cache,
+        config=cfg,
+        run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
+        video_profiles=profiles,
+    )
+    assert plan.lines == []
+
+
+def test_plan_insv_never_transcoded_even_if_h264(tmp_path: Path) -> None:
+    """Name-preserving .insv (H.264 360 video) is excluded from the
+    transcode override — re-encoding would strip the Insta360 trailer.
+    Even with an h264 profile present, it stays a tag-only/no-op keep."""
+    from pix.convert import VideoProfile
+
+    src = tmp_path / "src"
+    src.mkdir()
+    f = src / "VID_20230516_164835_00_010.insv"
+    f.write_bytes(b"")
+
+    cfg = _config(insv="keep")
+    cache = {
+        f.resolve(): _meta(
+            str(f),
+            **{
+                PIX_DATE_AUTO: "2023-05-16-16:48:35",
+                PIX_ORIGINAL_PATH: "G:/pix/2023-05/VID_20230516_164835_00_010.insv",
+            },
+        )
+    }
+    profiles: dict[Path, VideoProfile | None] = {f.resolve(): VideoProfile("h264", "High", "yuv420p")}
+
+    plan = generate_plan(
+        source=src.resolve(),
+        cache=cache,
+        config=cfg,
+        run_id="test-run",
+        run_dir=tmp_path / "runs",
+        staging_dir=tmp_path / "staging",
+        video_profiles=profiles,
+    )
+    # No CONVERT — nothing to do (already tagged, name-preserving keep).
+    assert all(ln.action != Action.CONVERT_RENAME_TAG for ln in plan.lines)
+    assert plan.lines == []
+
+
 def test_plan_dng_converts_to_jpg(tmp_path: Path) -> None:
     """dng is convert_to_jpg: a develop-able raw plans CONVERT→jpg. (Raws
     Pillow can't decode fail at apply and quarantine — not a plan concern.)"""

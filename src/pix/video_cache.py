@@ -19,13 +19,12 @@ Validation is by `(size, mtime_ns)` — same scheme as `pix.hash_cache`,
 because the profile is a derived fact about the file's bytes that we
 don't update synchronously when content changes. CONVERT rewrites a
 file's bytes → mtime changes → cache invalidates → next migrate
-re-probes (and finds the file is now Windows-playable, since CONVERT
-re-encodes to libx264 Main + yuv420p).
+re-probes (and finds the file is now HEVC — the canonical codec — since
+CONVERT re-encodes to libx265).
 
-The cache stores the profile **triple**, not the playability verdict.
-That way if we ever tighten/loosen `is_windows_playable`, the cache
-stays correct — only the verdict gets recomputed each run from the
-cached triple.
+The cache stores the profile **triple**, not the codec verdict. That way
+if the canonical-codec rule ever changes, the cache stays correct — only
+the verdict gets recomputed each run from the cached triple.
 """
 
 from __future__ import annotations
