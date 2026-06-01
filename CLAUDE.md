@@ -15,7 +15,7 @@ Active codebase. The implementation lives in `src/pix/`; tests in `tests/`. **Co
 
 - **Run tests:** `uv run pytest`. Type-check with `uv run pyright` (strict mode; see `pyproject.toml`).
 - **Version bump per commit:** bump the `__version__` patch in `src/pix/__init__.py` on every commit that changes runtime behavior. The CLI prints this as the first line of every run, so dev and tester stay aligned.
-- **Reinstall after commit:** run `uv tool install --reinstall --editable F:\code\pix` so `F:\bin\pix.exe` reflects the latest code.
+- **Reinstall after commit:** run `uv tool install --reinstall --editable .` (from the repo root) so the installed `pix` reflects the latest code.
 
 ## Spec map
 
@@ -35,6 +35,4 @@ Active codebase. The implementation lives in `src/pix/`; tests in `tests/`. **Co
 
 ## Environment
 
-- Platform: Windows 11, PowerShell. Bash available via the Bash tool for POSIX scripts.
-- Working directory: `F:\code\pix`.
-- Git repository on branch `main`.
+- Primarily developed on Windows + PowerShell (so commands/paths in docs lean that way); the tool isn't Windows-only by design. Machine-specific details (paths, drives) are supplied per session rather than written here.

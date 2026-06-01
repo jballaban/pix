@@ -27,7 +27,7 @@ Language: **Python 3.12+**.
 
 ## Subprocess hardening
 
-pix orchestrates several subprocesses (ExifTool, ffmpeg/ffprobe, Pillow via its native libs). Any of them can wedge on a malformed input or a slow disk, and we've seen real-world hangs where a single file ate hours of wall time before being killed. Two requirements:
+pix orchestrates several subprocesses (ExifTool, ffmpeg/ffprobe, Pillow via its native libs). Any of them can wedge on a malformed input or a slow disk — a single file can otherwise eat hours of wall time before being killed. Two requirements:
 
 1. **Every subprocess call has a timeout.** If it exceeds the timeout, the wrapper kills the subprocess and raises a typed exception that the calling action handles like any other failure.
 2. **CTRL+C works.** A user pressing Ctrl-C while a subprocess is mid-call must interrupt within ~500 ms, kill the subprocess, write a clean log line, and exit non-zero.
