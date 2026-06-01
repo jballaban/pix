@@ -352,6 +352,12 @@ For a CONVERT+TAG+RENAME line (the hardest case), the sequence is:
 
 Each step is one same-volume rename. The marker's existence is the only thing the next run needs to know about.
 
+### Convert concurrency
+
+Apply is **logically sequential** — one plan line at a time, in topo order, with a single ExifTool session and an append-only `apply.log`. But step 1 above (the off-library encode into `.pix\staging\`) is **CPU-bound and independent across files**, and a single libx265 encode extracts only limited frame/WPP parallelism — it tops out around a third of a many-core CPU. Encoding one file at a time leaves the rest of the box idle.
+
+So the encode is the *only* part that runs concurrently: a small worker pool (`apply._CONVERT_WORKERS`) encodes CONVERT staging files **ahead of** the serial loop, bounded to a sliding window so staging-dir occupancy stays small. When the loop reaches a CONVERT line it consumes the already-encoded staging file and does the metadata copy + the three renames (steps 2–4) on the main thread, in order. Everything with shared state — ExifTool, the crash log, rename slots — stays single-threaded, so atomicity and crash recovery are unchanged: a prefetched staging file is just a step-1 temp orphan, cleaned by the next run if the process dies before the line is finalized. A repair re-run (tag-write salvage) re-encodes inline, since its repaired source differs from what was prefetched.
+
 ### Marker conventions
 
 Markers use a synthetic `.__migrate__.` infix that's collision-proof against real filenames. The scan globs `**/*.__migrate__.*` and resolves each match purely from filesystem state — no sidecar metadata, no run-id encoded in the filename.

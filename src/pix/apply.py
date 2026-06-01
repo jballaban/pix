@@ -19,8 +19,10 @@ order, which may not be numerically ascending.
 
 from __future__ import annotations
 
+import threading
 import time
 from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import IO
@@ -58,6 +60,117 @@ class ApplyError(Exception):
 _RENAME_ACTIONS: frozenset[Action] = frozenset(
     {Action.RENAME, Action.RENAME_TAG, Action.CONVERT_RENAME_TAG}
 )
+
+
+# Number of CONVERT encodes to run concurrently. The apply loop is
+# otherwise serial (single ExifTool session, append-only crash log,
+# topo-ordered renames); only the CPU-bound encode is parallelized.
+# Rationale: a single libx265 encode extracts limited frame/WPP
+# parallelism and tops out around a third of a many-core CPU, so
+# encoding one file at a time leaves the rest of the box idle. Three
+# concurrent encodes fill a 16-core machine to ~90% while leaving
+# headroom for the main thread's ExifTool/rename finalize work and the
+# OS. See spec/migrate.md → Apply.
+_CONVERT_WORKERS: int = 3
+
+# How many encodes to keep queued ahead of the consumer, beyond the
+# worker count, so the pool never starves while the main thread finalizes
+# a line. Bounds staging-dir occupancy to ~(_CONVERT_WORKERS + this) files.
+_CONVERT_LOOKAHEAD: int = 3
+
+
+def _encode_staging(ln: PlanLine) -> None:
+    """Produce the converted file at `ln.staging_path` — the CPU-bound half
+    of a CONVERT line (step 1 of `_apply_convert`).
+
+    Pure, off-library work: reads the source, writes the staging file,
+    touches no shared state (no ExifTool, no rename slots, no apply.log),
+    so it's safe to run in a worker thread. Each line's staging path is
+    keyed by `line_id`, so concurrent encodes never collide. Raises the
+    same `ConvertFailed` / `OperationTimeout` / `ApplyError` the inline
+    encode would; the apply loop sees them when it awaits the result.
+    """
+    assert ln.staging_path is not None and ln.target_path is not None
+    if ln.staging_path.exists():
+        ln.staging_path.unlink()
+    target_ext = ln.target_path.suffix.lstrip(".").lower()
+    if target_ext == "jpg":
+        convert_to_jpg(ln.abs_path, ln.staging_path)
+    elif target_ext == "mp4":
+        convert_to_mp4(ln.abs_path, ln.staging_path)
+    else:
+        raise ApplyError(
+            f"{ln.line_id}: unsupported CONVERT target extension {target_ext!r}"
+        )
+
+
+class _StagingPrefetcher:
+    """Runs CONVERT encodes in a worker pool, ahead of the serial apply loop.
+
+    The apply loop stays sequential, but instead of encoding each CONVERT
+    line inline it pulls an already-encoded staging file from this pool, so
+    several encodes run concurrently while the main thread does the cheap
+    ExifTool + rename finalize for the previous line. Only the encode is
+    parallel; everything with shared state (the ExifTool session, apply.log,
+    rename slots) stays on the main thread, so crash-safety and rename
+    ordering are unchanged.
+
+    Encodes are submitted in apply order and bounded to a sliding window of
+    `workers + _CONVERT_LOOKAHEAD` outstanding lines, so staging-dir disk
+    use stays bounded even if a line stalls. `take(ln)` blocks until that
+    line's staging file is ready and re-raises any encode error, leaving the
+    loop's existing per-line failure handling intact.
+    """
+
+    def __init__(self, lines: list[PlanLine], workers: int) -> None:
+        self._lines = lines
+        self._index = {ln.line_id: i for i, ln in enumerate(lines)}
+        self._executor = ThreadPoolExecutor(max_workers=workers)
+        self._futures: dict[str, Future[None]] = {}
+        self._submitted = 0
+        self._window = workers + _CONVERT_LOOKAHEAD
+        self._lock = threading.Lock()
+        with self._lock:
+            self._submit_through(self._window)
+
+    def _submit_through(self, upto: int) -> None:
+        """Submit encodes up to (but not including) index `upto`. Caller
+        holds `self._lock`. Monotonic — never resubmits an earlier line."""
+        while self._submitted < min(upto, len(self._lines)):
+            ln = self._lines[self._submitted]
+            self._futures[ln.line_id] = self._executor.submit(
+                _encode_staging, ln
+            )
+            self._submitted += 1
+
+    def take(self, ln: PlanLine) -> bool:
+        """Await `ln`'s prefetched encode.
+
+        Returns True if a staging file is now ready at `ln.staging_path`;
+        False if this line was never prefetched (e.g. a repair re-run, whose
+        source differs from what was prefetched), so the caller should encode
+        inline. Re-raises encode errors (ConvertFailed / OperationTimeout /
+        ApplyError) so the apply loop handles them exactly as for an inline
+        encode. Advances the submission window as a side effect.
+        """
+        fut = self._futures.pop(ln.line_id, None)
+        if fut is None:
+            return False
+        try:
+            fut.result()
+            return True
+        finally:
+            with self._lock:
+                self._submit_through(
+                    self._index[ln.line_id] + 1 + self._window
+                )
+
+    def shutdown(self) -> None:
+        """Drop queued encodes and stop accepting work. In-flight encodes
+        finish on their own (a worker thread can't safely cancel a running
+        ffmpeg/Pillow call); on a normal completion the loop has already
+        consumed every line, so nothing is in flight."""
+        self._executor.shutdown(wait=False, cancel_futures=True)
 
 
 def _quarantine_line(
@@ -253,9 +366,10 @@ def apply_plan(
         in (Action.TAG, Action.RENAME_TAG, Action.CONVERT_RENAME_TAG)
         for ln in runnable
     )
-    needs_staging = any(
-        ln.action == Action.CONVERT_RENAME_TAG for ln in runnable
-    )
+    convert_lines = [
+        ln for ln in runnable if ln.action == Action.CONVERT_RENAME_TAG
+    ]
+    needs_staging = bool(convert_lines)
     # Any action other than a pure RENAME or STASH captures something
     # into `<run-dir>/data/`. STASH writes to `.pix/stash/` directly;
     # no run-folder capture.
@@ -268,6 +382,7 @@ def apply_plan(
 
     log_path = run_dir / "apply.log"
     exiftool: ExifToolSession | None = None
+    prefetcher: _StagingPrefetcher | None = None
     completed = 0
     convert_failures: list[tuple[PlanLine, str]] = []
     records: list[LineRecord] = []
@@ -285,6 +400,14 @@ def apply_plan(
                         "none was provided"
                     )
                 staging_dir.mkdir(parents=True, exist_ok=True)
+                # Start encoding the first window of CONVERT lines now, so
+                # several encodes are already in flight by the time the loop
+                # reaches them. Only built when there are CONVERTs (which is
+                # exactly when `needs_staging` is true).
+                if convert_lines:
+                    prefetcher = _StagingPrefetcher(
+                        convert_lines, _CONVERT_WORKERS
+                    )
             for ln in runnable:
                 progress.begin(
                     f"{ln.line_id} {ln.action.value}", str(ln.abs_path)
@@ -302,7 +425,10 @@ def apply_plan(
                 t_start = time.monotonic()
                 _log(log, ln, "Started", size_bytes=size_bytes)
                 try:
-                    _apply_one(ln, run_dir, exiftool, staging_dir, meta_cache)
+                    _apply_one(
+                        ln, run_dir, exiftool, staging_dir, meta_cache,
+                        prefetcher,
+                    )
                 except KeyboardInterrupt:
                     _log(
                         log,
@@ -360,8 +486,13 @@ def apply_plan(
                             dur_seconds=time.monotonic() - t_start,
                         )
                         try:
+                            # Repair re-run: the prefetched encode (if any)
+                            # was made from the pre-repair source, so pass
+                            # no prefetcher — `_apply_convert` re-encodes the
+                            # repaired file inline.
                             _apply_one(
-                                ln, run_dir, exiftool, staging_dir, meta_cache
+                                ln, run_dir, exiftool, staging_dir, meta_cache,
+                                None,
                             )
                         except (ConvertFailed, TagWriteFailed) as e2:
                             _quarantine_line(
@@ -410,6 +541,8 @@ def apply_plan(
                 progress.advance()
                 completed += 1
         finally:
+            if prefetcher is not None:
+                prefetcher.shutdown()
             if exiftool is not None:
                 exiftool.close()
             write_summary(log, records)
@@ -517,6 +650,7 @@ def _apply_one(
     exiftool: ExifToolSession | None,
     staging_dir: Path | None,
     meta_cache: PerFileCache | None,
+    prefetcher: "_StagingPrefetcher | None",
 ) -> None:
     """Dispatch one plan line to its action handler."""
     if ln.action == Action.DELETE:
@@ -539,7 +673,9 @@ def _apply_one(
     elif ln.action == Action.CONVERT_RENAME_TAG:
         assert exiftool is not None, "CONVERT requires an ExifTool session"
         assert staging_dir is not None, "CONVERT requires a staging directory"
-        _apply_convert(ln, run_dir, exiftool, staging_dir, meta_cache)
+        _apply_convert(
+            ln, run_dir, exiftool, staging_dir, meta_cache, prefetcher
+        )
     else:
         raise ApplyError(f"action {ln.action.value} not supported")
 
@@ -639,6 +775,7 @@ def _apply_convert(
     exiftool: ExifToolSession,
     staging_dir: Path,
     meta_cache: PerFileCache | None,
+    prefetcher: "_StagingPrefetcher | None",
 ) -> None:
     """Execute the 4-step CONVERT sequence (spec/migrate.md → Atomicity).
 
@@ -673,25 +810,18 @@ def _apply_convert(
         )
 
     src = ln.abs_path
-    target_ext = ln.target_path.suffix.lstrip(".").lower()
 
-    # Step 1: off-library conversion + metadata copy + pix:* writes
-    if ln.staging_path.exists():
-        ln.staging_path.unlink()
-
-    # ConvertFailed propagates uncaught to apply_plan's loop, where it's
-    # logged and the run continues to the next plan line — broken source
-    # files are a per-file data issue, not an environmental failure. See
-    # spec/migrate.md → Failure handling.
-    if target_ext == "jpg":
-        convert_to_jpg(src, ln.staging_path)
-    elif target_ext == "mp4":
-        convert_to_mp4(src, ln.staging_path)
-    else:
-        raise ApplyError(
-            f"{ln.line_id}: unsupported CONVERT target extension "
-            f"{target_ext!r}"
-        )
+    # Step 1: off-library conversion. Normally the encode ran ahead of time
+    # in the prefetch pool (so several encodes overlap on the CPU while the
+    # main thread finalizes earlier lines); `take` blocks until this line's
+    # staging file is ready. Falls back to an inline encode when there's no
+    # prefetched result — a repair re-run, whose repaired source differs
+    # from what was prefetched. ConvertFailed propagates uncaught to
+    # apply_plan's loop, where it's logged and the run continues to the next
+    # plan line — broken source files are a per-file data issue, not an
+    # environmental failure. See spec/migrate.md → Failure handling.
+    if prefetcher is None or not prefetcher.take(ln):
+        _encode_staging(ln)
 
     exiftool.copy_metadata_and_write_tags(
         source=src, dest=ln.staging_path, tags=dict(ln.pix_writes)
