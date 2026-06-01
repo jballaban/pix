@@ -510,6 +510,7 @@ def _run_migrate(
                 kept_line_ids=kept_line_ids,
                 staging_dir=staging_dir,
                 meta_cache=meta_cache,
+                library_root=root,
             )
         except ApplyError as e:
             typer.echo(f"Error: apply failed: {e}", err=True)

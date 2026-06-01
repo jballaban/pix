@@ -248,3 +248,45 @@ def test_apply_mp4_tagwrite_failure_does_attempt_salvage(
     _run_apply(mp4, root, run_dir, staging)
 
     assert len(remux_calls) == 1  # salvage was attempted for the mp4
+
+
+def test_quarantine_uses_passed_library_root_for_relocated_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With a relocated run folder (config runs_dir on another volume), the
+    quarantine errors-tree must use the explicit library_root, not one
+    derived by walking up from the run folder (which would land on the
+    wrong drive)."""
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    # Run dir deliberately NOT under lib/.pix/runs — simulates runs_dir
+    # pointed at another location/volume.
+    run_dir = tmp_path / "elsewhere" / "runs" / "r"
+    run_dir.mkdir(parents=True)
+    staging = tmp_path / "staging"
+    insv = lib / "VID_x_00_001.insv"  # 360 → carve-out → quarantine on fail
+    insv.write_bytes(b"x")
+
+    monkeypatch.setattr(apply_mod, "is_remuxable_video", _always_remuxable)
+    monkeypatch.setattr(apply_mod, "ExifToolSession", _FailWriteExif)
+
+    seen: dict[str, Path] = {}
+
+    def fake_move(*, source: Path, library_root: Path, run_id: str,
+                  line_id: str, error: str) -> Path:
+        seen["root"] = library_root
+        source.unlink()
+        return library_root / ".pix" / "errors" / source.name
+
+    monkeypatch.setattr(apply_mod, "move_to_errors", fake_move)
+
+    plan = Plan(
+        source=lib, run_id="r", generated_at=datetime.now(),
+        lines=[_tag_line(insv, run_dir)],
+    )
+    apply_plan(
+        plan, run_dir / "plan.txt", run_dir, {"L001"},
+        staging_dir=staging, library_root=lib,
+    )
+    # Must be the passed library root, not run_dir.parent.parent.parent.
+    assert seen["root"] == lib

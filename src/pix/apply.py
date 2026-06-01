@@ -69,16 +69,23 @@ def _quarantine_line(
     size_bytes: int | None,
     convert_failures: list[tuple[PlanLine, str]],
     records: list[LineRecord],
+    library_root: Path | None = None,
 ) -> None:
     """Log the failure, move the file into `.pix/errors/`, and record it.
 
     Shared by the CONVERT-failed and (unrepairable) TAG-write-failed paths.
     Raises `ApplyError` only if the move itself fails (an environment
     problem) — consistent with the rename-failure halt policy.
+
+    `library_root` must be passed when the run folder may be relocated off
+    the library volume (`config.runs_dir`) — otherwise the errors tree
+    would be derived relative to the run folder's drive, not the library's.
+    Falls back to deriving from `run_dir` (runs/<id> → runs → .pix → root)
+    for the default in-library layout.
     """
     _log(log, ln, "Failed", detail=error, dur_seconds=dur)
-    # library_root = runs/<id>/ → runs/ → .pix/ → root.
-    library_root = run_dir.parent.parent.parent
+    if library_root is None:
+        library_root = run_dir.parent.parent.parent
     run_id = run_dir.name
     try:
         dest = move_to_errors(
@@ -219,6 +226,7 @@ def apply_plan(
     kept_line_ids: set[str],
     staging_dir: Path | None = None,
     meta_cache: PerFileCache | None = None,
+    library_root: Path | None = None,
 ) -> tuple[int, list[tuple[PlanLine, str]]]:
     """Apply the plan, streaming progress to `<run_dir>/apply.log`.
 
@@ -309,7 +317,7 @@ def apply_plan(
                     _quarantine_line(
                         ln, run_dir, log, str(e),
                         time.monotonic() - t_start, size_bytes,
-                        convert_failures, records,
+                        convert_failures, records, library_root,
                     )
                     progress.advance()
                     continue
@@ -359,7 +367,7 @@ def apply_plan(
                             _quarantine_line(
                                 ln, run_dir, log, str(e2),
                                 time.monotonic() - t_start, size_bytes,
-                                convert_failures, records,
+                                convert_failures, records, library_root,
                             )
                             progress.advance()
                             continue
@@ -378,7 +386,7 @@ def apply_plan(
                         _quarantine_line(
                             ln, run_dir, log, str(e),
                             time.monotonic() - t_start, size_bytes,
-                            convert_failures, records,
+                            convert_failures, records, library_root,
                         )
                         progress.advance()
                         continue
