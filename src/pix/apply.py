@@ -74,9 +74,22 @@ _RENAME_ACTIONS: frozenset[Action] = frozenset(
 _CONVERT_WORKERS: int = 3
 
 # How many encodes to keep queued ahead of the consumer, beyond the
-# worker count, so the pool never starves while the main thread finalizes
-# a line. Bounds staging-dir occupancy to ~(_CONVERT_WORKERS + this) files.
-_CONVERT_LOOKAHEAD: int = 3
+# worker count. The consumer applies CONVERT lines strictly in plan order
+# and blocks on each line's encode, so the submission ceiling is pinned to
+# the consumer's position: a single slow clip (a big 4K reencode) blocks
+# the consumer, and once the buffered lines ahead of it drain, the other
+# workers idle until it finishes. A deep lookahead keeps those workers fed
+# with later clips across a multi-minute stall — e.g. with 3 workers, ~21
+# buffered lines lets the 2 non-stuck workers chew through ~18 more clips
+# (~40s each) before starving, covering a ~6-minute slow clip.
+#
+# Tradeoff: up to ~(_CONVERT_WORKERS + this) freshly-encoded files sit in
+# .pix\staging at once (more disk, more wasted work to drain on Ctrl-C).
+# This only *mitigates* the stall; it can't *guarantee* all workers stay
+# busy behind an arbitrarily long single encode (a 2-hour clip drains any
+# finite window). Eliminating it entirely needs out-of-order finalize —
+# see spec/migrate.md → Convert concurrency.
+_CONVERT_LOOKAHEAD: int = 21
 
 
 def _encode_staging(ln: PlanLine) -> None:
