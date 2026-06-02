@@ -13,6 +13,7 @@ focuses on the pixel/audio/video bytes only.
 
 from __future__ import annotations
 
+import functools
 import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
@@ -64,6 +65,26 @@ CANONICAL_VIDEO_CODEC: str = "hevc"
 # profile), `hvc1` tag so Windows/Apple players recognize the stream.
 _X265_CRF: str = "22"
 
+# GPU (NVENC) re-encode quality. cq 30 on Blackwell hevc_nvenc at preset
+# p7 + multipass lands within ~1 VMAF of x265 CRF22 *at the same file size*
+# on representative library footage — visually indistinguishable without
+# 4x pixel-peeping (measured: matched-size NVENC mean VMAF 93.3 vs x265
+# 94.5, worst frame 86.5; differences imperceptible in motion). NVENC is
+# less bitrate-efficient than x265, so the win isn't per-clip quality —
+# it's throughput: the GPU encodes alongside the CPU x265 workers on an
+# otherwise-idle chip. See spec/migrate.md → Convert concurrency.
+_NVENC_CQ: str = "30"
+
+# Routing threshold (apply.py): clips at or above this height re-encode on
+# the GPU (NVENC), where x265 is brutally slow and NVENC's efficiency gap
+# shrinks; smaller clips prefer the CPU (x265), where it's both fast and
+# more space-efficient. 2160 = 4K.
+NVENC_MIN_HEIGHT: int = 2160
+
+# Valid `encoder` values for `convert_to_mp4`'s re-encode branch.
+ENCODER_X265: str = "x265"
+ENCODER_NVENC: str = "nvenc"
+
 # Subprocess timeouts per spec/implementation.md → Subprocess hardening.
 _FFPROBE_TIMEOUT: float = 30.0       # codec probe; small read, generous margin
 _FFMPEG_REMUX_TIMEOUT: float = 300.0  # 5 min for `-c copy` (cheap; long for safety)
@@ -89,6 +110,12 @@ class VideoProfile:
     codec: str
     profile: str
     pix_fmt: str
+    # Frame dimensions. Default 0 (unknown) — the plan-time probe and the
+    # `.video` cache only carry the codec triple, so cached/plan profiles
+    # report 0x0. Populated only by `probe_video_profile_with_geometry`,
+    # which apply uses to route 4K clips to the GPU encoder.
+    width: int = 0
+    height: int = 0
 
 
 def is_canonical_video_codec(profile: VideoProfile) -> bool:
@@ -126,18 +153,36 @@ def convert_to_jpg(src: Path, dst: Path) -> None:
         ) from e
 
 
-def convert_to_mp4(src: Path, dst: Path) -> None:
+def convert_to_mp4(
+    src: Path,
+    dst: Path,
+    *,
+    encoder: str = ENCODER_X265,
+    profile: VideoProfile | None = None,
+) -> None:
     """Convert `src` to MP4 at `dst` via ffmpeg.
 
     Re-muxes (`-c copy`) when the source is already in the canonical
     codec (HEVC) — just rewrapping into MP4. Otherwise re-encodes to
-    HEVC (libx265 CRF 22, 8-bit yuv420p, `hvc1` tag) + AAC audio, the
-    canonical archival format (see spec/migrate.md → Canonical video
-    codec). Container-level metadata copied via `-map_metadata 0`;
+    HEVC, the canonical archival format (see spec/migrate.md → Canonical
+    video codec). Container-level metadata copied via `-map_metadata 0`;
     pix:* fields are written separately by the apply layer.
+
+    `encoder` selects the re-encode codec (ignored for the re-mux path,
+    which is codec-copy either way):
+    - `ENCODER_X265` (default): libx265 CRF 22, `-preset medium` — the
+      space-efficient CPU path.
+    - `ENCODER_NVENC`: hevc_nvenc on the GPU (preset p7, multipass, cq 30,
+      full CUDA decode pipeline) — faster throughput, slightly larger at
+      matched quality. apply routes 4K and CPU-overflow clips here.
+
+    `profile` lets the caller pass an already-probed `VideoProfile` (apply
+    probes once for routing); when None we probe here. Both encoders emit
+    8-bit 4:2:0 + `hvc1` so players recognize the stream.
     """
     ffmpeg = _require_tool("ffmpeg")
-    profile = probe_video_profile(src)
+    if profile is None:
+        profile = probe_video_profile(src)
 
     if is_canonical_video_codec(profile):
         cmd: list[str] = [
@@ -157,6 +202,54 @@ def convert_to_mp4(src: Path, dst: Path) -> None:
             str(dst),
         ]
         timeout = _FFMPEG_REMUX_TIMEOUT
+    elif encoder == ENCODER_NVENC:
+        # Full GPU pipeline: CUDA-decode the source and keep frames on the
+        # GPU for NVENC (no host round-trip). On a source NVENC's CUDA path
+        # can't handle (e.g. an exotic pixel format) this raises and the
+        # caller falls back to x265 — so we don't force a pix_fmt here.
+        cmd = [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-hwaccel",
+            "cuda",
+            "-hwaccel_output_format",
+            "cuda",
+            "-i",
+            str(src),
+            "-c:v",
+            "hevc_nvenc",
+            "-preset",
+            "p7",
+            "-tune",
+            "hq",
+            "-rc",
+            "vbr",
+            "-cq",
+            _NVENC_CQ,
+            "-b_ref_mode",
+            "middle",
+            "-temporal-aq",
+            "1",
+            "-spatial-aq",
+            "1",
+            "-multipass",
+            "fullres",
+            "-tag:v",
+            "hvc1",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-map_metadata",
+            "0",
+            "-movflags",
+            "+faststart",
+            str(dst),
+        ]
+        timeout = _FFMPEG_REENCODE_TIMEOUT
     else:
         cmd = [
             ffmpeg,
@@ -348,6 +441,119 @@ def probe_video_profile(src: Path) -> VideoProfile:
         profile=profile,
         pix_fmt=pix_fmt.lower(),
     )
+
+
+def probe_video_profile_with_geometry(src: Path) -> VideoProfile:
+    """Like `probe_video_profile`, but also fills `width`/`height`.
+
+    apply uses the dimensions to route 4K clips to the GPU encoder. Kept
+    separate from `probe_video_profile` (and the `.video` cache) because
+    those only need the codec triple, so this richer probe runs only at
+    apply time for the lines actually being converted.
+
+    Parses **`key=value`** output (`-of default=nw=1`), not the positional
+    `nk=1` form `probe_video_profile` uses: ffprobe emits stream fields in
+    the file's natural order (width/height come *before* pix_fmt), not the
+    order requested, so positional parsing would misalign them. A
+    missing/garbage dimension falls back to 0 (treated as "not 4K" →
+    CPU/x265 route).
+    """
+    ffprobe = _require_tool("ffprobe")
+    try:
+        proc = subprocess.run(
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_name,profile,pix_fmt,width,height",
+                "-of",
+                "default=nw=1",
+                str(src),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+            timeout=_FFPROBE_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise OperationTimeout(
+            f"ffprobe timed out after {_FFPROBE_TIMEOUT:.0f}s on {src}"
+        ) from e
+    if proc.returncode != 0:
+        raise ConvertFailed(
+            f"ffprobe failed on {src} (exit {proc.returncode}):\n{proc.stderr}"
+        )
+    fields: dict[str, str] = {}
+    for line in proc.stdout.splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            fields[key.strip()] = value.strip()
+
+    def _to_int(s: str) -> int:
+        try:
+            return int(s)
+        except ValueError:
+            return 0
+
+    return VideoProfile(
+        codec=fields.get("codec_name", "").lower().split(",", 1)[0],
+        profile=fields.get("profile", ""),
+        pix_fmt=fields.get("pix_fmt", "").lower(),
+        width=_to_int(fields.get("width", "")),
+        height=_to_int(fields.get("height", "")),
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def nvenc_available() -> bool:
+    """True iff this machine can encode HEVC on an NVIDIA GPU via NVENC.
+
+    Two-stage check, cached for the process: (1) `hevc_nvenc` is listed by
+    the ffmpeg build, and (2) a tiny throwaway encode actually succeeds —
+    the encoder can be *listed* yet fail at runtime (no NVIDIA GPU, no
+    driver, or a driver/runtime mismatch). The functional test is the only
+    reliable signal, so we pay its ~1-2s cost once. Any failure → False,
+    and apply runs every conversion on the CPU (x265) exactly as before —
+    keeping pix portable to non-NVIDIA machines.
+    """
+    try:
+        ffmpeg = _require_tool("ffmpeg")
+    except ToolNotFound:
+        return False
+    try:
+        listing = subprocess.run(
+            [ffmpeg, "-hide_banner", "-encoders"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+            timeout=_FFPROBE_TIMEOUT,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+    if listing.returncode != 0 or "hevc_nvenc" not in (listing.stdout or ""):
+        return False
+    # Functional probe: encode a 1-frame synthetic clip to null via NVENC.
+    try:
+        test = subprocess.run(
+            [
+                ffmpeg, "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "color=c=black:s=256x256:d=0.04",
+                "-c:v", "hevc_nvenc", "-f", "null", "-",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+            timeout=_FFPROBE_TIMEOUT,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+    return test.returncode == 0
 
 
 def probe_videos_parallel(

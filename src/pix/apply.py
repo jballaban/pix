@@ -23,17 +23,25 @@ import threading
 import time
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import IO
 
 from pix.convert import (
     ConvertFailed,
+    ENCODER_NVENC,
+    ENCODER_X265,
+    NVENC_MIN_HEIGHT,
     convert_to_jpg,
     convert_to_mp4,
+    is_canonical_video_codec,
     is_reencodable_image,
     is_remuxable_video,
+    nvenc_available,
+    probe_video_profile_with_geometry,
     remux_repair,
+    VideoProfile,
 )
 from pix.errors import move_to_errors
 from pix.timeout import OperationTimeout, safe_move, safe_rename
@@ -62,46 +70,73 @@ _RENAME_ACTIONS: frozenset[Action] = frozenset(
 )
 
 
-# Number of CONVERT encodes to run concurrently. The apply loop is
+# CONVERT encodes run concurrently on two independent resources — the CPU
+# (libx265) and, when present, an NVIDIA GPU (hevc_nvenc). The apply loop is
 # otherwise serial (single ExifTool session, append-only crash log,
-# topo-ordered renames); only the CPU-bound encode is parallelized.
-# Rationale: a single libx265 encode extracts limited frame/WPP
-# parallelism and tops out around a third of a many-core CPU, so
-# encoding one file at a time leaves the rest of the box idle. Three
-# concurrent encodes fill a 16-core machine to ~90% while leaving
-# headroom for the main thread's ExifTool/rename finalize work and the
-# OS. See spec/migrate.md → Apply.
-_CONVERT_WORKERS: int = 3
+# topo-ordered renames); only the encode is parallelized.
+#
+# CPU workers (libx265): a single x265 encode extracts limited frame/WPP
+# parallelism and tops out around a third of a many-core CPU, so three
+# concurrent encodes fill a 16-core machine to ~90% while leaving headroom
+# for the main thread's ExifTool/rename finalize work and the OS.
+_X265_WORKERS: int = 3
 
-# How many encodes to keep queued ahead of the consumer, beyond the
+# GPU workers (hevc_nvenc): concurrent NVENC sessions on a single card
+# scale cleanly to ~2 then taper (the encode engines are shared silicon);
+# measured ~27x realtime aggregate at 4 sessions on an RTX 5090, the
+# best throughput-per-session point. Zero when no NVENC GPU is present.
+_NVENC_WORKERS: int = 4
+
+# Routing (see spec/migrate.md → Convert concurrency): 4K+ re-encodes go to
+# the GPU (where x265 is brutally slow and NVENC's efficiency gap is
+# smallest) and never overflow back to a CPU worker (a long encode there
+# would re-create the single-slow-clip stall). Smaller clips prefer the CPU
+# (x265 is faster *and* more space-efficient), but overflow onto an idle
+# NVENC slot when all CPU workers are busy — which is what keeps the GPU
+# earning its keep on an HD/SD-heavy library that has little or no 4K.
+
+# How many encodes to keep queued ahead of the consumer, beyond the total
 # worker count. The consumer applies CONVERT lines strictly in plan order
 # and blocks on each line's encode, so the submission ceiling is pinned to
-# the consumer's position: a single slow clip (a big 4K reencode) blocks
-# the consumer, and once the buffered lines ahead of it drain, the other
-# workers idle until it finishes. A deep lookahead keeps those workers fed
-# with later clips across a multi-minute stall — e.g. with 3 workers, ~21
-# buffered lines lets the 2 non-stuck workers chew through ~18 more clips
-# (~40s each) before starving, covering a ~6-minute slow clip.
+# the consumer's position: a single slow clip blocks the consumer, and once
+# the buffered lines ahead of it drain, workers idle until it finishes. A
+# deep lookahead keeps workers fed with later clips across a multi-minute
+# stall.
 #
-# Tradeoff: up to ~(_CONVERT_WORKERS + this) freshly-encoded files sit in
+# Tradeoff: up to ~(total workers + this) freshly-encoded files sit in
 # .pix\staging at once (more disk, more wasted work to drain on Ctrl-C).
-# This only *mitigates* the stall; it can't *guarantee* all workers stay
-# busy behind an arbitrarily long single encode (a 2-hour clip drains any
-# finite window). Eliminating it entirely needs out-of-order finalize —
-# see spec/migrate.md → Convert concurrency.
+# This only *mitigates* the stall; eliminating it entirely needs
+# out-of-order finalize — see spec/migrate.md → Convert concurrency.
 _CONVERT_LOOKAHEAD: int = 21
 
 
+@dataclass
+class _ActiveEncode:
+    """Live state for one in-flight encode, shown in the progress display."""
+    started: float
+    encoder: str | None = None  # ENCODER_*, "mux", or None while probing
+
+
+def _route_encoder(profile: "VideoProfile", nvenc: bool) -> str:
+    """Preferred re-encode codec for a clip: GPU for 4K+ when NVENC is
+    available, else CPU. The pool may still overflow an HD clip onto the
+    GPU at dispatch time; this is only the content-based preference."""
+    if nvenc and profile.height >= NVENC_MIN_HEIGHT:
+        return ENCODER_NVENC
+    return ENCODER_X265
+
+
 def _encode_staging(ln: PlanLine) -> None:
-    """Produce the converted file at `ln.staging_path` — the CPU-bound half
-    of a CONVERT line (step 1 of `_apply_convert`).
+    """Produce the converted file at `ln.staging_path` — the inline encode
+    used when there's no prefetch pool (a repair re-run).
 
     Pure, off-library work: reads the source, writes the staging file,
-    touches no shared state (no ExifTool, no rename slots, no apply.log),
-    so it's safe to run in a worker thread. Each line's staging path is
-    keyed by `line_id`, so concurrent encodes never collide. Raises the
-    same `ConvertFailed` / `OperationTimeout` / `ApplyError` the inline
-    encode would; the apply loop sees them when it awaits the result.
+    touches no shared state. For video it picks the encoder by content
+    (GPU for 4K+ when NVENC is available, else x265), with an x265 fallback
+    if NVENC can't handle the clip — but, unlike the pooled path, takes no
+    concurrency semaphore (it's a lone synchronous encode). Raises the same
+    `ConvertFailed` / `OperationTimeout` / `ApplyError` the pooled encode
+    would.
     """
     assert ln.staging_path is not None and ln.target_path is not None
     if ln.staging_path.exists():
@@ -110,7 +145,22 @@ def _encode_staging(ln: PlanLine) -> None:
     if target_ext == "jpg":
         convert_to_jpg(ln.abs_path, ln.staging_path)
     elif target_ext == "mp4":
-        convert_to_mp4(ln.abs_path, ln.staging_path)
+        profile = probe_video_profile_with_geometry(ln.abs_path)
+        if is_canonical_video_codec(profile):
+            convert_to_mp4(ln.abs_path, ln.staging_path, profile=profile)
+            return
+        encoder = _route_encoder(profile, nvenc_available())
+        try:
+            convert_to_mp4(
+                ln.abs_path, ln.staging_path, encoder=encoder, profile=profile
+            )
+        except ConvertFailed:
+            if encoder != ENCODER_NVENC:
+                raise
+            convert_to_mp4(
+                ln.abs_path, ln.staging_path,
+                encoder=ENCODER_X265, profile=profile,
+            )
     else:
         raise ApplyError(
             f"{ln.line_id}: unsupported CONVERT target extension {target_ext!r}"
@@ -118,7 +168,8 @@ def _encode_staging(ln: PlanLine) -> None:
 
 
 class _StagingPrefetcher:
-    """Runs CONVERT encodes in a worker pool, ahead of the serial apply loop.
+    """Runs CONVERT encodes in a worker pool, ahead of the serial apply loop,
+    routed across the CPU (libx265) and an optional NVIDIA GPU (hevc_nvenc).
 
     The apply loop stays sequential, but instead of encoding each CONVERT
     line inline it pulls an already-encoded staging file from this pool, so
@@ -128,25 +179,46 @@ class _StagingPrefetcher:
     rename slots) stays on the main thread, so crash-safety and rename
     ordering are unchanged.
 
+    One executor holds `_X265_WORKERS + _NVENC_WORKERS` threads; two
+    semaphores cap how many encodes hit each encoder (so the GPU runs up to
+    `_NVENC_WORKERS` sessions and the CPU up to `_X265_WORKERS`). Per clip:
+    re-mux (already-HEVC) takes no encode slot; 4K re-encodes take a GPU slot
+    (blocking — never an x265 slot); smaller re-encodes prefer a CPU slot but
+    overflow onto a free GPU slot when the CPU is saturated. A GPU encode
+    that fails (e.g. a pixel format NVENC's CUDA path rejects) falls back to
+    x265. When no NVENC GPU is present, there's no GPU pool and every encode
+    runs x265 — identical to the pre-GPU behavior.
+
     Encodes are submitted in apply order and bounded to a sliding window of
-    `workers + _CONVERT_LOOKAHEAD` outstanding lines, so staging-dir disk
-    use stays bounded even if a line stalls. `take(ln)` blocks until that
-    line's staging file is ready and re-raises any encode error, leaving the
-    loop's existing per-line failure handling intact.
+    `total_workers + _CONVERT_LOOKAHEAD` outstanding lines, so staging-dir
+    disk use stays bounded even if a line stalls. `take(ln)` blocks until
+    that line's staging file is ready and re-raises any encode error.
     """
 
-    def __init__(self, lines: list[PlanLine], workers: int) -> None:
+    def __init__(
+        self,
+        lines: list[PlanLine],
+        x265_workers: int,
+        nvenc_workers: int,
+        nvenc: bool,
+    ) -> None:
         self._lines = lines
         self._index = {ln.line_id: i for i, ln in enumerate(lines)}
-        self._executor = ThreadPoolExecutor(max_workers=workers)
+        self._nvenc = nvenc
+        total = x265_workers + (nvenc_workers if nvenc else 0)
+        self._executor = ThreadPoolExecutor(max_workers=total)
+        self._x265_sem = threading.Semaphore(x265_workers)
+        self._nvenc_sem = (
+            threading.Semaphore(nvenc_workers) if nvenc else None
+        )
         self._futures: dict[str, Future[None]] = {}
         self._submitted = 0
-        self._window = workers + _CONVERT_LOOKAHEAD
+        self._window = total + _CONVERT_LOOKAHEAD
         self._lock = threading.Lock()
-        # line_id -> monotonic start time of an encode currently running in
-        # a worker. Drives the live progress display, which shows the
-        # up-to-`workers` in-flight encodes instead of a single stale path.
-        self._active: dict[str, float] = {}
+        # line_id -> live encode state. Drives the progress display (the
+        # up-to-`total` in-flight encodes, each tagged with the encoder it
+        # landed on) instead of a single stale path.
+        self._active: dict[str, _ActiveEncode] = {}
         with self._lock:
             self._submit_through(self._window)
 
@@ -161,30 +233,126 @@ class _StagingPrefetcher:
             self._submitted += 1
 
     def _run(self, ln: PlanLine) -> None:
-        """Worker body: record the encode as active (for the progress
-        display) for its duration, then run the actual encode."""
+        """Worker body: mark the line active (for the progress display) for
+        the encode's duration, clear any stale staging file, and dispatch by
+        target type. JPG and re-mux take no encode semaphore; an mp4
+        re-encode is routed and slot-gated by `_encode_mp4`."""
         with self._lock:
-            self._active[ln.line_id] = time.monotonic()
+            self._active[ln.line_id] = _ActiveEncode(time.monotonic())
         try:
-            _encode_staging(ln)
+            assert ln.staging_path is not None and ln.target_path is not None
+            if ln.staging_path.exists():
+                ln.staging_path.unlink()
+            target_ext = ln.target_path.suffix.lstrip(".").lower()
+            if target_ext == "jpg":
+                convert_to_jpg(ln.abs_path, ln.staging_path)
+            elif target_ext == "mp4":
+                self._encode_mp4(ln)
+            else:
+                raise ApplyError(
+                    f"{ln.line_id}: unsupported CONVERT target extension "
+                    f"{target_ext!r}"
+                )
         finally:
             with self._lock:
                 self._active.pop(ln.line_id, None)
 
+    def _encode_mp4(self, ln: PlanLine) -> None:
+        """Probe, route, and encode an mp4 CONVERT line, gated by the encoder
+        semaphores. Already-HEVC sources just re-mux (no slot). Otherwise the
+        clip prefers its routed encoder (4K→GPU, else CPU), overflows HD to a
+        free GPU slot, and falls back to x265 if a GPU encode fails."""
+        assert ln.staging_path is not None
+        profile = probe_video_profile_with_geometry(ln.abs_path)
+        if is_canonical_video_codec(profile):
+            self._label(ln, "mux")
+            convert_to_mp4(ln.abs_path, ln.staging_path, profile=profile)
+            return
+        preference = _route_encoder(profile, self._nvenc)
+        held: str | None = self._acquire(preference)
+        try:
+            self._label(ln, held)
+            try:
+                convert_to_mp4(
+                    ln.abs_path, ln.staging_path,
+                    encoder=held, profile=profile,
+                )
+            except ConvertFailed:
+                if held != ENCODER_NVENC:
+                    raise
+                # GPU couldn't encode this clip — release the GPU slot and
+                # retry on the CPU (which can encode anything). Force x265
+                # (block for a CPU slot); don't re-route, or we'd bounce
+                # straight back to the GPU that just failed.
+                self._release(held)
+                held = None
+                self._label(ln, ENCODER_X265)
+                self._x265_sem.acquire()
+                held = ENCODER_X265
+                convert_to_mp4(
+                    ln.abs_path, ln.staging_path,
+                    encoder=ENCODER_X265, profile=profile,
+                )
+        finally:
+            if held is not None:
+                self._release(held)
+
+    def _acquire(self, preference: str) -> str:
+        """Acquire an encode slot and return the encoder actually granted.
+
+        4K (preference NVENC): block for a GPU slot — never fall back to a
+        CPU worker, since a long encode there re-creates the slow-clip stall.
+        Otherwise prefer a CPU slot; if all are busy, overflow onto a free
+        GPU slot; if neither is free, block for a CPU slot.
+        """
+        if preference == ENCODER_NVENC:
+            assert self._nvenc_sem is not None
+            self._nvenc_sem.acquire()
+            return ENCODER_NVENC
+        if self._x265_sem.acquire(blocking=False):
+            return ENCODER_X265
+        if self._nvenc_sem is not None and self._nvenc_sem.acquire(
+            blocking=False
+        ):
+            return ENCODER_NVENC
+        self._x265_sem.acquire()
+        return ENCODER_X265
+
+    def _release(self, encoder: str) -> None:
+        if encoder == ENCODER_NVENC:
+            assert self._nvenc_sem is not None
+            self._nvenc_sem.release()
+        else:
+            self._x265_sem.release()
+
+    def _label(self, ln: PlanLine, label: str) -> None:
+        """Set the encoder label shown for this line in the progress display."""
+        with self._lock:
+            rec = self._active.get(ln.line_id)
+            if rec is not None:
+                rec.encoder = label
+
     def active_status(self) -> str:
         """One-line summary of the in-flight encodes for the progress line:
-        each active line's id and how long it's been encoding, oldest
-        first (the longest-running is the most informative and stays
-        left-stable as newer ones appear to its right). Empty string when
-        nothing is encoding (e.g. a stretch of non-CONVERT lines, or the
-        pool has drained at the tail of the run)."""
+        each active line's id, the encoder it's on (cpu/gpu/mux), and how
+        long it's been running, oldest first (the longest-running is the
+        most informative and stays left-stable as newer ones appear to its
+        right). Empty string when nothing is encoding."""
         now = time.monotonic()
         with self._lock:
-            items = sorted(self._active.items(), key=lambda kv: kv[1])
-        return "   ".join(
-            f"{line_id} {format_duration(now - started)}"
-            for line_id, started in items
-        )
+            snapshot = [
+                (lid, rec.started, rec.encoder)
+                for lid, rec in sorted(
+                    self._active.items(), key=lambda kv: kv[1].started
+                )
+            ]
+        labels = {ENCODER_NVENC: "gpu", ENCODER_X265: "cpu", "mux": "mux"}
+        parts: list[str] = []
+        for lid, started, encoder in snapshot:
+            tag = labels.get(encoder or "", "")
+            tag = f" {tag}" if tag else ""
+            parts.append(f"{lid}{tag} {format_duration(now - started)}")
+        return "   ".join(parts)
 
     def take(self, ln: PlanLine) -> bool:
         """Await `ln`'s prefetched encode.
@@ -460,10 +628,24 @@ def apply_plan(
                 # Start encoding the first window of CONVERT lines now, so
                 # several encodes are already in flight by the time the loop
                 # reaches them. Only built when there are CONVERTs (which is
-                # exactly when `needs_staging` is true).
+                # exactly when `needs_staging` is true). Detect the GPU once
+                # here (a ~1-2s functional probe) rather than per line.
                 if convert_lines:
+                    nvenc = nvenc_available()
+                    mode = (
+                        f"{_X265_WORKERS}x x265 (CPU)"
+                        + (
+                            f" + {_NVENC_WORKERS}x hevc_nvenc (GPU); "
+                            "4K->GPU, HD overflow->GPU when CPU busy"
+                            if nvenc
+                            else "; no NVENC GPU detected, CPU only"
+                        )
+                    )
+                    ts = datetime.now().isoformat(timespec="milliseconds")
+                    log.write(f"{ts} convert encoders: {mode}\n")
+                    log.flush()
                     prefetcher = _StagingPrefetcher(
-                        convert_lines, _CONVERT_WORKERS
+                        convert_lines, _X265_WORKERS, _NVENC_WORKERS, nvenc
                     )
             for ln in runnable:
                 # With a prefetch pool, the live body shows the in-flight
