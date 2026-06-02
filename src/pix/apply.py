@@ -42,7 +42,7 @@ from pix.exiftool_session import (
     ExifToolTimeout,
     TagWriteFailed,
 )
-from pix.duration import format_duration_compact, format_size
+from pix.duration import format_duration, format_duration_compact, format_size
 from pix.metadata_cache import PerFileCache
 from pix.plan import NAME_PRESERVING_KEEP, Action, Plan, PlanLine
 from pix.progress import LiveProgress
@@ -130,6 +130,10 @@ class _StagingPrefetcher:
         self._submitted = 0
         self._window = workers + _CONVERT_LOOKAHEAD
         self._lock = threading.Lock()
+        # line_id -> monotonic start time of an encode currently running in
+        # a worker. Drives the live progress display, which shows the
+        # up-to-`workers` in-flight encodes instead of a single stale path.
+        self._active: dict[str, float] = {}
         with self._lock:
             self._submit_through(self._window)
 
@@ -139,9 +143,35 @@ class _StagingPrefetcher:
         while self._submitted < min(upto, len(self._lines)):
             ln = self._lines[self._submitted]
             self._futures[ln.line_id] = self._executor.submit(
-                _encode_staging, ln
+                self._run, ln
             )
             self._submitted += 1
+
+    def _run(self, ln: PlanLine) -> None:
+        """Worker body: record the encode as active (for the progress
+        display) for its duration, then run the actual encode."""
+        with self._lock:
+            self._active[ln.line_id] = time.monotonic()
+        try:
+            _encode_staging(ln)
+        finally:
+            with self._lock:
+                self._active.pop(ln.line_id, None)
+
+    def active_status(self) -> str:
+        """One-line summary of the in-flight encodes for the progress line:
+        each active line's id and how long it's been encoding, oldest
+        first (the longest-running is the most informative and stays
+        left-stable as newer ones appear to its right). Empty string when
+        nothing is encoding (e.g. a stretch of non-CONVERT lines, or the
+        pool has drained at the tail of the run)."""
+        now = time.monotonic()
+        with self._lock:
+            items = sorted(self._active.items(), key=lambda kv: kv[1])
+        return "   ".join(
+            f"{line_id} {format_duration(now - started)}"
+            for line_id, started in items
+        )
 
     def take(self, ln: PlanLine) -> bool:
         """Await `ln`'s prefetched encode.
@@ -386,9 +416,23 @@ def apply_plan(
     completed = 0
     convert_failures: list[tuple[PlanLine, str]] = []
     records: list[LineRecord] = []
+
+    def _encode_status() -> str | None:
+        # Drives the live progress body: the encode pool's in-flight lines
+        # with their climbing timers. Read lazily each render (incl. the
+        # 1s background tick), so durations advance while the main thread
+        # is blocked waiting on an encode. None → fall back to the normal
+        # per-line label (e.g. a stretch of TAG/RENAME lines with nothing
+        # encoding, or the pool drained at the tail).
+        if prefetcher is None:
+            return None
+        return prefetcher.active_status() or None
+
     with (
         log_path.open("a", encoding="utf-8") as log,
-        LiveProgress(total=len(runnable)) as progress,
+        LiveProgress(
+            total=len(runnable), status_provider=_encode_status
+        ) as progress,
     ):
         try:
             if needs_exiftool:
@@ -409,8 +453,14 @@ def apply_plan(
                         convert_lines, _CONVERT_WORKERS
                     )
             for ln in runnable:
+                # With a prefetch pool, the live body shows the in-flight
+                # encodes (set via status_provider), so the per-line path
+                # would only flicker as a stale fallback — drop it. Without
+                # a pool (a pure TAG/RENAME run), the path is the useful
+                # signal, so keep it.
                 progress.begin(
-                    f"{ln.line_id} {ln.action.value}", str(ln.abs_path)
+                    f"{ln.line_id} {ln.action.value}",
+                    "" if prefetcher is not None else str(ln.abs_path),
                 )
                 # File size is only interesting for CONVERT (correlates
                 # with encode/transcode time); for TAG/RENAME/DELETE it

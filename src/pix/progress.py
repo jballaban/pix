@@ -19,6 +19,14 @@ column stays aligned across phases:
   source walk). Caller just calls `begin(label)` and lets the
   background thread tick the elapsed counter once per second.
 
+A caller can pass a `status_provider` to override the per-item
+`LABEL path (Yiter)` body with a dynamically computed string, re-read on
+every render including the 1s background tick (so embedded timers climb
+even while the caller's main thread is blocked). apply uses this to show
+its parallel encode pool's in-flight lines (`L2453 40s   L2455 12s   …`)
+instead of one stale path. Returning `None` falls back to normal
+label/path rendering.
+
 Single rewriting line via `\\r` either way. Line is clipped to the
 terminal width so a long path can't wrap and break the `\\r` rewrite.
 When successive lines have different lengths, the trailing chars from
@@ -36,7 +44,7 @@ import sys
 import threading
 import time
 from types import TracebackType
-from typing import IO
+from typing import Callable, IO
 
 from pix.duration import format_duration
 
@@ -106,9 +114,19 @@ class LiveProgress:
         self,
         total: int | None = None,
         stream: IO[str] | None = None,
+        status_provider: Callable[[], str | None] | None = None,
     ) -> None:
         self._total = total
         self._stream = stream or sys.stdout
+        # Optional dynamic-body override. When set and it returns a
+        # non-empty string, that string replaces the per-item label/path/
+        # `(Yiter)` suffix after the `NNN% Xphase - ` front block, and the
+        # background tick re-evaluates it once a second so embedded timers
+        # climb live even while the caller's main thread is blocked. Used
+        # by apply to show the parallel encode pool's in-flight lines
+        # instead of a single (stale) path. Returning None falls back to
+        # the normal label/path rendering.
+        self._status_provider = status_provider
         # Determinate with total < 1 is meaningless — disable.
         if total is not None and total < 1:
             self._enabled = False
@@ -242,7 +260,12 @@ class LiveProgress:
         if not self._enabled:
             return
         with self._lock:
-            if not self._label:
+            # A dynamic body (e.g. apply's in-flight encode pool) can carry
+            # the line even before/without a per-item label.
+            provider_body = (
+                self._status_provider() if self._status_provider else None
+            )
+            if not self._label and not provider_body:
                 return
             now = time.monotonic()
             if (
@@ -273,8 +296,6 @@ class LiveProgress:
                     if show_iter
                     else ""
                 )
-            head = f"{prefix}{self._label}"
-
             # Clip to terminal width minus one (avoid wrapping into a
             # second row — `\r` only resets the cursor on the current
             # row, so a wrap leaves the upper row stranded). Long paths
@@ -282,16 +303,23 @@ class LiveProgress:
             # duration suffix is preserved.
             cols = shutil.get_terminal_size((80, 24)).columns
             max_len = max(20, cols - 1)
-            if self._path:
-                # head + " " + path + suffix
-                overhead = len(head) + 1 + len(suffix)
-                path_budget = max_len - overhead
-                if path_budget <= 0:
-                    line = head + suffix
-                else:
-                    line = f"{head} {_truncate_path(self._path, path_budget)}{suffix}"
+            if provider_body:
+                # Dynamic body owns everything after the front block; no
+                # per-item label/path/suffix. (e.g. apply's encode pool:
+                # `L2453 40s   L2455 12s   L2457 3s`.)
+                line = f"{prefix}{provider_body}"
             else:
-                line = head + suffix
+                head = f"{prefix}{self._label}"
+                if self._path:
+                    # head + " " + path + suffix
+                    overhead = len(head) + 1 + len(suffix)
+                    path_budget = max_len - overhead
+                    if path_budget <= 0:
+                        line = head + suffix
+                    else:
+                        line = f"{head} {_truncate_path(self._path, path_budget)}{suffix}"
+                else:
+                    line = head + suffix
             if len(line) > max_len:
                 # Falls through only when head+suffix alone won't fit
                 # (pathological terminal width or a wildly long label).
