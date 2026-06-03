@@ -27,7 +27,11 @@ from pix.dedupe import (
 )
 from pix.duration import format_duration_precise
 from pix.editor import open_in_editor, parse_kept_line_ids, prompt_apply
-from pix.hash_cache import read_all_cached_hashes
+from pix.hash_cache import (
+    read_all_cached_hashes,
+    read_cached_hash,
+    write_cached_hash,
+)
 from pix.library_lock import LockHeld, acquire as acquire_lock
 from pix.metadata import (
     ExifToolFailed,
@@ -262,6 +266,20 @@ def _run_dedupe(root: Path, no_prompt: bool = False) -> None:
             continue
         break  # 'y'
 
+    # Capture each surviving keeper's content hash *before* apply mutates
+    # it. A MERGE writes pix:* tags onto the keeper, which bumps its mtime
+    # and so invalidates the (size, mtime) key on its .hash cache entry —
+    # but the content hash is metadata-invariant (see content_hash.py), so
+    # the value is still correct. We re-stamp it after apply with the new
+    # mtime, keeping the value, so `pix organize` (the next sync step,
+    # which requires a cached hash for every file and won't compute one)
+    # doesn't abort on these keepers. Read now, while the cache is valid.
+    merge_keeper_hashes: dict[Path, str | None] = {
+        ln.abs_path: read_cached_hash(root, ln.abs_path)
+        for ln in result.plan.lines
+        if ln.line_id in kept_line_ids and ln.action == Action.MERGE
+    }
+
     apply_log_path = runs_dir / "apply.log"
     try:
         try:
@@ -276,12 +294,29 @@ def _run_dedupe(root: Path, no_prompt: bool = False) -> None:
             raise typer.Exit(code=1) from e
 
         # Cache mutation: a removed duplicate's sidecars all go away; a
-        # merged (or quarantined) keeper's .meta/.hash are now stale, so
-        # drop them to be re-derived next run. Both reduce to remove_all on
-        # the applied line's path. Best-effort.
+        # merged keeper's .meta/.hash/.video are now stale (the tag write
+        # bumped its mtime), so drop them. Best-effort.
         for ln in result.plan.lines:
             if ln.line_id in kept_line_ids:
                 remove_all(root, ln.abs_path)
+
+        # ...then re-stamp the keeper's .hash with its pre-merge value and
+        # the file's new (size, mtime). The content hash skips metadata
+        # regions, so the value is unchanged by the MERGE; only the cache
+        # key moved. This keeps `pix organize` (next in `pix sync`) from
+        # aborting on these keepers for want of a cached hash. Best-effort:
+        # a keeper that had no cached hash to begin with is left dropped.
+        for keeper, hash_hex in merge_keeper_hashes.items():
+            if hash_hex is None:
+                continue
+            try:
+                st = keeper.stat()
+            except OSError:
+                continue
+            write_cached_hash(
+                root, keeper, hash_hex=hash_hex,
+                size=st.st_size, mtime_ns=st.st_mtime_ns,
+            )
 
         typer.echo("")
         typer.echo(

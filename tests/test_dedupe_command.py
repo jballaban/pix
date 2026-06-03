@@ -6,8 +6,9 @@ from pathlib import Path
 
 import pytest
 
+from pix import dedupe as dedupe_mod
 from pix.commands.dedupe import dedupe_library
-from pix.hash_cache import write_cached_hash
+from pix.hash_cache import read_cached_hash, write_cached_hash
 from pix.metadata_cache import PerFileCache
 from pix.plan import PIX_ORIGINAL_PATH
 
@@ -75,3 +76,63 @@ def test_no_prompt_applies_without_prompting(
     assert not b.exists()
     out = capsys.readouterr().out
     assert "Removed 1 duplicate(s)" in out
+
+
+class _MergeBumpsKeeperExif:
+    """Fake ExifToolSession: records the merge write and, like a real tag
+    write, bumps the keeper file's (size, mtime) so its seeded .hash cache
+    entry goes stale — exactly the condition that broke organize."""
+
+    def __init__(self) -> None:
+        self.writes: list[Path] = []
+
+    def export_xmp_sidecar(self, file: Path, sidecar_path: Path) -> None:
+        sidecar_path.write_text("<xmp/>", encoding="utf-8")
+
+    def write_tags(self, file: Path, tags: dict[str, str]) -> None:
+        # Append a byte → size (and mtime) change → (size,mtime) cache key
+        # for this file no longer matches; the pre-write .hash is now stale.
+        with file.open("ab") as fh:
+            fh.write(b"\x00")
+        self.writes.append(file)
+
+    def close(self) -> None:
+        pass
+
+
+def test_dedupe_merge_keeps_keeper_hash_valid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A MERGE writes tags onto the keeper (bumping its mtime), which would
+    invalidate its .hash cache. Since the content hash is metadata-invariant,
+    dedupe must re-stamp the keeper's hash so the next `pix organize` (in
+    `pix sync`) still finds a valid cached hash. Regression: organize aborted
+    with "N file(s) ... lack a cached content hash" after a sync's dedupe.
+    """
+    root = _make_library(tmp_path)
+    a = (root / "a.jpg").resolve()  # keeper (lex-smallest); no event
+    b = (root / "b.jpg").resolve()  # loser; folder "Hawaii" yields an event
+    a.write_bytes(b"keepkeepkeep")
+    b.write_bytes(b"dupdupdup")
+
+    cache = PerFileCache.for_library(root)
+    cache.add(a, {PIX_ORIGINAL_PATH: "F:/2023/a.jpg"})
+    cache.add(b, {PIX_ORIGINAL_PATH: "F:/Hawaii/b.jpg"})  # event → keeper MERGE
+    for f in (a, b):  # same hash ⇒ duplicates
+        st = f.stat()
+        write_cached_hash(
+            root, f, hash_hex="dedupehash",
+            size=st.st_size, mtime_ns=st.st_mtime_ns,
+        )
+
+    fake = _MergeBumpsKeeperExif()
+    monkeypatch.setattr(dedupe_mod, "ExifToolSession", lambda: fake)
+
+    dedupe_library(path=root, no_prompt=True)
+
+    # The merge wrote to the keeper (so its hash key really did go stale)...
+    assert fake.writes == [a]
+    assert a.exists() and not b.exists()
+    # ...yet the keeper's content hash is still cached and valid: re-stamped
+    # to the new (size, mtime), value preserved (metadata-invariant).
+    assert read_cached_hash(root, a) == "dedupehash"
