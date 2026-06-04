@@ -45,8 +45,9 @@ To curate:
 
 Then run:  pix dedupe --commit "{dir}"
 
-Filenames: gNNNN_dDDD.jpg  (group number _ max perceptual distance).
-Lower distance = more certain duplicate. manifest.json is authoritative.
+Filenames: dDDD_gNNNN.jpg  (max perceptual distance _ group number).
+Sort by name to scan most-certain (d000) -> most questionable. Lower
+distance = more certain duplicate. manifest.json is authoritative.
 """
 
 
@@ -60,7 +61,9 @@ class ManifestGroup:
 
 
 def montage_name(group_id: str, distance: int) -> str:
-    return f"{group_id}_d{distance:03d}.jpg"
+    # Distance first so a name sort spans most-certain (d000) → most
+    # questionable; group id second as a stable unique suffix.
+    return f"d{distance:03d}_{group_id}.jpg"
 
 
 def _rel(path: Path, root: Path) -> str:
