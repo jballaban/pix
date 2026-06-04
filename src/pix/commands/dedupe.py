@@ -370,6 +370,10 @@ def _run_checkout(
     plan_log_path = runs_dir / "plan.log"
 
     with acquire_lock(root, "dedupe-checkout"):
+        # Reset our own artifacts from any prior checkout into this folder so
+        # the review set is exactly this run (commit is manifest-driven, so
+        # stale montages were harmless but confusing to review).
+        dedupe_review.clear_review_artifacts(review_dir)
         result, fingerprints = _build_result(
             root, run_id, runs_dir, plan_log_path, min_distance, max_distance,
             videos_only=True,  # review tool: perceptual video groups only

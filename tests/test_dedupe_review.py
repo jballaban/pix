@@ -7,6 +7,7 @@ from pathlib import Path
 from pix.dedupe import DedupeGroup
 from pix.dedupe_review import (
     MANIFEST_NAME,
+    clear_review_artifacts,
     montage_name,
     read_manifest,
     surviving_member_sets,
@@ -62,3 +63,20 @@ def test_surviving_reflects_montage_presence(tmp_path: Path) -> None:
     (review / montage_name("g0002", 18)).unlink()
     survivors = surviving_member_sets(review)
     assert survivors == [frozenset({"a.mp4", "b.mp4"})]
+
+
+def test_clear_review_artifacts_scoped(tmp_path: Path) -> None:
+    review = tmp_path / "review"
+    review.mkdir()
+    (review / MANIFEST_NAME).write_text("{}", encoding="utf-8")
+    (review / "_README.txt").write_text("x", encoding="utf-8")
+    (review / montage_name("g0001", 5)).write_bytes(b"m")
+    (review / montage_name("g0042", 130)).write_bytes(b"m")
+    # unrelated files the user might have in the folder — must be kept
+    (review / "notes.txt").write_text("keep", encoding="utf-8")
+    (review / "vacation.jpg").write_bytes(b"keep")
+
+    clear_review_artifacts(review)
+
+    names = {p.name for p in review.iterdir()}
+    assert names == {"notes.txt", "vacation.jpg"}

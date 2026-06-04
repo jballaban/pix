@@ -16,6 +16,7 @@ changed since checkout simply won't match and is skipped — safe by default.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
@@ -28,6 +29,26 @@ from pix.video_fingerprint import FRAC
 
 MANIFEST_NAME = "manifest.json"
 README_NAME = "_README.txt"
+
+# Matches montage filenames we write (dDDD_gNNNN.jpg) so a reset only ever
+# removes our own artifacts, never unrelated files in the target folder.
+_MONTAGE_RE = re.compile(r"^d\d+_g\d+\.jpg$")
+
+
+def clear_review_artifacts(review_dir: Path) -> None:
+    """Remove this tool's artifacts (manifest, README, montages) from a prior
+    checkout so each run starts clean. Scoped by name — leaves any other
+    files in `review_dir` untouched."""
+    if not review_dir.is_dir():
+        return
+    for p in review_dir.iterdir():
+        if p.name in (MANIFEST_NAME, README_NAME) or (
+            p.is_file() and _MONTAGE_RE.match(p.name)
+        ):
+            try:
+                p.unlink()
+            except OSError:
+                pass
 
 _README = """\
 pix dedupe review folder
