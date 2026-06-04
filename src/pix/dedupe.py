@@ -475,7 +475,6 @@ def group_by_fingerprint(
         if ra != rb:
             parent[rb] = ra
 
-    edges: list[tuple[Path, Path, int]] = []
     by_res: dict[tuple[int, int], list[Path]] = defaultdict(list)
     for p, fp in valid.items():
         by_res[(fp.width, fp.height)].append(p)
@@ -489,17 +488,27 @@ def group_by_fingerprint(
                 d = fingerprint_distance(valid[paths[i]].frames, valid[paths[j]].frames)
                 if min_distance <= d <= max_distance:
                     union(paths[i], paths[j])
-                    edges.append((paths[i], paths[j], d))
                 j += 1
 
     comps: dict[Path, list[Path]] = defaultdict(list)
     for p in parent:
         comps[find(p)].append(p)
-    comp_max_dist: dict[Path, int] = defaultdict(int)
-    for a, _b, d in edges:
-        r = find(a)
-        if d > comp_max_dist[r]:
-            comp_max_dist[r] = d
+    # Group distance = the WORST pair within the component, not just the
+    # linking edges. Grouping is transitive (union-find): A~B and B~C put
+    # A,B,C together even if A~C exceeds the band, so the honest "how loose
+    # is this group" is the max over *all* pairs. Components are tiny, so the
+    # O(k^2) recompute is cheap. A chained group can thus report a distance
+    # above --max — exactly the signal a reviewer wants.
+    comp_max_dist: dict[Path, int] = {}
+    for root, members_paths in comps.items():
+        mx = 0
+        for i in range(len(members_paths)):
+            fi = valid[members_paths[i]].frames
+            for j in range(i + 1, len(members_paths)):
+                d = fingerprint_distance(fi, valid[members_paths[j]].frames)
+                if d > mx:
+                    mx = d
+        comp_max_dist[root] = mx
 
     groups: list[DedupeGroup] = []
     for root, members_paths in comps.items():

@@ -58,6 +58,23 @@ def test_grouped_just_under_max(tmp_path: Path) -> None:
     assert len(groups) == 1 and groups[0].distance == 20
 
 
+def test_transitive_group_reports_worst_pair_distance(tmp_path: Path) -> None:
+    """A~B (5) and B~C (30) chain A,B,C into one group even though A~C (35)
+    exceeds the band; the reported distance is the worst pair (35), not the
+    largest linking edge (30)."""
+    a, b, c = _mk(tmp_path, "a.mp4"), _mk(tmp_path, "b.mp4"), _mk(tmp_path, "c.mp4")
+    cache = {a: _meta(a), b: _meta(b), c: _meta(c)}
+    fa = (0, 0, 0, 0, 0, 0)
+    fb = ((1 << 5) - 1, 0, 0, 0, 0, 0)    # 5 bits from A
+    fc = ((1 << 35) - 1, 0, 0, 0, 0, 0)   # 35 bits from A; 30 bits from B
+    fps = {a: _fp(fa), b: _fp(fb), c: _fp(fc)}
+    groups = group_by_fingerprint(tmp_path, cache, fps, 0, 30)
+    assert len(groups) == 1
+    g = groups[0]
+    assert {g.keeper, *g.losers} == {a, b, c}
+    assert g.distance == 35   # worst pair (A~C), above the band — flagged
+
+
 def test_min_distance_excludes_exact(tmp_path: Path) -> None:
     """Band curation: --min 10 skips identical (distance 0) pairs."""
     a, b = _mk(tmp_path, "a.mp4"), _mk(tmp_path, "b.mp4")
