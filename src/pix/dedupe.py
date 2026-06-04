@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -68,6 +68,32 @@ from pix.plan import (
 )
 from pix.progress import LiveProgress
 from pix.telemetry import LineRecord, write_summary
+from pix.video_fingerprint import VideoFingerprint, fingerprint_distance
+
+
+# Video extensions deduped by *perceptual fingerprint* rather than exact
+# content hash — the re-encodable canonical containers, where two encodes
+# of one source differ byte-wise but match perceptually (the cross-encoder
+# gap from the GPU/CPU hybrid). Everything else (images, name-preserving
+# .insv/.insp 360 media) stays on the exact-hash path.
+_VIDEO_DEDUPE_EXTS: frozenset[str] = frozenset({"mp4", "mov", "m4v"})
+
+# Two videos can only be duplicates if their durations match within this
+# tolerance (a re-encode preserves duration to within container rounding /
+# a frame). Used as a cheap pre-filter before the fingerprint compare.
+_DUR_TOL: float = 0.75
+
+# Default perceptual-distance band (Hamming bits over the frame-hash set).
+# 0..30 is the range confirmed by visual review on the real library to be
+# all true duplicates; the gray zone begins above it. Overridable per run
+# via --min/--max for manual curation of higher bands.
+DEFAULT_MIN_DISTANCE: int = 0
+DEFAULT_MAX_DISTANCE: int = 30
+
+
+def is_dedupe_video(path: Path) -> bool:
+    """True if `path` is deduped by perceptual fingerprint (not exact hash)."""
+    return path.suffix.lower().lstrip(".") in _VIDEO_DEDUPE_EXTS
 
 
 # --- Errors ------------------------------------------------------------------
@@ -123,6 +149,12 @@ class DedupeGroup:
     keeper_writes: dict[str, str] = field(default_factory=lambda: {})
     merge_notes: tuple[str, ...] = ()
     merge_warnings: tuple[str, ...] = ()
+    # How the group was matched. "exact" → identical `content_hash` (images
+    # and non-video). "perceptual" → video fingerprint within the band;
+    # `content_hash` is empty and `distance` is the largest pairwise
+    # fingerprint distance inside the group (for the plan/details display).
+    kind: str = "exact"
+    distance: int = 0
 
 
 @dataclass(frozen=True)
@@ -379,6 +411,125 @@ def group_by_hash(
     return groups
 
 
+def select_video_keeper(
+    library_root: Path,
+    paths: list[Path],
+    fingerprints: dict[Path, VideoFingerprint],
+) -> Path:
+    """Pick the best copy to keep from a perceptual video group.
+
+    Unlike exact dedupe (where every member is byte-identical, so the
+    keeper is an arbitrary deterministic survivor), perceptual matches
+    differ in quality — so we keep the best by: highest resolution →
+    highest bitrate (size ÷ duration, a proxy for fidelity / fewest
+    re-encode generations) → longest duration (completeness) → lex-smallest
+    path (stable tie-break). See spec/dedupe.md → Keeper selection."""
+    def rank(p: Path) -> tuple[int, float, float, str]:
+        fp = fingerprints[p]
+        try:
+            size = p.stat().st_size
+        except OSError:
+            size = 0
+        bitrate = size / fp.duration if fp.duration > 0 else 0.0
+        return (
+            -(fp.width * fp.height),   # higher resolution first
+            -bitrate,                  # higher bitrate first
+            -fp.duration,              # longer first
+            _sort_key(p, library_root),
+        )
+    return min(paths, key=rank)
+
+
+def group_by_fingerprint(
+    library_root: Path,
+    cache: dict[Path, FileMetadata],
+    fingerprints: Mapping[Path, VideoFingerprint | None],
+    min_distance: int,
+    max_distance: int,
+) -> list[DedupeGroup]:
+    """Group videos by perceptual fingerprint within `[min,max]` distance.
+
+    Two videos are candidates only if they share resolution and durations
+    within `_DUR_TOL` (cheap pre-filter); among those, an edge is drawn when
+    their fingerprint distance is in `[min_distance, max_distance]`.
+    Connected components of 2+ become groups. Keeper is the best copy
+    (`select_video_keeper`); the rest are losers. Files with no usable
+    fingerprint are skipped (never grouped → never deleted).
+    """
+    valid: dict[Path, VideoFingerprint] = {
+        p: fp for p, fp in fingerprints.items()
+        if fp is not None and p in cache
+    }
+
+    parent: dict[Path, Path] = {}
+
+    def find(x: Path) -> Path:
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: Path, b: Path) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    edges: list[tuple[Path, Path, int]] = []
+    by_res: dict[tuple[int, int], list[Path]] = defaultdict(list)
+    for p, fp in valid.items():
+        by_res[(fp.width, fp.height)].append(p)
+    for paths in by_res.values():
+        paths.sort(key=lambda p: valid[p].duration)
+        n = len(paths)
+        for i in range(n):
+            di = valid[paths[i]].duration
+            j = i + 1
+            while j < n and valid[paths[j]].duration - di <= _DUR_TOL:
+                d = fingerprint_distance(valid[paths[i]].frames, valid[paths[j]].frames)
+                if min_distance <= d <= max_distance:
+                    union(paths[i], paths[j])
+                    edges.append((paths[i], paths[j], d))
+                j += 1
+
+    comps: dict[Path, list[Path]] = defaultdict(list)
+    for p in parent:
+        comps[find(p)].append(p)
+    comp_max_dist: dict[Path, int] = defaultdict(int)
+    for a, _b, d in edges:
+        r = find(a)
+        if d > comp_max_dist[r]:
+            comp_max_dist[r] = d
+
+    groups: list[DedupeGroup] = []
+    for root, members_paths in comps.items():
+        if len(members_paths) < 2:
+            continue
+        members = [(p, cache[p]) for p in members_paths]
+        keeper = select_video_keeper(library_root, members_paths, valid)
+        losers_sorted = sorted(
+            (p for p in members_paths if p != keeper),
+            key=lambda p: _sort_key(p, library_root),
+        )
+        keeper_writes, merge_notes, merge_warnings = _compute_keeper_merge(
+            keeper, members, library_root
+        )
+        groups.append(
+            DedupeGroup(
+                content_hash="",
+                keeper=keeper,
+                losers=tuple(losers_sorted),
+                keeper_writes=keeper_writes,
+                merge_notes=merge_notes,
+                merge_warnings=merge_warnings,
+                kind="perceptual",
+                distance=comp_max_dist[root],
+            )
+        )
+    groups.sort(key=lambda g: _sort_key(g.keeper, library_root))
+    return groups
+
+
 # --- Plan generation --------------------------------------------------------
 
 
@@ -390,11 +541,30 @@ def generate_plan(
     run_id: str,
     run_dir: Path,
     plan_log: IO[str] | None = None,
+    fingerprints: dict[Path, VideoFingerprint | None] | None = None,
+    min_distance: int = DEFAULT_MIN_DISTANCE,
+    max_distance: int = DEFAULT_MAX_DISTANCE,
 ) -> DedupeResult:
-    """Build a dedupe plan from the library cache and precomputed hash map."""
+    """Build a dedupe plan from the library cache and precomputed hash map.
+
+    When `fingerprints` is provided, videos (`is_dedupe_video`) are grouped
+    by *perceptual fingerprint* within `[min_distance, max_distance]` and
+    everything else by exact content hash; when it's None, all files group
+    by exact hash (the pre-perceptual behavior, kept for callers/tests that
+    don't supply fingerprints).
+    """
     require_migrated_with_hashes(cache, hashes)
 
-    groups = group_by_hash(library_root, cache, hashes)
+    if fingerprints is None:
+        groups = group_by_hash(library_root, cache, hashes)
+    else:
+        non_video = {p: m for p, m in cache.items() if not is_dedupe_video(p)}
+        video = {p: m for p, m in cache.items() if is_dedupe_video(p)}
+        groups = group_by_hash(library_root, non_video, hashes)
+        groups += group_by_fingerprint(
+            library_root, video, fingerprints, min_distance, max_distance
+        )
+        groups.sort(key=lambda g: _sort_key(g.keeper, library_root))
 
     # Build PlanLines with stable IDs and pre-computed capture paths.
     # Capture path lives at runs/<run-id>/data/L<NNN>_<filename>; the
@@ -411,12 +581,15 @@ def generate_plan(
                 progress.begin("dedupe", str(loser))
                 line_id = f"L{len(lines) + 1:03d}"
                 capture_name = f"{line_id}_{loser.name}"
-                short_hash = group.content_hash[:12]
+                if group.kind == "perceptual":
+                    detail = f"perceptual d={group.distance}"
+                else:
+                    detail = f"hash {group.content_hash[:12]}…"
                 line = PlanLine(
                     line_id=line_id,
                     action=Action.DEDUP,
                     rel_path=loser.relative_to(library_root).as_posix(),
-                    details=f"hash {short_hash}…",
+                    details=detail,
                     abs_path=loser,
                     capture_path=data_dir / capture_name,
                 )
@@ -425,7 +598,7 @@ def generate_plan(
                     ts = datetime.now().isoformat(timespec="seconds")
                     plan_log.write(
                         f"{ts} {loser} -> {line_id} DEDUP "
-                        f"(keeper={group.keeper}, hash={short_hash}…)\n"
+                        f"(keeper={group.keeper}, {detail})\n"
                     )
                     plan_log.flush()
                 progress.advance()
@@ -501,10 +674,13 @@ def serialize_plan(
 
     body: list[str] = []
     for i, group in enumerate(result.groups, start=1):
-        short_hash = group.content_hash[:12]
         keeper_rel = _rel_or_abs(group.keeper, library_root)
+        if group.kind == "perceptual":
+            match_desc = f"perceptual, max dist {group.distance}"
+        else:
+            match_desc = f"hash {group.content_hash[:12]}…"
         body.append(
-            f"# Group {i} — hash {short_hash}…, "
+            f"# Group {i} — {match_desc}, "
             f"{len(group.losers) + 1} files"
         )
         body.append(f"# Keeper: {keeper_rel}")
