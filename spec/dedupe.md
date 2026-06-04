@@ -16,9 +16,24 @@ Same rule as organize: the user must invoke `pix dedupe` from the library root o
 
 ## What counts as a duplicate
 
-Two files are duplicates if their cached content-hash values are equal. Nothing else.
+Matching is **by media type**:
 
-The hash is format-aware (see [hash.md](hash.md)): JPEGs strip APP-marker metadata before hashing, MP4s hash only `mdat` payloads. This means metadata changes (TAG writes) don't invalidate the hash, but **format conversions do** — a HEIC and its JPG conversion have different hashes despite sharing a source. Cross-format dedupe is **out of scope for v1**; it would need perceptual hashing or `pix:OriginalPath`-lineage detection, both deferred.
+- **Images (and any non-video):** equal cached content hash. Exact, provable, byte-identical. The hash is format-aware (see [hash.md](hash.md)) — JPEGs strip APP-marker metadata before hashing — so TAG writes don't invalidate it, but format conversions do.
+- **Videos (`mp4`/`mov`/`m4v`):** matched by **perceptual fingerprint**, not exact hash. The byte hash can't see that two *re-encodes of the same source* are the same — x265 vs `hevc_nvenc` (the GPU/CPU hybrid), or the same encoder across versions, produce different `mdat` bytes. The fingerprint (see [`video_fingerprint`](../src/pix/video_fingerprint.py)) is `K` dHashes of frames sampled at fixed *fractional timestamps* of the decoded picture — encoder-, GOP-, and quality-robust. Cached per file as `.vfp` (validated by size+mtime), computed once on the first dedupe/sync after a video is added.
+
+Two videos are duplicates when they share resolution, durations within `_DUR_TOL` (0.75s), and a fingerprint Hamming distance within the band `[--min, --max]`. Default band **0–30**: on the real ~14k-video library, visual review confirmed 0–30 is all true duplicates, 30–40 is ambiguous, and 40+ diverges. `select_video_keeper` ranks the keeper by **resolution → bitrate (size÷duration) → duration → path** (different copies genuinely differ in quality — unlike byte-identical exact dups, where the keeper is arbitrary). Same-resolution bucketing means cross-resolution duplicates are a deliberate v1 exclusion.
+
+Bare `pix dedupe` (and `pix sync`) apply images-exact + videos-perceptual `[0,30]` and conserve removed files to the run folder (recoverable). `--min/--max` rescope the video band; **`--checkout`/`--commit`** add a human-review gate (below) for curating higher/ambiguous bands.
+
+## Review: checkout / commit
+
+For bands you don't want applied unattended, `--checkout <dir>` stages instead of deleting:
+
+1. **`pix dedupe <path> --checkout <dir> [--min N --max M]`** — group, then write into `<dir>` one stacked **montage** per video group (keeper strip on top, duplicates below) plus a machine-readable `manifest.json`. Deletes nothing. Holds the library lock only while scanning/grouping/writing the manifest, then **releases it** — montages render lock-free, and the (possibly long) human-review window holds no lock, so organize/migrate can run meanwhile.
+2. **Curate** — the reviewer deletes the montage of any group they *don't* want deduped (same gesture as deleting a line from a migrate plan).
+3. **`pix dedupe --commit <dir>`** (no path — the manifest names the library) — re-groups the library fresh (so everything is re-validated against current bytes), keeps only the groups whose montage still exists, and applies those. A group whose membership changed since checkout no longer matches and is skipped (reported), so staleness is safe by construction.
+
+There's no global lock spanning the review window; the manifest is the state, and commit re-validates. This mirrors the editable-plan philosophy of migrate.
 
 ## Prerequisites
 
@@ -33,7 +48,9 @@ Both refusals exit non-zero before any plan is written.
 
 Within a duplicate group (≥ 2 files sharing a hash), one file is the **keeper** and the rest are **losers** (marked for removal).
 
-The rule is simply the **lex-smallest library-relative path** (forward-slash-normalized, case-insensitive, ascending). There is no investment tier: the [tag merge](#tag-merge) below consolidates every file's user investment (and best auto values) onto whichever file survives, so keeper selection no longer has to protect against losing an override. It just needs to pick a deterministic survivor.
+For **exact (hash) groups** the rule is simply the **lex-smallest library-relative path** (forward-slash-normalized, case-insensitive, ascending). There is no investment tier: the [tag merge](#tag-merge) below consolidates every file's user investment (and best auto values) onto whichever file survives, so keeper selection no longer has to protect against losing an override. It just needs to pick a deterministic survivor — the members are byte-identical anyway.
+
+For **perceptual (video) groups** the members differ in quality, so the keeper is the best copy: **resolution → bitrate → duration → lex path** (`select_video_keeper`). The tag merge still rides along onto whichever copy wins.
 
 Year-prefixed canonical date folders (`2023/...`) sort before letters in lex order, so the "in the date tree" file usually wins — and `organize` re-derives location from the effective date afterward regardless, so the keeper's starting location isn't a durable property worth optimizing for.
 

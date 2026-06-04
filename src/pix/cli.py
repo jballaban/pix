@@ -255,20 +255,63 @@ def hash_(
 @app.command("dedupe")
 def dedupe(
     path: Annotated[
-        Path,
+        Path | None,
         typer.Argument(
             help=(
                 "Path inside (or at) the library root. The library is "
-                "resolved by walking up from this path. `.` for CWD."
+                "resolved by walking up from this path. `.` for CWD. "
+                "Omitted with --commit (the review folder names the library)."
             ),
         ),
-    ],
+    ] = None,
     no_prompt: Annotated[
         bool, typer.Option("--no-prompt", help=_NO_PROMPT_HELP)
     ] = False,
+    min_distance: Annotated[
+        int,
+        typer.Option(
+            "--min",
+            help="Min perceptual distance for video matches (default 0).",
+        ),
+    ] = 0,
+    max_distance: Annotated[
+        int,
+        typer.Option(
+            "--max",
+            help="Max perceptual distance for video matches (default 30).",
+        ),
+    ] = 30,
+    checkout: Annotated[
+        Path | None,
+        typer.Option(
+            "--checkout",
+            help=(
+                "Review mode: write a montage + manifest per video duplicate "
+                "group into this folder instead of deleting. Delete a montage "
+                "to skip that group, then run --commit."
+            ),
+        ),
+    ] = None,
+    commit: Annotated[
+        Path | None,
+        typer.Option(
+            "--commit",
+            help=(
+                "Apply the groups whose montage still exists in this review "
+                "folder (from a prior --checkout)."
+            ),
+        ),
+    ] = None,
 ) -> None:
-    """Remove duplicate files sharing the same `pix:ContentHash` (library-wide)."""
-    dedupe_library(path=path, no_prompt=no_prompt)
+    """Remove duplicates: images by content hash, videos by perceptual match."""
+    dedupe_library(
+        path=path,
+        no_prompt=no_prompt,
+        min_distance=min_distance,
+        max_distance=max_distance,
+        checkout=checkout,
+        commit=commit,
+    )
 
 
 @app.command("sync")
