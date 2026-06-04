@@ -94,6 +94,7 @@ def dedupe_library(
     max_distance: int = DEFAULT_MAX_DISTANCE,
     checkout: Path | None = None,
     commit: Path | None = None,
+    videos_only: bool = False,
 ) -> None:
     """Dispatch to the auto / checkout / commit mode (see module docstring)."""
     try:
@@ -123,7 +124,9 @@ def dedupe_library(
             _run_checkout(root, checkout.resolve(), min_distance, max_distance)
         else:
             with acquire_lock(root, "dedupe"):
-                _run_dedupe(root, no_prompt, min_distance, max_distance)
+                _run_dedupe(
+                    root, no_prompt, min_distance, max_distance, videos_only
+                )
     except LockHeld as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
@@ -139,6 +142,7 @@ def _build_result(
     plan_log_path: Path,
     min_distance: int,
     max_distance: int,
+    videos_only: bool = False,
 ) -> tuple[DedupeResult, dict[Path, VideoFingerprint | None]]:
     """Walk → cache → hashes → fingerprints → group → plan. Shared by all
     three modes. Echoes + exits cleanly on an empty library; raises
@@ -217,6 +221,7 @@ def _build_result(
                 fingerprints=fingerprints,
                 min_distance=min_distance,
                 max_distance=max_distance,
+                videos_only=videos_only,
             )
     except UnmigratedFilesError as e:
         typer.echo(f"Error: {e}", err=True)
@@ -287,13 +292,15 @@ def _load_fingerprints(
 
 
 def _run_dedupe(
-    root: Path, no_prompt: bool, min_distance: int, max_distance: int
+    root: Path, no_prompt: bool, min_distance: int, max_distance: int,
+    videos_only: bool = False,
 ) -> None:
     run_id, runs_dir = _make_run_dir(root)
     plan_log_path = runs_dir / "plan.log"
 
     result, _fps = _build_result(
-        root, run_id, runs_dir, plan_log_path, min_distance, max_distance
+        root, run_id, runs_dir, plan_log_path, min_distance, max_distance,
+        videos_only,
     )
 
     plan_path = runs_dir / "plan.txt"
@@ -307,10 +314,14 @@ def _run_dedupe(
 
     dedup_total = sum(1 for ln in result.plan.lines if ln.action == Action.DEDUP)
     merge_total = sum(1 for ln in result.plan.lines if ln.action == Action.MERGE)
+    exact_groups = sum(1 for g in result.groups if g.kind == "exact")
+    perc_groups = sum(1 for g in result.groups if g.kind == "perceptual")
     typer.echo(f"Plan written: {plan_path}")
     typer.echo(
         f"Summary: {dedup_total} DEDUP, {merge_total} MERGE across "
-        f"{len(result.groups)} group(s)."
+        f"{len(result.groups)} group(s) "
+        f"({exact_groups} exact image, {perc_groups} perceptual video "
+        f"[{min_distance}, {max_distance}])."
     )
 
     kept_line_ids = {ln.line_id for ln in result.plan.lines}
@@ -360,7 +371,8 @@ def _run_checkout(
 
     with acquire_lock(root, "dedupe-checkout"):
         result, fingerprints = _build_result(
-            root, run_id, runs_dir, plan_log_path, min_distance, max_distance
+            root, run_id, runs_dir, plan_log_path, min_distance, max_distance,
+            videos_only=True,  # review tool: perceptual video groups only
         )
         groups = [g for g in result.groups if g.kind == "perceptual"]
         if not groups:
@@ -448,7 +460,8 @@ def _run_commit(review_dir: Path) -> None:
 
     with acquire_lock(root, "dedupe-commit"):
         result, _fps = _build_result(
-            root, run_id, runs_dir, plan_log_path, min_d, max_d
+            root, run_id, runs_dir, plan_log_path, min_d, max_d,
+            videos_only=True,  # commit only applies perceptual survivors
         )
         dedup_by_path = {
             ln.abs_path: ln.line_id

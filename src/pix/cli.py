@@ -302,6 +302,16 @@ def dedupe(
             ),
         ),
     ] = None,
+    videos_only: Annotated[
+        bool,
+        typer.Option(
+            "--videos-only",
+            help=(
+                "Only the perceptual video pass; skip exact image dedupe. "
+                "Matches what --checkout/--commit operate on."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Remove duplicates: images by content hash, videos by perceptual match."""
     dedupe_library(
@@ -311,6 +321,7 @@ def dedupe(
         max_distance=max_distance,
         checkout=checkout,
         commit=commit,
+        videos_only=videos_only,
     )
 
 

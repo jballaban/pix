@@ -544,6 +544,7 @@ def generate_plan(
     fingerprints: dict[Path, VideoFingerprint | None] | None = None,
     min_distance: int = DEFAULT_MIN_DISTANCE,
     max_distance: int = DEFAULT_MAX_DISTANCE,
+    videos_only: bool = False,
 ) -> DedupeResult:
     """Build a dedupe plan from the library cache and precomputed hash map.
 
@@ -552,18 +553,25 @@ def generate_plan(
     everything else by exact content hash; when it's None, all files group
     by exact hash (the pre-perceptual behavior, kept for callers/tests that
     don't supply fingerprints).
+
+    `videos_only` drops the exact-hash (image/byte) grouping entirely, so the
+    plan contains *only* perceptual video groups — what `--videos-only`,
+    `--checkout`, and `--commit` operate on.
     """
     require_migrated_with_hashes(cache, hashes)
 
     if fingerprints is None:
         groups = group_by_hash(library_root, cache, hashes)
     else:
-        non_video = {p: m for p, m in cache.items() if not is_dedupe_video(p)}
         video = {p: m for p, m in cache.items() if is_dedupe_video(p)}
-        groups = group_by_hash(library_root, non_video, hashes)
-        groups += group_by_fingerprint(
+        groups = group_by_fingerprint(
             library_root, video, fingerprints, min_distance, max_distance
         )
+        if not videos_only:
+            non_video = {
+                p: m for p, m in cache.items() if not is_dedupe_video(p)
+            }
+            groups += group_by_hash(library_root, non_video, hashes)
         groups.sort(key=lambda g: _sort_key(g.keeper, library_root))
 
     # Build PlanLines with stable IDs and pre-computed capture paths.
