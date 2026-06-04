@@ -139,31 +139,6 @@ def surviving_member_sets(review_dir: Path) -> list[frozenset[str]]:
 # --- montage rendering ------------------------------------------------------
 
 
-def _strip(path: Path, duration: float, out: Path) -> bool:
-    """Render one horizontal strip: `len(FRAC)` frames across the clip."""
-    pngs: list[Path] = []
-    for i, f in enumerate(FRAC):
-        fp = out.parent / f"{out.stem}_{i}.png"
-        subprocess.run(
-            ["ffmpeg", "-hide_banner", "-loglevel", "error",
-             "-ss", f"{max(0.0, f * duration):.3f}", "-i", str(path),
-             "-frames:v", "1", "-vf", "scale=-2:200", "-y", str(fp)],
-            check=False, capture_output=True,
-        )
-        if fp.exists():
-            pngs.append(fp)
-    if not pngs:
-        return False
-    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error"]
-    for p in pngs:
-        cmd += ["-i", str(p)]
-    cmd += ["-filter_complex", f"hstack=inputs={len(pngs)}", "-y", str(out)]
-    subprocess.run(cmd, check=False, capture_output=True)
-    for p in pngs:
-        p.unlink(missing_ok=True)
-    return out.exists()
-
-
 def render_montage(
     review_dir: Path,
     group_id: str,
@@ -171,28 +146,38 @@ def render_montage(
     members: list[Path],
     durations: dict[Path, float],
 ) -> bool:
-    """Stack each member's strip (keeper first) into one montage image.
+    """Render one stacked montage (keeper strip on top, each duplicate below)
+    in a **single** ffmpeg invocation.
 
-    Best-effort: returns False if no strip could be produced (e.g. files
-    moved). The manifest, not the montage, is authoritative — a missing
-    montage just means that group won't be offered for commit."""
-    strips: list[Path] = []
-    for idx, m in enumerate(members):
-        s = review_dir / f"{group_id}_strip{idx}.png"
-        if _strip(m, durations.get(m, 0.0), s):
-            strips.append(s)
-    if not strips:
+    Every member×frame is an input-seeked input (`-ss t -i file`, fast and
+    decode-light); the filtergraph scales each, `hstack`es the frames of each
+    member into a row, scales each row to a common width, and `vstack`es the
+    rows. One process per montage instead of ~`members*len(FRAC)` — process
+    spawn was the bottleneck (the work itself is tiny). Best-effort: returns
+    False if ffmpeg can't produce the image (e.g. a member moved); the
+    manifest, not the montage, is authoritative."""
+    if not members:
         return False
+    n = len(FRAC)
+    cmd: list[str] = ["ffmpeg", "-hide_banner", "-loglevel", "error"]
+    for m in members:
+        dur = durations.get(m, 0.0)
+        for f in FRAC:
+            cmd += ["-ss", f"{max(0.0, f * dur):.3f}", "-i", str(m)]
+    parts: list[str] = []
+    for mi in range(len(members)):
+        for fi in range(n):
+            idx = mi * n + fi
+            parts.append(f"[{idx}:v]scale=-2:200[s{idx}]")
+        row = "".join(f"[s{mi * n + fi}]" for fi in range(n))
+        parts.append(f"{row}hstack=inputs={n}[r{mi}]")
+        parts.append(f"[r{mi}]scale=1440:-2[w{mi}]")
+    rows = "".join(f"[w{mi}]" for mi in range(len(members)))
+    parts.append(f"{rows}vstack=inputs={len(members)}[out]")
     out = review_dir / montage_name(group_id, distance)
-    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error"]
-    for s in strips:
-        cmd += ["-i", str(s)]
-    # scale every strip to a common width, then stack vertically.
-    parts = "".join(f"[{i}:v]scale=1440:-2[s{i}];" for i in range(len(strips)))
-    inputs = "".join(f"[s{i}]" for i in range(len(strips)))
-    cmd += ["-filter_complex",
-            f"{parts}{inputs}vstack=inputs={len(strips)}", "-y", str(out)]
+    cmd += [
+        "-filter_complex", ";".join(parts),
+        "-map", "[out]", "-frames:v", "1", "-y", str(out),
+    ]
     subprocess.run(cmd, check=False, capture_output=True)
-    for s in strips:
-        s.unlink(missing_ok=True)
     return out.exists()

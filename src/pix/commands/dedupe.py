@@ -33,6 +33,7 @@ from pix.dedupe import (
     DEFAULT_MAX_DISTANCE,
     DEFAULT_MIN_DISTANCE,
     DedupeApplyError,
+    DedupeGroup,
     DedupeResult,
     MissingHashesError,
     UnmigratedFilesError,
@@ -71,6 +72,7 @@ from pix.video_fingerprint import (
 
 
 _FINGERPRINT_WORKERS = 14
+_MONTAGE_WORKERS = 12
 
 
 def _make_run_dir(root: Path) -> tuple[str, Path]:
@@ -379,14 +381,20 @@ def _run_checkout(
         f"Reviewing {len(id_groups)} perceptual group(s) "
         f"(band [{min_distance}, {max_distance}]) → {review_dir}"
     )
+    def _render(item: tuple[str, DedupeGroup]) -> None:
+        gid, group = item
+        members = [group.keeper, *group.losers]
+        dedupe_review.render_montage(
+            review_dir, gid, group.distance, members, durations
+        )
+
+    # Rendering is process-spawn/IO-light, so it parallelizes well — a serial
+    # loop leaves the machine idle waiting on ffmpeg startup.
     with LiveProgress(total=len(id_groups)) as prog:
         prog.begin("Rendering montages")
-        for gid, group in id_groups:
-            members = [group.keeper, *group.losers]
-            dedupe_review.render_montage(
-                review_dir, gid, group.distance, members, durations
-            )
-            prog.advance()
+        with ThreadPoolExecutor(max_workers=_MONTAGE_WORKERS) as ex:
+            for _ in ex.map(_render, id_groups):
+                prog.advance()
     typer.echo("")
     typer.echo(
         f"Delete the montage of any group you DON'T want deduped, then run:\n"
