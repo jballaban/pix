@@ -58,7 +58,8 @@ Each image here is one proposed duplicate group:
   - TOP strip  = the file that would be KEPT (the keeper).
   - strip(s) below = the duplicate(s) that would be REMOVED (conserved to
     the run folder, recoverable).
-Each strip shows {n} frames sampled across that clip.
+Each strip shows {n} frames at the SAME timestamps across the group, so a
+true duplicate lines up row-for-row (misaligned frames = a real difference).
 
 To curate:
   - Keep a montage  -> that group WILL be deduped on commit.
@@ -183,11 +184,16 @@ def render_montage(
     if not members:
         return False
     n = len(FRAC)
+    # Sample every member at the SAME absolute timestamps (fraction of the
+    # group's shortest clip, so every t is valid for every member) — a true
+    # duplicate then lines up row-for-row, and a trimmed/longer near-dup
+    # shows misaligned frames. (The fingerprint still uses each file's own
+    # fraction; this alignment is review-only.)
+    ref_dur = min((durations.get(m, 0.0) for m in members), default=0.0)
     cmd: list[str] = ["ffmpeg", "-hide_banner", "-loglevel", "error"]
     for m in members:
-        dur = durations.get(m, 0.0)
         for f in FRAC:
-            cmd += ["-ss", f"{max(0.0, f * dur):.3f}", "-i", str(m)]
+            cmd += ["-ss", f"{max(0.0, f * ref_dur):.3f}", "-i", str(m)]
     parts: list[str] = []
     for mi in range(len(members)):
         for fi in range(n):
