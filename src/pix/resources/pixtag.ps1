@@ -3,23 +3,27 @@
   Windows Explorer context-menu launcher for `pix set` / `pix clear`.
 
 .DESCRIPTION
-  Registered by `pix context-menu install` under the classic right-click menu
-  for both files (HKCU\...\*) and folders (HKCU\...\Directory). The classic
-  menu invokes the command once per selected item, so this script runs in two
-  stages:
+  Registered by `pix context-menu install` as a cascading menu:
+
+      Pix  >  Event | Date  >  Set value... | Clear
+
+  The menu leaf encodes the tag (-Tag event|date) and operation
+  (-Op set|clear), so this launcher only has to collect the value (for set)
+  and forward the selected paths. The classic menu invokes the leaf command
+  once per selected item, so the script runs in two stages:
 
     1. COLLATE (default, hidden window). Each per-item process appends its
        path to a shared pending list and races to become "leader". Non-leaders
        exit immediately. The leader waits for the burst to settle, snapshots
        the full selection, then relaunches itself in RUN mode in a visible
-       console. This is the COM-free way to aggregate a multi-select with a
-       pure-registry context menu.
+       console (carrying -Tag/-Op). This is the COM-free way to aggregate a
+       multi-select with a pure-registry context menu.
 
-    2. RUN (-Run <listfile>, visible window). Reads the collected paths,
-       prompts for the tag (event/date) and value, and calls `pix`. A blank
-       value clears the override (`pix clear`); otherwise it sets it
-       (`pix set`). pix shows its own Apply plan + confirmation in the same
-       console, so nothing is written without review.
+    2. RUN (-Run <listfile>, visible window). Reads the collected paths and,
+       for set, prompts for the value (event name / date pattern); for clear,
+       no value is needed. Then calls `pix set` / `pix clear`. pix shows its
+       own Apply plan + confirmation in the same console, so nothing is
+       written without review.
 
   Folder expansion is done by pix itself (a folder arg expands to the taggable
   media it contains), so this launcher just forwards whatever Explorer selected.
@@ -31,9 +35,13 @@ param(
     [Parameter(ParameterSetName = 'Collate', Position = 0, ValueFromRemainingArguments = $true)]
     [string[]] $Paths,
     # RUN mode: path to the snapshot list file produced by the COLLATE leader.
-    # Its own parameter set, so it's reachable only as -Run <file>.
     [Parameter(ParameterSetName = 'Run', Mandatory = $true)]
-    [string] $Run
+    [string] $Run,
+    # Common to both stages: which tag and operation the menu leaf chose.
+    [ValidateSet('event', 'date')]
+    [string] $Tag = 'event',
+    [ValidateSet('set', 'clear')]
+    [string] $Op = 'set'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -64,43 +72,36 @@ if ($Run) {
         return
     }
 
-    $pix = (Get-Command pix -ErrorAction SilentlyContinue)
-    if (-not $pix) {
+    if (-not (Get-Command pix -ErrorAction SilentlyContinue)) {
         Write-Host 'pixtag: `pix` is not on PATH. Install it (uv tool install) first.' -ForegroundColor Red
         Read-Host 'Press Enter to close'
         return
     }
 
     Write-Host ''
-    Write-Host "pix tag - $($items.Count) item(s) selected:" -ForegroundColor Cyan
+    Write-Host "pix $Op $Tag - $($items.Count) item(s) selected:" -ForegroundColor Cyan
     foreach ($i in ($items | Select-Object -First 10)) { Write-Host "  $i" }
     if ($items.Count -gt 10) { Write-Host "  ... and $($items.Count - 10) more" }
     Write-Host ''
 
-    $tag = Read-Host 'Tag to edit? (event/date) [event]'
-    if ([string]::IsNullOrWhiteSpace($tag)) { $tag = 'event' }
-    $tag = $tag.Trim().ToLower()
-    if ($tag -ne 'event' -and $tag -ne 'date') {
-        Write-Host "pixtag: unknown tag '$tag' (expected 'event' or 'date')." -ForegroundColor Red
-        Read-Host 'Press Enter to close'
-        return
-    }
-
-    if ($tag -eq 'date') {
-        Write-Host 'Date override pattern: YYYY-MM-DD-HH:MM:SS with * for any unpinned part.'
-        Write-Host '  e.g. 2022-*-*-*:*:* (pin year)  or  2022-08-15-*:*:* (pin the day)'
-        $value = Read-Host 'Date value (blank to CLEAR the override)'
+    if ($Op -eq 'clear') {
+        & pix clear $Tag @items
     }
     else {
-        $value = Read-Host 'Event name (blank to CLEAR the override)'
-    }
-
-    Write-Host ''
-    if ([string]::IsNullOrWhiteSpace($value)) {
-        & pix clear $tag @items
-    }
-    else {
-        & pix set $tag $value @items
+        if ($Tag -eq 'date') {
+            Write-Host 'Date override pattern: YYYY-MM-DD-HH:MM:SS with * for any unpinned part.'
+            Write-Host '  e.g. 2022-*-*-*:*:* (pin year)  or  2022-08-15-*:*:* (pin the day)'
+            $value = Read-Host 'Date value'
+        }
+        else {
+            $value = Read-Host 'Event name'
+        }
+        if ([string]::IsNullOrWhiteSpace($value)) {
+            Write-Host 'Cancelled - no value entered (use the Clear menu to remove a tag).' -ForegroundColor Yellow
+            Read-Host 'Press Enter to close'
+            return
+        }
+        & pix set $Tag $value @items
     }
 
     Write-Host ''
@@ -164,9 +165,9 @@ finally {
     $mutex.Dispose()
 }
 
-# Hand off to the visible RUN stage. PIXTAG_COLLATE_ONLY is a test seam: it
-# skips the relaunch and just reports the snapshot file, so the collation shim
-# can be exercised headlessly.
+# Hand off to the visible RUN stage, carrying the menu's tag + operation.
+# PIXTAG_COLLATE_ONLY is a test seam: it skips the relaunch and just reports
+# the snapshot file, so the collation shim can be exercised headlessly.
 if ($env:PIXTAG_COLLATE_ONLY) {
     Write-Output $itemsFile
     return
@@ -174,5 +175,5 @@ if ($env:PIXTAG_COLLATE_ONLY) {
 $psExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 Start-Process -FilePath $psExe -ArgumentList @(
     '-NoProfile', '-ExecutionPolicy', 'Bypass',
-    '-File', $PSCommandPath, '-Run', $itemsFile
+    '-File', $PSCommandPath, '-Run', $itemsFile, '-Tag', $Tag, '-Op', $Op
 )

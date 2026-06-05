@@ -1,12 +1,17 @@
 """Implementation of `pix context-menu` — manage the Windows Explorer entry.
 
 `pix context-menu <install|uninstall|status>` (status by default) registers or
-removes the "Tag with pix" right-click menu. It writes per-user (`HKCU`)
-registry keys — no admin needed — for both files (`*`) and folders
-(`Directory`), pointing Explorer at the packaged launcher
-`pix/resources/pixtag.ps1`. That launcher is the collation shim that
-aggregates a multi-select and calls `pix set` / `pix clear` (see the script's
-header for the two-stage design).
+removes a cascading "Pix" right-click menu:
+
+    Pix  >  Event | Date  >  Set value... | Clear
+
+It writes per-user (`HKCU`) registry keys — no admin needed — for both files
+(`*`) and folders (`Directory`). The cascade uses the registry-only nesting
+trick: a parent verb with `MUIVerb` + an empty `SubCommands` value makes
+Explorer render its `shell` subkey as a submenu, repeated to nest. Each leaf's
+`command` points at the packaged launcher `pix/resources/pixtag.ps1` with the
+chosen `-Tag`/`-Op`; the launcher (a collation shim) aggregates a multi-select
+and calls `pix set` / `pix clear` (see the script header).
 
 Windows-only: the registry + Explorer integration has no meaning elsewhere, so
 the command refuses up front on other platforms. `winreg` is imported lazily,
@@ -24,13 +29,22 @@ import typer
 import pix
 from pix import banner
 
-# The two classic-menu roots: files (`*`) and folders (`Directory`). Both get
-# the same verb so a mixed selection of files and folders fires it.
-_MENU_KEYS: tuple[tuple[str, str], ...] = (
-    (r"Software\Classes\*\shell\pixtag", "files"),
-    (r"Software\Classes\Directory\shell\pixtag", "folders"),
+# Data-driven cascade: adding a tag or op is a one-line change here.
+_ROOT_LABEL = "Pix"
+_ROOT_KEY = "Pix"
+_TAGS: tuple[tuple[str, str], ...] = (("event", "Event"), ("date", "Date"))
+_OPS: tuple[tuple[str, str], ...] = (("set", "Set value..."), ("clear", "Clear"))
+
+# Parents under which the "Pix" cascade lives (files `*` and folders).
+_SHELL_PARENTS: tuple[tuple[str, str], ...] = (
+    (r"Software\Classes\*\shell", "files"),
+    (r"Software\Classes\Directory\shell", "folders"),
 )
-_LABEL = "Tag with pix"
+# Single-verb keys from earlier pix versions — swept on (re)install/uninstall.
+_LEGACY_KEYS: tuple[str, ...] = (
+    r"Software\Classes\*\shell\pixtag",
+    r"Software\Classes\Directory\shell\pixtag",
+)
 _ACTIONS = ("install", "uninstall", "status")
 
 
@@ -53,16 +67,30 @@ def _powershell_exe() -> str:
     return str(candidate) if candidate.is_file() else "powershell.exe"
 
 
-def _command_string() -> str:
-    """The registry `command` value: launch the hidden collate stage on `%1`."""
+def _command_string(tag: str, op: str) -> str:
+    """The registry `command` for one leaf: launch the hidden collate stage."""
     return (
         f'"{_powershell_exe()}" -NoProfile -ExecutionPolicy Bypass '
-        f'-WindowStyle Hidden -File "{_launcher_path()}" "%1"'
+        f'-WindowStyle Hidden -File "{_launcher_path()}" '
+        f'-Tag {tag} -Op {op} "%1"'
     )
 
 
+def _root_keys() -> list[str]:
+    """The two `...\\shell\\Pix` cascade roots (files + folders)."""
+    return [f"{parent}\\{_ROOT_KEY}" for parent, _scope in _SHELL_PARENTS]
+
+
+def _first_leaf_command_key() -> str:
+    """A deterministic leaf `command` path, used by status to check drift."""
+    parent = _SHELL_PARENTS[0][0]
+    tag = _TAGS[0][0]
+    op = _OPS[0][0]
+    return f"{parent}\\{_ROOT_KEY}\\shell\\01_{tag}\\shell\\01_{op}\\command"
+
+
 def context_menu(action: str = "status") -> None:
-    """Install/uninstall/report the Explorer "Tag with pix" context menu."""
+    """Install/uninstall/report the cascading Explorer "Pix" context menu."""
     banner()
     action = action.lower()
     if action not in _ACTIONS:
@@ -83,48 +111,98 @@ def context_menu(action: str = "status") -> None:
         _status()
 
 
-def _install() -> None:
+def _make_cascade(key_path: str, label: str, icon: str | None = None) -> None:
+    """A parent menu node: MUIVerb label + empty SubCommands triggers Explorer
+    to render this key's `shell` subkey as a cascading submenu."""
     import winreg
 
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+        winreg.SetValueEx(key, "MUIVerb", 0, winreg.REG_SZ, label)
+        winreg.SetValueEx(key, "SubCommands", 0, winreg.REG_SZ, "")
+        if icon is not None:
+            winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, icon)
+
+
+def _make_verb(key_path: str, label: str, command: str) -> None:
+    """A leaf menu item: MUIVerb label + a `command` subkey to run."""
+    import winreg
+
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+        winreg.SetValueEx(key, "MUIVerb", 0, winreg.REG_SZ, label)
+    with winreg.CreateKey(
+        winreg.HKEY_CURRENT_USER, key_path + r"\command"
+    ) as cmd_key:
+        winreg.SetValueEx(cmd_key, "", 0, winreg.REG_SZ, command)
+
+
+def _delete_tree(key_path: str) -> bool:
+    """Recursively delete an HKCU key and all subkeys. Returns True if the key
+    existed. `winreg.DeleteKey` only removes childless keys, so recurse first."""
+    import winreg
+
+    try:
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_ALL_ACCESS
+        )
+    except FileNotFoundError:
+        return False
+    try:
+        while True:
+            try:
+                child = winreg.EnumKey(key, 0)
+            except OSError:
+                break  # no more subkeys
+            _delete_tree(key_path + "\\" + child)
+    finally:
+        winreg.CloseKey(key)
+    winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key_path)
+    return True
+
+
+def _install() -> None:
     launcher = _launcher_path()
     if not launcher.is_file():
         _fail(f"launcher not found at {launcher}; reinstall pix and try again.")
         return
 
-    command = _command_string()
     icon = _powershell_exe()
-    for key_path, _scope in _MENU_KEYS:
-        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path) as key:
-            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, _LABEL)
-            winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, icon)
-        with winreg.CreateKey(
-            winreg.HKEY_CURRENT_USER, key_path + r"\command"
-        ) as cmd_key:
-            winreg.SetValueEx(cmd_key, "", 0, winreg.REG_SZ, command)
+    # Clean slate so a structural change (or an old flat-verb install) never
+    # leaves stale leaves behind.
+    for key in _root_keys():
+        _delete_tree(key)
+    for legacy in _LEGACY_KEYS:
+        _delete_tree(legacy)
 
-    typer.echo(f"Installed '{_LABEL}' for files and folders (current user).")
+    for root in _root_keys():
+        _make_cascade(root, _ROOT_LABEL, icon=icon)
+        for ti, (tag, tag_label) in enumerate(_TAGS, start=1):
+            tag_key = f"{root}\\shell\\{ti:02d}_{tag}"
+            _make_cascade(tag_key, tag_label)
+            for oi, (op, op_label) in enumerate(_OPS, start=1):
+                leaf = f"{tag_key}\\shell\\{oi:02d}_{op}"
+                _make_verb(leaf, op_label, _command_string(tag, op))
+
+    typer.echo(f"Installed the '{_ROOT_LABEL}' menu for files and folders (current user).")
+    typer.echo(f"Layout:   {_ROOT_LABEL} > " + " | ".join(t for _t, t in _TAGS)
+               + " > " + " | ".join(o for _o, o in _OPS))
     typer.echo(f"Launcher: {launcher}")
     typer.echo(
-        "Right-click media files/folders in a pix library and choose the entry."
+        "Right-click media files/folders in a pix library to use it. On Windows "
+        "11 it's under 'Show more options' (Shift+F10)."
     )
 
 
 def _uninstall() -> None:
-    import winreg
-
     removed = False
-    for key_path, _scope in _MENU_KEYS:
-        # DeleteKey requires the key to have no subkeys, so remove `command`
-        # (the leaf) before its parent. Missing keys are fine — idempotent.
-        for sub in (key_path + r"\command", key_path):
-            try:
-                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, sub)
-                removed = True
-            except FileNotFoundError:
-                pass
+    for key in _root_keys():
+        if _delete_tree(key):
+            removed = True
+    for legacy in _LEGACY_KEYS:
+        if _delete_tree(legacy):
+            removed = True
 
     if removed:
-        typer.echo(f"Removed the '{_LABEL}' context menu (current user).")
+        typer.echo(f"Removed the '{_ROOT_LABEL}' context menu (current user).")
     else:
         typer.echo("Nothing to remove — the context menu was not installed.")
 
@@ -132,35 +210,37 @@ def _uninstall() -> None:
 def _status() -> None:
     import winreg
 
-    found: list[tuple[str, str]] = []
-    for key_path, scope in _MENU_KEYS:
+    scopes: list[str] = []
+    for root, (_parent, scope) in zip(_root_keys(), _SHELL_PARENTS):
         try:
-            with winreg.OpenKey(
-                winreg.HKEY_CURRENT_USER, key_path + r"\command"
-            ) as key:
-                cmd, _ = winreg.QueryValueEx(key, "")
-            found.append((scope, str(cmd)))
+            winreg.CloseKey(winreg.OpenKey(winreg.HKEY_CURRENT_USER, root))
+            scopes.append(scope)
         except FileNotFoundError:
             pass
 
-    if not found:
+    if not scopes:
         typer.echo("Context menu: not installed.")
         typer.echo(
-            "Run `pix context-menu install` to add the 'Tag with pix' "
-            "right-click entry."
+            "Run `pix context-menu install` to add the 'Pix' right-click menu."
         )
         return
 
-    typer.echo(
-        "Context menu: installed for " + ", ".join(s for s, _ in found) + "."
-    )
+    typer.echo("Context menu: installed for " + ", ".join(scopes) + ".")
     launcher = _launcher_path()
     typer.echo(f"Launcher: {launcher}")
+
     # Flag a stale registration whose command no longer points at this build's
     # launcher (e.g. pix was reinstalled to a different location).
-    if any(str(launcher) not in cmd for _s, cmd in found):
-        typer.echo(
-            "Warning: the registered command does not match the current "
-            "launcher path. Run `pix context-menu install` to refresh it.",
-            err=True,
-        )
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, _first_leaf_command_key()
+        ) as key:
+            cmd, _ = winreg.QueryValueEx(key, "")
+        if str(launcher) not in str(cmd):
+            typer.echo(
+                "Warning: the registered command does not match the current "
+                "launcher path. Run `pix context-menu install` to refresh it.",
+                err=True,
+            )
+    except FileNotFoundError:
+        pass
