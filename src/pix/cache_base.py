@@ -1,13 +1,14 @@
 """Shared plumbing for per-file caches under `<library>/.pix/cache/`.
 
-Three caches share this layer (one file per flavor on disk; see the
+Four caches share this layer (one file per flavor on disk; see the
 discussion in the per-cache modules for why we keep them separate):
 
-- `<...>.cache` — ExifTool JSON, validated on size only
+- `<...>.meta` — ExifTool JSON, validated on size only
 - `<...>.hash` — content-hash digest, validated on (size, mtime_ns)
 - `<...>.video` — ffprobe codec/profile/pix_fmt, validated on (size, mtime_ns)
+- `<...>.vfp` — perceptual video fingerprint, validated on (size, mtime_ns)
 
-All three mirror the source path under `<library>/.pix/cache/` with a
+All mirror the source path under `<library>/.pix/cache/` with a
 suffix appended:
 
     media:  G:\\pix\\raw\\2023\\foo.jpg
@@ -39,8 +40,12 @@ DEFAULT_WORKERS: int = 32
 DEFAULT_BATCH_SIZE: int = 1000
 
 # Known live cache suffixes. Anything else in `.pix/cache/` is either
-# legacy (see `_LEGACY_SUFFIXES`) or stray.
-LIVE_SUFFIXES: tuple[str, ...] = (".meta", ".hash", ".video")
+# legacy (see `_LEGACY_SUFFIXES`) or stray. Every per-file cache flavor
+# MUST be listed here, or its sidecars won't follow media moves
+# (relocate_all), won't be cleaned when media is removed (remove_all), and
+# won't be reclaimed when orphaned (prune_orphans) — the bug that made
+# `.vfp` re-fingerprint the whole library after an organize move.
+LIVE_SUFFIXES: tuple[str, ...] = (".meta", ".hash", ".video", ".vfp")
 
 # Suffixes from earlier pix versions that should be cleared on contact.
 # Currently: `.cache` was renamed to `.meta` in v0.1.88; old sidecars
@@ -166,7 +171,7 @@ def rename(old: Path, new: Path) -> None:
 def relocate_all(
     library_root: Path, old_media: Path, new_media: Path
 ) -> None:
-    """Move *every* cache sidecar (.meta/.hash/.video) with a media move.
+    """Move *every* cache sidecar (.meta/.hash/.video/.vfp) with a media move.
 
     A media MOVE/RENAME doesn't touch the file's bytes, size, or mtime,
     so a valid hash/video entry stays valid at the new path — but only

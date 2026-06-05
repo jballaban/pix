@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from pix.cache_base import (
+    LIVE_SUFFIXES,
     PruneStats,
     cache_path_for,
     cache_root_for,
@@ -55,16 +56,12 @@ def test_removes_orphan_sidecars(tmp_path: Path) -> None:
     library_root.mkdir()
     gone = tmp_path / "lib" / "old_dir" / "deleted.jpg"
 
-    meta = _make_cache_file(library_root, gone, ".meta")
-    hash_ = _make_cache_file(library_root, gone, ".hash")
-    video = _make_cache_file(library_root, gone, ".video")
+    sidecars = [_make_cache_file(library_root, gone, s) for s in LIVE_SUFFIXES]
 
     stats = prune_orphans(library_root, expected_paths=set())
-    assert stats.orphans_removed == 3
+    assert stats.orphans_removed == len(LIVE_SUFFIXES)
     assert stats.legacy_removed == 0
-    assert not meta.exists()
-    assert not hash_.exists()
-    assert not video.exists()
+    assert all(not s.exists() for s in sidecars)
 
 
 def test_sweeps_legacy_cache_suffix(tmp_path: Path) -> None:
@@ -154,23 +151,24 @@ def test_no_cache_dir_is_a_noop(tmp_path: Path) -> None:
 
 
 def test_relocate_all_moves_every_sidecar(tmp_path: Path) -> None:
-    """A media move must carry .meta/.hash/.video to the new mirror.
+    """A media move must carry every LIVE_SUFFIXES sidecar to the new mirror.
 
-    Regression for the organize cache-loss bug: relocating only .meta
-    orphaned .hash/.video, which the next walk pruned — forcing a
-    needless re-`pix hash` after every organize.
+    Regression for the organize cache-loss bug: relocating only some
+    suffixes orphaned the rest, which the next walk pruned — forcing a
+    needless re-`pix hash` (and, for the omitted `.vfp`, a re-fingerprint
+    of the whole library) after every organize.
     """
     library_root = tmp_path / "lib"
     library_root.mkdir()
     old_media = tmp_path / "lib" / "raw" / "2023-08-15_143205.jpg"
     new_media = tmp_path / "lib" / "2023" / "Hawaii" / "2023-08-15_143205.jpg"
 
-    for suffix in (".meta", ".hash", ".video"):
+    for suffix in LIVE_SUFFIXES:
         _make_cache_file(library_root, old_media, suffix, b'{"k":1}')
 
     relocate_all(library_root, old_media, new_media)
 
-    for suffix in (".meta", ".hash", ".video"):
+    for suffix in LIVE_SUFFIXES:
         assert not cache_path_for(library_root, old_media, suffix).exists()
         new_side = cache_path_for(library_root, new_media, suffix)
         assert new_side.is_file()
@@ -185,12 +183,12 @@ def test_remove_all_deletes_every_sidecar(tmp_path: Path) -> None:
     library_root = tmp_path / "lib"
     library_root.mkdir()
     media = tmp_path / "lib" / "gone.jpg"
-    for suffix in (".meta", ".hash", ".video"):
+    for suffix in LIVE_SUFFIXES:
         _make_cache_file(library_root, media, suffix)
 
     remove_all(library_root, media)
 
-    for suffix in (".meta", ".hash", ".video"):
+    for suffix in LIVE_SUFFIXES:
         assert not cache_path_for(library_root, media, suffix).exists()
 
 

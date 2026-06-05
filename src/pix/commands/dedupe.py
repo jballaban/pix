@@ -63,7 +63,12 @@ from pix.plan import Action
 from pix.progress import LiveProgress
 from pix.root import NoLibraryRoot, resolve as resolve_root
 from pix.scan import walk_source_files
-from pix.vfp_cache import read_all_cached_fingerprints, write_cached_fingerprint
+from pix.vfp_cache import (
+    read_all_cached_fingerprints,
+    read_cached_fingerprint,
+    write_cached_fingerprint,
+)
+from pix.video_cache import read_cached_profile, write_cached_profile
 from pix.video_fingerprint import (
     FingerprintFailed,
     VideoFingerprint,
@@ -518,15 +523,21 @@ def _apply_result(
     """Apply `kept_line_ids` of `result`: conserve+remove losers, MERGE tags
     onto keepers, update caches (incl. re-stamping each merged keeper's
     metadata-invariant content hash). Shared by auto + commit."""
-    # Capture each surviving keeper's content hash before apply mutates it
-    # (a MERGE tag-write bumps mtime → stale (size,mtime) key, but the
-    # content hash is metadata-invariant). Re-stamped post-apply so organize
-    # still finds a valid cached hash. See spec/dedupe.md.
-    merge_keeper_hashes: dict[Path, str | None] = {
-        ln.abs_path: read_cached_hash(root, ln.abs_path)
+    # A MERGE tag-write bumps the keeper's (size, mtime) — invalidating every
+    # cache key — but it only touches metadata, so the *values* of the
+    # content hash, ffprobe profile, and perceptual fingerprint are all
+    # unchanged. Capture them before apply and re-stamp them against the new
+    # (size, mtime) afterward, so a no-op re-run doesn't re-hash, re-probe, or
+    # (the expensive one) re-fingerprint these keepers. The metadata cache
+    # (.meta) is intentionally left to refresh — its value genuinely changed.
+    merge_keepers = [
+        ln.abs_path
         for ln in result.plan.lines
         if ln.line_id in kept_line_ids and ln.action == Action.MERGE
-    }
+    ]
+    pre_hashes = {p: read_cached_hash(root, p) for p in merge_keepers}
+    pre_profiles = {p: read_cached_profile(root, p) for p in merge_keepers}
+    pre_fingerprints = {p: read_cached_fingerprint(root, p) for p in merge_keepers}
 
     apply_log_path = runs_dir / "apply.log"
     try:
@@ -541,20 +552,33 @@ def _apply_result(
             typer.echo(f"Error: apply failed: {e}", err=True)
             raise typer.Exit(code=1) from e
 
+        # Only removed losers (DEDUP) lose their caches — never the kept
+        # keepers (MERGE), whose abs_path is the surviving file.
         for ln in result.plan.lines:
-            if ln.line_id in kept_line_ids:
+            if ln.line_id in kept_line_ids and ln.action == Action.DEDUP:
                 remove_all(root, ln.abs_path)
-        for keeper, hash_hex in merge_keeper_hashes.items():
-            if hash_hex is None:
-                continue
+        for keeper in merge_keepers:
             try:
                 st = keeper.stat()
             except OSError:
                 continue
-            write_cached_hash(
-                root, keeper, hash_hex=hash_hex,
-                size=st.st_size, mtime_ns=st.st_mtime_ns,
-            )
+            size, mtime_ns = st.st_size, st.st_mtime_ns
+            hash_hex = pre_hashes.get(keeper)
+            if hash_hex is not None:
+                write_cached_hash(
+                    root, keeper, hash_hex=hash_hex, size=size, mtime_ns=mtime_ns
+                )
+            profile = pre_profiles.get(keeper)
+            if profile is not None:
+                write_cached_profile(
+                    root, keeper, profile=profile, size=size, mtime_ns=mtime_ns
+                )
+            fingerprint = pre_fingerprints.get(keeper)
+            if fingerprint is not None:
+                write_cached_fingerprint(
+                    root, keeper, fingerprint=fingerprint,
+                    size=size, mtime_ns=mtime_ns,
+                )
 
         typer.echo("")
         typer.echo(f"Removed {removed} duplicate(s).")
