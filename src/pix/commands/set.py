@@ -25,9 +25,11 @@ import typer
 
 from pix import banner
 from pix.apply import ApplyError, apply_plan
+from pix.checkout import CheckoutOpen, ensure_no_open_checkout
 from pix.config import Config, settings_path
 from pix.editor import prompt_proceed
 from pix.hash_cache import read_cached_hash, write_cached_hash
+from pix.library_lock import LockHeld, acquire as acquire_lock
 from pix.metadata import (
     ExifToolFailed,
     ExifToolNotFound,
@@ -143,6 +145,45 @@ def set_override(
         )
         return
 
+    # A checkout freeze forbids inode-mutating ops: an override write goes
+    # through ExifTool -overwrite_original (temp + rename → new inode), which
+    # would orphan the open checkout's hard links. Refuse, like every other
+    # mutating command.
+    try:
+        ensure_no_open_checkout(root)
+    except CheckoutOpen as e:
+        _fail(str(e))
+        return
+
+    # All file mutations run under the library lock so set/clear can't race a
+    # concurrent migrate/organize/dedupe (or each other) on the same files or
+    # the hash cache.
+    try:
+        with acquire_lock(root, "clear" if clearing else "set"):
+            _apply_overrides(
+                tag=tag,
+                value=value,
+                field=field,
+                clearing=clearing,
+                raw=raw,
+                root=root,
+                no_prompt=no_prompt,
+            )
+    except LockHeld as e:
+        _fail(str(e))
+
+
+def _apply_overrides(
+    *,
+    tag: str,
+    value: str,
+    field: str,
+    clearing: bool,
+    raw: list[Path],
+    root: Path,
+    no_prompt: bool,
+) -> None:
+    """Plan and write the override changes. Runs under the library lock."""
     config = Config.load(settings_path(root))
 
     # A folder argument expands to the taggable media it contains, so the

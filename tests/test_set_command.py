@@ -13,7 +13,9 @@ import pytest
 import typer
 
 import pix.commands.set as set_mod
+from pix.checkout import CheckoutOpen
 from pix.commands.set import set_override
+from pix.library_lock import LockHeld
 from pix.metadata import FileMetadata
 from pix.plan import PIX_EVENT_OVERRIDE, Plan, PlanLine
 
@@ -204,6 +206,39 @@ def test_set_dedupes_overlapping_file_and_folder(
 
     assert len(seen) == 1
     assert [ln.abs_path for ln in seen[0].lines] == [a]
+
+
+def test_set_refuses_when_checkout_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An open checkout freezes the library — set/clear must refuse like its
+    inode-mutating peers (it would orphan the checkout's hard links)."""
+    root = _lib(tmp_path)
+    f = root / "x.jpg"
+    f.write_bytes(b"x")
+
+    def boom(_root: Path) -> None:
+        raise CheckoutOpen(None)
+
+    monkeypatch.setattr(set_mod, "ensure_no_open_checkout", boom)
+    with pytest.raises(typer.Exit):
+        set_override(tag="event", value="Hawaii", paths=[f], no_prompt=True)
+
+
+def test_set_refuses_when_lock_held(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """set/clear runs its writes under the library lock; a held lock aborts."""
+    root = _lib(tmp_path)
+    f = root / "x.jpg"
+    f.write_bytes(b"x")
+
+    def boom(_root: Path, _label: str) -> object:
+        raise LockHeld(pid=1234, op="migrate", started_at="2026-06-05T10:00:00")
+
+    monkeypatch.setattr(set_mod, "acquire_lock", boom)
+    with pytest.raises(typer.Exit):
+        set_override(tag="event", value="Hawaii", paths=[f], no_prompt=True)
 
 
 def test_set_rejects_folder_with_no_media(
