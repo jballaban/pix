@@ -200,12 +200,13 @@ def context_menu_(
         typer.Argument(
             help=(
                 "install, uninstall, or status (default). Manages the Windows "
-                "Explorer 'Tag with pix' right-click entry for files/folders."
+                "Explorer 'Pix' right-click menu (Event/Date > Set/Clear, plus "
+                "Info on files) for files/folders."
             )
         ),
     ] = "status",
 ) -> None:
-    """Manage the Windows Explorer "Tag with pix" right-click menu."""
+    """Manage the Windows Explorer "Pix" right-click menu."""
     context_menu(action=action)
 
 

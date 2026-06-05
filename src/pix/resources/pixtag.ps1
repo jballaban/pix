@@ -40,7 +40,7 @@ param(
     # Common to both stages: which tag and operation the menu leaf chose.
     [ValidateSet('event', 'date')]
     [string] $Tag = 'event',
-    [ValidateSet('set', 'clear')]
+    [ValidateSet('set', 'clear', 'meta')]
     [string] $Op = 'set'
 )
 
@@ -74,6 +74,19 @@ if ($Run) {
 
     if (-not (Get-Command pix -ErrorAction SilentlyContinue)) {
         Write-Host 'pixtag: `pix` is not on PATH. Install it (uv tool install) first.' -ForegroundColor Red
+        Read-Host 'Press Enter to close'
+        return
+    }
+
+    # meta is read-only and single-file; run it for each selected item in turn.
+    if ($Op -eq 'meta') {
+        Write-Host ''
+        Write-Host "pix meta - $($items.Count) item(s):" -ForegroundColor Cyan
+        foreach ($it in $items) {
+            Write-Host ''
+            & pix meta $it
+        }
+        Write-Host ''
         Read-Host 'Press Enter to close'
         return
     }

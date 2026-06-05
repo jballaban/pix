@@ -133,6 +133,27 @@ def test_install_builds_cascade(fake_reg: _FakeWinreg) -> None:
                 assert command.endswith('"%1"')
 
 
+def test_info_leaf_is_files_only(fake_reg: _FakeWinreg) -> None:
+    """The read-only `meta`/Info leaf is added to the files root only, with no
+    -Tag, and never to the folders root."""
+    cm.context_menu(action="install")
+    files_root, folders_root = cm._root_keys()
+    launcher = str(cm._launcher_path())
+
+    for vi, (key, label, op) in enumerate(cm._FILE_VERBS, start=len(cm._TAGS) + 1):
+        verb_key = f"{files_root}\\shell\\{vi:02d}_{key}"
+        assert fake_reg.keys[verb_key]["MUIVerb"] == label
+
+        command = fake_reg.keys[verb_key + r"\command"][""]
+        assert launcher in command
+        assert f"-Op {op}" in command
+        assert "-Tag " not in command
+        assert command.endswith('"%1"')
+
+        # Folders never get this leaf.
+        assert f"{folders_root}\\shell\\{vi:02d}_{key}" not in fake_reg.keys
+
+
 def test_install_status_uninstall_round_trip(
     fake_reg: _FakeWinreg, capsys: pytest.CaptureFixture[str]
 ) -> None:

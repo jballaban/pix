@@ -34,6 +34,9 @@ _ROOT_LABEL = "Pix"
 _ROOT_KEY = "Pix"
 _TAGS: tuple[tuple[str, str], ...] = (("event", "Event"), ("date", "Date"))
 _OPS: tuple[tuple[str, str], ...] = (("set", "Set value..."), ("clear", "Clear"))
+# Top-level leaves shown only on files (not folders), as (key, label, op).
+# `meta` is the read-only single-file inspector (`pix meta`).
+_FILE_VERBS: tuple[tuple[str, str, str], ...] = (("info", "Info", "meta"),)
 
 # Parents under which the "Pix" cascade lives (files `*` and folders).
 _SHELL_PARENTS: tuple[tuple[str, str], ...] = (
@@ -67,12 +70,15 @@ def _powershell_exe() -> str:
     return str(candidate) if candidate.is_file() else "powershell.exe"
 
 
-def _command_string(tag: str, op: str) -> str:
-    """The registry `command` for one leaf: launch the hidden collate stage."""
+def _command_string(op: str, tag: str | None = None) -> str:
+    """The registry `command` for one leaf: launch the hidden collate stage.
+
+    `tag` is omitted for tagless ops (e.g. `meta`), which don't need it."""
+    tag_arg = f"-Tag {tag} " if tag is not None else ""
     return (
         f'"{_powershell_exe()}" -NoProfile -ExecutionPolicy Bypass '
         f'-WindowStyle Hidden -File "{_launcher_path()}" '
-        f'-Tag {tag} -Op {op} "%1"'
+        f'{tag_arg}-Op {op} "%1"'
     )
 
 
@@ -173,6 +179,7 @@ def _install() -> None:
     for legacy in _LEGACY_KEYS:
         _delete_tree(legacy)
 
+    files_root = _root_keys()[0]
     for root in _root_keys():
         _make_cascade(root, _ROOT_LABEL, icon=icon)
         for ti, (tag, tag_label) in enumerate(_TAGS, start=1):
@@ -180,11 +187,21 @@ def _install() -> None:
             _make_cascade(tag_key, tag_label)
             for oi, (op, op_label) in enumerate(_OPS, start=1):
                 leaf = f"{tag_key}\\shell\\{oi:02d}_{op}"
-                _make_verb(leaf, op_label, _command_string(tag, op))
+                _make_verb(leaf, op_label, _command_string(op, tag))
+        # File-only top-level leaves (e.g. read-only `meta`) — folders skip
+        # these. Numbered after the tag submenus so they sort below them.
+        if root == files_root:
+            for vi, (key, label, op) in enumerate(
+                _FILE_VERBS, start=len(_TAGS) + 1
+            ):
+                leaf = f"{root}\\shell\\{vi:02d}_{key}"
+                _make_verb(leaf, label, _command_string(op))
 
     typer.echo(f"Installed the '{_ROOT_LABEL}' menu for files and folders (current user).")
     typer.echo(f"Layout:   {_ROOT_LABEL} > " + " | ".join(t for _t, t in _TAGS)
-               + " > " + " | ".join(o for _o, o in _OPS))
+               + " > " + " | ".join(o for _o, o in _OPS)
+               + "   (+ " + ", ".join(lbl for _k, lbl, _o in _FILE_VERBS)
+               + " on files)")
     typer.echo(f"Launcher: {launcher}")
     typer.echo(
         "Right-click media files/folders in a pix library to use it. On Windows "
