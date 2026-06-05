@@ -110,6 +110,26 @@ def test_keeper_is_higher_bitrate(tmp_path: Path) -> None:
     assert groups[0].keeper == big and groups[0].losers == (small,)
 
 
+def test_keeper_prefers_longer_over_higher_bitrate(tmp_path: Path) -> None:
+    """A length difference (a trim) beats bitrate: keep the longer, more
+    complete copy even if the shorter one has higher bitrate (the
+    _001/_003 case). Duration is quantized, so this only fires on a real
+    length gap, not re-encode drift."""
+    long_ = _mk(tmp_path, "long.mp4", nbytes=500)    # lower bitrate, longer
+    short = _mk(tmp_path, "short.mp4", nbytes=5000)  # higher bitrate, shorter
+    fps = {long_: _fp(Z, dur=2.8), short: _fp(Z, dur=2.1)}
+    assert select_video_keeper(tmp_path, [long_, short], fps) == long_
+
+
+def test_keeper_bitrate_decides_when_same_length(tmp_path: Path) -> None:
+    """Equal-length copies (drift within the quantum) still fall through to
+    bitrate — true re-encodes behave as before."""
+    big = _mk(tmp_path, "big.mp4", nbytes=5000)
+    small = _mk(tmp_path, "small.mp4", nbytes=500)
+    fps = {big: _fp(Z, dur=10.02), small: _fp(Z, dur=10.0)}  # ~drift only
+    assert select_video_keeper(tmp_path, [big, small], fps) == big
+
+
 def test_failed_fingerprint_never_groups(tmp_path: Path) -> None:
     a, b = _mk(tmp_path, "a.mp4"), _mk(tmp_path, "b.mp4")
     cache = {a: _meta(a), b: _meta(b)}

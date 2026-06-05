@@ -411,6 +411,15 @@ def group_by_hash(
     return groups
 
 
+# Duration quantum for keeper selection. Two clips whose durations fall in
+# the same bucket are treated as equal-length (so a re-encode's few-frame /
+# container-rounding drift doesn't beat a higher-bitrate sibling); a
+# difference larger than this is a real length difference (a trim) and the
+# longer, more-complete copy wins. 0.5s comfortably absorbs drift while
+# staying well under the 0.75s grouping tolerance.
+_KEEPER_DURATION_QUANTUM_S: float = 0.5
+
+
 def select_video_keeper(
     library_root: Path,
     paths: list[Path],
@@ -421,10 +430,18 @@ def select_video_keeper(
     Unlike exact dedupe (where every member is byte-identical, so the
     keeper is an arbitrary deterministic survivor), perceptual matches
     differ in quality — so we keep the best by: highest resolution →
-    highest bitrate (size ÷ duration, a proxy for fidelity / fewest
-    re-encode generations) → longest duration (completeness) → lex-smallest
-    path (stable tie-break). See spec/dedupe.md → Keeper selection."""
-    def rank(p: Path) -> tuple[int, float, float, str]:
+    **longest duration** (most complete; quantized so a re-encode's tiny
+    drift ties rather than flipping the choice) → highest bitrate (size ÷
+    duration, a proxy for fidelity / fewest re-encode generations) →
+    lex-smallest path (stable tie-break).
+
+    Duration is ranked above bitrate deliberately: when two near-duplicates
+    differ in length (one is a trim of the other), keeping the *longer* copy
+    never silently discards footage, whereas a marginal bitrate edge isn't
+    worth losing a second of video. For true re-encodes (equal length) the
+    duration bucket ties and bitrate decides, as before. See spec/dedupe.md
+    → Keeper selection."""
+    def rank(p: Path) -> tuple[int, int, float, str]:
         fp = fingerprints[p]
         try:
             size = p.stat().st_size
@@ -432,9 +449,9 @@ def select_video_keeper(
             size = 0
         bitrate = size / fp.duration if fp.duration > 0 else 0.0
         return (
-            -(fp.width * fp.height),   # higher resolution first
-            -bitrate,                  # higher bitrate first
-            -fp.duration,              # longer first
+            -(fp.width * fp.height),                          # resolution
+            -round(fp.duration / _KEEPER_DURATION_QUANTUM_S),  # longer (quantized)
+            -bitrate,                                          # then bitrate
             _sort_key(p, library_root),
         )
     return min(paths, key=rank)
