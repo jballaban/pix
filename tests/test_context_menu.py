@@ -115,18 +115,22 @@ def test_install_builds_cascade(fake_reg: _FakeWinreg) -> None:
     launcher = str(cm._launcher_path())
 
     for root in cm._root_keys():
-        # Parent cascade nodes carry MUIVerb + an (empty) SubCommands trigger.
+        # Parent cascade nodes carry MUIVerb + an (empty) SubCommands trigger,
+        # and MultiSelectModel=Player so they survive a >15-item selection.
         assert fake_reg.keys[root]["MUIVerb"] == cm._ROOT_LABEL
         assert "SubCommands" in fake_reg.keys[root]
+        assert fake_reg.keys[root]["MultiSelectModel"] == "Player"
 
         for ti, (tag, tag_label) in enumerate(cm._TAGS, start=1):
             tag_key = f"{root}\\shell\\{ti:02d}_{tag}"
             assert fake_reg.keys[tag_key]["MUIVerb"] == tag_label
             assert "SubCommands" in fake_reg.keys[tag_key]
+            assert fake_reg.keys[tag_key]["MultiSelectModel"] == "Player"
 
             for oi, (op, _op_label) in enumerate(cm._OPS, start=1):
-                cmd_key = f"{tag_key}\\shell\\{oi:02d}_{op}\\command"
-                command = fake_reg.keys[cmd_key][""]
+                verb_key = f"{tag_key}\\shell\\{oi:02d}_{op}"
+                assert fake_reg.keys[verb_key]["MultiSelectModel"] == "Player"
+                command = fake_reg.keys[verb_key + r"\command"][""]
                 assert launcher in command
                 assert f"-Tag {tag}" in command
                 assert f"-Op {op}" in command
@@ -143,6 +147,7 @@ def test_info_leaf_is_files_only(fake_reg: _FakeWinreg) -> None:
     for vi, (key, label, op) in enumerate(cm._FILE_VERBS, start=len(cm._TAGS) + 1):
         verb_key = f"{files_root}\\shell\\{vi:02d}_{key}"
         assert fake_reg.keys[verb_key]["MUIVerb"] == label
+        assert fake_reg.keys[verb_key]["MultiSelectModel"] == "Player"
 
         command = fake_reg.keys[verb_key + r"\command"][""]
         assert launcher in command

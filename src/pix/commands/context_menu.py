@@ -32,6 +32,11 @@ from pix import banner
 # Data-driven cascade: adding a tag or op is a one-line change here.
 _ROOT_LABEL = "Pix"
 _ROOT_KEY = "Pix"
+# Without this, Explorer hides a static verb once >15 items are selected
+# (the "Document" default). "Player" raises the cap for a legacy (registry,
+# %1) verb to 100 items, while keeping the same per-item invocation our
+# collation shim relies on. Beyond 100 would need a COM handler.
+_MULTISELECT_MODEL = "Player"
 _TAGS: tuple[tuple[str, str], ...] = (("event", "Event"), ("date", "Date"))
 _OPS: tuple[tuple[str, str], ...] = (("set", "Set value..."), ("clear", "Clear"))
 # Top-level leaves shown only on files (not folders), as (key, label, op).
@@ -125,6 +130,7 @@ def _make_cascade(key_path: str, label: str, icon: str | None = None) -> None:
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path) as key:
         winreg.SetValueEx(key, "MUIVerb", 0, winreg.REG_SZ, label)
         winreg.SetValueEx(key, "SubCommands", 0, winreg.REG_SZ, "")
+        winreg.SetValueEx(key, "MultiSelectModel", 0, winreg.REG_SZ, _MULTISELECT_MODEL)
         if icon is not None:
             winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, icon)
 
@@ -135,6 +141,7 @@ def _make_verb(key_path: str, label: str, command: str) -> None:
 
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path) as key:
         winreg.SetValueEx(key, "MUIVerb", 0, winreg.REG_SZ, label)
+        winreg.SetValueEx(key, "MultiSelectModel", 0, winreg.REG_SZ, _MULTISELECT_MODEL)
     with winreg.CreateKey(
         winreg.HKEY_CURRENT_USER, key_path + r"\command"
     ) as cmd_key:
@@ -205,7 +212,8 @@ def _install() -> None:
     typer.echo(f"Launcher: {launcher}")
     typer.echo(
         "Right-click media files/folders in a pix library to use it. On Windows "
-        "11 it's under 'Show more options' (Shift+F10)."
+        "11 it's under 'Show more options' (Shift+F10). Shows for up to 100 "
+        "selected items (a Windows limit on registry menus)."
     )
 
 
