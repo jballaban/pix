@@ -145,13 +145,20 @@ finally {
 
 if (-not $iAmLeader) { return }   # a sibling is the leader and will do the work
 
-# Leader: wait for the shell's burst of per-item launches to settle. Poll the
-# pending count until it stops growing (a quiet period), capped so a hang can't
-# block forever.
-$lastCount = -1
-$deadline = (Get-Date).AddSeconds(10)
+# Leader: wait for the shell's burst of per-item launches to settle, then
+# finalize. Explorer doesn't fire all invocations in one tight burst — for a
+# large selection it launches them in waves (notably a first wave of ~15, then
+# the rest). So we finalize only after a *quiet period* with no new arrivals,
+# tracking the time since the last append rather than a single flat poll (which
+# would snapshot the first wave and let the rest spawn a second window).
+#
+# The quiet period is tiered: small selections finalize fast, but once the
+# count is large enough to be wave-split we wait longer to catch the next wave.
+$lastCount = 0
+$lastChange = Get-Date
+$deadline = (Get-Date).AddSeconds(60)
 while ((Get-Date) -lt $deadline) {
-    Start-Sleep -Milliseconds 400
+    Start-Sleep -Milliseconds 250
     [void] $mutex.WaitOne()
     try {
         $count = @(Get-Content -LiteralPath $pending -Encoding UTF8 -ErrorAction SilentlyContinue).Count
@@ -159,8 +166,13 @@ while ((Get-Date) -lt $deadline) {
     finally {
         $mutex.ReleaseMutex()
     }
-    if ($count -eq $lastCount) { break }
-    $lastCount = $count
+    if ($count -ne $lastCount) {
+        $lastCount = $count
+        $lastChange = Get-Date
+        continue
+    }
+    $quietMs = if ($count -ge 15) { 2500 } else { 700 }
+    if (((Get-Date) - $lastChange).TotalMilliseconds -ge $quietMs) { break }
 }
 
 # Snapshot the full selection and reset, so any later (separate) action starts
