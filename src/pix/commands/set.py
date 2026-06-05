@@ -1,11 +1,14 @@
 """Implementation of `pix set` — write a tag override onto specific files.
 
 `pix set <tag> <value> <path>...` writes `pix:EventOverride` /
-`pix:DateOverride` to each named file. An empty value (`""`) clears the
-override. It's the targeted, file-list alternative to the `checkout`
-folder-shuffle: same override the tag-editing workflow sets, just applied
-to the files you pass. Conservation (prior-XMP capture) and atomicity come
-from reusing migrate's TAG apply path.
+`pix:DateOverride` to each named path. An empty value (`""`) clears the
+override. A path may be a file or a **folder** — a folder expands to the
+taggable media it contains (per `EXTENSION_POLICY`), so a Windows Explorer
+selection of mixed files and folders can be handed straight in. It's the
+targeted alternative to the `checkout` folder-shuffle: same override the
+tag-editing workflow sets, just applied to the paths you pass.
+Conservation (prior-XMP capture) and atomicity come from reusing migrate's
+TAG apply path.
 
 `set` writes tags only — run `pix organize` afterward to reshape the
 library to match (consistent with pix's commit/organize separation). The
@@ -38,9 +41,11 @@ from pix.plan import (
     Plan,
     PlanLine,
     attach_paths,
+    lookup_policy,
     valid_date_override,
 )
 from pix.root import NoLibraryRoot, resolve as resolve_root
+from pix.scan import walk_source_files
 
 _OVERRIDE_FIELD: dict[str, str] = {
     "event": PIX_EVENT_OVERRIDE,
@@ -51,6 +56,41 @@ _OVERRIDE_FIELD: dict[str, str] = {
 def _fail(msg: str) -> None:
     typer.echo(f"Error: {msg}", err=True)
     raise typer.Exit(code=1)
+
+
+def _expand_paths(raw: list[Path], root: Path, config: Config) -> list[Path]:
+    """Resolve a mix of files and folders to a deduped list of taggable files.
+
+    A path that is a **file** passes through verbatim (the user named it
+    explicitly, so any extension is honored). A path that is a **folder** is
+    walked recursively (`walk_source_files` already skips `.pix/`) and kept
+    only where `EXTENSION_POLICY` says pix actually tags the file — the
+    `keep` and `convert_to_*` types, never `delete` junk or unknown formats.
+    This lets the Explorer context menu hand us whatever was selected.
+
+    Order is preserved and the first occurrence of a path wins, so an
+    overlapping selection (a file and the folder that contains it) never
+    double-writes. Anything under `.pix/` is dropped — that's tool
+    scaffolding, never library media.
+    """
+    out: list[Path] = []
+    seen: set[Path] = set()
+
+    def _add(p: Path) -> None:
+        if p in seen or ".pix" in p.relative_to(root).parts:
+            return
+        seen.add(p)
+        out.append(p)
+
+    for p in raw:
+        if p.is_dir():
+            for fp, _size, _mtime in walk_source_files(p):
+                action = lookup_policy(fp.name, config.extensions)
+                if action is not None and action != "delete":
+                    _add(fp)
+        else:
+            _add(p)
+    return out
 
 
 def set_override(
@@ -84,26 +124,35 @@ def set_override(
     if not paths:
         _fail("no files given.")
         return
-    resolved = [p.resolve() for p in paths]
-    missing = [p for p in resolved if not p.is_file()]
-    if missing:
-        _fail(f"not a file: {missing[0]}")
+    raw = [p.resolve() for p in paths]
+    bad = [p for p in raw if not p.is_file() and not p.is_dir()]
+    if bad:
+        _fail(f"not a file or folder: {bad[0]}")
         return
 
     try:
-        root = resolve_root(start=resolved[0])
+        root = resolve_root(start=raw[0])
     except NoLibraryRoot as e:
         _fail(str(e))
         return
-    outside = [p for p in resolved if root not in p.parents]
+    outside = [p for p in raw if p != root and root not in p.parents]
     if outside:
         _fail(
-            f"{outside[0]} is not inside the library at {root}. All files "
+            f"{outside[0]} is not inside the library at {root}. All paths "
             f"must belong to the same library."
         )
         return
 
     config = Config.load(settings_path(root))
+
+    # A folder argument expands to the taggable media it contains, so the
+    # Explorer context menu can pass a mix of files and folders. Files pass
+    # through unchanged. An empty expansion (a folder with no media) is an
+    # error rather than a silent no-op.
+    resolved = _expand_paths(raw, root, config)
+    if not resolved:
+        _fail("no taggable media found in the given files/folders.")
+        return
 
     # Read current overrides so a set that's already in effect is a no-op,
     # and a clear only touches files that actually have the override (an

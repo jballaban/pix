@@ -160,3 +160,60 @@ def test_set_rejects_file_outside_any_library(
     f.write_bytes(b"x")
     with pytest.raises(typer.Exit):
         set_override(tag="event", value="Hawaii", paths=[f], no_prompt=True)
+
+
+def test_set_expands_folder_to_media(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A folder arg expands to the taggable media inside it (recursively),
+    skipping junk per EXTENSION_POLICY."""
+    root = _lib(tmp_path)
+    sub = root / "2023"
+    sub.mkdir()
+    a = sub / "a.jpg"
+    a.write_bytes(b"x")
+    b = sub / "deep" / "b.mp4"
+    b.parent.mkdir()
+    b.write_bytes(b"x")
+    (sub / "Thumbs.db").write_bytes(b"x")  # junk → skipped
+    seen: list[Plan] = []
+    _patch_apply(monkeypatch, seen, 2)
+    monkeypatch.setattr(set_mod, "read_metadata_batched", _no_metas)
+
+    set_override(tag="event", value="Hawaii", paths=[sub], no_prompt=True)
+
+    assert len(seen) == 1
+    tagged = {ln.abs_path for ln in seen[0].lines}
+    assert tagged == {a, b}
+
+
+def test_set_dedupes_overlapping_file_and_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file named both directly and via its enclosing folder is written once."""
+    root = _lib(tmp_path)
+    sub = root / "2023"
+    sub.mkdir()
+    a = sub / "a.jpg"
+    a.write_bytes(b"x")
+    seen: list[Plan] = []
+    _patch_apply(monkeypatch, seen, 1)
+    monkeypatch.setattr(set_mod, "read_metadata_batched", _no_metas)
+
+    set_override(tag="event", value="Hawaii", paths=[a, sub], no_prompt=True)
+
+    assert len(seen) == 1
+    assert [ln.abs_path for ln in seen[0].lines] == [a]
+
+
+def test_set_rejects_folder_with_no_media(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A folder that expands to nothing taggable is an error, not a no-op."""
+    root = _lib(tmp_path)
+    sub = root / "empty"
+    sub.mkdir()
+    (sub / "notes.txt").write_bytes(b"x")  # 'delete' policy → not taggable
+    monkeypatch.setattr(set_mod, "read_metadata_batched", _no_metas)
+    with pytest.raises(typer.Exit):
+        set_override(tag="event", value="Hawaii", paths=[sub], no_prompt=True)

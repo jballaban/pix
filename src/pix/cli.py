@@ -154,7 +154,11 @@ def set_(
     paths: Annotated[
         list[Path],
         typer.Argument(
-            help="One or more files to set the override on (all under one library)."
+            help=(
+                "One or more files or folders to set the override on (all "
+                "under one library). A folder expands to the taggable media "
+                "it contains."
+            )
         ),
     ],
     no_prompt: Annotated[
@@ -173,7 +177,12 @@ def clear_(
     ],
     paths: Annotated[
         list[Path],
-        typer.Argument(help="One or more files to clear the override on."),
+        typer.Argument(
+            help=(
+                "One or more files or folders to clear the override on. A "
+                "folder expands to the taggable media it contains."
+            )
+        ),
     ],
     no_prompt: Annotated[
         bool, typer.Option("--no-prompt", help=_NO_PROMPT_HELP)
