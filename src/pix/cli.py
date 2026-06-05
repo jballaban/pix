@@ -9,6 +9,7 @@ from typing import Annotated
 import typer
 
 from pix.commands.checkout import run_checkout
+from pix.commands.context_menu import context_menu
 from pix.commands.dedupe import dedupe_library
 from pix.commands.hash import hash_library
 from pix.commands.init import init_library
@@ -190,6 +191,22 @@ def clear_(
 ) -> None:
     """Remove a tag override from specific files (the inverse of `pix set`)."""
     set_override(tag=tag, value="", paths=paths, no_prompt=no_prompt, clear=True)
+
+
+@app.command("context-menu")
+def context_menu_(
+    action: Annotated[
+        str,
+        typer.Argument(
+            help=(
+                "install, uninstall, or status (default). Manages the Windows "
+                "Explorer 'Tag with pix' right-click entry for files/folders."
+            )
+        ),
+    ] = "status",
+) -> None:
+    """Manage the Windows Explorer "Tag with pix" right-click menu."""
+    context_menu(action=action)
 
 
 @app.command("meta")

@@ -3,15 +3,15 @@
   Windows Explorer context-menu launcher for `pix set` / `pix clear`.
 
 .DESCRIPTION
-  Registered (by install-pixtag.ps1) under the classic right-click menu for
-  both files (HKCU\...\*) and folders (HKCU\...\Directory). The classic menu
-  invokes the command once per selected item, so this script runs in two
+  Registered by `pix context-menu install` under the classic right-click menu
+  for both files (HKCU\...\*) and folders (HKCU\...\Directory). The classic
+  menu invokes the command once per selected item, so this script runs in two
   stages:
 
     1. COLLATE (default, hidden window). Each per-item process appends its
        path to a shared pending list and races to become "leader". Non-leaders
        exit immediately. The leader waits for the burst to settle, snapshots
-       the full selection, then relaunches itself in RUN mode in a *visible*
+       the full selection, then relaunches itself in RUN mode in a visible
        console. This is the COM-free way to aggregate a multi-select with a
        pure-registry context menu.
 
@@ -49,7 +49,7 @@ function Get-PixMutex {
 }
 
 # ---------------------------------------------------------------------------
-# RUN mode — the interactive, visible stage.
+# RUN mode - the interactive, visible stage.
 # ---------------------------------------------------------------------------
 if ($Run) {
     $items = @()
@@ -109,7 +109,7 @@ if ($Run) {
 }
 
 # ---------------------------------------------------------------------------
-# COLLATE mode — the fast, hidden stage (one process per selected item).
+# COLLATE mode - the fast, hidden stage (one process per selected item).
 # ---------------------------------------------------------------------------
 if (-not $Paths -or $Paths.Count -eq 0) { return }
 
