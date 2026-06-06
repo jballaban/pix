@@ -1,37 +1,37 @@
 <#
 .SYNOPSIS
-  Windows Explorer context-menu launcher for `pix set` / `pix clear`.
+  Windows Explorer context-menu launcher for `pix set` / `pix clear` / `pix meta`.
 
 .DESCRIPTION
   Registered by `pix context-menu install` as a cascading menu:
 
       Pix  >  Event | Date  >  Set value... | Clear
+                                Info   (files only)
 
   The menu leaf encodes the tag (-Tag event|date) and operation
-  (-Op set|clear), so this launcher only has to collect the value (for set)
-  and forward the selected paths. The classic menu invokes the leaf command
-  once per selected item, so the script runs in two stages:
+  (-Op set|clear|meta). A classic registry verb is invoked once per selected
+  item, and only up to a hard Windows limit (100 for a legacy verb) — so
+  rather than try to receive every path via %1, the script runs in two stages:
 
-    1. COLLATE (default, hidden window). Each per-item process appends its
-       path to a shared pending list and races to become "leader". Non-leaders
-       exit immediately. The leader waits for the burst to settle, snapshots
-       the full selection, then relaunches itself in RUN mode in a visible
-       console (carrying -Tag/-Op). This is the COM-free way to aggregate a
-       multi-select with a pure-registry context menu.
+    1. COLLATE (default, hidden window). The first invocation becomes the
+       "leader"; a short-lived freshness lock makes the sibling per-item
+       invocations from the same selection exit silently. The leader reads the
+       *live selection* of the Explorer window the menu was invoked from, via
+       COM (Shell.Application). That returns the complete selection in one shot
+       with no 100-item cap and no dependence on Explorer's per-item launch
+       waves. It then relaunches itself in RUN mode in a visible console.
 
     2. RUN (-Run <listfile>, visible window). Reads the collected paths and,
-       for set, prompts for the value (event name / date pattern); for clear,
-       no value is needed. Then calls `pix set` / `pix clear`. pix shows its
-       own Apply plan + confirmation in the same console, so nothing is
-       written without review.
+       for set, prompts for the value; for clear/meta, no value is needed. Then
+       calls `pix`, which shows its own Apply plan + confirmation.
 
   Folder expansion is done by pix itself (a folder arg expands to the taggable
-  media it contains), so this launcher just forwards whatever Explorer selected.
+  media it contains), so the launcher just forwards whatever was selected.
 #>
 [CmdletBinding(DefaultParameterSetName = 'Collate')]
 param(
-    # COLLATE mode: the selected path(s) (the registry passes one "%1" per item).
-    # Position 0 + remaining-args so a bare "%1" positional binds here.
+    # COLLATE mode: the clicked item (the registry passes "%1"). Used only to
+    # identify which Explorer window's live selection to read.
     [Parameter(ParameterSetName = 'Collate', Position = 0, ValueFromRemainingArguments = $true)]
     [string[]] $Paths,
     # RUN mode: path to the snapshot list file produced by the COLLATE leader.
@@ -47,13 +47,45 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $workDir = Join-Path $env:TEMP 'pixtag'
-$pending = Join-Path $workDir 'pending.txt'
 $leader  = Join-Path $workDir 'leader.lock'
 
+# How long a leader's lock suppresses sibling invocations from the same
+# selection. Must comfortably exceed Explorer's per-item launch spread (it
+# fires large selections in waves). The cost of too long is that a *separate*
+# tag action begun within this window would be ignored.
+$LeaderStaleSeconds = 6
+
 function Get-PixMutex {
-    # One named mutex serializes the append + leader-election critical section
-    # across the per-item processes the shell spawns.
+    # Serializes the leader check-and-claim across the per-item processes.
     New-Object System.Threading.Mutex($false, 'Global\pixtag_collate')
+}
+
+function Get-ExplorerSelection {
+    # Return every path currently selected in the Explorer window the menu was
+    # invoked from (the one whose selection contains $Clicked). Falls back to
+    # just [$Clicked] for the Desktop or non-filesystem views, where the live
+    # selection isn't reachable this way.
+    param([string] $Clicked)
+
+    $fallback = @($Clicked)
+    $clickedFull = $Clicked
+    try { $clickedFull = [System.IO.Path]::GetFullPath($Clicked) } catch {}
+
+    try { $shell = New-Object -ComObject Shell.Application } catch { return $fallback }
+    foreach ($w in $shell.Windows()) {
+        $doc = $null
+        try { $doc = $w.Document } catch { continue }
+        if ($null -eq $doc) { continue }
+        $selected = $null
+        try { $selected = $doc.SelectedItems() } catch { continue }
+        if ($null -eq $selected) { continue }
+        $paths = @()
+        foreach ($item in $selected) { try { $paths += $item.Path } catch {} }
+        foreach ($p in $paths) {
+            if ($p -ieq $clickedFull) { return $paths }
+        }
+    }
+    return $fallback
 }
 
 # ---------------------------------------------------------------------------
@@ -123,9 +155,10 @@ if ($Run) {
 }
 
 # ---------------------------------------------------------------------------
-# COLLATE mode - the fast, hidden stage (one process per selected item).
+# COLLATE mode - elect one leader, read the live selection, hand off to RUN.
 # ---------------------------------------------------------------------------
 if (-not $Paths -or $Paths.Count -eq 0) { return }
+$clicked = $Paths[0]
 
 New-Item -ItemType Directory -Force -Path $workDir | Out-Null
 
@@ -133,66 +166,30 @@ $mutex = Get-PixMutex
 $iAmLeader = $false
 [void] $mutex.WaitOne()
 try {
-    Add-Content -LiteralPath $pending -Value $Paths -Encoding UTF8
-    if (-not (Test-Path -LiteralPath $leader)) {
-        New-Item -ItemType File -Path $leader -Force | Out-Null
+    $fresh = $false
+    if (Test-Path -LiteralPath $leader) {
+        $age = ((Get-Date) - (Get-Item -LiteralPath $leader).LastWriteTime).TotalSeconds
+        if ($age -lt $LeaderStaleSeconds) { $fresh = $true }
+    }
+    if (-not $fresh) {
+        Set-Content -LiteralPath $leader -Value ([string](Get-Date).Ticks) -Encoding UTF8
         $iAmLeader = $true
     }
-}
-finally {
-    $mutex.ReleaseMutex()
-}
-
-if (-not $iAmLeader) { return }   # a sibling is the leader and will do the work
-
-# Leader: wait for the shell's burst of per-item launches to settle, then
-# finalize. Explorer doesn't fire all invocations in one tight burst — for a
-# large selection it launches them in waves (notably a first wave of ~15, then
-# the rest). So we finalize only after a *quiet period* with no new arrivals,
-# tracking the time since the last append rather than a single flat poll (which
-# would snapshot the first wave and let the rest spawn a second window).
-#
-# The quiet period is tiered: small selections finalize fast, but once the
-# count is large enough to be wave-split we wait longer to catch the next wave.
-$lastCount = 0
-$lastChange = Get-Date
-$deadline = (Get-Date).AddSeconds(60)
-while ((Get-Date) -lt $deadline) {
-    Start-Sleep -Milliseconds 250
-    [void] $mutex.WaitOne()
-    try {
-        $count = @(Get-Content -LiteralPath $pending -Encoding UTF8 -ErrorAction SilentlyContinue).Count
-    }
-    finally {
-        $mutex.ReleaseMutex()
-    }
-    if ($count -ne $lastCount) {
-        $lastCount = $count
-        $lastChange = Get-Date
-        continue
-    }
-    $quietMs = if ($count -ge 15) { 2500 } else { 700 }
-    if (((Get-Date) - $lastChange).TotalMilliseconds -ge $quietMs) { break }
-}
-
-# Snapshot the full selection and reset, so any later (separate) action starts
-# a fresh group with its own leader.
-$itemsFile = Join-Path $workDir ("items-{0}.txt" -f ([guid]::NewGuid().ToString('N')))
-[void] $mutex.WaitOne()
-try {
-    $all = @(Get-Content -LiteralPath $pending -Encoding UTF8 -ErrorAction SilentlyContinue | Where-Object { $_ -ne '' })
-    Set-Content -LiteralPath $itemsFile -Value $all -Encoding UTF8
-    Remove-Item -LiteralPath $pending -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $leader -Force -ErrorAction SilentlyContinue
 }
 finally {
     $mutex.ReleaseMutex()
     $mutex.Dispose()
 }
 
+if (-not $iAmLeader) { return }   # sibling invocation from the same selection
+
+$items = @(Get-ExplorerSelection -Clicked $clicked | Where-Object { $_ -ne '' })
+
+$itemsFile = Join-Path $workDir ("items-{0}.txt" -f ([guid]::NewGuid().ToString('N')))
+Set-Content -LiteralPath $itemsFile -Value $items -Encoding UTF8
+
 # Hand off to the visible RUN stage, carrying the menu's tag + operation.
-# PIXTAG_COLLATE_ONLY is a test seam: it skips the relaunch and just reports
-# the snapshot file, so the collation shim can be exercised headlessly.
+# PIXTAG_COLLATE_ONLY is a test seam: skip the relaunch and report the file.
 if ($env:PIXTAG_COLLATE_ONLY) {
     Write-Output $itemsFile
     return

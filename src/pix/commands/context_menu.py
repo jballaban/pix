@@ -212,8 +212,8 @@ def _install() -> None:
     typer.echo(f"Launcher: {launcher}")
     typer.echo(
         "Right-click media files/folders in a pix library to use it. On Windows "
-        "11 it's under 'Show more options' (Shift+F10). Shows for up to 100 "
-        "selected items (a Windows limit on registry menus)."
+        "11 it's under 'Show more options' (Shift+F10). It acts on the whole "
+        "Explorer selection, regardless of count."
     )
 
 
