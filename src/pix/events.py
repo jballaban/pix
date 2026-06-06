@@ -38,6 +38,21 @@ def events_cache_path(library_root: Path) -> Path:
     return library_root / ".pix" / "events.cache"
 
 
+def cached_event_names(library_root: Path) -> list[str]:
+    """Event names from the cached list, or [] if there's no cache.
+
+    Best-effort: the cache (written by `pix events`, format `name<TAB>range`
+    per line) may be stale or absent. Used for case-alignment on `pix set`;
+    the menu warms the cache via `pix events` right before set, so there it's
+    current.
+    """
+    try:
+        text = events_cache_path(library_root).read_text(encoding="utf-8")
+    except OSError:
+        return []
+    return [line.split("\t", 1)[0] for line in text.splitlines() if line]
+
+
 def invalidate_events_cache(library_root: Path) -> None:
     """Drop the cached event list so the next `pix events` recomputes it.
 

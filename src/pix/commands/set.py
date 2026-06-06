@@ -32,7 +32,7 @@ from pix.apply import ApplyError, apply_plan
 from pix.checkout import CheckoutOpen, ensure_no_open_checkout
 from pix.config import Config, settings_path
 from pix.editor import prompt_proceed
-from pix.events import EVENT_NULL, invalidate_events_cache
+from pix.events import EVENT_NULL, cached_event_names, invalidate_events_cache
 from pix.hash_cache import read_cached_hash, write_cached_hash
 from pix.library_lock import LockHeld, acquire as acquire_lock
 from pix.metadata import (
@@ -64,6 +64,25 @@ _OVERRIDE_FIELD: dict[str, str] = {
 def _fail(msg: str) -> None:
     typer.echo(f"Error: {msg}", err=True)
     raise typer.Exit(code=1)
+
+
+def _align_event_case(root: Path, value: str) -> str:
+    """Return `value`, but snapped to an existing event's casing when one
+    matches case-insensitively.
+
+    NTFS is case-insensitive, so `Karate` and `karate` can't be distinct event
+    folders — aligning the tag keeps one canonical casing per event (and the
+    events list / autocomplete clean). Best-effort via the cached event list;
+    the menu warms it right before set, so there it's reliable."""
+    lower = value.lower()
+    for existing in cached_event_names(root):
+        if existing != value and existing.lower() == lower:
+            typer.echo(
+                f"Aligning event casing to existing {existing!r} "
+                f"(you typed {value!r})."
+            )
+            return existing
+    return value
 
 
 def _plan_clear(
@@ -176,6 +195,11 @@ def set_override(
             f"must belong to the same library."
         )
         return
+
+    # Snap a new event's casing onto any existing same-spelling event so NTFS
+    # never ends up with case-variant event folders (Karate vs karate).
+    if field == PIX_EVENT_OVERRIDE and not clearing and value:
+        value = _align_event_case(root, value)
 
     # A checkout freeze forbids inode-mutating ops: an override write goes
     # through ExifTool -overwrite_original (temp + rename → new inode), which

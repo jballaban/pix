@@ -209,6 +209,47 @@ def test_set_dedupes_overlapping_file_and_folder(
     assert [ln.abs_path for ln in seen[0].lines] == [a]
 
 
+def _seed_events_cache(root: Path, *names: str) -> None:
+    """Write the events cache (name<TAB>range lines) used for case-alignment."""
+    (root / ".pix").mkdir(parents=True, exist_ok=True)
+    (root / ".pix" / "events.cache").write_text(
+        "".join(f"{n}\t\n" for n in names), encoding="utf-8"
+    )
+
+
+def test_set_event_aligns_casing_to_existing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Setting 'karate' when 'Karate' already exists writes the existing
+    casing, so NTFS doesn't get case-variant event folders."""
+    root = _lib(tmp_path)
+    _seed_events_cache(root, "Karate", "Hawaii")
+    f = root / "x.jpg"
+    f.write_bytes(b"x")
+    seen: list[Plan] = []
+    _patch_apply(monkeypatch, seen, 1)
+    monkeypatch.setattr(set_mod, "read_metadata_batched", _no_metas)
+
+    set_override(tag="event", value="karate", paths=[f], no_prompt=True)
+    assert seen[0].lines[0].pix_writes == {PIX_EVENT_OVERRIDE: "Karate"}
+
+
+def test_set_event_new_value_kept_as_typed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A brand-new event (no case-insensitive match) is stored verbatim."""
+    root = _lib(tmp_path)
+    _seed_events_cache(root, "Karate")
+    f = root / "x.jpg"
+    f.write_bytes(b"x")
+    seen: list[Plan] = []
+    _patch_apply(monkeypatch, seen, 1)
+    monkeypatch.setattr(set_mod, "read_metadata_batched", _no_metas)
+
+    set_override(tag="event", value="Skiing", paths=[f], no_prompt=True)
+    assert seen[0].lines[0].pix_writes == {PIX_EVENT_OVERRIDE: "Skiing"}
+
+
 def test_clear_event_blanks_auto_derived_event(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
