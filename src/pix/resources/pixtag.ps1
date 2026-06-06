@@ -90,17 +90,18 @@ function Get-ExplorerSelection {
 
 function Get-EventValue {
     # Inline, editor-style autosuggest in the terminal (no GUI): the best
-    # matching event shows as dim "ghost" text after the cursor; Tab or Right
-    # accepts it, Enter submits, Esc cancels. Returns the text, or $null on
-    # cancel. Falls back to a plain prompt when stdin isn't an interactive
-    # console (e.g. piped input in tests).
-    param([string[]] $Suggestions)
+    # matching event shows as dim "ghost" text after the cursor, with its date
+    # range as a further-dimmed hint to tell similar events apart. Tab or Right
+    # accepts the name only (never the hint); Enter submits, Esc cancels.
+    # Returns the text, or $null on cancel. Falls back to a plain prompt when
+    # stdin isn't an interactive console (e.g. piped input in tests).
+    param([string[]] $Names, [hashtable] $Ranges)
 
     if ([Console]::IsInputRedirected) {
         return (Read-Host 'Event name')
     }
 
-    $sorted = @($Suggestions | Sort-Object)
+    $sorted = @($Names | Sort-Object)
     $prompt = 'Event: '
     $buffer = ''
     $lastLen = 0
@@ -108,36 +109,46 @@ function Get-EventValue {
     Write-Host '(type to autocomplete; Tab/Right completes, Enter accepts, Esc cancels)' -ForegroundColor DarkGray
 
     while ($true) {
-        # Ghost = remainder of the first event that case-insensitively starts
-        # with what's typed (and is longer than it).
-        $ghost = ''
+        # Best match = first event that case-insensitively starts with what's
+        # typed. fullGhost = its remaining name (what Tab accepts); hint = its
+        # date range (display only).
+        $fullGhost = ''
+        $hint = ''
         if ($buffer.Length -gt 0) {
             $lower = $buffer.ToLower()
             foreach ($s in $sorted) {
-                if ($s.Length -gt $buffer.Length -and
+                if ($s.Length -ge $buffer.Length -and
                     $s.Substring(0, $buffer.Length).ToLower() -eq $lower) {
-                    $ghost = $s.Substring($buffer.Length)
+                    $fullGhost = $s.Substring($buffer.Length)
+                    if ($Ranges -and $Ranges.ContainsKey($s) -and $Ranges[$s]) {
+                        $hint = "  ($($Ranges[$s]))"
+                    }
                     break
                 }
             }
         }
 
-        # Clamp to the console width so we never write past the line.
+        # Fit ghost (priority) then hint into the remaining console width.
         $width = [Console]::BufferWidth
-        $maxGhost = $width - 1 - ($prompt.Length + $buffer.Length)
-        if ($maxGhost -lt 0) { $maxGhost = 0 }
-        if ($ghost.Length -gt $maxGhost) { $ghost = $ghost.Substring(0, $maxGhost) }
+        $avail = $width - 1 - ($prompt.Length + $buffer.Length)
+        if ($avail -lt 0) { $avail = 0 }
+        $ghost = $fullGhost
+        if ($ghost.Length -gt $avail) { $ghost = $ghost.Substring(0, $avail) }
+        $hintRoom = $avail - $ghost.Length
+        if ($hint.Length -gt $hintRoom) { $hint = $hint.Substring(0, $hintRoom) }
 
-        # Redraw the line: prompt + typed text, then ghost in dim grey, then
-        # erase any leftover from a previously longer line, then park the
-        # cursor right after the typed text.
+        # Redraw: prompt + typed text, ghost (dim grey), range hint (dim cyan),
+        # erase any leftover from a longer prior line, then park the cursor
+        # right after the typed text.
         [Console]::CursorLeft = 0
         [Console]::Write($prompt + $buffer)
         $fg = [Console]::ForegroundColor
         [Console]::ForegroundColor = [ConsoleColor]::DarkGray
         [Console]::Write($ghost)
+        [Console]::ForegroundColor = [ConsoleColor]::DarkCyan
+        [Console]::Write($hint)
         [Console]::ForegroundColor = $fg
-        $total = $prompt.Length + $buffer.Length + $ghost.Length
+        $total = $prompt.Length + $buffer.Length + $ghost.Length + $hint.Length
         if ($total -lt $lastLen) { [Console]::Write(' ' * ($lastLen - $total)) }
         $lastLen = $total
         $col = $prompt.Length + $buffer.Length
@@ -153,8 +164,8 @@ function Get-EventValue {
                     $buffer = $buffer.Substring(0, $buffer.Length - 1)
                 }
             }
-            'Tab' { if ($ghost) { $buffer += $ghost } }
-            'RightArrow' { if ($ghost) { $buffer += $ghost } }
+            'Tab' { if ($fullGhost) { $buffer += $fullGhost } }
+            'RightArrow' { if ($fullGhost) { $buffer += $fullGhost } }
             default {
                 $ch = $key.KeyChar
                 if ($ch -and -not [char]::IsControl($ch)) { $buffer += $ch }
@@ -267,13 +278,20 @@ if ($Run) {
             $value = Read-Host 'Date value'
         }
         else {
-            # Offer existing library events as type-ahead suggestions.
-            $suggestions = @()
+            # Offer existing library events (with their date ranges) as
+            # type-ahead suggestions. `pix events` emits `name<TAB>range`.
+            $names = @()
+            $ranges = @{}
             try {
-                $suggestions = @(& pix events $items[0] 2>$null | Where-Object { $_ -ne '' })
+                foreach ($row in (& pix events $items[0] 2>$null)) {
+                    if (-not $row) { continue }
+                    $parts = $row -split "`t", 2
+                    $names += $parts[0]
+                    if ($parts.Count -gt 1 -and $parts[1]) { $ranges[$parts[0]] = $parts[1] }
+                }
             }
             catch {}
-            $value = Get-EventValue -Suggestions $suggestions
+            $value = Get-EventValue -Names $names -Ranges $ranges
         }
         if ([string]::IsNullOrWhiteSpace($value)) {
             Write-Host 'Cancelled - no value entered (use the Clear menu to remove a tag).' -ForegroundColor Yellow
