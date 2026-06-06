@@ -149,6 +149,51 @@ function Get-EventValue {
     return $null
 }
 
+function Get-CommonAncestor {
+    # Deepest folder containing all of $Paths (a file's parent folder; a folder
+    # path is used as-is). This is the scope handed to `pix organize`.
+    param([string[]] $Paths)
+    $dirs = @()
+    foreach ($p in $Paths) {
+        if (Test-Path -LiteralPath $p -PathType Container) { $dirs += $p }
+        else { $dirs += (Split-Path -Parent $p) }
+    }
+    $dirs = @($dirs | Where-Object { $_ } | Select-Object -Unique)
+    if ($dirs.Count -eq 0) { return $null }
+    if ($dirs.Count -eq 1) { return $dirs[0] }
+
+    $split = @($dirs | ForEach-Object { , ($_ -split '[\\/]') })
+    $min = ($split | ForEach-Object { $_.Count } | Measure-Object -Minimum).Minimum
+    $common = @()
+    for ($i = 0; $i -lt $min; $i++) {
+        $seg = $split[0][$i]
+        $match = $true
+        foreach ($s in $split) { if ($s[$i] -ne $seg) { $match = $false; break } }
+        if ($match) { $common += $seg } else { break }
+    }
+    if ($common.Count -eq 0) { return $null }
+    return ($common -join '\')
+}
+
+function Invoke-Organize {
+    # Reshape just the affected subtree so the freshly-tagged files land in
+    # their event/date folders immediately. `pix organize` refuses to run with
+    # the working directory inside the library, so step out to TEMP first.
+    param([string[]] $Items)
+    $scope = Get-CommonAncestor -Paths $Items
+    if (-not $scope) { return }
+    Write-Host ''
+    Write-Host "Organizing $scope ..." -ForegroundColor Cyan
+    $previous = (Get-Location).Path
+    Set-Location -LiteralPath $env:TEMP
+    try {
+        & pix organize $scope --no-prompt
+    }
+    finally {
+        Set-Location -LiteralPath $previous
+    }
+}
+
 # ---------------------------------------------------------------------------
 # RUN mode - the interactive, visible stage.
 # ---------------------------------------------------------------------------
@@ -190,8 +235,10 @@ if ($Run) {
     if ($items.Count -gt 10) { Write-Host "  ... and $($items.Count - 10) more" }
     Write-Host ''
 
+    # The menu applies without a second console confirmation (the value dialog
+    # / Clear choice is the intent), then files the results immediately.
     if ($Op -eq 'clear') {
-        & pix clear $Tag @items
+        & pix clear $Tag --no-prompt @items
     }
     else {
         if ($Tag -eq 'date') {
@@ -213,7 +260,12 @@ if ($Run) {
             Read-Host 'Press Enter to close'
             return
         }
-        & pix set $Tag $value @items
+        & pix set $Tag $value --no-prompt @items
+    }
+
+    # Tag write succeeded → organize the affected folder so the files move now.
+    if ($LASTEXITCODE -eq 0) {
+        Invoke-Organize -Items $items
     }
 
     Write-Host ''

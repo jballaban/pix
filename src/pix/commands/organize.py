@@ -7,6 +7,7 @@ prompt → apply → persist active template.
 
 from __future__ import annotations
 
+import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -39,8 +40,10 @@ from pix.organize import (
     UnmigratedFilesError,
     apply_plan,
     check_cwd_not_inside,
+    compute_values,
     generate_plan,
     parse_template,
+    render_target_folder,
 )
 from pix.plan import PlanLine
 from pix.root import NoLibraryRoot, resolve as resolve_root
@@ -52,8 +55,13 @@ def organize_library(
 ) -> None:
     """End-to-end organize: parse, plan, edit, confirm, apply.
 
-    `path` is anywhere inside (or at) the library root. Resolution
-    walks up from it to find the `.pix/` directory.
+    `path` resolves the library root (walk up for `.pix/`) **and scopes the
+    operation**: only files at or under `path` are (re)organized. Pointing at
+    the library root organizes everything (what `pix sync` does); pointing at a
+    subfolder is a fast, targeted reshape of just that subtree — useful right
+    after tagging a folderful of files. A scoped run still computes
+    destinations against the whole library and pulls in the files already in
+    those destination folders, so collisions resolve exactly as a full run.
 
     `no_prompt` skips the `Apply?` confirmation and applies the generated
     plan directly (the plan is still written). Used by `pix sync`; also
@@ -107,7 +115,7 @@ def organize_library(
     try:
         with acquire_lock(root, "organize"):
             _run_organize(
-                root, template, template_str, config_path,
+                root, path, template, template_str, config_path,
                 no_prompt=no_prompt,
             )
     except LockHeld as e:
@@ -115,27 +123,86 @@ def organize_library(
         raise typer.Exit(code=1) from e
 
 
+def _augment_with_destination_folders(
+    root: Path,
+    template: Template,
+    scanned: list[tuple[Path, int, int]],
+    meta_cache: PerFileCache,
+) -> list[tuple[Path, int, int]]:
+    """Add the files already in the folders the scoped files will move into.
+
+    A scoped organize only walks its subtree, so it can't see a file already
+    sitting at a target name — and `_do_move` aborts on an occupied target.
+    Including those occupants as candidates lets the normal collision rule
+    suffix the incoming file around them; the occupants are usually already
+    correctly placed, so they produce no move of their own.
+
+    Destinations are computed from *cached* metadata only (no ExifTool); a
+    scoped file with no cached metadata is skipped here and planned as-is.
+    """
+    hits, _misses = filter_cache_misses(scanned, meta_cache)
+    target_folders: set[Path] = {
+        root / render_target_folder(template, compute_values(meta))
+        for meta in hits.values()
+    }
+
+    already = {p for p, _, _ in scanned}
+    extra: list[tuple[Path, int, int]] = []
+    for folder in target_folders:
+        try:
+            with os.scandir(folder) as it:
+                for entry in it:
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
+                    p = Path(entry.path)
+                    if p in already:
+                        continue
+                    already.add(p)
+                    st = entry.stat()
+                    extra.append((p, st.st_size, st.st_mtime_ns))
+        except OSError:
+            continue  # destination folder doesn't exist yet → nothing to pull
+    return scanned + extra
+
+
 def _run_organize(
     root: Path,
+    scope: Path,
     template: Template,
     template_str: str,
     config_path: Path,
     no_prompt: bool = False,
 ) -> None:
-    """Organize body, called under the library lock."""
+    """Organize body, called under the library lock.
+
+    `scope` bounds which files are (re)organized: the whole library when it's
+    the root, or a subtree otherwise (plus the destination folders those files
+    target — see `_augment_with_destination_folders`)."""
     run_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     runs_dir = root / ".pix" / "runs" / run_id
     runs_dir.mkdir(parents=True)
     plan_log_path = runs_dir / "plan.log"
 
+    scoped = scope != root
     _plog(plan_log_path, f"Library root: {root}")
+    if scoped:
+        _plog(plan_log_path, f"Scope: {scope}")
     _plog(plan_log_path, f"Template: {template_str}")
 
     # Walk is sub-second on libraries we care about; no console
     # ticker — the next phase's progress bar comes up immediately.
     # Timing still lands in plan.log. (Same pattern as migrate/dedupe.)
     t0 = time.monotonic()
-    scanned = walk_source_files(root)
+    scanned = walk_source_files(scope)
+    meta_cache = PerFileCache.for_library(root)
+    if scoped:
+        # Pull in the files already living in the folders the scoped files will
+        # move into, so cross-scope canonical-name collisions resolve (suffix)
+        # against them instead of aborting the move (see _do_move). Occupants
+        # are normally already correctly placed → idempotent (no move line).
+        scanned = _augment_with_destination_folders(
+            root, template, scanned, meta_cache
+        )
     _plog(
         plan_log_path,
         f"Found {len(scanned)} file(s) in "
@@ -143,15 +210,17 @@ def _run_organize(
     )
 
     if not scanned:
-        typer.echo("Library is empty; nothing to organize.")
+        typer.echo("Nothing to organize." if scoped else "Library is empty; nothing to organize.")
         return
 
     library_files = [p for p, _, _ in scanned]
 
-    # Drop cache sidecars whose source files no longer exist anywhere
-    # in the library, plus any legacy-suffix sidecars from older pix
-    # versions. Library-wide walk, so no prefix scoping.
-    prune_stats = prune_orphans(root, set(library_files))
+    # Drop cache sidecars whose source files no longer exist. Scoped to the
+    # walked subtree (`allowed_prefix`) so a subfolder organize never prunes
+    # entries for files elsewhere in the library; root scope prunes the lot.
+    prune_stats = prune_orphans(
+        root, set(library_files), allowed_prefix=scope
+    )
     if prune_stats.orphans_removed or prune_stats.legacy_removed:
         _plog(
             plan_log_path,
@@ -161,8 +230,6 @@ def _run_organize(
         )
 
     t0 = time.monotonic()
-    meta_cache = PerFileCache.for_library(root)
-
     with LiveProgress(total=len(scanned)) as check_progress:
         check_progress.begin("Loading cache")
 
