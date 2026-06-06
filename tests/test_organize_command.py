@@ -11,8 +11,10 @@ from pathlib import Path
 import pytest
 import typer
 
+import pix.commands.organize as organize_mod
 from pix.commands.organize import organize_library
 from pix.hash_cache import write_cached_hash
+from pix.metadata import FileMetadata
 from pix.metadata_cache import PerFileCache
 from pix.plan import PIX_DATE_AUTO, PIX_EVENT_AUTO, PIX_ORIGINAL_PATH
 
@@ -85,6 +87,58 @@ def test_scoped_organize(tmp_path: Path) -> None:
     # Out-of-scope file untouched; its destination never created.
     assert outside.is_file()
     assert not (root / "Aruba").exists()
+
+
+def test_scoped_organize_augments_when_meta_cache_stale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: a file tagged moments ago has a size-stale .meta (cache
+    miss). Augmentation must still read it fresh to find its destination and
+    pull in the occupant there — otherwise the move aborts on a collision."""
+    root = _make_library(tmp_path, template="{event}")
+    cache = PerFileCache.for_library(root)
+    canon = "2023-05-10_120000.jpg"
+
+    # Just-tagged scoped file: hashed, but NO cached metadata (the miss case).
+    incoming = root / "src" / "a.jpg"
+    incoming.parent.mkdir(parents=True)
+    incoming.write_bytes(b"x")
+    st = incoming.stat()
+    write_cached_hash(
+        root, incoming, hash_hex="bbbb", size=st.st_size, mtime_ns=st.st_mtime_ns
+    )
+    # Occupant already at the destination under the canonical name, cached.
+    occupant = _seed(
+        root, cache, f"Hawaii/{canon}",
+        date_auto="2023-05-10-12:00:00", event="Hawaii", hash_hex="aaaa",
+    )
+
+    # The fresh read returns event Hawaii for the just-tagged file.
+    fresh = FileMetadata(
+        path=incoming,
+        raw={
+            "SourceFile": str(incoming),
+            PIX_ORIGINAL_PATH: "F:/src/a.jpg",
+            PIX_DATE_AUTO: "2023-05-10-12:00:00",
+            PIX_EVENT_AUTO: "Hawaii",
+        },
+    )
+
+    def fake_read(
+        paths: list[Path], cache: object = None, on_batch: object = None
+    ) -> dict[Path, FileMetadata]:
+        return {p: fresh for p in paths if p == incoming}
+
+    monkeypatch.setattr(organize_mod, "read_metadata_batched", fake_read)
+
+    organize_library(
+        path=root / "src", template_str="{event}", no_prompt=True
+    )
+
+    # No abort: incoming suffixed around the occupant (which kept the bare name).
+    assert not incoming.exists()
+    assert occupant.is_file()
+    assert (root / "Hawaii" / "2023-05-10_120000_001.jpg").is_file()
 
 
 def _make_library(tmp_path: Path, *, template: str | None = None) -> Path:

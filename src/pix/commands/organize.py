@@ -137,13 +137,24 @@ def _augment_with_destination_folders(
     suffix the incoming file around them; the occupants are usually already
     correctly placed, so they produce no move of their own.
 
-    Destinations are computed from *cached* metadata only (no ExifTool); a
-    scoped file with no cached metadata is skipped here and planned as-is.
+    Destinations are computed from the same *fresh* metadata the plan uses —
+    crucially via the full read (not cache-hits only): a file tagged moments
+    ago (e.g. by the context menu's `set`) has a size-stale `.meta`, so a
+    hits-only read would miss it and never scan its new destination, exactly
+    the case that aborts the move. The read also warms the cache, so the main
+    pass below re-hits instead of re-reading. ExifTool errors here are
+    swallowed — the main pass surfaces them properly.
     """
-    hits, _misses = filter_cache_misses(scanned, meta_cache)
+    hits, misses = filter_cache_misses(scanned, meta_cache)
+    fresh: dict[Path, FileMetadata] = {}
+    if misses:
+        try:
+            fresh = read_metadata_batched(misses, cache=meta_cache)
+        except (ExifToolNotFound, ExifToolFailed):
+            return scanned  # main pass surfaces the error properly
     target_folders: set[Path] = {
         root / render_target_folder(template, compute_values(meta))
-        for meta in hits.values()
+        for meta in {**hits, **fresh}.values()
     }
 
     already = {p for p, _, _ in scanned}
