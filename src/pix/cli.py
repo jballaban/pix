@@ -174,14 +174,14 @@ def set_(
 def clear_(
     tag: Annotated[
         str,
-        typer.Argument(help="Tag whose override to remove: 'event' or 'date'."),
+        typer.Argument(help="Tag to clear: 'event' or 'date'."),
     ],
     paths: Annotated[
         list[Path],
         typer.Argument(
             help=(
-                "One or more files or folders to clear the override on. A "
-                "folder expands to the taggable media it contains."
+                "One or more files or folders to clear. A folder expands to "
+                "the taggable media it contains."
             )
         ),
     ],
@@ -189,7 +189,8 @@ def clear_(
         bool, typer.Option("--no-prompt", help=_NO_PROMPT_HELP)
     ] = False,
 ) -> None:
-    """Remove a tag override from specific files (the inverse of `pix set`)."""
+    """Clear a tag: blank the event (forces 'no event', even if auto-derived),
+    or revert a date override to the auto date. Run `pix organize` after."""
     set_override(tag=tag, value="", paths=paths, no_prompt=no_prompt, clear=True)
 
 

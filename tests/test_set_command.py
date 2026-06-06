@@ -15,6 +15,7 @@ import typer
 import pix.commands.set as set_mod
 from pix.checkout import CheckoutOpen
 from pix.commands.set import set_override
+from pix.events import EVENT_NULL, PIX_EVENT_AUTO
 from pix.library_lock import LockHeld
 from pix.metadata import FileMetadata
 from pix.plan import PIX_EVENT_OVERRIDE, Plan, PlanLine
@@ -206,6 +207,70 @@ def test_set_dedupes_overlapping_file_and_folder(
 
     assert len(seen) == 1
     assert [ln.abs_path for ln in seen[0].lines] == [a]
+
+
+def test_clear_event_blanks_auto_derived_event(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Clearing an event that comes from EventAuto (no override) writes the
+    force-null sentinel so the effective event becomes empty — the case where
+    `pix clear` used to be a confusing no-op."""
+    root = _lib(tmp_path)
+    f = root / "x.jpg"
+    f.write_bytes(b"x")
+    seen: list[Plan] = []
+    _patch_apply(monkeypatch, seen, 1)
+    monkeypatch.setattr(
+        set_mod, "read_metadata_batched",
+        _metas(**{str(f): FileMetadata(
+            path=f, raw={"SourceFile": str(f), PIX_EVENT_AUTO: "Camera"})}),
+    )
+
+    set_override(tag="event", value="", paths=[f], no_prompt=True, clear=True)
+    assert len(seen) == 1
+    assert seen[0].lines[0].pix_writes == {PIX_EVENT_OVERRIDE: EVENT_NULL}
+
+
+def test_clear_event_drops_override_when_no_auto(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With a manual override but no auto, clearing just removes the override
+    (no force-null needed — absence already means no event)."""
+    root = _lib(tmp_path)
+    f = root / "x.jpg"
+    f.write_bytes(b"x")
+    seen: list[Plan] = []
+    _patch_apply(monkeypatch, seen, 1)
+    monkeypatch.setattr(
+        set_mod, "read_metadata_batched",
+        _metas(**{str(f): FileMetadata(
+            path=f, raw={"SourceFile": str(f), PIX_EVENT_OVERRIDE: "Hawaii"})}),
+    )
+
+    set_override(tag="event", value="", paths=[f], no_prompt=True, clear=True)
+    assert len(seen) == 1
+    assert seen[0].lines[0].pix_writes == {PIX_EVENT_OVERRIDE: ""}
+
+
+def test_clear_event_noop_when_already_blanked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A file already force-null (or with no event at all) is skipped."""
+    root = _lib(tmp_path)
+    f = root / "x.jpg"
+    f.write_bytes(b"x")
+    seen: list[Plan] = []
+    _patch_apply(monkeypatch, seen, 0)
+    monkeypatch.setattr(
+        set_mod, "read_metadata_batched",
+        _metas(**{str(f): FileMetadata(
+            path=f, raw={"SourceFile": str(f),
+                         PIX_EVENT_AUTO: "Camera",
+                         PIX_EVENT_OVERRIDE: EVENT_NULL})}),
+    )
+
+    set_override(tag="event", value="", paths=[f], no_prompt=True, clear=True)
+    assert seen == []
 
 
 def test_set_refuses_when_checkout_open(

@@ -6,8 +6,41 @@ from pathlib import Path
 
 import pytest
 
-from pix.events import PIX_ORIGINAL_PATH, derive_event_auto
+from pix.events import (
+    EVENT_NULL,
+    PIX_EVENT_AUTO,
+    PIX_EVENT_OVERRIDE,
+    PIX_ORIGINAL_PATH,
+    derive_event_auto,
+    effective_event,
+)
 from pix.metadata import FileMetadata
+
+
+def _event_meta(auto: str | None = None, override: str | None = None) -> FileMetadata:
+    raw: dict[str, object] = {"SourceFile": "x.jpg"}
+    if auto is not None:
+        raw[PIX_EVENT_AUTO] = auto
+    if override is not None:
+        raw[PIX_EVENT_OVERRIDE] = override
+    return FileMetadata(path=Path("x.jpg"), raw=raw)
+
+
+def test_effective_event_override_wins() -> None:
+    assert effective_event(_event_meta(auto="Camera", override="Hawaii")) == "Hawaii"
+
+
+def test_effective_event_falls_back_to_auto() -> None:
+    assert effective_event(_event_meta(auto="Camera")) == "Camera"
+
+
+def test_effective_event_null_sentinel_beats_auto() -> None:
+    """EVENT_NULL is an explicit 'no event' that overrides the auto."""
+    assert effective_event(_event_meta(auto="Camera", override=EVENT_NULL)) is None
+
+
+def test_effective_event_none_when_nothing_set() -> None:
+    assert effective_event(_event_meta()) is None
 
 
 def _meta(path: str, original: str | None = None) -> FileMetadata:

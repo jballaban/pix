@@ -1,8 +1,12 @@
 """Implementation of `pix set` — write a tag override onto specific files.
 
 `pix set <tag> <value> <path>...` writes `pix:EventOverride` /
-`pix:DateOverride` to each named path. An empty value (`""`) clears the
-override. A path may be a file or a **folder** — a folder expands to the
+`pix:DateOverride` to each named path. `pix clear` is the inverse: for
+**date** it removes the override (reverting to the auto date); for **event**
+it blanks the *effective* value — writing an `EVENT_NULL` force-null
+override when an auto event would otherwise show, so "Clear" means "no
+event" even when the event was auto-derived (not a manual override). A path
+may be a file or a **folder** — a folder expands to the
 taggable media it contains (per `EXTENSION_POLICY`), so a Windows Explorer
 selection of mixed files and folders can be handed straight in. It's the
 targeted alternative to the `checkout` folder-shuffle: same override the
@@ -28,6 +32,7 @@ from pix.apply import ApplyError, apply_plan
 from pix.checkout import CheckoutOpen, ensure_no_open_checkout
 from pix.config import Config, settings_path
 from pix.editor import prompt_proceed
+from pix.events import EVENT_NULL
 from pix.hash_cache import read_cached_hash, write_cached_hash
 from pix.library_lock import LockHeld, acquire as acquire_lock
 from pix.metadata import (
@@ -38,6 +43,7 @@ from pix.metadata import (
 )
 from pix.plan import (
     PIX_DATE_OVERRIDE,
+    PIX_EVENT_AUTO,
     PIX_EVENT_OVERRIDE,
     Action,
     Plan,
@@ -58,6 +64,32 @@ _OVERRIDE_FIELD: dict[str, str] = {
 def _fail(msg: str) -> None:
     typer.echo(f"Error: {msg}", err=True)
     raise typer.Exit(code=1)
+
+
+def _plan_clear(
+    field: str, current: str | None, meta: FileMetadata, tag: str
+) -> tuple[str, str] | None:
+    """Decide the write value + details for a `clear` on one file.
+
+    Returns `(write_value, details)`, or `None` when there's nothing to do.
+    A `write_value` of `""` removes the override tag.
+
+    - **Event**: clear means "no event" — it blanks the *effective* value, not
+      just a manual override. If an auto event (`pix:EventAuto`) would
+      otherwise show, write the `EVENT_NULL` force-null sentinel to beat it;
+      if the event came only from an override (no auto), just drop the
+      override. Already-eventless files are a no-op.
+    - **Other tags (date)**: remove the override, reverting to the auto.
+    """
+    if field == PIX_EVENT_OVERRIDE:
+        auto = meta.get_str(PIX_EVENT_AUTO)
+        effective = None if current == EVENT_NULL else (current or auto)
+        if effective is None:
+            return None  # already no event
+        return (EVENT_NULL if auto else "", f'event "{effective}"→(none)')
+    if current is None:
+        return None
+    return ("", f"{tag}_override {current!r}→(cleared)")
 
 
 def _expand_paths(raw: list[Path], root: Path, config: Config) -> list[Path]:
@@ -218,22 +250,23 @@ def _apply_overrides(
         meta = metas.get(p) or FileMetadata(path=p, raw={"SourceFile": str(p)})
         current = meta.get_str(field)
         if clearing:
-            if current is None:
+            decision = _plan_clear(field, current, meta, tag)
+            if decision is None:
                 noop += 1
                 continue
-            details = f"{tag}_override {current!r}→(cleared)"
+            write_value, details = decision
         else:
             if current == value:
                 noop += 1
                 continue
-            details = f"{tag}_override {current or 'null'}→{value}"
+            write_value, details = value, f"{tag}_override {current or 'null'}→{value}"
         ln = PlanLine(
             line_id=f"L{len(lines) + 1:03d}",
             action=Action.TAG,
             rel_path=p.relative_to(root).as_posix(),
             details=details,
             abs_path=p,
-            pix_writes={field: "" if clearing else value},  # "" clears the tag
+            pix_writes={field: write_value},  # "" removes the tag
         )
         lines.append(attach_paths(ln, runs_dir, runs_dir / "staging"))
 

@@ -26,6 +26,12 @@ PIX_ORIGINAL_PATH: str = "XMP:OriginalPath"
 # See spec/tags.md → Merge fields and spec/dedupe.md → Tag merge.
 PIX_MERGE_EVENT: str = "XMP:MergeEvent"
 
+# Force-null sentinel for `pix:EventOverride`: an explicit "no event" that
+# beats `pix:EventAuto` (an absent/empty override otherwise reverts to the
+# auto). Mirrors the `*` null convention used for date overrides. `pix clear
+# event` writes this when a file would otherwise show an auto-derived event.
+EVENT_NULL: str = "*"
+
 
 # Leading digits + common separators (-, _, ., space) that look like a
 # date prefix on a folder name. We strip as much as matches; whatever
@@ -36,10 +42,13 @@ _DATE_PREFIX_RE = re.compile(r"^[\d\-_. ]+")
 def effective_event(meta: FileMetadata) -> str | None:
     """Return the effective `event` value for `meta`, or None.
 
-    `pix:EventOverride` wins if set; otherwise `pix:EventAuto`.
-    See spec/tags.md → Effective value computation.
+    `pix:EventOverride` wins if set; otherwise `pix:EventAuto`. The
+    `EVENT_NULL` (`*`) override is an explicit "no event" that beats the
+    auto. See spec/tags.md → Effective value computation.
     """
     override = meta.get_str(PIX_EVENT_OVERRIDE)
+    if override == EVENT_NULL:
+        return None
     if override:
         return override
     return meta.get_str(PIX_EVENT_AUTO)
