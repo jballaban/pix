@@ -89,64 +89,78 @@ function Get-ExplorerSelection {
 }
 
 function Get-EventValue {
-    # Prompt for an event name with type-ahead autocomplete over $Suggestions
-    # (existing library events). Returns the entered text, or $null on cancel.
-    # Falls back to a plain console prompt where WinForms isn't available.
+    # Inline, editor-style autosuggest in the terminal (no GUI): the best
+    # matching event shows as dim "ghost" text after the cursor; Tab or Right
+    # accepts it, Enter submits, Esc cancels. Returns the text, or $null on
+    # cancel. Falls back to a plain prompt when stdin isn't an interactive
+    # console (e.g. piped input in tests).
     param([string[]] $Suggestions)
 
-    try {
-        Add-Type -AssemblyName System.Windows.Forms
-        Add-Type -AssemblyName System.Drawing
-    }
-    catch {
+    if ([Console]::IsInputRedirected) {
         return (Read-Host 'Event name')
     }
 
-    $form = New-Object System.Windows.Forms.Form
-    $form.Text = 'pix - set event'
-    $form.ClientSize = New-Object System.Drawing.Size(430, 110)
-    $form.StartPosition = 'CenterScreen'
-    $form.FormBorderStyle = 'FixedDialog'
-    $form.MinimizeBox = $false
-    $form.MaximizeBox = $false
-    $form.TopMost = $true
+    $sorted = @($Suggestions | Sort-Object)
+    $prompt = 'Event: '
+    $buffer = ''
+    $lastLen = 0
 
-    $label = New-Object System.Windows.Forms.Label
-    $label.Text = 'Event name (type to autocomplete):'
-    $label.AutoSize = $true
-    $label.Location = New-Object System.Drawing.Point(12, 12)
-    $form.Controls.Add($label)
+    Write-Host '(type to autocomplete; Tab/Right completes, Enter accepts, Esc cancels)' -ForegroundColor DarkGray
 
-    $box = New-Object System.Windows.Forms.TextBox
-    $box.Location = New-Object System.Drawing.Point(12, 36)
-    $box.Width = 406
-    if ($Suggestions -and $Suggestions.Count -gt 0) {
-        $box.AutoCompleteMode = [System.Windows.Forms.AutoCompleteMode]::SuggestAppend
-        $box.AutoCompleteSource = [System.Windows.Forms.AutoCompleteSource]::CustomSource
-        $col = New-Object System.Windows.Forms.AutoCompleteStringCollection
-        $col.AddRange([string[]] $Suggestions)
-        $box.AutoCompleteCustomSource = $col
+    while ($true) {
+        # Ghost = remainder of the first event that case-insensitively starts
+        # with what's typed (and is longer than it).
+        $ghost = ''
+        if ($buffer.Length -gt 0) {
+            $lower = $buffer.ToLower()
+            foreach ($s in $sorted) {
+                if ($s.Length -gt $buffer.Length -and
+                    $s.Substring(0, $buffer.Length).ToLower() -eq $lower) {
+                    $ghost = $s.Substring($buffer.Length)
+                    break
+                }
+            }
+        }
+
+        # Clamp to the console width so we never write past the line.
+        $width = [Console]::BufferWidth
+        $maxGhost = $width - 1 - ($prompt.Length + $buffer.Length)
+        if ($maxGhost -lt 0) { $maxGhost = 0 }
+        if ($ghost.Length -gt $maxGhost) { $ghost = $ghost.Substring(0, $maxGhost) }
+
+        # Redraw the line: prompt + typed text, then ghost in dim grey, then
+        # erase any leftover from a previously longer line, then park the
+        # cursor right after the typed text.
+        [Console]::CursorLeft = 0
+        [Console]::Write($prompt + $buffer)
+        $fg = [Console]::ForegroundColor
+        [Console]::ForegroundColor = [ConsoleColor]::DarkGray
+        [Console]::Write($ghost)
+        [Console]::ForegroundColor = $fg
+        $total = $prompt.Length + $buffer.Length + $ghost.Length
+        if ($total -lt $lastLen) { [Console]::Write(' ' * ($lastLen - $total)) }
+        $lastLen = $total
+        $col = $prompt.Length + $buffer.Length
+        if ($col -ge $width) { $col = $width - 1 }
+        [Console]::CursorLeft = $col
+
+        $key = [Console]::ReadKey($true)
+        switch ($key.Key) {
+            'Enter' { [Console]::WriteLine(); return $buffer }
+            'Escape' { [Console]::WriteLine(); return $null }
+            'Backspace' {
+                if ($buffer.Length -gt 0) {
+                    $buffer = $buffer.Substring(0, $buffer.Length - 1)
+                }
+            }
+            'Tab' { if ($ghost) { $buffer += $ghost } }
+            'RightArrow' { if ($ghost) { $buffer += $ghost } }
+            default {
+                $ch = $key.KeyChar
+                if ($ch -and -not [char]::IsControl($ch)) { $buffer += $ch }
+            }
+        }
     }
-    $form.Controls.Add($box)
-
-    $ok = New-Object System.Windows.Forms.Button
-    $ok.Text = 'OK'
-    $ok.Location = New-Object System.Drawing.Point(250, 72)
-    $ok.DialogResult = [System.Windows.Forms.DialogResult]::OK
-    $form.Controls.Add($ok)
-    $form.AcceptButton = $ok
-
-    $cancelButton = New-Object System.Windows.Forms.Button
-    $cancelButton.Text = 'Cancel'
-    $cancelButton.Location = New-Object System.Drawing.Point(337, 72)
-    $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
-    $form.Controls.Add($cancelButton)
-    $form.CancelButton = $cancelButton
-
-    $form.Add_Shown({ $form.Activate(); $box.Focus() })
-    $result = $form.ShowDialog()
-    if ($result -eq [System.Windows.Forms.DialogResult]::OK) { return $box.Text }
-    return $null
 }
 
 function Get-CommonAncestor {

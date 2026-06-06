@@ -6,7 +6,7 @@ import typer
 
 # Bump on every commit that changes runtime behavior. The CLI prints this
 # as the first line of every run so dev and tester are always aligned.
-__version__ = "0.1.153"
+__version__ = "0.1.154"
 
 
 def exiftool_config_path() -> Path:
