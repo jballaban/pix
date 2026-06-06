@@ -260,17 +260,13 @@ if ($Run) {
     if ($items.Count -gt 10) { Write-Host "  ... and $($items.Count - 10) more" }
     Write-Host ''
 
-    # Set's value prompt is its own confirmation; Clear has none and can be
-    # mis-clicked, so gate it with a y/N — defaulting to Yes (Enter confirms),
-    # but still requiring a keypress so a stray click never clears on its own.
+    # Set's value dialog is its own confirmation, so it applies directly.
+    # Clear instead keeps pix's own "Proceed? [Y/n]" prompt (default Yes): the
+    # launcher can't know the real count when a folder is selected (it expands
+    # to the media inside), but pix does — its prompt shows "clear ... on N
+    # file(s)" and gates the mis-click.
     if ($Op -eq 'clear') {
-        $answer = Read-Host "Clear the $Tag on $($items.Count) file(s)? [Y/n]"
-        if ($answer -match '^\s*[Nn]') {
-            Write-Host 'Cancelled - nothing changed.' -ForegroundColor Yellow
-            Read-Host 'Press Enter to close'
-            return
-        }
-        & pix clear $Tag --no-prompt @items
+        & pix clear $Tag @items
     }
     else {
         if ($Tag -eq 'date') {
