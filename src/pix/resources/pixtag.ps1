@@ -261,10 +261,11 @@ if ($Run) {
     Write-Host ''
 
     # Set's value prompt is its own confirmation; Clear has none and can be
-    # mis-clicked, so gate it with an explicit y/N (defaulting to No).
+    # mis-clicked, so gate it with a y/N — defaulting to Yes (Enter confirms),
+    # but still requiring a keypress so a stray click never clears on its own.
     if ($Op -eq 'clear') {
-        $answer = Read-Host "Clear the $Tag on $($items.Count) file(s)? [y/N]"
-        if ($answer -notmatch '^\s*[Yy]') {
+        $answer = Read-Host "Clear the $Tag on $($items.Count) file(s)? [Y/n]"
+        if ($answer -match '^\s*[Nn]') {
             Write-Host 'Cancelled - nothing changed.' -ForegroundColor Yellow
             Read-Host 'Press Enter to close'
             return
