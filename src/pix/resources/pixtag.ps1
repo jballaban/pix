@@ -249,9 +249,15 @@ if ($Run) {
     if ($items.Count -gt 10) { Write-Host "  ... and $($items.Count - 10) more" }
     Write-Host ''
 
-    # The menu applies without a second console confirmation (the value dialog
-    # / Clear choice is the intent), then files the results immediately.
+    # Set's value prompt is its own confirmation; Clear has none and can be
+    # mis-clicked, so gate it with an explicit y/N (defaulting to No).
     if ($Op -eq 'clear') {
+        $answer = Read-Host "Clear the $Tag on $($items.Count) file(s)? [y/N]"
+        if ($answer -notmatch '^\s*[Yy]') {
+            Write-Host 'Cancelled - nothing changed.' -ForegroundColor Yellow
+            Read-Host 'Press Enter to close'
+            return
+        }
         & pix clear $Tag --no-prompt @items
     }
     else {
