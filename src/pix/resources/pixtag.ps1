@@ -88,6 +88,67 @@ function Get-ExplorerSelection {
     return $fallback
 }
 
+function Get-EventValue {
+    # Prompt for an event name with type-ahead autocomplete over $Suggestions
+    # (existing library events). Returns the entered text, or $null on cancel.
+    # Falls back to a plain console prompt where WinForms isn't available.
+    param([string[]] $Suggestions)
+
+    try {
+        Add-Type -AssemblyName System.Windows.Forms
+        Add-Type -AssemblyName System.Drawing
+    }
+    catch {
+        return (Read-Host 'Event name')
+    }
+
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = 'pix - set event'
+    $form.ClientSize = New-Object System.Drawing.Size(430, 110)
+    $form.StartPosition = 'CenterScreen'
+    $form.FormBorderStyle = 'FixedDialog'
+    $form.MinimizeBox = $false
+    $form.MaximizeBox = $false
+    $form.TopMost = $true
+
+    $label = New-Object System.Windows.Forms.Label
+    $label.Text = 'Event name (type to autocomplete):'
+    $label.AutoSize = $true
+    $label.Location = New-Object System.Drawing.Point(12, 12)
+    $form.Controls.Add($label)
+
+    $box = New-Object System.Windows.Forms.TextBox
+    $box.Location = New-Object System.Drawing.Point(12, 36)
+    $box.Width = 406
+    if ($Suggestions -and $Suggestions.Count -gt 0) {
+        $box.AutoCompleteMode = [System.Windows.Forms.AutoCompleteMode]::SuggestAppend
+        $box.AutoCompleteSource = [System.Windows.Forms.AutoCompleteSource]::CustomSource
+        $col = New-Object System.Windows.Forms.AutoCompleteStringCollection
+        $col.AddRange([string[]] $Suggestions)
+        $box.AutoCompleteCustomSource = $col
+    }
+    $form.Controls.Add($box)
+
+    $ok = New-Object System.Windows.Forms.Button
+    $ok.Text = 'OK'
+    $ok.Location = New-Object System.Drawing.Point(250, 72)
+    $ok.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $form.Controls.Add($ok)
+    $form.AcceptButton = $ok
+
+    $cancelButton = New-Object System.Windows.Forms.Button
+    $cancelButton.Text = 'Cancel'
+    $cancelButton.Location = New-Object System.Drawing.Point(337, 72)
+    $cancelButton.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $form.Controls.Add($cancelButton)
+    $form.CancelButton = $cancelButton
+
+    $form.Add_Shown({ $form.Activate(); $box.Focus() })
+    $result = $form.ShowDialog()
+    if ($result -eq [System.Windows.Forms.DialogResult]::OK) { return $box.Text }
+    return $null
+}
+
 # ---------------------------------------------------------------------------
 # RUN mode - the interactive, visible stage.
 # ---------------------------------------------------------------------------
@@ -139,7 +200,13 @@ if ($Run) {
             $value = Read-Host 'Date value'
         }
         else {
-            $value = Read-Host 'Event name'
+            # Offer existing library events as type-ahead suggestions.
+            $suggestions = @()
+            try {
+                $suggestions = @(& pix events $items[0] 2>$null | Where-Object { $_ -ne '' })
+            }
+            catch {}
+            $value = Get-EventValue -Suggestions $suggestions
         }
         if ([string]::IsNullOrWhiteSpace($value)) {
             Write-Host 'Cancelled - no value entered (use the Clear menu to remove a tag).' -ForegroundColor Yellow

@@ -11,6 +11,7 @@ import typer
 from pix.commands.checkout import run_checkout
 from pix.commands.context_menu import context_menu
 from pix.commands.dedupe import dedupe_library
+from pix.commands.events import list_events
 from pix.commands.hash import hash_library
 from pix.commands.init import init_library
 from pix.commands.meta import meta_file
@@ -222,6 +223,22 @@ def meta(
 ) -> None:
     """Show pix's date candidates and notable tags for one file."""
     meta_file(path)
+
+
+@app.command("events")
+def events(
+    path: Annotated[
+        Path | None,
+        typer.Argument(
+            help=(
+                "A file/folder inside the library (resolves the root). "
+                "Defaults to CWD / PIX_ROOT."
+            )
+        ),
+    ] = None,
+) -> None:
+    """List the library's unique event names, one per line (read-only)."""
+    list_events(path)
 
 
 @app.command("checkout")

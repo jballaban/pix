@@ -10,7 +10,7 @@ contains at least one alphabetic character.
 from __future__ import annotations
 
 import re
-from pathlib import PurePath
+from pathlib import Path, PurePath
 
 from pix import debug
 from pix.metadata import FileMetadata
@@ -31,6 +31,23 @@ PIX_MERGE_EVENT: str = "XMP:MergeEvent"
 # auto). Mirrors the `*` null convention used for date overrides. `pix clear
 # event` writes this when a file would otherwise show an auto-derived event.
 EVENT_NULL: str = "*"
+
+
+def events_cache_path(library_root: Path) -> Path:
+    """Path to the cached unique-event list (backs `pix events`/autocomplete)."""
+    return library_root / ".pix" / "events.cache"
+
+
+def invalidate_events_cache(library_root: Path) -> None:
+    """Drop the cached event list so the next `pix events` recomputes it.
+
+    Called after a tag write that can change the set of events (set/clear), so
+    a value you just assigned shows up in the next autocomplete. Best-effort.
+    """
+    try:
+        events_cache_path(library_root).unlink()
+    except OSError:
+        pass
 
 
 # Leading digits + common separators (-, _, ., space) that look like a

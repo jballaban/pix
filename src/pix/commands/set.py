@@ -32,7 +32,7 @@ from pix.apply import ApplyError, apply_plan
 from pix.checkout import CheckoutOpen, ensure_no_open_checkout
 from pix.config import Config, settings_path
 from pix.editor import prompt_proceed
-from pix.events import EVENT_NULL
+from pix.events import EVENT_NULL, invalidate_events_cache
 from pix.hash_cache import read_cached_hash, write_cached_hash
 from pix.library_lock import LockHeld, acquire as acquire_lock
 from pix.metadata import (
@@ -333,6 +333,11 @@ def _apply_overrides(
                 size=st.st_size, mtime_ns=st.st_mtime_ns,
             )
             rekeyed += 1
+
+        # An event change can add/remove a unique event, so drop the cached
+        # event list — the next autocomplete fetch then reflects this edit.
+        if field == PIX_EVENT_OVERRIDE:
+            invalidate_events_cache(root)
 
         typer.echo("")
         typer.echo(f"Updated {completed} file(s).")
