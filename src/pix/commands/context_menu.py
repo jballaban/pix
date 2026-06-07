@@ -39,6 +39,9 @@ _ROOT_KEY = "Pix"
 _MULTISELECT_MODEL = "Player"
 _TAGS: tuple[tuple[str, str], ...] = (("event", "Event"), ("date", "Date"))
 _OPS: tuple[tuple[str, str], ...] = (("set", "Set value..."), ("clear", "Clear"))
+# Rotate submenu: clockwise degrees per direction (run twice for 180).
+_ROTATE_LABEL = "Rotate"
+_ROTATIONS: tuple[tuple[int, str], ...] = ((90, "Rotate right"), (270, "Rotate left"))
 # Top-level leaves shown only on files (not folders), as (key, label, op).
 # `meta` is the read-only single-file inspector (`pix meta`).
 _FILE_VERBS: tuple[tuple[str, str, str], ...] = (("info", "Info", "meta"),)
@@ -75,15 +78,20 @@ def _powershell_exe() -> str:
     return str(candidate) if candidate.is_file() else "powershell.exe"
 
 
-def _command_string(op: str, tag: str | None = None) -> str:
+def _command_string(op: str, tag: str | None = None, deg: int | None = None) -> str:
     """The registry `command` for one leaf: launch the hidden collate stage.
 
-    `tag` is omitted for tagless ops (e.g. `meta`), which don't need it."""
-    tag_arg = f"-Tag {tag} " if tag is not None else ""
+    `tag`/`deg` are included only when relevant (`-Tag` for set/clear, `-Deg`
+    for rotate); `meta` needs neither."""
+    extra = ""
+    if tag is not None:
+        extra += f"-Tag {tag} "
+    if deg is not None:
+        extra += f"-Deg {deg} "
     return (
         f'"{_powershell_exe()}" -NoProfile -ExecutionPolicy Bypass '
         f'-WindowStyle Hidden -File "{_launcher_path()}" '
-        f'{tag_arg}-Op {op} "%1"'
+        f'{extra}-Op {op} "%1"'
     )
 
 
@@ -195,11 +203,18 @@ def _install() -> None:
             for oi, (op, op_label) in enumerate(_OPS, start=1):
                 leaf = f"{tag_key}\\shell\\{oi:02d}_{op}"
                 _make_verb(leaf, op_label, _command_string(op, tag))
+        # Rotate submenu (right/left), numbered after the tags.
+        rot_n = len(_TAGS) + 1
+        rot_key = f"{root}\\shell\\{rot_n:02d}_rotate"
+        _make_cascade(rot_key, _ROTATE_LABEL)
+        for di, (deg, label) in enumerate(_ROTATIONS, start=1):
+            leaf = f"{rot_key}\\shell\\{di:02d}_deg{deg}"
+            _make_verb(leaf, label, _command_string("rotate", deg=deg))
         # File-only top-level leaves (e.g. read-only `meta`) — folders skip
-        # these. Numbered after the tag submenus so they sort below them.
+        # these. Numbered after the tag submenus + Rotate.
         if root == files_root:
             for vi, (key, label, op) in enumerate(
-                _FILE_VERBS, start=len(_TAGS) + 1
+                _FILE_VERBS, start=len(_TAGS) + 2
             ):
                 leaf = f"{root}\\shell\\{vi:02d}_{key}"
                 _make_verb(leaf, label, _command_string(op))
@@ -207,6 +222,7 @@ def _install() -> None:
     typer.echo(f"Installed the '{_ROOT_LABEL}' menu for files and folders (current user).")
     typer.echo(f"Layout:   {_ROOT_LABEL} > " + " | ".join(t for _t, t in _TAGS)
                + " > " + " | ".join(o for _o, o in _OPS)
+               + f"  |  {_ROTATE_LABEL} > " + " | ".join(l for _d, l in _ROTATIONS)
                + "   (+ " + ", ".join(lbl for _k, lbl, _o in _FILE_VERBS)
                + " on files)")
     typer.echo(f"Launcher: {launcher}")

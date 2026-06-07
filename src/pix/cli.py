@@ -17,6 +17,7 @@ from pix.commands.init import init_library
 from pix.commands.meta import meta_file
 from pix.commands.migrate import migrate_folder
 from pix.commands.organize import organize_library
+from pix.commands.rotate import rotate_videos
 from pix.commands.set import set_override
 from pix.commands.sync import sync_library
 
@@ -193,6 +194,29 @@ def clear_(
     """Clear a tag: blank the event (forces 'no event', even if auto-derived),
     or revert a date override to the auto date. Run `pix organize` after."""
     set_override(tag=tag, value="", paths=paths, no_prompt=no_prompt, clear=True)
+
+
+@app.command("rotate")
+def rotate(
+    degrees: Annotated[
+        int,
+        typer.Argument(help="Clockwise rotation to add: 90, 180, or 270."),
+    ],
+    paths: Annotated[
+        list[Path],
+        typer.Argument(
+            help=(
+                "Video files or folders to rotate (all under one library). "
+                "Folders expand to the videos inside; non-videos are skipped."
+            )
+        ),
+    ],
+    no_prompt: Annotated[
+        bool, typer.Option("--no-prompt", help=_NO_PROMPT_HELP)
+    ] = False,
+) -> None:
+    """Losslessly rotate videos by tagging orientation (no re-encode)."""
+    rotate_videos(degrees=degrees, paths=paths, no_prompt=no_prompt)
 
 
 @app.command("context-menu")

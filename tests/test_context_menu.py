@@ -144,7 +144,7 @@ def test_info_leaf_is_files_only(fake_reg: _FakeWinreg) -> None:
     files_root, folders_root = cm._root_keys()
     launcher = str(cm._launcher_path())
 
-    for vi, (key, label, op) in enumerate(cm._FILE_VERBS, start=len(cm._TAGS) + 1):
+    for vi, (key, label, op) in enumerate(cm._FILE_VERBS, start=len(cm._TAGS) + 2):
         verb_key = f"{files_root}\\shell\\{vi:02d}_{key}"
         assert fake_reg.keys[verb_key]["MUIVerb"] == label
         assert fake_reg.keys[verb_key]["MultiSelectModel"] == "Player"
@@ -157,6 +157,26 @@ def test_info_leaf_is_files_only(fake_reg: _FakeWinreg) -> None:
 
         # Folders never get this leaf.
         assert f"{folders_root}\\shell\\{vi:02d}_{key}" not in fake_reg.keys
+
+
+def test_rotate_submenu(fake_reg: _FakeWinreg) -> None:
+    """A Rotate cascade with right/left leaves exists on both roots; each leaf
+    calls `-Op rotate -Deg <clockwise>` with no -Tag."""
+    cm.context_menu(action="install")
+    launcher = str(cm._launcher_path())
+    rot_n = len(cm._TAGS) + 1
+    for root in cm._root_keys():
+        rot_key = f"{root}\\shell\\{rot_n:02d}_rotate"
+        assert fake_reg.keys[rot_key]["MUIVerb"] == cm._ROTATE_LABEL
+        assert "SubCommands" in fake_reg.keys[rot_key]
+        for di, (deg, label) in enumerate(cm._ROTATIONS, start=1):
+            verb = f"{rot_key}\\shell\\{di:02d}_deg{deg}"
+            assert fake_reg.keys[verb]["MUIVerb"] == label
+            command = fake_reg.keys[verb + r"\command"][""]
+            assert launcher in command
+            assert f"-Deg {deg}" in command
+            assert "-Op rotate" in command
+            assert "-Tag " not in command
 
 
 def test_install_status_uninstall_round_trip(

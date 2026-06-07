@@ -37,11 +37,12 @@ param(
     # RUN mode: path to the snapshot list file produced by the COLLATE leader.
     [Parameter(ParameterSetName = 'Run', Mandatory = $true)]
     [string] $Run,
-    # Common to both stages: which tag and operation the menu leaf chose.
+    # Common to both stages: which tag, operation, and (for rotate) degrees.
     [ValidateSet('event', 'date')]
     [string] $Tag = 'event',
-    [ValidateSet('set', 'clear', 'meta')]
-    [string] $Op = 'set'
+    [ValidateSet('set', 'clear', 'meta', 'rotate')]
+    [string] $Op = 'set',
+    [string] $Deg = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -254,6 +255,16 @@ if ($Run) {
         return
     }
 
+    # rotate: lossless, no value prompt, no organize (orientation only).
+    if ($Op -eq 'rotate') {
+        Write-Host ''
+        Write-Host "pix rotate $Deg - $($items.Count) item(s):" -ForegroundColor Cyan
+        & pix rotate $Deg --no-prompt @items
+        Write-Host ''
+        Read-Host 'Press Enter to close'
+        return
+    }
+
     Write-Host ''
     Write-Host "pix $Op $Tag - $($items.Count) item(s) selected:" -ForegroundColor Cyan
     foreach ($i in ($items | Select-Object -First 10)) { Write-Host "  $i" }
@@ -351,5 +362,5 @@ if ($env:PIXTAG_COLLATE_ONLY) {
 $psExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 Start-Process -FilePath $psExe -ArgumentList @(
     '-NoProfile', '-ExecutionPolicy', 'Bypass',
-    '-File', $PSCommandPath, '-Run', $itemsFile, '-Tag', $Tag, '-Op', $Op
+    '-File', $PSCommandPath, '-Run', $itemsFile, '-Tag', $Tag, '-Op', $Op, '-Deg', $Deg
 )
