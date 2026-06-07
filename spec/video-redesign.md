@@ -74,12 +74,13 @@ Relevant memories: `project_hevc_canonical_video`, `project_hybrid_gpu_encoding`
    cross-res deferred), with a `--checkout`/`--commit` review gate (v0.1.132–134;
    see `spec/dedupe.md`). Images still dedupe by exact content hash; videos use
    this fuzzy "partial" comparison. It's extra complexity *and* a recurring
-   cost/churn source (`.vfp` re-fingerprinting), and it exists almost entirely
-   to paper over transcode non-determinism. **Under remux-only the rationale
-   largely evaporates:** a lossless remux preserves the mdat bytes, so two
-   imports of the same source are byte-identical again and exact `.hash` dedupe
-   works — perceptual matching would only be needed for copies re-encoded
-   *outside* pix.
+   cost/churn source (`.vfp` re-fingerprinting). Remux-only removes the
+   *pix-internal* reason for it (re-imports of the same file are byte-identical
+   again → exact `.hash` works), **but it must stay** — see §9: the owner has
+   backup copies of originals on other drives, in *different* formats/encodes
+   than the current HEVC, that must dedupe against what's already in the
+   library. Those are byte-different by definition, so only perceptual matching
+   can merge them.
 7. **Undated `_000000_NNN` clusters.** Many videos have no real date → all
    canonicalize to the same midnight timestamp and pile up with suffixes;
    collision re-suffixing churns on every organize. (Not caused by transcode but
@@ -115,14 +116,17 @@ and most of the fragility above.
   tooling for this library, so the redesign must include a migration plan for
   what's already there. The full measured state and the A/B/C migration options
   are in **§8** — settle that alongside the storage strategy.
-- **Dedupe — can we drop the perceptual path?** It was added only because
-  transcode made same-source copies byte-different (see catalog #6). With
-  remux-only, exact `.hash` dedupe catches true byte duplicates again, so the
-  fuzzy dHash-band comparison (and the `.vfp` cache, the `--checkout`/`--commit`
-  review gate, the band tuning) may be removable — a big simplification.
-  Counter-argument: it still catches copies someone re-encoded *outside* pix.
-  Decide: keep perceptual as optional, or remove `.vfp`/perceptual entirely and
-  return dedupe to pure exact-hash.
+- **Dedupe — perceptual path stays; harden it for multi-format groups.** It was
+  added because transcode made same-source copies byte-different. Remux-only
+  removes the *internal* reason, but the owner will import backup originals in
+  other formats/encodes that must dedupe against the existing HEVC (see §9), so
+  perceptual is **required**, not optional. Open design points: (a) **keeper
+  selection must prefer the highest-fidelity copy** (original/lossless), not the
+  smallest/HEVC — the opposite of a space-minimizing keeper; (b) **cross-format
+  / 3-way groups** (new remuxed original + current HEVC + another backup encode)
+  must group and merge cleanly; (c) the current **same-resolution-only** limit
+  (cross-res deferred) may need lifting if backups differ in resolution; (d) tag
+  merge must consolidate `pix:*` onto the chosen original keeper.
 - **Rotation.** Remux preserves the rotation matrix (verified), so the rotation
   bug simply disappears under remux-only — `pix rotate` remains as the manual
   fix-up tool.
@@ -209,3 +213,39 @@ whatever strategy we agree on.
 decided first. The 21,154 conserved captures are themselves substantial weight:
 under A they're largely prunable; under B the H.264 ones get consumed into the
 library, then the rest pruned.
+
+
+## 9. Importing un-merged backup originals (multi-format dedupe)
+
+Beyond what's already in the library, the owner has **backup copies of
+originals on other drives, not yet merged in**, that they'll want to import.
+These are typically a *different* representation of videos that are already in
+the library as HEVC — e.g. the untouched H.264 (or other) source. So a single
+logical video can show up in **three+ forms that must all dedupe together**:
+
+- **"current"** — the in-library lossy HEVC (x265 or NVENC).
+- **"old"** — a pre-pix original on a backup drive (e.g. H.264), to be imported.
+- **"new"** — a future remux-only import (codec preserved, rewrapped to MP4).
+
+These are **byte-different by construction**, so exact `.hash` will never group
+them — **perceptual fingerprinting is the only thing that can** (this is why §2#6
+/ the dedupe open-question resolve to *keep* perceptual). Requirements this puts
+on the redesign:
+
+1. **Cross-format grouping.** dedupe must group H.264-original, HEVC-transcode,
+   and any other encode of the same source into one group via the perceptual
+   fingerprint — across codecs, not just across same-codec re-encodes.
+2. **Keeper = highest fidelity.** When a group mixes an original and a transcode,
+   the **original/lossless copy must win** (and `pix:*` tags merge onto it),
+   reversing any space-minimizing "smallest wins" instinct. This dovetails with
+   migration option B (§8): importing a backup original then deduping is itself a
+   way to re-establish the lossless source and retire the HEVC.
+3. **Cross-resolution.** Backups may differ in resolution from the transcode;
+   the current perceptual path is same-resolution-only — likely needs lifting.
+4. **Workflow.** Decide how import + dedupe sequence (import all, then a dedupe
+   pass that prefers originals?) and how the review gate (`--checkout`) scales to
+   large cross-format merges.
+
+This makes perceptual dedupe a **first-class, permanent** part of the design,
+not a transcode-era workaround — and it ties the "import my backups" goal,
+the keeper policy, and migration option B together.
