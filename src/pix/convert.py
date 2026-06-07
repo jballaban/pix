@@ -153,6 +153,38 @@ def convert_to_jpg(src: Path, dst: Path) -> None:
         ) from e
 
 
+def _video_rotation(src: Path) -> int:
+    """Display rotation in degrees (0 if none / undeterminable).
+
+    Phones store frames in a base orientation plus a rotation matrix; ffmpeg's
+    autorotation (a CPU filter) bakes it during a normal decode, but the
+    full-CUDA NVENC pipeline (`-hwaccel_output_format cuda`) keeps frames on the
+    GPU and silently skips it — which left rotated clips upside down/sideways.
+    We probe so the NVENC path can take the CPU-rotate detour for rotated clips
+    (see `convert_to_mp4`)."""
+    ffprobe = _require_tool("ffprobe")
+    try:
+        proc = subprocess.run(
+            [
+                ffprobe, "-v", "error", "-select_streams", "v:0",
+                "-show_entries", "stream_side_data=rotation:stream_tags=rotate",
+                "-of", "default=noprint_wrappers=1:nokey=1", str(src),
+            ],
+            capture_output=True, text=True, encoding="utf-8",
+            timeout=_FFPROBE_TIMEOUT,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return 0
+    for line in (proc.stdout or "").splitlines():
+        try:
+            deg = int(round(float(line.strip())))
+        except ValueError:
+            continue
+        if deg % 360 != 0:
+            return deg
+    return 0
+
+
 def convert_to_mp4(
     src: Path,
     dst: Path,
@@ -207,16 +239,23 @@ def convert_to_mp4(
         # GPU for NVENC (no host round-trip). On a source NVENC's CUDA path
         # can't handle (e.g. an exotic pixel format) this raises and the
         # caller falls back to x265 — so we don't force a pix_fmt here.
+        #
+        # Exception: a rotated source. Autorotation is a CPU filter, so with
+        # frames pinned to the GPU (`-hwaccel_output_format cuda`) it's skipped
+        # and the rotation is lost — leaving the clip upside down/sideways. For
+        # rotated clips we drop `-hwaccel_output_format cuda` so frames land in
+        # system memory, autorotation bakes the orientation in, and NVENC still
+        # does the encode (one extra host round-trip, rotated clips only).
+        decode = ["-hwaccel", "cuda"]
+        if _video_rotation(src) == 0:
+            decode += ["-hwaccel_output_format", "cuda"]
         cmd = [
             ffmpeg,
             "-hide_banner",
             "-loglevel",
             "error",
             "-y",
-            "-hwaccel",
-            "cuda",
-            "-hwaccel_output_format",
-            "cuda",
+            *decode,
             "-i",
             str(src),
             "-c:v",

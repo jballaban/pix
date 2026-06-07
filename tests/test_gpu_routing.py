@@ -102,15 +102,45 @@ def test_convert_to_mp4_x265_command(
 def test_convert_to_mp4_nvenc_command(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    calls = _capture_cmd(monkeypatch)
+    calls = _capture_cmd(monkeypatch)  # rotation probe returns "" → not rotated
     convert_to_mp4(
         tmp_path / "in.mp4", tmp_path / "out.mp4",
         encoder=ENCODER_NVENC, profile=_profile(codec="h264", height=2160),
     )
-    cmd = calls[0]
+    cmd = next(c for c in calls if "hevc_nvenc" in c)
     assert "hevc_nvenc" in cmd and "libx265" not in cmd
-    assert "cuda" in cmd  # full GPU decode pipeline
+    assert "-hwaccel_output_format" in cmd  # full GPU pipeline (unrotated)
     assert "-cq" in cmd
+
+
+def test_convert_to_mp4_nvenc_rotated_bakes_via_cpu(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A rotated source drops `-hwaccel_output_format cuda` so frames hit the
+    CPU and ffmpeg's autorotation bakes the orientation in (NVENC still
+    encodes)."""
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], *_a: Any, **_k: Any):
+        calls.append(cmd)
+        rotated = bool(cmd) and "ffprobe" in cmd[0]
+
+        class _P:
+            returncode = 0
+            stdout = "180" if rotated else ""
+            stderr = ""
+
+        return _P()
+
+    monkeypatch.setattr(convert, "_require_tool", _passthrough)
+    monkeypatch.setattr(convert.subprocess, "run", fake_run)
+    convert_to_mp4(
+        tmp_path / "in.mp4", tmp_path / "out.mp4",
+        encoder=ENCODER_NVENC, profile=_profile(codec="h264", height=2160),
+    )
+    enc = next(c for c in calls if "hevc_nvenc" in c)
+    assert "-hwaccel" in enc and "cuda" in enc  # GPU decode + encode
+    assert "-hwaccel_output_format" not in enc  # dropped → autorotate runs
 
 
 def test_convert_to_mp4_hevc_source_remuxes_regardless_of_encoder(
