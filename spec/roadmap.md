@@ -50,9 +50,11 @@ tree. Sketched only — see [export.md](export.md).
 
 ## Smaller items
 
-- **Skip-lean transcode** — don't re-encode already-lean videos where HEVC saves
-  little; needs bitrate + dimensions in the video cache. See
-  [migrate.md → Canonical video codec](migrate.md#canonical-video-codec).
+- **Codec-rank keeper tiebreak** — make dedupe's "original beats transcode"
+  explicit (lossless/intra > H.264 > HEVC, below resolution/duration) instead of
+  relying on the bitrate proxy. Low priority; see
+  [video-redesign.md §0](video-redesign.md). (The former "skip-lean transcode"
+  item is obsolete — pix no longer re-encodes video.)
 - **Subfolder-scoped hash/organize** — both are library-wide today.
 
 Performance-oriented ideas (against already-built code paths) live in

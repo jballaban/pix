@@ -200,7 +200,7 @@ Every source extension must have an explicit action in the build's **`config.EXT
 |---|---|
 | `keep` | Already canonical. Extension is normalized (case + alias, see below); content untouched. |
 | `convert_to_jpg` | Decode + re-encode as JPG (quality 95). Pillow + pillow-heif. EXIF/XMP preserved. |
-| `convert_to_mp4` | Container → MP4 in the [canonical codec (HEVC)](#canonical-video-codec). Re-mux (`ffmpeg -c copy`) only when the source is already HEVC; otherwise re-encode `-c:v libx265 -preset medium -crf 22 -pix_fmt yuv420p -tag:v hvc1 -c:a aac -b:a 192k`. Container metadata copied (`-map_metadata 0`). |
+| `convert_to_mp4` | Container → MP4 by [lossless remux](#canonical-video-codec) (`ffmpeg -c copy`); codec preserved, never re-encoded. Audio-only AAC fallback when MP4 can't carry the source audio codec. Container metadata copied (`-map_metadata 0`). |
 | `delete` | Capture the file into the run folder during migrate, then remove from source. Conservation applies. |
 | `stash` | Move the file into `<library-root>/.pix/stash/` for future processing (RAW formats, proprietary 360 sources, anything we can't canonically process in v1). Whole-file BLAKE3 dedups across stash entries: same content from multiple sources lands once with a multi-origin sidecar. See [Stash action](#stash-action) below. |
 
@@ -285,34 +285,27 @@ What's suppressed is the **rename to the canonical `YYYY-MM-DD_HHMMSS` name**. T
 **LRV proxies are deleted.** Insta360 writes a disposable low-resolution proxy (`LRV_*.insv`) beside each full-res `VID_*.insv` for fast in-app preview. The app regenerates it on demand and it has no archival value, so migrate **deletes** any keep-policy `.insv` whose filename starts `LRV_` (built-in Insta360 rule, captured to the run folder like any other DELETE). Only the full-res `VID_*` lens files are kept.
 
 <a id="canonical-video-codec"></a>
-### Canonical video codec (HEVC)
+### Video handling (remux-only)
 
-pix normalizes every kept video to one archival codec — **HEVC / H.265** — so the library converges on a single efficient format. This supersedes the earlier "x264, universally stock-Windows-playable" policy: HEVC plays on Windows via the free **HEVC Video Extension** (an opt-in pix now assumes is present), and it roughly halves the bloated x264-CRF18 files at no perceptible cost (VMAF ~97–99 vs source on representative library footage). The trade-off is explicit — the library no longer plays on *stock* Windows without that extension.
+**pix never re-encodes video.** A video CONVERT only normalizes the *container* to MP4 by losslessly remuxing (`ffmpeg -c copy`); the codec is preserved byte-for-byte. There is **no canonical video codec** — the library holds whatever codecs the sources used (H.264, HEVC, …), and migrate never converges them.
 
-**Criterion.** A kept video is canonical iff its codec is **HEVC**. Codec identity is the whole test — profile and pixel format don't matter (any HEVC is left alone). This makes the pass **idempotent**: a re-encoded HEVC file is canonical and never touched again, so re-running migrate over a converged library does no video work.
+This reverses the earlier HEVC codec-convergence policy. That policy re-encoded every non-HEVC video to HEVC for space; it caused repeated, serious fidelity damage (the worst: NVENC's full-CUDA pipeline silently dropped rotation on ~1,126 files), generational quality loss, CPU/GPU output divergence, and a large bug-prone encode surface. The full problem catalog and the decision to drop transcode are in [`spec/video-redesign.md`](video-redesign.md). Remux-only eliminates the entire class of problem: `-c copy` preserves the codec, quality, rotation matrix, and side data, and is fast. Storage is no longer fought with lossy transcode — the larger size is accepted as the cost of fidelity (see video-redesign §0).
 
-**Probe.** During plan-gen, migrate runs `ffprobe -show_entries stream=codec_name,profile,pix_fmt` on every keep-policy mp4/m4v candidate (thread pool, 32 workers). Results cache at `<library>/.pix/cache/<absolute-path-mirror>/<filename>.video` keyed on `(size, mtime_ns)` — first migrate pays the ffprobe cost; unchanged libraries skip it. A CONVERT rewrites the file → mtime shifts → next migrate re-probes and finds the now-HEVC output (canonical → done). `convert_to_mp4`-policy sources go through CONVERT regardless and probe internally, so they aren't in the plan-gen probe set.
+**Action decision in plan-gen** (no codec probe — there's nothing to branch on):
 
-**Name-preserving keep is excluded.** `.insv`/`.insp` are never re-encoded — that would strip the Insta360 trailer (gyro + dual-fisheye calibration). Their canonical extension isn't `mp4` so they're not in the probe set, and `plan._plan_one` additionally guards on `NAME_PRESERVING_KEEP` so the exclusion is explicit, not incidental.
+- `keep` (`mp4`/`m4v`) → no CONVERT, whatever the codec. An already-`.mp4` H.264 file is left alone (RENAME/TAG only, per idempotence). This makes the pass idempotent with no ffprobe pass at all.
+- `convert_to_mp4` (`mov`/`avi`/`mts`/`mpg`/`mpeg`/`vob`) → **CONVERT+RENAME+TAG**, remuxing the source into MP4 with `-c copy`.
+- `.insv`/`.insp` (name-preserving keep) → never converted; a remux would strip the Insta360 trailer (gyro + dual-fisheye calibration). `plan._plan_one` guards on `NAME_PRESERVING_KEEP`.
 
-Result feeds the action decision in plan-gen:
+**Remux target** (`convert.convert_to_mp4`):
 
-- `keep` + already HEVC → no plan line (or RENAME/TAG only, per idempotence).
-- `keep` + **not** HEVC → **CONVERT+RENAME+TAG**, re-encoding to HEVC (plan detail notes `transcode to HEVC`).
-- `convert_to_mp4` + source already HEVC → re-mux (`-c copy`), just rewrapping into MP4.
-- `convert_to_mp4` + source **not** HEVC → re-encode to HEVC.
+1. `-c copy -map_metadata 0 -movflags +faststart` — copy both streams. Fully lossless.
+2. **Audio fallback.** If `-c copy` fails because MP4 can't carry the source's audio codec (e.g. PCM in an old AVI), retry `-c:v copy -c:a aac -b:a 192k`: the **video bitstream is still copied verbatim**, only the audio is re-encoded to AAC. Audio was always re-encoded to AAC under the old transcode paths, so this is no regression.
+3. **Un-muxable video.** If even the video bitstream can't be muxed into MP4 (rare, exotic codecs), `convert_to_mp4` raises `ConvertFailed` and the file is quarantined to `.pix/errors/` like any other CONVERT failure (bytes intact, surfaced for manual handling).
 
-**Re-encode target.**
+The XMP layer carries over (per the cross-cutting CONVERT invariant) so `pix:OriginalPath`, `pix:DateAuto`, user overrides etc. all survive the remux. The `.pix/cache/<…>.hash` cache for each remuxed file goes stale (size + mtime change); `pix hash` regenerates next run.
 
-- Video: `-c:v libx265 -preset medium -crf 22 -pix_fmt yuv420p -tag:v hvc1`. CRF 22 is visually transparent for archival content; `hvc1` tagging makes Windows/Apple players recognize the stream.
-- Audio: `-c:a aac -b:a 192k`.
-- Container metadata: `-map_metadata 0`.
-
-**Re-processing already-migrated files.** Files with `pix:OriginalPath` set are *not* exempt — a previously-migrated x264 file is non-HEVC, so migrate re-CONVERTs it. This is deliberate: the first `pix migrate <library-root>` after this change re-encodes every H.264 file in the library to HEVC **once** (a large, hours-to-days pass), then the library is uniformly HEVC and subsequent migrates skip it. Each original is captured to `runs/<run-id>/data/`. **Caveat:** this is a *lossy second-generation* re-encode (the prior x264 was already lossy and the true camera originals are usually gone), so the run-folder capture is the only rollback — don't delete the run folder until the result is verified.
-
-The XMP layer carries over (per the cross-cutting CONVERT invariant) so `pix:OriginalPath`, `pix:DateAuto`, user overrides etc. all survive. The `.pix/cache/<…>.hash` cache for each re-encoded file goes stale (size + mtime change); `pix hash` regenerates next run.
-
-> **Skip-lean (deferred).** Re-encoding *every* non-HEVC file includes already-lean clips where HEVC saves little. CRF-22 is quality-targeted so it won't bloat them, but it's a wasted generation of loss. A future refinement could skip files below a bitrate-per-pixel threshold — it needs the probe/cache to carry bitrate + dimensions, so it's out of scope here.
+**Existing HEVC library.** The library was fully transcoded to HEVC under the old policy. Remux-only does **not** undo that — it's accepted as-is (no migration batch). Where the owner imports an original/remuxed copy of a video already present as HEVC, [`pix dedupe`](dedupe.md)'s perceptual matching groups them and keeps the higher-fidelity original (bitrate-ranked keeper), so the lossless source is re-established opportunistically rather than in a risky bulk pass. See video-redesign §0/§9.
 
 ### Fail-fast on unknown extensions
 
@@ -354,20 +347,13 @@ Each step is one same-volume rename. The marker's existence is the only thing th
 
 ### Convert concurrency
 
-Apply is **logically sequential** — one plan line at a time, in topo order, with a single ExifTool session and an append-only `apply.log`. But step 1 above (the off-library encode into `.pix\staging\`) is **CPU-bound and independent across files**, and a single libx265 encode extracts only limited frame/WPP parallelism — it tops out around a third of a many-core CPU. Encoding one file at a time leaves the rest of the box idle.
+Apply is **logically sequential** — one plan line at a time, in topo order, with a single ExifTool session and an append-only `apply.log`. But step 1 above (the off-library conversion into `.pix\staging\`) is **independent across files**: a video CONVERT is a lossless `-c copy` remux (I/O-bound) and an image CONVERT is a Pillow JPEG encode (CPU-bound). Doing one file at a time leaves the box idle.
 
-So the encode is the *only* part that runs concurrently: a worker pool encodes CONVERT staging files **ahead of** the serial loop, bounded to a sliding window. When the loop reaches a CONVERT line it consumes the already-encoded staging file and does the metadata copy + the three renames (steps 2–4) on the main thread, in order. Everything with shared state — ExifTool, the crash log, rename slots — stays single-threaded, so atomicity and crash recovery are unchanged: a prefetched staging file is just a step-1 temp orphan, cleaned by the next run if the process dies before the line is finalized. A repair re-run (tag-write salvage) re-encodes inline, since its repaired source differs from what was prefetched.
+So the conversion is the *only* part that runs concurrently: a worker pool converts CONVERT staging files **ahead of** the serial loop, bounded to a sliding window. When the loop reaches a CONVERT line it consumes the already-converted staging file and does the metadata copy + the three renames (steps 2–4) on the main thread, in order. Everything with shared state — ExifTool, the crash log, rename slots — stays single-threaded, so atomicity and crash recovery are unchanged: a prefetched staging file is just a step-1 temp orphan, cleaned by the next run if the process dies before the line is finalized. A repair re-run (tag-write salvage) converts inline, since its repaired source differs from what was prefetched.
 
-**Two encoders, CPU + GPU.** The pool spans two independent encode resources: the CPU (`libx265`, `_X265_WORKERS` slots) and, when an NVIDIA GPU with a working `hevc_nvenc` is detected at apply start, the GPU (`_NVENC_WORKERS` slots). They run *simultaneously* — the GPU is otherwise idle during conversion, so its encodes are additive throughput. NVENC is less bitrate-efficient than x265 (≈ +25–35% size at matched quality on grainy footage; visually within ~1 VMAF), so it isn't a per-clip quality win — it's parallel throughput. One executor holds `_X265_WORKERS + _NVENC_WORKERS` threads; two semaphores cap the per-encoder concurrency. Routing per clip:
+**One uniform pool.** The pool is a single executor of `_CONVERT_WORKERS` threads (`apply._StagingPrefetcher`). There is no per-codec routing and no GPU path — remux-only made the old CPU/GPU (x265/`hevc_nvenc`) machinery, its routing, and its NVENC failure-fallback obsolete, and they're gone. Both conversion kinds are cheap, so a modest fixed pool overlaps them with the main thread's finalize work.
 
-- **Already-HEVC** → re-mux (`-c copy`), no encode slot.
-- **4K+ re-encode** (`height ≥ NVENC_MIN_HEIGHT`) → GPU. x265 is brutally slow at 4K and NVENC's efficiency gap is smallest there. A 4K clip **blocks for a GPU slot — it never falls back to a CPU slot**, because a multi-minute x265 4K encode on a CPU worker re-creates the single-slow-clip stall.
-- **Smaller re-encode** → CPU x265 (faster *and* more space-efficient), but **overflows onto a free GPU slot when all CPU slots are busy** — which is what keeps the GPU busy on an HD/SD-heavy library with little or no 4K. (Overflow is the dominant GPU workload for such libraries, so a meaningful share of HD clips end up NVENC-encoded: a deliberate throughput-for-uniformity trade.)
-- A GPU encode that raises `ConvertFailed` (e.g. a pixel format NVENC's CUDA path rejects) **falls back to x265** for that clip.
-
-When no NVENC GPU is present there's no GPU pool and every clip runs x265 — identical to the CPU-only behavior, keeping pix portable to non-NVIDIA machines. Encoder settings are build constants in `convert.py` (`_X265_CRF`, `_NVENC_CQ`); both emit 8-bit 4:2:0 HEVC tagged `hvc1`, so either output satisfies the canonical-codec invariant and re-runs only re-mux it.
-
-**The window vs. one slow clip.** Because the loop consumes CONVERTs strictly in plan order and *blocks* on each one's encode, the submission ceiling is pinned to the consumer's position. A single slow encode blocks the consumer; once the buffered clips ahead of it drain, the other workers idle until it finishes, then the window slides and the pool refills. `_CONVERT_LOOKAHEAD` is sized deep enough that a multi-minute clip doesn't drain the buffer, but a *finite* window can't fully hide an *arbitrarily* long single encode. Eliminating idle-behind-a-slow-clip entirely would require finalizing CONVERTs **out of plan order** as their encodes complete (which would let the submission ceiling advance past the stuck clip with a small buffer); that's a larger rework of the in-order apply loop and isn't built. (Routing 4K to the GPU also sidesteps the worst case, since the clips that stall x265 longest no longer run on the CPU.)
+**The window vs. one slow line.** Because the loop consumes CONVERTs strictly in plan order and *blocks* on each one, the submission ceiling is pinned to the consumer's position. A single slow line blocks the consumer; once the buffered lines ahead of it drain, the other workers idle until it finishes, then the window slides and the pool refills. `_CONVERT_LOOKAHEAD` is sized deep enough that a slow line doesn't drain the buffer, but a *finite* window can't fully hide an *arbitrarily* long single one. Eliminating idle-behind-a-slow-line entirely would require finalizing CONVERTs **out of plan order** as they complete; that's a larger rework of the in-order apply loop and isn't built. (Remux is fast enough that this is rarely observable now — the worst-case slow clip was a 4K x265 encode, which no longer exists.)
 
 ### Marker conventions
 

@@ -2,7 +2,7 @@
 
 The path-mirror, atomic-write, and parallel-read helpers are exercised
 indirectly by the per-cache test files (test_metadata_cache,
-test_hash_cache, test_video_cache). This module focuses on what's
+test_hash_cache, test_vfp_cache). This module focuses on what's
 unique to cache_base: orphan pruning and legacy-suffix sweeping.
 """
 
@@ -79,6 +79,23 @@ def test_sweeps_legacy_cache_suffix(tmp_path: Path) -> None:
     stats = prune_orphans(library_root, {media})
     assert stats.legacy_removed == 1
     assert stats.orphans_removed == 0
+    assert not legacy.exists()
+    assert new_meta.is_file()  # current sidecar untouched
+
+
+def test_sweeps_legacy_video_suffix(tmp_path: Path) -> None:
+    """`.video` files (codec cache, dead since video handling went
+    remux-only) are swept as legacy even though the media is still live."""
+    library_root = tmp_path / "lib"
+    library_root.mkdir()
+    media = tmp_path / "lib" / "clip.mp4"
+    media.write_bytes(b"x")
+
+    legacy = _make_cache_file(library_root, media, ".video")
+    new_meta = _make_cache_file(library_root, media, ".meta")
+
+    stats = prune_orphans(library_root, {media})
+    assert stats.legacy_removed == 1
     assert not legacy.exists()
     assert new_meta.is_file()  # current sidecar untouched
 

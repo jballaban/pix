@@ -8,12 +8,10 @@ import pytest
 
 from pix import dedupe as dedupe_mod
 from pix.commands.dedupe import dedupe_library
-from pix.convert import VideoProfile
 from pix.hash_cache import read_cached_hash, write_cached_hash
 from pix.metadata_cache import PerFileCache
 from pix.plan import PIX_ORIGINAL_PATH
 from pix.vfp_cache import read_cached_fingerprint, write_cached_fingerprint
-from pix.video_cache import read_cached_profile, write_cached_profile
 from pix.video_fingerprint import VideoFingerprint
 
 
@@ -142,14 +140,14 @@ def test_dedupe_merge_keeps_keeper_hash_valid(
     assert read_cached_hash(root, a) == "dedupehash"
 
 
-def test_dedupe_merge_keeps_keeper_video_and_vfp_caches(
+def test_dedupe_merge_keeps_keeper_vfp_cache(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A MERGE bumps the keeper's (size, mtime), invalidating its cache keys —
-    but the ffprobe profile and perceptual fingerprint are metadata-invariant,
-    so dedupe must re-stamp them too. Regression: the keeper's caches were
-    wiped by a blanket remove_all and only .hash was restored, so every sync
-    re-probed and (expensively) re-fingerprinted merged video keepers.
+    but the perceptual fingerprint is metadata-invariant, so dedupe must
+    re-stamp it too. Regression: the keeper's caches were wiped by a blanket
+    remove_all and only .hash was restored, so every sync (expensively)
+    re-fingerprinted merged video keepers.
     """
     root = _make_library(tmp_path)
     a = (root / "a.mp4").resolve()  # keeper (lex-smallest)
@@ -160,7 +158,6 @@ def test_dedupe_merge_keeps_keeper_video_and_vfp_caches(
     cache = PerFileCache.for_library(root)
     cache.add(a, {PIX_ORIGINAL_PATH: "F:/2023/a.mp4"})
     cache.add(b, {PIX_ORIGINAL_PATH: "F:/Hawaii/b.mp4"})  # event → keeper MERGE
-    profile = VideoProfile(codec="hevc", profile="Main", pix_fmt="yuv420p")
     fingerprint = VideoFingerprint(
         frames=(1, 2, 3, 4, 5, 6), width=1920, height=1080, duration=12.5
     )
@@ -168,9 +165,6 @@ def test_dedupe_merge_keeps_keeper_video_and_vfp_caches(
         st = f.stat()
         write_cached_hash(
             root, f, hash_hex="dedupehash", size=st.st_size, mtime_ns=st.st_mtime_ns
-        )
-        write_cached_profile(
-            root, f, profile=profile, size=st.st_size, mtime_ns=st.st_mtime_ns
         )
         write_cached_fingerprint(
             root, f, fingerprint=fingerprint,
@@ -183,8 +177,6 @@ def test_dedupe_merge_keeps_keeper_video_and_vfp_caches(
     dedupe_library(path=root, no_prompt=True)
 
     assert fake.writes == [a]  # the merge really bumped the keeper
-    # Profile + fingerprint re-stamped to the new (size, mtime), values intact.
-    survived_profile = read_cached_profile(root, a)
-    assert survived_profile is not None and survived_profile.codec == "hevc"
+    # Fingerprint re-stamped to the new (size, mtime), value intact.
     survived_fp = read_cached_fingerprint(root, a)
     assert survived_fp is not None and survived_fp.frames == (1, 2, 3, 4, 5, 6)

@@ -68,7 +68,6 @@ from pix.vfp_cache import (
     read_cached_fingerprint,
     write_cached_fingerprint,
 )
-from pix.video_cache import read_cached_profile, write_cached_profile
 from pix.video_fingerprint import (
     FingerprintFailed,
     VideoFingerprint,
@@ -525,18 +524,17 @@ def _apply_result(
     metadata-invariant content hash). Shared by auto + commit."""
     # A MERGE tag-write bumps the keeper's (size, mtime) — invalidating every
     # cache key — but it only touches metadata, so the *values* of the
-    # content hash, ffprobe profile, and perceptual fingerprint are all
-    # unchanged. Capture them before apply and re-stamp them against the new
-    # (size, mtime) afterward, so a no-op re-run doesn't re-hash, re-probe, or
-    # (the expensive one) re-fingerprint these keepers. The metadata cache
-    # (.meta) is intentionally left to refresh — its value genuinely changed.
+    # content hash and perceptual fingerprint are unchanged. Capture them
+    # before apply and re-stamp them against the new (size, mtime) afterward,
+    # so a no-op re-run doesn't re-hash or (the expensive one) re-fingerprint
+    # these keepers. The metadata cache (.meta) is intentionally left to
+    # refresh — its value genuinely changed.
     merge_keepers = [
         ln.abs_path
         for ln in result.plan.lines
         if ln.line_id in kept_line_ids and ln.action == Action.MERGE
     ]
     pre_hashes = {p: read_cached_hash(root, p) for p in merge_keepers}
-    pre_profiles = {p: read_cached_profile(root, p) for p in merge_keepers}
     pre_fingerprints = {p: read_cached_fingerprint(root, p) for p in merge_keepers}
 
     apply_log_path = runs_dir / "apply.log"
@@ -567,11 +565,6 @@ def _apply_result(
             if hash_hex is not None:
                 write_cached_hash(
                     root, keeper, hash_hex=hash_hex, size=size, mtime_ns=mtime_ns
-                )
-            profile = pre_profiles.get(keeper)
-            if profile is not None:
-                write_cached_profile(
-                    root, keeper, profile=profile, size=size, mtime_ns=mtime_ns
                 )
             fingerprint = pre_fingerprints.get(keeper)
             if fingerprint is not None:

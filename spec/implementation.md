@@ -14,7 +14,7 @@ Language: **Python 3.12+**.
 |---|---|
 | CLI framework | `typer` |
 | Image decode/encode | `Pillow` + `pillow-heif` |
-| Video transcode | `ffmpeg` (subprocess; bundled `.exe` or on PATH) |
+| Video remux | `ffmpeg` (subprocess; bundled `.exe` or on PATH) — lossless `-c copy` container normalization, never re-encode |
 | Metadata read/write | `ExifTool` (subprocess via `pyexiftool`) — only tool that reliably handles EXIF/XMP/IPTC across photo + video formats including MWG face regions. **Reads:** bulk-extract with `exiftool -j -r -G:1 <folder>` once per migrate, populating an in-memory cache (see [migrate.md → Metadata cache](migrate.md#metadata-cache)). **Writes:** per-file via `-overwrite_original`, using `-stay_open` mode (one long-running ExifTool process per migrate, communicating via stdin/stdout) to avoid the ~200ms-per-spawn overhead. |
 | Format-aware content hash (tier 1) | hand-rolled framing: JPEG → strip APP-marker metadata (APP1/EXIF, APP1/XMP, APP13/IPTC, …) and hash the rest; MP4 / ISO BMFF → parse boxes and hash only the concatenated `mdat` payload(s). Hashed with `blake3` (256-bit, hex-encoded). Stored in the per-file cache under `.pix/cache/` by `pix hash` (see [hash.md](hash.md)). |
 | Perceptual hash (tier 2) | `imagehash` (photos), sampled-frame imagehash (videos) |
@@ -40,12 +40,11 @@ Timeouts are per primitive call, not per plan action. A `CONVERT+RENAME+TAG` pla
 |---|---|---|
 | ExifTool `-execute` (read, sidecar export, tag write) | **30s** | Metadata ops should be sub-second; 30s = wedged. Same timeout regardless of whether it's reading or writing — same protocol underneath. |
 | Pillow JPG encode (`convert_to_jpg`) | **60s** | A 50 MP JPG re-encodes in seconds. 60s = pathological. |
-| ffmpeg re-mux (`-c copy`) | **5 min** | Should be fast (bytes copy + container rewrite); 5 min covers big files on slow disks. |
-| ffmpeg re-encode (libx265 / aac) | **1 hour** | Realistic for 30–60 min H.264-source clips at 1–2× real-time on libx265. Covers most realistic library content. |
+| ffmpeg remux (`-c copy`, the only video CONVERT) | **5 min** | Should be fast (bytes copy + container rewrite); 5 min covers big files on slow disks. The audio-only AAC fallback shares this timeout (audio re-encode is cheap). pix never re-encodes video, so there's no hour-scale ffmpeg path. |
 | Filesystem rename / move | **10s** | Should be instant; 10s catches AV locks and network FS hangs. |
 | Format-aware content hash compute | **60s** | Even a 10 GB MP4 hashes in seconds (BLAKE3 ~3 GB/s; post the JPEG marker-scan optimization the JPEG path is native-speed). 60s = pathological. |
 
-Defaults are hard-coded in v1. No env-var overrides, no config knobs. If real workflows hit a ceiling — most likely the 1-hour ffmpeg re-encode for 4K family videos — we add an override then. Until then, hitting a timeout is the signal that we need to learn something about the workload.
+Defaults are hard-coded in v1. No env-var overrides, no config knobs. If real workflows hit a ceiling, we add an override then. Until then, hitting a timeout is the signal that we need to learn something about the workload.
 
 ### On timeout: halt for investigation
 

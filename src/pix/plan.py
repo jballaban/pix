@@ -21,7 +21,6 @@ from pathlib import Path
 
 from pix import debug
 from pix.config import Config, ExtensionAction
-from pix.convert import VideoProfile, is_canonical_video_codec
 from pix.dates import (
     PIX_DATETIME_FORMAT,
     derive_date_auto,
@@ -202,7 +201,6 @@ def generate_plan(
     run_id: str,
     run_dir: Path,
     staging_dir: Path,
-    video_profiles: dict[Path, "VideoProfile | None"] | None = None,
     now: datetime | None = None,
 ) -> Plan:
     """Build a Plan from the metadata cache and extension policy.
@@ -211,11 +209,10 @@ def generate_plan(
     captures and staging conversions respectively. Plan-gen uses them to
     pre-compute every path apply will need, so apply is a pure executor.
 
-    `video_profiles` is the precomputed `{path: VideoProfile|None}` for
-    keep-policy video candidates (per spec/migrate.md → Canonical video
-    codec). When a file's codec isn't the canonical one (HEVC), plan-gen
-    routes it to CONVERT for re-encode. Built once in commands/migrate.py
-    via `convert.probe_videos_parallel`.
+    Videos are converted only when their *container* needs normalizing to
+    MP4 (the `convert_to_mp4` extension policy); the codec is preserved by a
+    lossless remux at apply time (see spec/migrate.md → Video handling). An
+    already-`.mp4`/`.m4v` file is kept untouched regardless of its codec.
     """
     generated_at = now or datetime.now()
     lines: list[PlanLine] = []
@@ -238,7 +235,6 @@ def generate_plan(
                 meta=meta,
                 source=source,
                 config=config,
-                video_profiles=video_profiles,
             )
             ts = datetime.now().isoformat(timespec="seconds")
             if line is not None:
@@ -566,7 +562,6 @@ def _plan_one(
     meta: FileMetadata,
     source: Path,
     config: Config,
-    video_profiles: dict[Path, "VideoProfile | None"] | None = None,
 ) -> PlanLine | None:
     """Decide the plan line for one file, or return None if no action is needed."""
     rel = path.relative_to(source)
@@ -615,42 +610,12 @@ def _plan_one(
         )
         debug.log(f"  First migrate: {'yes' if is_first_migrate else 'no'}")
 
-        # Canonical-video-codec override per spec/migrate.md → Canonical
-        # video codec. A keep-policy video (target_ext is None) whose codec
-        # isn't HEVC is re-encoded to HEVC so the library converges to one
-        # efficient codec. Already-HEVC files pass untouched (idempotent).
-        # Name-preserving keep formats (.insv/.insp) are excluded — they're
-        # never re-encoded (would strip the Insta360 trailer). They aren't
-        # in the probe set today, but the guard makes that contract explicit.
-        ext = path.suffix.lower().lstrip(".")
-        transcode_override = False
-        if (
-            target_ext is None
-            and ext not in NAME_PRESERVING_KEEP
-            and video_profiles is not None
-            and path in video_profiles
-        ):
-            profile = video_profiles[path]
-            debug.section("Canonical video codec")
-            if profile is None:
-                debug.log(
-                    "  ffprobe failed or returned no video stream — "
-                    "leaving action unchanged."
-                )
-            elif not is_canonical_video_codec(profile):
-                debug.log(
-                    f"  Codec: {profile.codec}, profile: {profile.profile!r}, "
-                    f"pix_fmt: {profile.pix_fmt}"
-                )
-                debug.log(
-                    "  Not HEVC — forcing CONVERT to re-encode to canonical "
-                    "codec."
-                )
-                target_ext = "mp4"
-                transcode_override = True
-            else:
-                debug.log("  Already HEVC — canonical; no override.")
-
+        # Videos converge by *container* only: a `convert_to_mp4`-policy
+        # source (.mov/.avi/.mts/.mpg/.mpeg/.vob) is losslessly remuxed into
+        # MP4 at apply time, preserving the codec. An already-`.mp4`/`.m4v`
+        # file is kept untouched regardless of codec — no re-encode, ever.
+        # (This reverses the former HEVC codec-convergence; see
+        # spec/migrate.md → Video handling.)
         if target_ext is not None:
             return _plan_convert(
                 meta=meta,
@@ -658,7 +623,6 @@ def _plan_one(
                 rel_str=rel_str,
                 target_ext=target_ext,
                 is_first_migrate=is_first_migrate,
-                transcode_override=transcode_override,
             )
 
         # Built-in Insta360 rule: LRV_*.insv are disposable low-res proxies
@@ -690,14 +654,11 @@ def _plan_convert(
     rel_str: str,
     target_ext: str,
     is_first_migrate: bool,
-    transcode_override: bool = False,
 ) -> PlanLine:
     canonical_name = _canonical_filename(meta=meta, ext=target_ext)
     details_parts: list[str] = [
         f"→{canonical_name}" if canonical_name else "→<unknown-date>"
     ]
-    if transcode_override:
-        details_parts.append("transcode to HEVC")
     pix_writes: dict[str, str] = {}
 
     if is_first_migrate:

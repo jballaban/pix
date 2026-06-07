@@ -9,7 +9,7 @@ One JSON sidecar per video under `<library>/.pix/cache/`, suffix `.vfp`:
      "height": ..., "duration": ..., "computed_at": "..."}
 
 Valid when `(size, mtime_ns)` match the live file (same scheme as
-`hash_cache` / `video_cache`); otherwise stale → treated as missing.
+`hash_cache`); otherwise stale → treated as missing.
 Computing a fingerprint decodes several frames, so — like `pix hash` — the
 cost is paid once and reused by every later `pix dedupe` run. A CONVERT
 that rewrites the bytes changes mtime → cache invalidates → re-fingerprint

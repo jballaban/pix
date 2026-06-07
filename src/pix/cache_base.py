@@ -1,11 +1,10 @@
 """Shared plumbing for per-file caches under `<library>/.pix/cache/`.
 
-Four caches share this layer (one file per flavor on disk; see the
+Three caches share this layer (one file per flavor on disk; see the
 discussion in the per-cache modules for why we keep them separate):
 
 - `<...>.meta` — ExifTool JSON, validated on size only
 - `<...>.hash` — content-hash digest, validated on (size, mtime_ns)
-- `<...>.video` — ffprobe codec/profile/pix_fmt, validated on (size, mtime_ns)
 - `<...>.vfp` — perceptual video fingerprint, validated on (size, mtime_ns)
 
 All mirror the source path under `<library>/.pix/cache/` with a
@@ -45,13 +44,16 @@ DEFAULT_BATCH_SIZE: int = 1000
 # (relocate_all), won't be cleaned when media is removed (remove_all), and
 # won't be reclaimed when orphaned (prune_orphans) — the bug that made
 # `.vfp` re-fingerprint the whole library after an organize move.
-LIVE_SUFFIXES: tuple[str, ...] = (".meta", ".hash", ".video", ".vfp")
+LIVE_SUFFIXES: tuple[str, ...] = (".meta", ".hash", ".vfp")
 
 # Suffixes from earlier pix versions that should be cleared on contact.
-# Currently: `.cache` was renamed to `.meta` in v0.1.88; old sidecars
-# are unreachable by the new code (the metadata cache reads `.meta`)
-# but consume disk space until pruned.
-_LEGACY_SUFFIXES: tuple[str, ...] = (".cache",)
+# - `.cache` was renamed to `.meta` in v0.1.88.
+# - `.video` (ffprobe codec/profile/pix_fmt) became dead weight when video
+#   handling went remux-only: with no codec-convergence decision left, no
+#   code reads it. Listing it here prunes the stale sidecars existing
+#   libraries still carry.
+# Old sidecars are unreachable by the new code but consume disk until pruned.
+_LEGACY_SUFFIXES: tuple[str, ...] = (".cache", ".video")
 
 
 def cache_root_for(library_root: Path) -> Path:
@@ -69,7 +71,7 @@ def mirror_under(root: Path, file_path: Path, suffix: str = "") -> Path:
     paths. A defensive `resolve()` here would cost one stat per lookup.
 
     Shared by the cache tree (`<library>/.pix/cache/`, with a `.meta`/`.hash`/
-    `.video` suffix) and the errors tree (`<library>/.pix/errors/`, no suffix —
+    `.vfp` suffix) and the errors tree (`<library>/.pix/errors/`, no suffix —
     the moved file keeps its own name, and its *location* records the source
     path so a lost sidecar doesn't lose provenance).
     """
@@ -171,14 +173,14 @@ def rename(old: Path, new: Path) -> None:
 def relocate_all(
     library_root: Path, old_media: Path, new_media: Path
 ) -> None:
-    """Move *every* cache sidecar (.meta/.hash/.video/.vfp) with a media move.
+    """Move *every* cache sidecar (.meta/.hash/.vfp) with a media move.
 
     A media MOVE/RENAME doesn't touch the file's bytes, size, or mtime,
-    so a valid hash/video entry stays valid at the new path — but only
-    if its sidecar follows. Relocating just `.meta` (the historical
-    behavior) left `.hash`/`.video` orphaned at the old mirror, where
+    so a valid hash/fingerprint entry stays valid at the new path — but
+    only if its sidecar follows. Relocating just `.meta` (the historical
+    behavior) left `.hash`/`.vfp` orphaned at the old mirror, where
     the next walk's `prune_orphans` deleted them; the file then needed a
-    fresh `pix hash` / ffprobe pass for no reason. Best-effort per
+    fresh `pix hash` / fingerprint pass for no reason. Best-effort per
     suffix.
     """
     for suffix in LIVE_SUFFIXES:

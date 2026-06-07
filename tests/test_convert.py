@@ -1,14 +1,14 @@
-"""Tests for `pix.convert` codec/profile probing and canonical-codec check.
+"""Tests for `pix.convert`.
 
-Covers `probe_video_profile` output parsing (multi-field ffprobe) and the
-`is_canonical_video_codec` check (HEVC = canonical) that drives re-mux vs
-re-encode.
+Covers the JPEG re-encode path and the remux-only `convert_to_mp4`: a
+lossless `-c copy` with an audio-only AAC fallback when MP4 can't carry the
+source's audio codec. pix never re-encodes video, so there is no codec
+probe / canonical-codec branch anymore.
 """
 
 from __future__ import annotations
 
 import subprocess
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -17,12 +17,7 @@ import pytest
 from PIL import Image
 
 from pix import convert
-from pix.convert import (
-    VideoProfile,
-    convert_to_jpg,
-    is_canonical_video_codec,
-    probe_video_profile,
-)
+from pix.convert import ConvertFailed, convert_to_jpg, convert_to_mp4
 
 
 def test_convert_to_jpg_handles_bmp(tmp_path: Path) -> None:
@@ -51,97 +46,77 @@ def test_convert_to_jpg_handles_paletted_bmp(tmp_path: Path) -> None:
         assert out.format == "JPEG"
 
 
-@dataclass
-class _FakeCompletedProcess:
-    """Drop-in for `subprocess.CompletedProcess` so we can monkeypatch run()."""
+class _RunRecorder:
+    """Records the ffmpeg commands passed to `subprocess.run` and replays a
+    scripted sequence of return codes (one per call)."""
 
-    stdout: str
-    returncode: int = 0
-    stderr: str = ""
+    def __init__(self, returncodes: list[int]) -> None:
+        self._returncodes = returncodes
+        self.calls: list[list[str]] = []
+
+    def __call__(
+        self, cmd: list[str], *_args: Any, **_kwargs: Any
+    ) -> "subprocess.CompletedProcess[str]":
+        self.calls.append(cmd)
+        rc = self._returncodes[len(self.calls) - 1]
+        return subprocess.CompletedProcess(
+            args=cmd, returncode=rc, stdout="", stderr="boom" if rc else ""
+        )
 
 
-def _fake_run(stdout: str, returncode: int = 0):
-    """Build a `subprocess.run` replacement that always returns `stdout`."""
-
-    def runner(*_args: Any, **_kwargs: Any) -> _FakeCompletedProcess:
-        return _FakeCompletedProcess(stdout=stdout, returncode=returncode)
-
-    return runner
+def _fake_require(_name: str) -> str:
+    return "ffmpeg"
 
 
-@pytest.mark.parametrize(
-    "stdout,expected",
-    [
-        # ffprobe `default=nw=1:nk=1` with codec_name,profile,pix_fmt emits
-        # one line per field, in the order requested.
-        (
-            "h264\nMain\nyuv420p\n",
-            VideoProfile(codec="h264", profile="Main", pix_fmt="yuv420p"),
-        ),
-        (
-            "h264\nHigh 4:2:2\nyuvj422p\n",
-            VideoProfile(
-                codec="h264", profile="High 4:2:2", pix_fmt="yuvj422p"
-            ),
-        ),
-        (
-            "hevc\nMain\nyuv420p\n",
-            VideoProfile(codec="hevc", profile="Main", pix_fmt="yuv420p"),
-        ),
-        # Casing: codec + pix_fmt lowercased, profile preserved.
-        (
-            "H264\nHigh\nYUV420P\n",
-            VideoProfile(codec="h264", profile="High", pix_fmt="yuv420p"),
-        ),
-        # Tolerate missing tail values (some old containers don't expose
-        # profile or pix_fmt) — they pad to "" and the codec check
-        # will route to re-encode.
-        (
-            "mpeg2video\n\n\n",
-            VideoProfile(codec="mpeg2video", profile="", pix_fmt=""),
-        ),
-        # Trailing-comma tolerance kept from the v0.1.56 fix.
-        (
-            "hevc,\nMain\nyuv420p\n",
-            VideoProfile(codec="hevc", profile="Main", pix_fmt="yuv420p"),
-        ),
-    ],
-)
-def test_probe_video_profile_parses_output(
-    monkeypatch: pytest.MonkeyPatch,
-    stdout: str,
-    expected: VideoProfile,
-) -> None:
-    def _fake_require(_name: str) -> str:
-        return "ffprobe"
-
+def _patch(monkeypatch: pytest.MonkeyPatch, recorder: _RunRecorder) -> None:
     monkeypatch.setattr(convert, "_require_tool", _fake_require)
-    monkeypatch.setattr(subprocess, "run", _fake_run(stdout))
-    assert probe_video_profile(Path("/fake/video.mov")) == expected
+    monkeypatch.setattr(subprocess, "run", recorder)
 
 
-@pytest.mark.parametrize(
-    "profile,canonical",
-    [
-        # HEVC is the canonical codec — re-mux only, any profile/pix_fmt.
-        (VideoProfile("hevc", "Main", "yuv420p"), True),
-        (VideoProfile("hevc", "Main 10", "yuv420p10le"), True),
-        (VideoProfile("hevc", "Rext", "yuv422p"), True),
-        # Everything else re-encodes to HEVC — including formerly
-        # "Windows-playable" H.264 4:2:0 (now still re-encoded for efficiency).
-        (VideoProfile("h264", "Main", "yuv420p"), False),
-        (VideoProfile("h264", "High", "yuvj420p"), False),
-        (VideoProfile("h264", "High 4:2:2", "yuvj422p"), False),
-        (VideoProfile("h264", "High 10", "yuv420p10le"), False),
-        (VideoProfile("mpeg2video", "Main", "yuv420p"), False),
-        (VideoProfile("mpeg4", "Simple Profile", "yuv420p"), False),
-        (VideoProfile("vp9", "Profile 0", "yuv420p"), False),
-        (VideoProfile("av1", "Main", "yuv420p"), False),
-        # Unknown / probe-incomplete.
-        (VideoProfile("", "", ""), False),
-    ],
-)
-def test_is_canonical_video_codec(
-    profile: VideoProfile, canonical: bool
+def test_convert_to_mp4_remuxes_with_c_copy(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    assert is_canonical_video_codec(profile) is canonical
+    """The happy path is a single lossless `-c copy` remux — no re-encode,
+    no fallback."""
+    rec = _RunRecorder([0])
+    _patch(monkeypatch, rec)
+
+    convert_to_mp4(Path("/in.mov"), Path("/out.mp4"))
+
+    assert len(rec.calls) == 1
+    cmd = rec.calls[0]
+    # Whole-stream copy; never a video encoder.
+    assert "-c" in cmd and cmd[cmd.index("-c") + 1] == "copy"
+    assert "libx265" not in cmd and "hevc_nvenc" not in cmd
+    assert "+faststart" in cmd
+
+
+def test_convert_to_mp4_falls_back_to_aac_audio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When `-c copy` fails (e.g. PCM audio MP4 can't carry), it retries
+    copying the video bitstream while re-encoding only the audio to AAC."""
+    rec = _RunRecorder([1, 0])  # first attempt fails, fallback succeeds
+    _patch(monkeypatch, rec)
+
+    convert_to_mp4(Path("/in.avi"), Path("/out.mp4"))
+
+    assert len(rec.calls) == 2
+    fallback = rec.calls[1]
+    # Video still copied verbatim; only audio re-encoded.
+    assert fallback[fallback.index("-c:v") + 1] == "copy"
+    assert fallback[fallback.index("-c:a") + 1] == "aac"
+
+
+def test_convert_to_mp4_raises_when_video_unmuxable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If even the video bitstream can't be muxed into MP4, both attempts
+    fail and the caller gets a ConvertFailed to quarantine on."""
+    rec = _RunRecorder([1, 1])
+    _patch(monkeypatch, rec)
+
+    with pytest.raises(ConvertFailed):
+        convert_to_mp4(Path("/in.avi"), Path("/out.mp4"))
+
+    assert len(rec.calls) == 2

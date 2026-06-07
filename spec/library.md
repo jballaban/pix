@@ -37,7 +37,7 @@ Format drift in persisted `.pix/` data is handled **structurally**, by what each
 
 | Data | Durability | If a build can't read it |
 |---|---|---|
-| `cache/` (`.meta`/`.hash`/`.video`) | regenerable | **regenerate** — an unreadable/stale entry is just a miss; recompute from the file |
+| `cache/` (`.meta`/`.hash`/`.vfp`) | regenerable | **regenerate** — an unreadable/stale entry is just a miss; recompute from the file |
 | `errors/`, `stash/` | only-copy | **restore** the file to its origin and reprocess (see below) |
 | `runs/` | historical / rollback | **leave** — old run folders are frozen records; new code doesn't reinterpret them |
 

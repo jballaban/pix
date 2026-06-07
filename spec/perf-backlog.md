@@ -49,11 +49,3 @@ walks again. One classifying walk would cut traversal cost.
 `plan.py` flushes plan.log every iteration; plan.log is throwaway-on-crash, so
 block buffering (or flush every ~1000 lines) is fine and saves a few seconds on
 200k iterations.
-
-### Hardware-accelerated video encode (NVENC / Quick Sync / AMF)
-`src/pix/convert.py` — the libx265 re-encode path is CPU-heavy. `hevc_nvenc` /
-`hevc_qsv` / `hevc_amf` are ~5–10× faster for a ~10–20% size penalty at
-equivalent quality. Needs encoder detection, a way to select it, per-encoder
-CRF tuning, and a CPU fallback. Quality trade is real (libx265 is the
-compression gold standard for an archive pass). Cheaper first step: libx265
-`-preset fast`/`faster` (3–5× for ~5% size) or apply-phase parallelism above.

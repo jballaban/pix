@@ -6,9 +6,98 @@
 > re-encoding and go back to remux-only**, solving storage some other way. This
 > file captures the full context so a fresh session can pick it up cold.
 >
-> **Status:** directive / not yet designed or implemented. Confirm scope with
-> the owner before ripping anything out. Nothing here is decided except the
-> overall direction (drop transcode → remux-only).
+> **Status:** **design settled (2026-06-07)** — see §0. The forward path
+> (remux-only) and the existing-library policy (accept-as-is, organic dedupe
+> re-establish) are decided with the owner. Ready to implement; the problem
+> catalog and library-state sections below remain as context.
+
+---
+
+## 0. Resolved design (settled 2026-06-07)
+
+Decided with the owner after walking the directive against the live code. The
+scope is **much smaller than §2–§9 feared**: it collapses to the forward
+remux-only switch plus retiring the encode surface. **No migration batch, no
+dedupe rewrite.**
+
+### Forward path — remux-only
+
+- `pix migrate` rewraps videos to MP4 via `ffmpeg -c copy` (codec preserved,
+  lossless, rotation matrix + container metadata intact). **It never
+  re-encodes.** `convert_to_mp4` collapses to today's already-present `-c copy`
+  branch — functionally what `remux_repair` already does.
+- **Retire** (all the transcode surface): the x265 + NVENC re-encode branches in
+  `convert_to_mp4`; `apply._route_encoder`, the dual-semaphore GPU prefetch pool,
+  `_NVENC_WORKERS`, `nvenc_available`, `_video_rotation`, `NVENC_MIN_HEIGHT`,
+  `_X265_CRF`, `_NVENC_CQ`, `ENCODER_X265`/`ENCODER_NVENC`,
+  `CANONICAL_VIDEO_CODEC`/`is_canonical_video_codec`. `_StagingPrefetcher` stays
+  but simplifies to one slot type (parallel remux/JPG is still worth it).
+- **plan.py:** delete the codec-convergence override (the `transcode_override`
+  block, ~lines 618–652). Videos convert **only for container reasons** now. An
+  H.264 `.mp4` is genuinely left alone (`keep`), so re-runs are idempotent.
+- **`EXTENSION_POLICY` shape is unchanged**; only the *meaning* of
+  `convert_to_mp4` changes from "re-encode to HEVC" to "remux to MP4".
+  `mov/avi/mts/mpg/mpeg/vob → convert_to_mp4` (rewrap); `mp4/m4v → keep`.
+- **Un-remuxable fallback:** attempt `-c copy` into MP4; on ffmpeg refusal, keep
+  the source container/extension as-is (still tagged + organized), surface a
+  count. **Never re-encode.** Rare (exotic AVI/MJPEG/uncompressed).
+- **Rotation:** remux preserves the matrix, so the §2#1 bug disappears by
+  construction. `pix rotate` stays as the manual fix-up tool.
+- **`pix:*` metadata:** the §2#4 fragility is already handled — the normal
+  CONVERT+RENAME+TAG action re-applies pix tags after the remux, so `-c copy`
+  dropping the XMP namespace is a non-issue in the live pipeline (it only bit
+  the one-off rotation recovery).
+
+### Storage — accept the size
+
+The H.264 portion roughly doubles vs HEVC. **Accepted as the price of fidelity**
+(the redesign's whole point). No tiering, no auto-transcode, no opt-in transcode
+command. Lossless re-compression of already-compressed video buys ~nothing, so
+the transcode delta *is* intrinsically the cost of not being lossy. The only
+lossless reclaim is dedupe (merging genuine duplicates), which is orthogonal to
+the transcode delta — it just ensures the same video isn't stored twice.
+
+### Existing 100%-HEVC library — accept as-is, organic re-establish
+
+- **No migration batch.** Existing HEVC stays. The fragile run-folder
+  re-establish (§8-B; `_000000_NNN` false matches, ~1,694 files with no
+  conserved original) is **not** pursued.
+- **Re-establish happens organically through dedupe.** When the owner imports a
+  remux'd/original copy of a video already in the library, perceptual dedupe
+  groups it with the HEVC and the heavier (original) copy wins — retiring the
+  HEVC. Partial by nature (not every file has a backup), which is fine: it
+  improves what it can and never regresses.
+- **This needs no new dedupe code** (see below).
+- Conserved run captures (21,154) are prunable dead weight under accept-as-is —
+  **but pruning them discards the only non-backup lossless copies**, so it's a
+  deliberate manual fidelity tradeoff, never automated.
+
+### Dedupe — already does what's needed
+
+Verified against the live code, not just the spec:
+
+- **Grouping** (`group_by_fingerprint`) buckets by `(width, height)` then matches
+  within 0.75s duration and Hamming `[0,30]`. The dHash fingerprint is
+  **codec-agnostic**, so an H.264 original and its HEVC transcode at the **same
+  resolution** already group — the remux'd original is just another codec to it.
+- **Keeper** (`select_video_keeper`): `resolution → duration → bitrate → path`.
+  For an original-vs-transcode pair, resolution and duration tie, so **bitrate
+  decides and the heavier H.264 original already wins.** "Use the remux'd
+  original" is *already the behavior*.
+- **Cross-resolution is NOT needed.** Owner confirmed backups are the *same
+  resolution* (re-encoded, never resized) — and the transcode never changed
+  resolution either. So the `by_res` same-resolution restriction can stay.
+- **Optional hardening (low priority):** make "original beats transcode"
+  explicit via a codec-rank keeper tiebreak (lossless/intra > H.264 > HEVC),
+  ranked *below* resolution/duration, instead of relying on the bitrate proxy.
+  The proxy is right ~always; a high-CRF original vs a bloated HEVC is the only
+  theoretical miss. Defer unless a real case shows up.
+
+### Minor open item
+
+- **`.video` cache (codec triple):** under remux-only nothing branches on codec
+  for re-encode. It may still inform the remuxability decision; otherwise it can
+  be dropped. Decide during implementation. `.hash` and `.vfp` both stay.
 
 ---
 

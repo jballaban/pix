@@ -360,27 +360,25 @@ def test_plan_insp_first_migrate_tags_without_rename(tmp_path: Path) -> None:
     assert "date_auto null→2023-08-28-14:03:42" in line.details
 
 
-def test_plan_keep_h264_mp4_transcodes_to_hevc(tmp_path: Path) -> None:
-    """A keep-policy mp4 whose codec isn't HEVC is routed to CONVERT
-    (re-encode to the canonical codec)."""
-    from pix.convert import VideoProfile
-
+def test_plan_mov_converts_to_mp4_container_only(tmp_path: Path) -> None:
+    """A `convert_to_mp4`-policy video (.mov) is routed to CONVERT to
+    normalize the *container* to MP4. Under remux-only there is no codec
+    re-encode, so the line carries no "transcode" wording."""
     src = tmp_path / "src"
     src.mkdir()
-    f = src / "2023-08-15_143205.mp4"
+    f = src / "2023-08-15_143205.mov"
     f.write_bytes(b"")
 
-    cfg = _config(mp4="keep")
+    cfg = _config(mov="convert_to_mp4")
     cache = {
         f.resolve(): _meta(
             str(f),
             **{
                 PIX_DATE_AUTO: "2023-08-15-14:32:05",
-                PIX_ORIGINAL_PATH: "F:/2023-08/clip.mp4",
+                PIX_ORIGINAL_PATH: "F:/2023-08/clip.mov",
             },
         )
     }
-    profiles: dict[Path, VideoProfile | None] = {f.resolve(): VideoProfile("h264", "High", "yuv420p")}
 
     plan = generate_plan(
         source=src.resolve(),
@@ -389,20 +387,19 @@ def test_plan_keep_h264_mp4_transcodes_to_hevc(tmp_path: Path) -> None:
         run_id="test-run",
         run_dir=tmp_path / "runs",
         staging_dir=tmp_path / "staging",
-        video_profiles=profiles,
     )
 
     assert len(plan.lines) == 1
     line = plan.lines[0]
     assert line.action == Action.CONVERT_RENAME_TAG
-    assert "transcode to HEVC" in line.details
+    assert "→2023-08-15_143205.mp4" in line.details
+    assert "transcode" not in line.details and "HEVC" not in line.details
 
 
-def test_plan_keep_hevc_mp4_is_left_alone(tmp_path: Path) -> None:
-    """An already-HEVC mp4 (canonical) produces no line — idempotent, so a
-    re-run over a converged library does no work."""
-    from pix.convert import VideoProfile
-
+def test_plan_keep_mp4_is_left_alone_regardless_of_codec(tmp_path: Path) -> None:
+    """An already-`.mp4` keep-policy file produces no line, whatever its
+    codec — remux-only never re-encodes, and no codec is probed at plan
+    time. Idempotent: a re-run over the library does no work."""
     src = tmp_path / "src"
     src.mkdir()
     f = src / "2023-08-15_143205.mp4"
@@ -418,7 +415,6 @@ def test_plan_keep_hevc_mp4_is_left_alone(tmp_path: Path) -> None:
             },
         )
     }
-    profiles: dict[Path, VideoProfile | None] = {f.resolve(): VideoProfile("hevc", "Main", "yuv420p")}
 
     plan = generate_plan(
         source=src.resolve(),
@@ -427,17 +423,14 @@ def test_plan_keep_hevc_mp4_is_left_alone(tmp_path: Path) -> None:
         run_id="test-run",
         run_dir=tmp_path / "runs",
         staging_dir=tmp_path / "staging",
-        video_profiles=profiles,
     )
     assert plan.lines == []
 
 
-def test_plan_insv_never_transcoded_even_if_h264(tmp_path: Path) -> None:
-    """Name-preserving .insv (H.264 360 video) is excluded from the
-    transcode override — re-encoding would strip the Insta360 trailer.
-    Even with an h264 profile present, it stays a tag-only/no-op keep."""
-    from pix.convert import VideoProfile
-
+def test_plan_insv_is_kept_not_converted(tmp_path: Path) -> None:
+    """Name-preserving .insv (Insta360 360 video) is a keep — never routed to
+    CONVERT (a remux would strip the Insta360 trailer). An already-tagged one
+    is a no-op."""
     src = tmp_path / "src"
     src.mkdir()
     f = src / "VID_20230516_164835_00_010.insv"
@@ -453,7 +446,6 @@ def test_plan_insv_never_transcoded_even_if_h264(tmp_path: Path) -> None:
             },
         )
     }
-    profiles: dict[Path, VideoProfile | None] = {f.resolve(): VideoProfile("h264", "High", "yuv420p")}
 
     plan = generate_plan(
         source=src.resolve(),
@@ -462,7 +454,6 @@ def test_plan_insv_never_transcoded_even_if_h264(tmp_path: Path) -> None:
         run_id="test-run",
         run_dir=tmp_path / "runs",
         staging_dir=tmp_path / "staging",
-        video_profiles=profiles,
     )
     # No CONVERT — nothing to do (already tagged, name-preserving keep).
     assert all(ln.action != Action.CONVERT_RENAME_TAG for ln in plan.lines)

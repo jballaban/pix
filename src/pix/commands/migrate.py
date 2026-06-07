@@ -27,7 +27,6 @@ from pix.cleanup import (
 )
 from pix.cache_base import prune_orphans, relocate_all, remove_all
 from pix.config import Config, settings_path
-from pix.convert import VideoProfile, probe_videos_parallel
 from pix.duration import format_duration_precise
 from pix.errors import restore_orphaned_errors, restore_stale_errors
 from pix.editor import open_in_editor, parse_kept_line_ids, prompt_apply
@@ -44,7 +43,6 @@ from pix.plan import (
     Action,
     Plan,
     PlanLine,
-    canonical_extension,
     generate_plan,
     lookup_policy,
 )
@@ -52,7 +50,6 @@ from pix.progress import LiveProgress
 from pix.root import NoLibraryRoot, resolve as resolve_root
 from pix.scan import walk_source_files
 from pix.stash import restore_stale_stash
-from pix.video_cache import read_all_cached_profiles, write_cached_profile
 
 
 def migrate_folder(folder: Path, no_prompt: bool = False) -> None:
@@ -366,83 +363,10 @@ def _run_migrate(
                 path=path, raw={"SourceFile": str(path)}
             )
 
-    # Canonical-codec probe per spec/migrate.md → Canonical video codec.
-    # Probe every keep-policy mp4/m4v candidate so plan-gen knows whether
-    # it's already HEVC (keep) or needs CONVERT to re-encode. Cached at
-    # <library>/.pix/cache/<...>.video keyed on (size, mtime_ns), so
-    # subsequent runs over an unchanged library skip the ffprobe pass
-    # entirely. Source files matching `convert_to_mp4` policy already go
-    # through CONVERT and re-probe internally at apply time, so we don't
-    # cache or pre-probe them here.
-    video_candidates_meta = [
-        (p, sz, mt) for p, sz, mt in scanned
-        if lookup_policy(p.name, config.extensions) == "keep"
-        and canonical_extension(p.suffix.lstrip(".")) == "mp4"
-    ]
-    video_profiles: dict[Path, VideoProfile | None] = {}
-    if video_candidates_meta:
-        t0 = time.monotonic()
-        _plog(
-            plan_log_path,
-            f"Probing {len(video_candidates_meta)} video(s) for codec...",
-        )
-        # Parallel cache lookup first.
-        with LiveProgress(
-            total=len(video_candidates_meta)
-        ) as cache_progress:
-            cache_progress.begin("Loading video cache")
-
-            def _on_cache_batch(n: int) -> None:
-                cache_progress.advance(by=n)
-
-            cached_profiles = read_all_cached_profiles(
-                root, video_candidates_meta, on_batch=_on_cache_batch
-            )
-
-        # Probe only the misses; write fresh results back to the cache.
-        miss_meta = [
-            (p, sz, mt) for p, sz, mt in video_candidates_meta
-            if cached_profiles.get(p) is None
-        ]
-        hits = sum(
-            1 for p in cached_profiles if cached_profiles[p] is not None
-        )
-        fresh_profiles: dict[Path, VideoProfile | None] = {}
-        if miss_meta:
-            with LiveProgress(total=len(miss_meta)) as probe_progress:
-                probe_progress.begin("Probing videos")
-
-                def _on_probe_batch(n: int) -> None:
-                    probe_progress.advance(by=n)
-
-                fresh_profiles = probe_videos_parallel(
-                    [p for p, _, _ in miss_meta],
-                    on_batch=_on_probe_batch,
-                )
-            # Persist fresh probes — successful ones only (a failed
-            # probe yields None; we'd re-probe on next run anyway, and
-            # caching None would mask a transient ffprobe error).
-            mt_by_path = {p: (sz, mt) for p, sz, mt in miss_meta}
-            for p, profile in fresh_profiles.items():
-                if profile is None:
-                    continue
-                sz, mt = mt_by_path[p]
-                write_cached_profile(
-                    root, p, profile=profile, size=sz, mtime_ns=mt
-                )
-
-        # Merge hits (non-None entries from cache) + fresh probes.
-        video_profiles = {
-            p: v for p, v in cached_profiles.items() if v is not None
-        }
-        video_profiles.update(fresh_profiles)
-        _plog(
-            plan_log_path,
-            f"Probed {len(video_profiles)} video(s) in "
-            f"{format_duration_precise(time.monotonic() - t0)} "
-            f"({hits} cache hit(s), {len(miss_meta)} from ffprobe).",
-        )
-
+    # Videos are not probed at plan time: under remux-only there's no codec
+    # decision to make (a `convert_to_mp4`-policy source is losslessly
+    # remuxed to MP4 at apply time, an already-`.mp4`/`.m4v` is kept), so the
+    # former canonical-codec ffprobe pass and its `.video` cache are gone.
     t0 = time.monotonic()
     _plog(plan_log_path, "Generating plan...")
     with debug.writing_to(runs_dir):
@@ -453,7 +377,6 @@ def _run_migrate(
             run_id=run_id,
             run_dir=runs_dir,
             staging_dir=staging_dir,
-            video_profiles=video_profiles,
         )
     _plog(
         plan_log_path,
@@ -549,18 +472,17 @@ def _post_apply_cache_update(
     """Update the per-file metadata cache to reflect apply's mutations.
 
     Walks the applied plan lines and reflects each into ALL cache
-    sidecars (.meta/.hash/.video), not just .meta — a pure RENAME leaves
-    bytes/size/mtime untouched, so the .hash/.video entries stay valid
+    sidecars (.meta/.hash), not just .meta — a pure RENAME leaves
+    bytes/size/mtime untouched, so the .hash entry stays valid
     and must travel with the file instead of being orphaned and pruned:
     - DELETE / STASH: removes every sidecar (file gone).
     - CONVERT+RENAME+TAG: removes every old sidecar; the new file's
       .meta was already written inside apply (via the live ExifTool
-      session); its .hash/.video are recomputed by a later pix hash /
-      migrate re-probe.
+      session); its .hash is recomputed by a later pix hash run.
     - RENAME: relocates every sidecar alongside the media rename.
     - TAG: merges the written pix:* fields into the cached .meta
-      in place (the tag write changed mtime, so the .hash/.video at this
-      path are now stale — left for validation to reject on next read).
+      in place (the tag write changed mtime, so the .hash at this
+      path is now stale — left for validation to reject on next read).
     - RENAME+TAG: relocate every sidecar first (apply already moved the
       file), then update_metadata using `target_path` so cache.add
       stats the file at its current location. Calling update_metadata

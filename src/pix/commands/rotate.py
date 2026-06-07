@@ -3,7 +3,7 @@
 Adds `<degrees>` of **clockwise** display rotation to each video by rewriting
 only the container's rotation matrix (`ffmpeg -c copy` — no re-encode, no
 quality loss), then re-applying the `pix:*` XMP that the remux drops and
-re-stamping the content-invariant caches (`.hash`/`.video`). Folders expand to
+re-stamping the content-invariant cache (`.hash`). Folders expand to
 the videos inside them; non-video paths are skipped.
 
 Orientation only — no date/event change, so `pix organize` isn't needed.
@@ -40,7 +40,6 @@ from pix.metadata_cache import SUFFIX as META_SUFFIX
 from pix import cache_base
 from pix.root import NoLibraryRoot, resolve as resolve_root
 from pix.scan import walk_source_files
-from pix.video_cache import read_cached_profile, write_cached_profile
 
 _VALID_DEGREES = (90, 180, 270)
 # Container formats we can losslessly re-tag rotation on.
@@ -176,7 +175,6 @@ def _apply(root: Path, videos: list[Path], degrees: int) -> None:
         tmp = src.with_name(f"{src.stem}.__rot__{src.suffix}")
         try:
             pre_hash = read_cached_hash(root, src)
-            pre_prof = read_cached_profile(root, src)
             orig_op = _cached_original(root, src)
 
             r = subprocess.run(
@@ -207,11 +205,6 @@ def _apply(root: Path, videos: list[Path], degrees: int) -> None:
             if pre_hash is not None:
                 write_cached_hash(
                     root, src, hash_hex=pre_hash,
-                    size=st.st_size, mtime_ns=st.st_mtime_ns,
-                )
-            if pre_prof is not None:
-                write_cached_profile(
-                    root, src, profile=pre_prof,
                     size=st.st_size, mtime_ns=st.st_mtime_ns,
                 )
             fixed += 1
