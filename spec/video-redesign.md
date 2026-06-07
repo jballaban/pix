@@ -111,12 +111,10 @@ and most of the fragility above.
   it (storage is cheap); cold/tiered storage; opt-in per-file transcode for a
   few huge outliers; better dedupe; lossless container optimization. Owner
   said "a different / better way."
-- **Existing already-HEVC library.** Most videos are *already* transcoded
-  (lossy, done). Remux-only changes only *future* behavior — it won't
-  un-transcode. Conserved originals exist in `.pix/runs` (both `G:\pix\.pix\runs`
-  and the relocated `F:\.pix\runs`) but are huge/numerous. Decide: accept the
-  current HEVC archive as-is, or selectively re-establish originals where
-  conserved? (Probably accept; re-import is a separate, optional effort.)
+- **Existing already-HEVC library + one-off migration.** pix is the *only*
+  tooling for this library, so the redesign must include a migration plan for
+  what's already there. The full measured state and the A/B/C migration options
+  are in **§8** — settle that alongside the storage strategy.
 - **Dedupe — can we drop the perceptual path?** It was added only because
   transcode made same-source copies byte-different (see catalog #6). With
   remux-only, exact `.hash` dedupe catches true byte duplicates again, so the
@@ -162,7 +160,52 @@ and most of the fragility above.
 ## 7. How to use this doc (fresh session)
 
 Read this file, then skim `src/pix/convert.py` and `src/pix/apply.py` (sections
-2 & 5). Confirm the storage strategy and the un-remuxable fallback with the
-owner before implementing. The end state: `pix migrate` remuxes videos to MP4
-(`-c copy`) and never re-encodes; the CPU/GPU encode paths and `_route_encoder`
-pool are removed; storage is handled by whatever strategy we agree on.
+2 & 5). Confirm the storage strategy, the un-remuxable fallback, and the
+migration option (§8) with the owner before implementing. The end state: `pix
+migrate` remuxes videos to MP4 (`-c copy`) and never re-encodes; the CPU/GPU
+encode paths and `_route_encoder` pool are removed; storage is handled by
+whatever strategy we agree on.
+
+
+## 8. Current library state (measured 2026-06-07) & the one-off migration
+
+**What's in the library now:**
+- **9,676 videos, 100% HEVC** — the transcode is complete; no original-codec
+  video remains in place (from the `.video` cache).
+- **Mixed encoder, ~half/half:** a 200-file sample was **~54% x265 (CPU)** /
+  **~46% hevc_nvenc (GPU)** (x265 leaves an SEI signature; NVENC doesn't). So
+  quality/encode characteristics vary file-to-file across the archive.
+- All of it is **lossily transcoded** from the originals.
+
+**What's recoverable (conserved originals):**
+- Run folders (`G:\pix\.pix\runs` + relocated `F:\.pix\runs`) hold **21,154
+  conserved video captures**. A 300-file sample was **~59% H.264** (pre-transcode
+  CONVERT-source originals) / ~40% HEVC (post-transcode dedupe captures) — so on
+  the order of **~12k H.264 originals conserved**: a large fraction of the
+  library is recoverable to its lossless source.
+- **But not all.** The rotation recovery found **~1,694 current videos with no
+  conserved original**. Matching original↔current is by canonical basename and
+  is **unreliable for the undated `_000000_NNN` clusters** (false matches) — any
+  migration must verify each pair (duration/content) before acting, exactly as
+  the rotation recovery did.
+
+**One-off migration options (for the remux-only target):**
+- **A. Accept the current HEVC archive as-is.** Change only future imports to
+  remux-only. Simplest; zero re-processing. Existing lossy/mixed-encoder HEVC
+  stays — a permanent quality compromise, but done and stable. Conserved
+  captures (21,154) become prunable dead weight.
+- **B. Re-establish originals where conserved.** For each current video with a
+  *verified* conserved H.264 original: **remux the original** (lossless
+  H.264-in-MP4), transplant the `pix:*` tags + canonical name, replace the HEVC.
+  Recovers lossless quality for the recoverable fraction (~80%?); the rest stay
+  HEVC. Big, careful, verify-first batch (like the rotation recovery) with
+  false-match guards. **Increases library size** (H.264 ≫ HEVC) — i.e. it brings
+  back exactly the space the transcode was saving, so it only makes sense once
+  the §4 storage strategy is settled.
+- **C. Hybrid / opt-in.** Accept HEVC now; ship a tool to re-establish originals
+  selectively (e.g. only NVENC-encoded ones, or only where it matters), over time.
+
+**Linked:** option B's size cost is why the storage strategy (§4) must be
+decided first. The 21,154 conserved captures are themselves substantial weight:
+under A they're largely prunable; under B the H.264 ones get consumed into the
+library, then the rest pruned.
