@@ -65,7 +65,22 @@ Relevant memories: `project_hevc_canonical_video`, `project_hybrid_gpu_encoding`
    cache leaks made it re-fingerprint the whole library (fixed v0.1.147). The
    transcode pipeline (prefetch pool, GPU routing, NVENC ceiling, fallback) is a
    large, bug-prone surface.
-6. **Undated `_000000_NNN` clusters.** Many videos have no real date → all
+6. **Dedupe is no longer a pure hash compare (a transcode-induced kludge).**
+   Exact byte-hash dedupe stopped catching duplicate *videos* because
+   re-encoding the same source with different encoders/versions (x265 vs NVENC,
+   or across runs) produces byte-different HEVC. So we added **perceptual video
+   dedupe**: a dHash fingerprint (`.vfp`) sampled at fixed fractional
+   timestamps, grouped within a Hamming **band [0, 30]** (same-resolution only;
+   cross-res deferred), with a `--checkout`/`--commit` review gate (v0.1.132–134;
+   see `spec/dedupe.md`). Images still dedupe by exact content hash; videos use
+   this fuzzy "partial" comparison. It's extra complexity *and* a recurring
+   cost/churn source (`.vfp` re-fingerprinting), and it exists almost entirely
+   to paper over transcode non-determinism. **Under remux-only the rationale
+   largely evaporates:** a lossless remux preserves the mdat bytes, so two
+   imports of the same source are byte-identical again and exact `.hash` dedupe
+   works — perceptual matching would only be needed for copies re-encoded
+   *outside* pix.
+7. **Undated `_000000_NNN` clusters.** Many videos have no real date → all
    canonicalize to the same midnight timestamp and pile up with suffixes;
    collision re-suffixing churns on every organize. (Not caused by transcode but
    tangled with video handling.)
@@ -102,9 +117,14 @@ and most of the fragility above.
   and the relocated `F:\.pix\runs`) but are huge/numerous. Decide: accept the
   current HEVC archive as-is, or selectively re-establish originals where
   conserved? (Probably accept; re-import is a separate, optional effort.)
-- **Dedupe.** With no re-encode, exact `.hash` dedupe catches true byte
-  duplicates again; perceptual `.vfp` still useful for copies re-encoded
-  *elsewhere*. Decide whether `.vfp` stays.
+- **Dedupe — can we drop the perceptual path?** It was added only because
+  transcode made same-source copies byte-different (see catalog #6). With
+  remux-only, exact `.hash` dedupe catches true byte duplicates again, so the
+  fuzzy dHash-band comparison (and the `.vfp` cache, the `--checkout`/`--commit`
+  review gate, the band tuning) may be removable — a big simplification.
+  Counter-argument: it still catches copies someone re-encoded *outside* pix.
+  Decide: keep perceptual as optional, or remove `.vfp`/perceptual entirely and
+  return dedupe to pure exact-hash.
 - **Rotation.** Remux preserves the rotation matrix (verified), so the rotation
   bug simply disappears under remux-only — `pix rotate` remains as the manual
   fix-up tool.
