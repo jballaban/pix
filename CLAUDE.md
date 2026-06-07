@@ -32,6 +32,7 @@ Active codebase. The implementation lives in `src/pix/`; tests in `tests/`. **Co
 - [`spec/implementation.md`](spec/implementation.md) — language, libs, env, perf notes, sync-client interaction
 - [`spec/roadmap.md`](spec/roadmap.md) — designed-but-unbuilt features
 - [`spec/perf-backlog.md`](spec/perf-backlog.md) — performance ideas against already-implemented code
+- [`spec/video-redesign.md`](spec/video-redesign.md) — directive: drop video transcode → remux-only (full problem catalog; not yet designed)
 
 ## Environment
 

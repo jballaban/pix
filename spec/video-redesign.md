@@ -1,0 +1,148 @@
+# Video handling — problem catalog & redesign directive
+
+> **Purpose.** This is the seed document for redesigning how pix handles videos.
+> The current approach (transcode everything to HEVC for space) has caused
+> repeated, serious data-fidelity problems. The owner wants to **stop
+> re-encoding and go back to remux-only**, solving storage some other way. This
+> file captures the full context so a fresh session can pick it up cold.
+>
+> **Status:** directive / not yet designed or implemented. Confirm scope with
+> the owner before ripping anything out. Nothing here is decided except the
+> overall direction (drop transcode → remux-only).
+
+---
+
+## 1. Current architecture (what exists today)
+
+**Canonical video codec = HEVC** (introduced v0.1.122). `pix migrate` converges
+every video to HEVC-in-MP4:
+
+- `src/pix/config.py` `EXTENSION_POLICY`: `mp4`/`m4v` = `keep`,
+  `mov`/`avi`/`mts`/`mpg`/`mpeg`/`vob` = `convert_to_mp4`, `insp`/`insv` = `keep`
+  (Insta360, never touched). "keep" is about the **container**; the **codec**
+  policy still re-encodes non-HEVC (e.g. an H.264 `.mp4`) to HEVC.
+- `src/pix/convert.py` `convert_to_mp4(src, dst, encoder, profile)`:
+  - source already HEVC → **remux** (`ffmpeg -c copy -map_metadata 0
+    -movflags +faststart`) — lossless rewrap.
+  - otherwise → **re-encode** to HEVC via one of two encoders.
+- **Hybrid CPU+GPU encoding** (v0.1.130): `ENCODER_X265` (libx265, CPU, CRF 22,
+  `-preset medium`) and `ENCODER_NVENC` (hevc_nvenc, GPU, full-CUDA pipeline
+  `-hwaccel cuda -hwaccel_output_format cuda`, preset p7, cq ~30).
+  - `src/pix/apply.py` `_route_encoder()` (~line 120) + a GPU-slot pool
+    (~lines 271–322) route 4K / CPU-overflow clips to the GPU; NVENC has a
+    ~3× concurrency ceiling; on NVENC failure it falls back to x265.
+- Caches per video: `.hash` (content hash, mdat-only), `.video` (ffprobe
+  codec/profile/pix_fmt), `.vfp` (perceptual dHash fingerprint for dedupe).
+- Box: AMD 9950X + RTX 5090. Library is single-user, **TB-scale, HD-heavy**.
+- **Why it was built:** space savings on a large HD/4K library.
+
+Relevant memories: `project_hevc_canonical_video`, `project_hybrid_gpu_encoding`,
+`project_perceptual_dedupe`, `project_reconsider_reencode`.
+
+---
+
+## 2. Problem catalog (why we're reconsidering)
+
+1. **NVENC silently dropped rotation (the worst).** The full-CUDA pipeline keeps
+   frames on the GPU, so ffmpeg's autorotation (a CPU filter) was skipped and a
+   rotated source's orientation was lost entirely — clips came out upside-down /
+   sideways. **~1,126 library files were damaged.** Diagnosed and proven: CPU
+   path bakes rotation; remux preserves the matrix; only NVENC re-encode broke
+   it. Fixed forward in **v0.1.161** (rotated clips drop `-hwaccel_output_format
+   cuda` so autorotate runs). Existing files recovered via a lossless
+   rotation-tag-add (`pix rotate`, v0.1.162) using conserved originals to
+   determine the angle.
+2. **Re-encoding is lossy and irreversible.** Every transcode loses quality;
+   re-running migrate/sync once re-encoded the whole H.264 library to HEVC
+   (huge, lossy, conserved originals only in run folders).
+3. **CPU vs GPU output diverges.** Different encoders → slightly different
+   output and (as the rotation bug showed) different *behavior*. Mixed archive.
+4. **Metadata fragility.** Re-encode/remux drops things: a remux/`-c copy
+   -map_metadata 0` drops the `pix:*` XMP namespace (we had to re-apply via
+   exiftool during the rotation recovery). Rotation matrices, side data, etc.
+   are easy to lose across a transcode.
+5. **Expense & churn.** Perceptual fingerprinting (`.vfp`) of videos is costly;
+   cache leaks made it re-fingerprint the whole library (fixed v0.1.147). The
+   transcode pipeline (prefetch pool, GPU routing, NVENC ceiling, fallback) is a
+   large, bug-prone surface.
+6. **Undated `_000000_NNN` clusters.** Many videos have no real date → all
+   canonicalize to the same midnight timestamp and pile up with suffixes;
+   collision re-suffixing churns on every organize. (Not caused by transcode but
+   tangled with video handling.)
+
+---
+
+## 3. The decision / direction
+
+**Drop video re-encoding. Go back to remux-only.** Rewrap the source container
+into MP4 with `-c copy` (codec preserved, lossless, fast, metadata/rotation
+intact). This eliminates the entire transcode surface — and with it the
+rotation class of bug, the CPU/GPU routing, NVENC, generational quality loss,
+and most of the fragility above.
+
+**Handle storage "in a different / better way" — TBD, but NOT lossy transcode.**
+
+---
+
+## 4. Open questions to resolve in the design pass
+
+- **Canonical policy under remux-only.** Keep source codec, rewrap to `.mp4`?
+  What about already-`.mp4` H.264 — leave as-is (no codec convergence)? Likely
+  yes: remux only normalizes the *container*, never the codec.
+- **Un-remuxable sources.** Some codecs can't `-c copy` into MP4 (e.g. certain
+  AVI/DivX/MJPEG, old formats). Policy: keep original container? a rare,
+  explicit re-encode? Need a fallback rule and how it's surfaced.
+- **Storage strategy** (replace the transcode space win). Brainstorm: accept
+  it (storage is cheap); cold/tiered storage; opt-in per-file transcode for a
+  few huge outliers; better dedupe; lossless container optimization. Owner
+  said "a different / better way."
+- **Existing already-HEVC library.** Most videos are *already* transcoded
+  (lossy, done). Remux-only changes only *future* behavior — it won't
+  un-transcode. Conserved originals exist in `.pix/runs` (both `G:\pix\.pix\runs`
+  and the relocated `F:\.pix\runs`) but are huge/numerous. Decide: accept the
+  current HEVC archive as-is, or selectively re-establish originals where
+  conserved? (Probably accept; re-import is a separate, optional effort.)
+- **Dedupe.** With no re-encode, exact `.hash` dedupe catches true byte
+  duplicates again; perceptual `.vfp` still useful for copies re-encoded
+  *elsewhere*. Decide whether `.vfp` stays.
+- **Rotation.** Remux preserves the rotation matrix (verified), so the rotation
+  bug simply disappears under remux-only — `pix rotate` remains as the manual
+  fix-up tool.
+
+---
+
+## 5. Code & spec map (where to work)
+
+- `src/pix/convert.py` — `convert_to_mp4` (remux + re-encode branches),
+  `VideoProfile`, `probe_video_profile`, `nvenc_available`, `_video_rotation`,
+  `ENCODER_X265`/`ENCODER_NVENC`, `is_canonical_video_codec`.
+- `src/pix/apply.py` — `_route_encoder`, the GPU-slot prefetch pool (the CPU/GPU
+  concurrency machinery to retire).
+- `src/pix/config.py` — `EXTENSION_POLICY` (the `convert_to_mp4` actions).
+- `src/pix/video_cache.py`, `vfp_cache.py`, `video_fingerprint.py` — caches.
+- `src/pix/commands/rotate.py` — the lossless rotation tag-add (keep).
+- Tests: `tests/test_convert.py`, `tests/test_gpu_routing.py`,
+  `tests/test_video_cache.py`, `tests/test_vfp_cache.py`,
+  `tests/test_dedupe_perceptual.py`.
+- Specs: `spec/migrate.md` (Canonical video codec section), `spec/dedupe.md`,
+  `spec/implementation.md`. Update these when the policy changes.
+
+---
+
+## 6. Invariants to respect
+
+- **Conservation** — never destroy data without a capture (run folders).
+- **Canonical filename** + **same-volume** invariants (see `spec/library.md`).
+- **Version bump** per behavior change; **reinstall** editable after commits.
+- Migrate is **in-place**; only organize moves files.
+- Don't break the `pix:*` tag model or the rotation tag-add recovery path.
+
+---
+
+## 7. How to use this doc (fresh session)
+
+Read this file, then skim `src/pix/convert.py` and `src/pix/apply.py` (sections
+2 & 5). Confirm the storage strategy and the un-remuxable fallback with the
+owner before implementing. The end state: `pix migrate` remuxes videos to MP4
+(`-c copy`) and never re-encodes; the CPU/GPU encode paths and `_route_encoder`
+pool are removed; storage is handled by whatever strategy we agree on.
