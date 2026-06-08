@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import os
 import shutil
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -37,6 +38,61 @@ _EXIFTOOL_TMP_SUFFIX: str = "_exiftool_tmp"
 
 class CleanupError(Exception):
     """Raised when a marker can't be safely resolved during cleanup."""
+
+
+@dataclass(frozen=True)
+class CleanupMarkers:
+    """The orphan markers found by one `scan_cleanup_markers` pass, bucketed
+    by kind. Each cleanup function consumes its own list."""
+
+    rename_orphans: list[Path]
+    migrate_markers: list[Path]
+    exiftool_tmps: list[Path]
+
+
+def scan_cleanup_markers(folder: Path) -> CleanupMarkers:
+    """Single classifying walk of `folder` for all three orphan-marker kinds.
+
+    Replaces the three separate `rglob` traversals the cleanup functions used
+    to each run at migrate start (rename intermediates, CONVERT markers,
+    ExifTool tmp files) with one `os.scandir`-based pass, skipping `.pix/`
+    (same as `pix.scan.walk_source_files`). Classification is first-match
+    (rename > migrate > tmp); the suffix patterns don't overlap on any file
+    pix actually produces, so the ordering is immaterial in practice.
+
+    The source walk (`walk_source_files`) stays separate and runs *after*
+    cleanup, because cleanup mutates the tree (reverts renames, finalizes
+    markers) and the source enumeration must see that post-cleanup state.
+    """
+    rename_orphans: list[Path] = []
+    migrate_markers: list[Path] = []
+    exiftool_tmps: list[Path] = []
+    stack: list[str] = [str(folder)]
+    while stack:
+        dirpath = stack.pop()
+        try:
+            with os.scandir(dirpath) as it:
+                for entry in it:
+                    if entry.is_dir(follow_symlinks=False):
+                        if entry.name != ".pix":
+                            stack.append(entry.path)
+                        continue
+                    if not entry.is_file(follow_symlinks=False):
+                        continue
+                    name = entry.name
+                    if name.endswith(_RENAME_SUFFIX):
+                        rename_orphans.append(Path(entry.path))
+                    elif _MIGRATE_INFIX in name:
+                        migrate_markers.append(Path(entry.path))
+                    elif name.endswith(_EXIFTOOL_TMP_SUFFIX):
+                        exiftool_tmps.append(Path(entry.path))
+        except OSError:
+            continue
+    return CleanupMarkers(
+        rename_orphans=rename_orphans,
+        migrate_markers=migrate_markers,
+        exiftool_tmps=exiftool_tmps,
+    )
 
 
 # `.pix/` working subfolders migrate owns and can reap once empty: errors
@@ -79,8 +135,9 @@ def cleanup_empty_pix_workdirs(library_root: Path) -> list[str]:
     return removed
 
 
-def cleanup_rename_orphans(folder: Path) -> list[Path]:
-    """Revert any `*.__pixrename__` intermediates back to their original names.
+def cleanup_rename_orphans(orphans: list[Path]) -> list[Path]:
+    """Revert `*.__pixrename__` intermediates (from `scan_cleanup_markers`)
+    back to their original names.
 
     For each orphan:
     - If the original name slot is empty → rename intermediate to original.
@@ -91,12 +148,7 @@ def cleanup_rename_orphans(folder: Path) -> list[Path]:
     intermediate encountered).
     """
     resolved: list[Path] = []
-    for path in folder.rglob(f"*{_RENAME_SUFFIX}"):
-        if not path.is_file():
-            continue
-        if _under_pix_dir(path):
-            continue
-
+    for path in orphans:
         original_name = path.name[: -len(_RENAME_SUFFIX)]
         original = path.parent / original_name
         if original.exists():
@@ -107,8 +159,9 @@ def cleanup_rename_orphans(folder: Path) -> list[Path]:
     return resolved
 
 
-def cleanup_migrate_markers(folder: Path) -> list[str]:
-    """Resolve any `*.__migrate__.*` markers from interrupted CONVERT runs.
+def cleanup_migrate_markers(markers: list[Path]) -> list[str]:
+    """Resolve `*.__migrate__.*` markers (from `scan_cleanup_markers`) left by
+    interrupted CONVERT runs.
 
     For each marker `{original-name}.__migrate__.{new-ext}`:
     - If `{original-name}` is still in source → original survived; delete
@@ -121,11 +174,6 @@ def cleanup_migrate_markers(folder: Path) -> list[str]:
     `CleanupError` if a marker can't be safely resolved (e.g. malformed
     name, missing pix:DateAuto, canonical-name collision).
     """
-    markers = [
-        p
-        for p in folder.rglob(f"*{_MIGRATE_INFIX}*")
-        if p.is_file() and not _under_pix_dir(p)
-    ]
     if not markers:
         return []
 
@@ -213,23 +261,16 @@ def _parse_pix_dt(value: str) -> datetime | None:
         return None
 
 
-def cleanup_exiftool_tmp(folder: Path) -> list[Path]:
-    """Delete any `*_exiftool_tmp` leftovers under `folder`.
+def cleanup_exiftool_tmp(tmps: list[Path]) -> list[Path]:
+    """Delete `*_exiftool_tmp` leftovers (from `scan_cleanup_markers`).
 
     These are ExifTool's atomic-write tmp files; if one exists then the
     original was never replaced (ExifTool's protocol), so deletion is
     safe. Per spec/migrate.md → Marker cleanup. Returns the list of
     deleted paths.
-
-    Skips anything under `.pix/` — that's pix-managed working state and
-    not part of source's atomic-write story.
     """
     deleted: list[Path] = []
-    for path in folder.rglob(f"*{_EXIFTOOL_TMP_SUFFIX}"):
-        if not path.is_file():
-            continue
-        if _under_pix_dir(path):
-            continue
+    for path in tmps:
         try:
             path.unlink()
         except OSError:
@@ -261,7 +302,3 @@ def wipe_staging(staging_dir: Path) -> int:
                 continue
         count += 1
     return count
-
-
-def _under_pix_dir(path: Path) -> bool:
-    return any(part == ".pix" for part in path.parts)

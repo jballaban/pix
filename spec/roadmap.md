@@ -14,6 +14,17 @@ already guaranteed present per the conservation law; only the command is
 missing. Sketched in [migrate.md](migrate.md), [organize.md](organize.md), and
 [dedupe.md](dedupe.md).
 
+**Bundled opportunity — make a TAG one ExifTool round-trip.** A TAG currently
+makes two `-execute` calls: export a full XMP sidecar (the conservation
+artifact), then write. ExifTool can't do both in one command (`-o` suppresses
+the in-place write — verified). But a pix TAG only ever touches `pix:*` fields,
+whose prior values pix **already read into the cache** — so the conservation
+artifact could be written from those cached values instead of via a second
+ExifTool pass, cutting TAG to a single round-trip (and a metadata read). This
+changes the conservation artifact format, so it should be designed *with*
+rollback (rollback is the artifact's only consumer), not as a standalone perf
+change. See [perf-backlog.md → Considered and dropped](perf-backlog.md).
+
 ## Tag editing — removal, blanking, and override review
 
 `pix checkout` currently supports **assigning** a tag (drag a file into a value

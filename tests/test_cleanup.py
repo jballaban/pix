@@ -5,6 +5,7 @@ from pathlib import Path
 from pix.cleanup import (
     cleanup_exiftool_tmp,
     cleanup_rename_orphans,
+    scan_cleanup_markers,
     wipe_staging,
 )
 
@@ -16,7 +17,7 @@ def test_cleanup_reverts_orphan_intermediate(tmp_path: Path) -> None:
     orphan = src / "FOO.JPG.__pixrename__"
     orphan.write_bytes(b"img")
 
-    resolved = cleanup_rename_orphans(src)
+    resolved = cleanup_rename_orphans(scan_cleanup_markers(src).rename_orphans)
 
     assert len(resolved) == 1
     assert not orphan.exists()
@@ -35,7 +36,7 @@ def test_cleanup_deletes_stale_intermediate_if_original_exists(
     orphan = src / "FOO.JPG.__pixrename__"
     orphan.write_bytes(b"stale-orphan-bytes")
 
-    cleanup_rename_orphans(src)
+    cleanup_rename_orphans(scan_cleanup_markers(src).rename_orphans)
 
     assert original.exists()
     assert original.read_bytes() == b"original"
@@ -46,7 +47,7 @@ def test_cleanup_returns_empty_when_no_orphans(tmp_path: Path) -> None:
     src = tmp_path / "src"
     src.mkdir()
     (src / "normal.jpg").write_bytes(b"")
-    assert cleanup_rename_orphans(src) == []
+    assert cleanup_rename_orphans(scan_cleanup_markers(src).rename_orphans) == []
 
 
 def test_cleanup_skips_pix_state_directory(tmp_path: Path) -> None:
@@ -56,7 +57,7 @@ def test_cleanup_skips_pix_state_directory(tmp_path: Path) -> None:
     (src / ".pix").mkdir()
     (src / ".pix" / "weird.__pixrename__").write_bytes(b"")
 
-    resolved = cleanup_rename_orphans(src)
+    resolved = cleanup_rename_orphans(scan_cleanup_markers(src).rename_orphans)
     assert resolved == []
     # The pix-state file is untouched.
     assert (src / ".pix" / "weird.__pixrename__").exists()
@@ -68,7 +69,7 @@ def test_cleanup_handles_nested_subdirectories(tmp_path: Path) -> None:
     orphan = src / "deep" / "nested" / "FILE.JPG.__pixrename__"
     orphan.write_bytes(b"img")
 
-    cleanup_rename_orphans(src)
+    cleanup_rename_orphans(scan_cleanup_markers(src).rename_orphans)
     assert not orphan.exists()
     assert (src / "deep" / "nested" / "FILE.JPG").exists()
 
@@ -82,7 +83,7 @@ def test_cleanup_exiftool_tmp_deletes_leftovers(tmp_path: Path) -> None:
     tmp = src / "photo.jpg_exiftool_tmp"
     tmp.write_bytes(b"half-written-tmp")
 
-    deleted = cleanup_exiftool_tmp(src)
+    deleted = cleanup_exiftool_tmp(scan_cleanup_markers(src).exiftool_tmps)
 
     assert len(deleted) == 1
     assert not tmp.exists()
@@ -99,7 +100,7 @@ def test_cleanup_exiftool_tmp_skips_pix_dir(tmp_path: Path) -> None:
     in_pix = src / ".pix" / "weird.jpg_exiftool_tmp"
     in_pix.write_bytes(b"")
 
-    assert cleanup_exiftool_tmp(src) == []
+    assert cleanup_exiftool_tmp(scan_cleanup_markers(src).exiftool_tmps) == []
     assert in_pix.exists()
 
 
@@ -109,7 +110,7 @@ def test_cleanup_exiftool_tmp_nested(tmp_path: Path) -> None:
     tmp = src / "a" / "b" / "deep.jpg_exiftool_tmp"
     tmp.write_bytes(b"")
 
-    deleted = cleanup_exiftool_tmp(src)
+    deleted = cleanup_exiftool_tmp(scan_cleanup_markers(src).exiftool_tmps)
     assert deleted == [tmp]
     assert not tmp.exists()
 
@@ -118,7 +119,26 @@ def test_cleanup_exiftool_tmp_returns_empty_when_none(tmp_path: Path) -> None:
     src = tmp_path / "src"
     src.mkdir()
     (src / "photo.jpg").write_bytes(b"")
-    assert cleanup_exiftool_tmp(src) == []
+    assert cleanup_exiftool_tmp(scan_cleanup_markers(src).exiftool_tmps) == []
+
+
+def test_scan_classifies_all_kinds_and_skips_pix(tmp_path: Path) -> None:
+    """One walk buckets the three marker kinds and ignores `.pix/` + normals."""
+    src = tmp_path / "src"
+    (src / "sub").mkdir(parents=True)
+    (src / ".pix").mkdir()
+    rename = src / "FOO.JPG.__pixrename__"
+    marker = src / "sub" / "bar.jpg.__migrate__.mp4"
+    tmp = src / "baz.jpg_exiftool_tmp"
+    for p in (rename, marker, tmp):
+        p.write_bytes(b"")
+    (src / "normal.jpg").write_bytes(b"")  # not a marker
+    (src / ".pix" / "x.jpg_exiftool_tmp").write_bytes(b"")  # skipped
+
+    found = scan_cleanup_markers(src)
+    assert found.rename_orphans == [rename]
+    assert found.migrate_markers == [marker]
+    assert found.exiftool_tmps == [tmp]
 
 
 def test_wipe_staging_removes_contents(tmp_path: Path) -> None:

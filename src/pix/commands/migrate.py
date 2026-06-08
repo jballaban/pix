@@ -23,6 +23,7 @@ from pix.cleanup import (
     cleanup_exiftool_tmp,
     cleanup_migrate_markers,
     cleanup_rename_orphans,
+    scan_cleanup_markers,
     wipe_staging,
 )
 from pix import cache_db
@@ -120,24 +121,26 @@ def _run_migrate(
     # output is forfeit; the new plan will re-propose); then rename
     # intermediates (simple path-only ops); then CONVERT markers (which
     # may need ExifTool reads); then ExifTool's own _exiftool_tmp
-    # leftovers from interrupted TAG writes.
+    # leftovers from interrupted TAG writes. All three marker kinds are
+    # discovered in one classifying walk (rather than three rglobs).
     wiped = wipe_staging(staging_dir)
     if wiped:
         _plog(plan_log_path, f"Wiped {wiped} entr(ies) from staging.")
-    reverted = cleanup_rename_orphans(folder)
+    markers = scan_cleanup_markers(folder)
+    reverted = cleanup_rename_orphans(markers.rename_orphans)
     if reverted:
         _plog(
             plan_log_path,
             f"Recovered {len(reverted)} rename intermediate(s) from a prior run.",
         )
     try:
-        marker_notes = cleanup_migrate_markers(folder)
+        marker_notes = cleanup_migrate_markers(markers.migrate_markers)
     except CleanupError as e:
         typer.echo(f"Error: marker cleanup failed: {e}", err=True)
         raise typer.Exit(code=1) from e
     for note in marker_notes:
         _plog(plan_log_path, note)
-    tmp_deleted = cleanup_exiftool_tmp(folder)
+    tmp_deleted = cleanup_exiftool_tmp(markers.exiftool_tmps)
     if tmp_deleted:
         _plog(
             plan_log_path,
