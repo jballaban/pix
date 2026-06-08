@@ -95,6 +95,25 @@ Touch points: `plan.py:_resolve_collisions` + the canonical-name/`_drop_noop_ren
 recognizer; `organize.py`'s collision/cycle handling can shed its `_NNN`-swap
 special-casing once suffixes are stable.
 
+**Why this is a prerequisite for apply parallelism.** Today two plan lines can
+target the same canonical name and the suffix that disambiguates them is
+assigned by a *serial* pass; parallel apply would have to coordinate those
+renames (locking slots, breaking cycles) to avoid two workers claiming one path.
+If every file instead lands at a **truly unique name**, apply becomes
+embarrassingly parallel — no worker ever collides with another, no cross-line
+rename coordination.
+
+**Candidate strategy — "always-unique, then shorten" (collisions pushed
+downstream).** Apply writes every file at a long, guaranteed-unique name (e.g.
+`<datetime>_<full-token>.<ext>`), so the parallel apply phase never collides and
+never renames-around-a-neighbor. A **separate cleanup command**, run afterward,
+then shortens the names that turned out *not* to collide down to the bare
+canonical form (and leaves a short stable token only where a real collision
+remains). This cleanly decouples the fast/parallel write phase from the
+serial-ish canonicalization, and folds naturally into the stable-token design
+above (the long-unique name can be derived from `pix:OriginalPath`, and the
+cleanup pass is the only place that needs to reason about collisions at all).
+
 ## Smaller items
 
 - **Codec-rank keeper tiebreak** — make dedupe's "original beats transcode"
