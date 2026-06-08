@@ -400,8 +400,15 @@ if ($env:PIXTAG_COLLATE_ONLY) {
 }
 $psExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 Write-PixLog "spawning RUN window: $psExe -File $PSCommandPath -Run $itemsFile"
-Start-Process -FilePath $psExe -ArgumentList @(
+# Build the arg list incrementally: `-Deg` is only meaningful for rotate, and
+# Windows PowerShell 5.1's `Start-Process -ArgumentList` REJECTS an empty-string
+# element ("The argument is null or empty"). Passing `-Deg ''` for set/clear/meta
+# therefore threw here and killed the leader before the RUN window spawned. Only
+# append `-Deg` when it carries a value.
+$runArgs = @(
     '-NoProfile', '-ExecutionPolicy', 'Bypass',
-    '-File', $PSCommandPath, '-Run', $itemsFile, '-Tag', $Tag, '-Op', $Op, '-Deg', $Deg
+    '-File', $PSCommandPath, '-Run', $itemsFile, '-Tag', $Tag, '-Op', $Op
 )
+if ($Deg) { $runArgs += @('-Deg', $Deg) }
+Start-Process -FilePath $psExe -ArgumentList $runArgs
 Write-PixLog "RUN window spawned"
