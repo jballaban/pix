@@ -125,7 +125,8 @@ def test_scoped_organize_augments_when_meta_cache_stale(
     )
 
     def fake_read(
-        paths: list[Path], cache: object = None, on_batch: object = None
+        paths: list[Path], cache: object = None, on_batch: object = None,
+        tags: object = None,
     ) -> dict[Path, FileMetadata]:
         return {p: fresh for p in paths if p == incoming}
 

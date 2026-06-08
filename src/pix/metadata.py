@@ -118,6 +118,7 @@ def read_metadata_batched(
     exiftool: str | None = None,
     on_batch: Callable[[int], None] | None = None,
     batch_size: int = BATCH_SIZE,
+    tags: list[str] | None = None,
 ) -> dict[Path, FileMetadata]:
     """Read metadata for the listed files via batched ExifTool calls.
 
@@ -127,6 +128,11 @@ def read_metadata_batched(
     keeps completed batches. `on_batch(batch_size)` fires after each
     batch; callers wire this to `LiveProgress.advance(by=n)`.
 
+    `tags`: optional ExifTool `-TAG` args restricting which tags are read
+    (e.g. `metadata_filter.consumed_read_args()`). None reads everything —
+    the cache-fill callers pass the consumed allowlist to shrink the read;
+    `pix meta` leaves it None to display every tag.
+
     Returns a dict keyed by absolute file path.
     """
     if not misses:
@@ -134,7 +140,7 @@ def read_metadata_batched(
     result: dict[Path, FileMetadata] = {}
     for i in range(0, len(misses), batch_size):
         batch = misses[i : i + batch_size]
-        fresh = _exiftool_bulk_read(batch, exiftool=exiftool)
+        fresh = _exiftool_bulk_read(batch, exiftool=exiftool, tags=tags)
         for path, meta in fresh.items():
             result[path] = meta
             if cache is not None:
@@ -176,13 +182,19 @@ def build_cache(
 
 
 def _exiftool_bulk_read(
-    paths: list[Path], exiftool: str | None = None
+    paths: list[Path],
+    exiftool: str | None = None,
+    tags: list[str] | None = None,
 ) -> dict[Path, FileMetadata]:
     """Run ExifTool against a list of paths via the `-@ <listfile>` flag.
 
     Avoids both Windows command-line length limits and ExifTool's
     redundant `-r` walk (the caller has already enumerated the
     relevant files via `pix.scan.walk_source_files`).
+
+    `tags`: optional `-TAG` selectors; when given, ExifTool emits only those
+    tags (plus the always-present `SourceFile`), shrinking the output and
+    parse. None reads every tag.
     """
     if not paths:
         return {}
@@ -219,6 +231,10 @@ def _exiftool_bulk_read(
                 "filename=utf8",
                 "-api",
                 "largefilesupport=1",
+                # Optional tag allowlist: emit only the requested tags
+                # (SourceFile is always included by -j). Shrinks the JSON +
+                # parse on cache-fill reads; empty → every tag.
+                *(tags or []),
                 "-@",
                 str(listfile),
             ],

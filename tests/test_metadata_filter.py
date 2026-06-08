@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pix import dates, events, plan
-from pix.metadata_filter import _is_consumed, filter_consumed
+from pix.metadata_filter import _is_consumed, consumed_read_args, filter_consumed
 
 
 def test_drops_noise_keeps_consumed() -> None:
@@ -45,3 +45,22 @@ def test_allowlist_covers_every_consumed_constant() -> None:
     }
     missing = {k for k in consumed if not _is_consumed(k)}
     assert not missing, f"allowlist missing consumed keys: {sorted(missing)}"
+
+
+def test_read_args_cover_consumed_non_xmp_keys() -> None:
+    """The ExifTool read allowlist must request `-XMP:all` (covers every
+    consumed XMP/pix/region tag) plus every consumed non-XMP key — otherwise
+    a cache fill could miss a tag pix needs."""
+    args = consumed_read_args()
+    assert "-XMP:all" in args  # covers every consumed XMP/pix/region tag
+    needed = {
+        dates._MTIME_KEY,  # pyright: ignore[reportPrivateUsage]
+        *dates._PHOTO_DATE_KEYS,  # pyright: ignore[reportPrivateUsage]
+        *dates._VIDEO_DATE_KEYS,  # pyright: ignore[reportPrivateUsage]
+    }
+    for key in needed:
+        if key.startswith("XMP:"):
+            continue  # covered by -XMP:all
+        assert f"-{key}" in args, f"read allowlist missing -{key}"
+    # XMP keys are covered by -XMP:all, never requested individually.
+    assert all(a == "-XMP:all" or not a.startswith("-XMP:") for a in args)

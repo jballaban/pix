@@ -39,6 +39,7 @@ from pix.metadata import (
     read_metadata_batched,
 )
 from pix.metadata_cache import PerFileCache
+from pix.metadata_filter import consumed_read_args
 from pix.plan import (
     Action,
     Plan,
@@ -342,6 +343,7 @@ def _run_migrate(
                     misses,
                     cache=meta_cache,
                     on_batch=_on_batch,
+                    tags=consumed_read_args(),
                 )
         except ExifToolNotFound as e:
             typer.echo(f"Error: {e}", err=True)

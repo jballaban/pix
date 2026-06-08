@@ -26,16 +26,6 @@ lives. (Tracked as an open decision in [README.md](README.md).)
 `-execute` calls (sidecar export, then write). ExifTool can do both in one. TAG
 is the bulk of work at scale, so halving the round-trips is meaningful.
 
-### Restrict the bulk metadata *read* to consumed tags
-`src/pix/metadata.py` — the bulk ExifTool read still passes no tag filter, so
-every readable tag comes back over the pipe and is parsed. **Storage** is now
-trimmed to the consumed set on the way into the cache (`pix.metadata_filter`,
-applied in `metadata_cache.add` / the cache-db import), so cache size and
-cache-parse time are already cut. Remaining win: pass a tag allowlist to the
-ExifTool invocation itself (`-pix:* -DateTimeOriginal …`) so the read + parse
-shrink too, not just the stored payload — often 10×+ on libraries with rich
-XMP/MakerNotes.
-
 ## Smaller / opportunistic
 
 ### Skip the ExifTool metadata-copy pass for JPEG CONVERT

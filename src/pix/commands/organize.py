@@ -30,6 +30,7 @@ from pix.metadata import (
     read_metadata_batched,
 )
 from pix.metadata_cache import PerFileCache
+from pix.metadata_filter import consumed_read_args
 from pix.progress import LiveProgress
 from pix.organize import (
     CwdInsideLibraryError,
@@ -149,7 +150,9 @@ def _augment_with_destination_folders(
     fresh: dict[Path, FileMetadata] = {}
     if misses:
         try:
-            fresh = read_metadata_batched(misses, cache=meta_cache)
+            fresh = read_metadata_batched(
+                misses, cache=meta_cache, tags=consumed_read_args()
+            )
         except (ExifToolNotFound, ExifToolFailed):
             return scanned  # main pass surfaces the error properly
     target_folders: set[Path] = {
@@ -261,7 +264,8 @@ def _run_organize(
                     read_progress.advance(by=batch_size)
 
                 fresh = read_metadata_batched(
-                    misses, cache=meta_cache, on_batch=_on_batch
+                    misses, cache=meta_cache, on_batch=_on_batch,
+                    tags=consumed_read_args(),
                 )
         except ExifToolNotFound as e:
             typer.echo(f"Error: {e}", err=True)

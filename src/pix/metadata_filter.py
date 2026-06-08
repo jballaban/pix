@@ -59,3 +59,23 @@ def _is_consumed(key: str) -> bool:
 def filter_consumed(raw: dict[str, object]) -> dict[str, object]:
     """Return `raw` with only the keys pix actually consumes from the cache."""
     return {k: v for k, v in raw.items() if _is_consumed(k)}
+
+
+def consumed_read_args() -> list[str]:
+    """ExifTool `-TAG` args that restrict a *read* to the consumed set.
+
+    A superset of what `filter_consumed` keeps, so the cache never misses a
+    consumed tag: `-XMP:all` (covers every `pix:*` field, the XMP date
+    candidates, and region/face tags in one cheap packet — and any future XMP
+    tag pix adds) plus the explicit non-XMP keys from `_CONSUMED_KEYS`.
+    `SourceFile` is always emitted by `-j` regardless, so it's not requested.
+
+    Opt-in: callers filling the cache pass this to `read_metadata_batched`;
+    `pix meta` (which displays make/model/comment) reads the full set.
+    """
+    explicit = sorted(
+        f"-{k}"
+        for k in _CONSUMED_KEYS
+        if k != "SourceFile" and not k.startswith("XMP:")
+    )
+    return ["-XMP:all", *explicit]

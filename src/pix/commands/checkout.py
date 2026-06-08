@@ -51,6 +51,7 @@ from pix.metadata import (
     read_metadata_batched,
 )
 from pix.metadata_cache import PerFileCache
+from pix.metadata_filter import consumed_read_args
 from pix.organize import OrganizeError, Template, parse_template
 from pix.plan import Action, Plan, PlanLine, attach_paths
 from pix.progress import LiveProgress
@@ -527,7 +528,8 @@ def _load_metadata(
                     read_progress.advance(by=n)
 
                 fresh = read_metadata_batched(
-                    misses, cache=meta_cache, on_batch=_on_batch
+                    misses, cache=meta_cache, on_batch=_on_batch,
+                    tags=consumed_read_args(),
                 )
         except ExifToolNotFound as e:
             typer.echo(f"Error: {e}", err=True)

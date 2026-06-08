@@ -54,6 +54,7 @@ from pix.metadata import (
     read_metadata_batched,
 )
 from pix.metadata_cache import PerFileCache
+from pix.metadata_filter import consumed_read_args
 from pix.organize import CwdInsideLibraryError, check_cwd_not_inside
 from pix.plan import Action
 from pix.progress import LiveProgress
@@ -182,6 +183,7 @@ def _build_result(
                 fresh = read_metadata_batched(
                     misses, cache=meta_cache,
                     on_batch=lambda n: read_progress.advance(by=n),
+                    tags=consumed_read_args(),
                 )
         except ExifToolNotFound as e:
             typer.echo(f"Error: {e}", err=True)
