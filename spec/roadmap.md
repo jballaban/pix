@@ -25,15 +25,18 @@ folder → set that override). Still to build (see [tag-editing.md](tag-editing.
 - **Face checkout (`{face}`)** — depends on migrate-time face detection, also
   not yet built.
 
-## Near-duplicate (perceptual) dedupe
+## Near-duplicate (perceptual) dedupe — **images** (video done)
 
-`pix dedupe` today groups only by exact, format-aware content hash, so a photo
-**re-encoded** at a different quality (visually identical, byte-different) isn't
-caught. A planned tier-2 pass would compute a perceptual hash (pHash/dHash),
-group by Hamming distance, and **surface** the candidates for confirmation
-(never auto-remove — burst frames are genuinely different photos). A cheaper
-interim heuristic: `pix:OriginalPath`-lineage matching (same source-device
-basename + capture second). See
+**Video** near-dup dedupe is built: `pix dedupe` computes a perceptual
+fingerprint (sampled-frame dHash, cached in `cache.db`'s `vfp` column) and
+groups re-encoded clips within a Hamming band, gated behind a `--checkout`/
+`--commit` review. **Images** still group only by exact, format-aware content
+hash, so a photo **re-encoded** at a different quality (visually identical,
+byte-different) isn't caught. The remaining work is the image tier-2 pass:
+compute a perceptual hash (pHash/dHash), group by Hamming distance, and
+**surface** candidates for confirmation (never auto-remove — burst frames are
+genuinely different photos). A cheaper interim heuristic: `pix:OriginalPath`-
+lineage matching (same source-device basename + capture second). See
 [dedupe.md → Known limitations](dedupe.md#known-v1-limitations).
 
 ## Cross-format dedupe

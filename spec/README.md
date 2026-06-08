@@ -67,7 +67,6 @@ This is intentionally a coarse lock: one operation at a time, library-wide. Fine
 
 ## Open decisions
 
-- **Dedupe design** — workflow, plan format, keeper selection, hash cache. Sketched in [dedupe.md](dedupe.md); full design deferred. (Migrate has now stabilized, so this is unblocked.)
-- **Merge design** — workflow, plan format, reuse of `dedupe`. Deferred until dedupe stabilizes.
+- **Merge design** — workflow, plan format, reuse of `dedupe`. Deferred (dedupe is now v1-implemented, so this is unblocked).
 - **Apply-phase parallelism for migrate** — currently sequential. Lines are independent; a worker pool is a future perf-pass, not a v1 concern.
 - **Face detection — deferred to last.** Migrate v1 *does not* detect faces or write `XMP-mwg-rs:RegionList`. The spec covers face workflow in [tag-editing.md](tag-editing.md) and the writing protocol in [tags.md](tags.md#structured-metadata-face-regions), but the migrate-time detection step (insightface + embedding match against confirmed identity centroids) is intentionally postponed until everything else in the spec is built. When it lands it integrates as another bundled step inside the existing TAG / CONVERT+RENAME+TAG action; no new top-level operation.
