@@ -49,6 +49,37 @@ $ErrorActionPreference = 'Stop'
 
 $workDir = Join-Path $env:TEMP 'pixtag'
 $leader  = Join-Path $workDir 'leader.lock'
+$logFile = Join-Path $workDir 'last-run.log'
+
+function Write-PixLog {
+    # Breadcrumb trail to %TEMP%\pixtag\last-run.log. Best-effort: a logging
+    # failure must never derail the menu action. Lets a vanished-window report
+    # be diagnosed after the fact (which stage ran, where it stopped).
+    param([string] $Message)
+    try {
+        if (-not (Test-Path -LiteralPath $workDir)) {
+            New-Item -ItemType Directory -Force -Path $workDir | Out-Null
+        }
+        Add-Content -LiteralPath $logFile -Value (
+            '{0} pid={1} {2}' -f (Get-Date -Format 'o'), $PID, $Message
+        )
+    } catch {}
+}
+
+# Catch-all so the launcher never dies silently. Any uncaught terminating
+# error (a COM hiccup reading the selection, a bad path, ...) is logged; in
+# the visible RUN stage it's also shown with a pause, so the window can't
+# just vanish with no trace — the exact symptom this guards against.
+trap {
+    Write-PixLog ('UNCAUGHT ' + $_.Exception.GetType().Name + ': ' + $_.Exception.Message)
+    if ($Run) {
+        Write-Host ''
+        Write-Host ('pixtag error: ' + $_.Exception.Message) -ForegroundColor Red
+        Write-Host "(details logged to $logFile)" -ForegroundColor DarkGray
+        try { Read-Host 'Press Enter to close' } catch {}
+    }
+    exit 1
+}
 
 # How long a leader's lock suppresses sibling invocations from the same
 # selection. Must comfortably exceed Explorer's per-item launch spread (it
@@ -73,19 +104,24 @@ function Get-ExplorerSelection {
     try { $clickedFull = [System.IO.Path]::GetFullPath($Clicked) } catch {}
 
     try { $shell = New-Object -ComObject Shell.Application } catch { return $fallback }
-    foreach ($w in $shell.Windows()) {
-        $doc = $null
-        try { $doc = $w.Document } catch { continue }
-        if ($null -eq $doc) { continue }
-        $selected = $null
-        try { $selected = $doc.SelectedItems() } catch { continue }
-        if ($null -eq $selected) { continue }
-        $paths = @()
-        foreach ($item in $selected) { try { $paths += $item.Path } catch {} }
-        foreach ($p in $paths) {
-            if ($p -ieq $clickedFull) { return $paths }
+    # The whole enumeration is guarded: if `$shell.Windows()` (or any COM call
+    # not already caught below) throws, fall back to the clicked path rather
+    # than let it escape and kill the leader before it spawns the RUN window.
+    try {
+        foreach ($w in $shell.Windows()) {
+            $doc = $null
+            try { $doc = $w.Document } catch { continue }
+            if ($null -eq $doc) { continue }
+            $selected = $null
+            try { $selected = $doc.SelectedItems() } catch { continue }
+            if ($null -eq $selected) { continue }
+            $paths = @()
+            foreach ($item in $selected) { try { $paths += $item.Path } catch {} }
+            foreach ($p in $paths) {
+                if ($p -ieq $clickedFull) { return $paths }
+            }
         }
-    }
+    } catch { return $fallback }
     return $fallback
 }
 
@@ -224,6 +260,7 @@ function Invoke-Organize {
 # RUN mode - the interactive, visible stage.
 # ---------------------------------------------------------------------------
 if ($Run) {
+    Write-PixLog "RUN start Op=$Op Tag=$Tag Deg=$Deg list=$Run"
     $items = @()
     if (Test-Path -LiteralPath $Run) {
         $items = @(Get-Content -LiteralPath $Run -Encoding UTF8 | Where-Object { $_ -ne '' })
@@ -347,8 +384,10 @@ finally {
 }
 
 if (-not $iAmLeader) { return }   # sibling invocation from the same selection
+Write-PixLog "COLLATE leader Op=$Op Tag=$Tag Deg=$Deg clicked=$clicked"
 
 $items = @(Get-ExplorerSelection -Clicked $clicked | Where-Object { $_ -ne '' })
+Write-PixLog "selection read: $($items.Count) item(s)"
 
 $itemsFile = Join-Path $workDir ("items-{0}.txt" -f ([guid]::NewGuid().ToString('N')))
 Set-Content -LiteralPath $itemsFile -Value $items -Encoding UTF8
@@ -360,7 +399,9 @@ if ($env:PIXTAG_COLLATE_ONLY) {
     return
 }
 $psExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+Write-PixLog "spawning RUN window: $psExe -File $PSCommandPath -Run $itemsFile"
 Start-Process -FilePath $psExe -ArgumentList @(
     '-NoProfile', '-ExecutionPolicy', 'Bypass',
     '-File', $PSCommandPath, '-Run', $itemsFile, '-Tag', $Tag, '-Op', $Op, '-Deg', $Deg
 )
+Write-PixLog "RUN window spawned"
