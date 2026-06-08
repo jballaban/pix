@@ -15,7 +15,7 @@ from pathlib import Path
 import typer
 
 from pix import banner, debug
-from pix.cache_base import prune_orphans
+from pix import cache_db
 from pix.checkout import CheckoutOpen, ensure_no_open_checkout
 from pix.config import Config, set_organize_template, settings_path
 from pix.duration import format_duration_precise
@@ -229,7 +229,7 @@ def _run_organize(
     # Drop cache sidecars whose source files no longer exist. Scoped to the
     # walked subtree (`allowed_prefix`) so a subfolder organize never prunes
     # entries for files elsewhere in the library; root scope prunes the lot.
-    prune_stats = prune_orphans(
+    prune_stats = cache_db.prune(
         root, set(library_files), allowed_prefix=scope
     )
     if prune_stats.orphans_removed or prune_stats.legacy_removed:

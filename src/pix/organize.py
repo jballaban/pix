@@ -39,7 +39,7 @@ from pix.dates import format_pix_datetime
 from pix.duration import format_duration_compact, format_size
 from pix.events import effective_event
 from pix.metadata import FileMetadata
-from pix.cache_base import relocate_all
+from pix import cache_db
 from pix.timeout import safe_rename
 from pix.plan import (
     NAME_PRESERVING_KEEP,
@@ -511,15 +511,15 @@ def apply_plan(
                 raise OrganizeApplyError(
                     f"{ln.line_id} ({ln.rel_path}): {e}"
                 ) from e
-            # Move cache sidecars (.meta/.hash/.vfp) in lockstep with the
-            # media, through the SAME scheduled op sequence — including the
-            # temp-name parks used to break cycles. Relocating per-op (rather
-            # than a naive plan-order pass after apply) is what stops suffix
-            # permutations within a folder from clobbering each other's
-            # sidecars; a content-hash-driven `_001`↔`_002` swap would
-            # otherwise overwrite/orphan the `.hash`/`.vfp` entries and
-            # force a needless re-hash/re-fingerprint on the next run.
-            relocate_all(library_root, op.src, op.dst)
+            # Move the cache row (meta+hash+vfp) in lockstep with the media,
+            # through the SAME scheduled op sequence — including the temp-name
+            # parks used to break cycles. Relocating per-op (rather than a
+            # naive plan-order pass after apply) is what stops suffix
+            # permutations within a folder from clobbering each other's rows;
+            # a content-hash-driven `_001`↔`_002` swap would otherwise
+            # overwrite the wrong row and force a needless re-hash/
+            # re-fingerprint on the next run.
+            cache_db.relocate(library_root, op.src, op.dst)
             if op.final:
                 dur = time.monotonic() - starts[ln.line_id]
                 _log(log, ln, "Completed", dur_seconds=dur)

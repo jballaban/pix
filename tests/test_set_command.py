@@ -23,10 +23,6 @@ from pix.plan import PIX_EVENT_OVERRIDE, Plan, PlanLine
 _ApplyResult = tuple[int, list[tuple[PlanLine, str]]]
 
 
-def _no_hash(root: Path, p: Path) -> str | None:
-    return None
-
-
 def _no_metas(paths: list[Path]) -> dict[Path, FileMetadata]:
     return {}
 
@@ -52,7 +48,6 @@ def _patch_apply(monkeypatch: pytest.MonkeyPatch, seen: list[Plan], n: int) -> N
         return (n, [])
 
     monkeypatch.setattr(set_mod, "apply_plan", fake_apply)
-    monkeypatch.setattr(set_mod, "read_cached_hash", _no_hash)
 
 
 def test_set_event_writes_override(

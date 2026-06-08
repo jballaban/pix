@@ -16,7 +16,7 @@ Nine top-level operations. `init`, `migrate`, `hash`, `dedupe`, `organize`, and 
 |---|---|---|---|
 | `init [<path>]` | Establish a library root by creating `<path>\.pix\` with default config. | [library.md](library.md#establishing-a-root) | **v1 implemented** |
 | `migrate <folder>` | Per-file **in-place** normalization: convert formats, rename, re-derive `_auto` tags, write tags into files. | [migrate.md](migrate.md) | **v1 implemented** (face detection deferred — see [Open decisions](#open-decisions)) |
-| `hash <library-root>` | Populate the per-file content-hash cache at `.pix/cache/` for every file missing or stale. Decoupled from migrate so migrate's hot path stays fast. | [hash.md](hash.md) | **v1 implemented** |
+| `hash <library-root>` | Populate the content-hash cache (a column in the shared SQLite store `.pix/cache.db` — see [implementation.md → Cache store](implementation.md#cache-store)) for every file missing or stale. Decoupled from migrate so migrate's hot path stays fast. | [hash.md](hash.md) | **v1 implemented** |
 | `dedupe` | Find duplicates by content hash across the library and remove redundant copies. | [dedupe.md](dedupe.md) | **v1 implemented** |
 | `merge <src> <dst>` | Combine two already-migrated trees; reuses `dedupe`. | — | Deferred (after dedupe) |
 | `organize [<template>]` | Physically rearrange files per a template (bare = re-apply the stored default). Single-valued tags only. | [organize.md](organize.md) | **v1 implemented** |
@@ -31,7 +31,7 @@ The plan-applying ops (`migrate`, `hash`, `dedupe`, `organize`) share a `--no-pr
 These hold across all operations. Each spec reinforces the invariants relevant to it.
 
 - **Atomicity / no data loss.** Every action is transactional. Multi-step operations stage to temp paths and validate before committing. Partial failure rolls back cleanly. Same-volume operations exploit atomic rename.
-- **Soft delete only (conservation).** Every destructive operation captures the data it replaces into the current run's folder under `.pix/runs/<run-id>/`. User performs the final hard-delete manually by removing old run folders. The one exception is `pix hash`, whose writes are purely additive into the recomputable `.pix/cache/` layer (no source data is replaced) — see [hash.md → Conservation invariant](hash.md#conservation-invariant).
+- **Soft delete only (conservation).** Every destructive operation captures the data it replaces into the current run's folder under `.pix/runs/<run-id>/`. User performs the final hard-delete manually by removing old run folders. The one exception is `pix hash`, whose writes are purely additive into the recomputable `.pix/cache.db` store (no source data is replaced) — see [hash.md → Conservation invariant](hash.md#conservation-invariant).
 - **CONVERT preserves source metadata.** Any CONVERT action carries forward all non-format-specific metadata (EXIF, XMP including face regions, IPTC, container-level metadata) from the source into the output file. CONVERT changes only the encoding/container, never the metadata payload.
 - **TAG writes preserve untouched fields.** A TAG action modifies only the pix:* fields named in the plan line. All other metadata on the file — other pix:* fields, EXIF, XMP, IPTC, face regions — is preserved bit-for-bit. This is what makes incremental migrate runs and re-derivation passes safe.
 - **Same-volume constraint.** Library root, `.pix/`, and source folders being migrated are assumed on the same volume so atomic rename and hard links are available.

@@ -2,9 +2,25 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+
+from pix import cache_db
+
+
+@pytest.fixture(autouse=True)
+def _close_cache_db_connections() -> Iterator[None]:  # pyright: ignore[reportUnusedFunction]
+    """Close any cached SQLite connections after each test.
+
+    The store keeps one process-wide connection per library (pix runs one
+    command per process). Tests create many short-lived libraries under
+    tmp_path; closing connections at teardown frees the file handles so
+    Windows can clean up the temp dirs.
+    """
+    yield
+    cache_db.close_all()
 
 
 @pytest.fixture

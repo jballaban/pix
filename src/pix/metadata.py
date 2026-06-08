@@ -13,12 +13,11 @@ import json
 import shutil
 import subprocess
 import tempfile
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, cast
 
-from pix import exiftool_config_path
+from pix import cache_db, exiftool_config_path
 from pix.metadata_cache import PerFileCache
 
 
@@ -28,14 +27,6 @@ from pix.metadata_cache import PerFileCache
 # returning JSON for 1000 files is a few MB, vs. tens-to-hundreds of MB
 # for an unbounded library-wide read.
 BATCH_SIZE: int = 1000
-
-# Cache lookup is I/O-bound (stat + small file read + parse, per file).
-# A thread pool parallelizes the per-file disk operations; on SSD/NVMe
-# this is roughly an order-of-magnitude speedup over sequential, since
-# each stat/read spends most of its time blocked on the disk. 32 keeps
-# us well under typical NTFS handle limits while saturating modern
-# storage.
-CACHE_LOOKUP_WORKERS: int = 32
 
 
 class ExifToolNotFound(Exception):
@@ -81,53 +72,40 @@ def filter_cache_misses(
     cache: PerFileCache | None,
     on_batch: Callable[[int], None] | None = None,
     batch_size: int = BATCH_SIZE,
-    max_workers: int = CACHE_LOOKUP_WORKERS,
 ) -> tuple[dict[Path, FileMetadata], list[Path]]:
     """Split `(path, size, mtime_ns)` triples into (cache_hits, misses).
 
-    Size and mtime come from the scandir-based walk in
-    `pix.scan.walk_source_files`, where they're free from the dirent.
-    Size is passed to `cache.get()` for validation so the cache lookup
-    is a pure file read with no additional `stat()`. The metadata cache
-    only validates on size; mtime is ignored here but threaded through
-    so callers can share one walk between the metadata and hash caches.
+    Size and mtime come free from the scandir walk in
+    `pix.scan.walk_source_files`. The whole cache loads in one query
+    (`cache_db.load_all`); each row is a hit iff it has metadata and its
+    `(size, mtime_ns)` stamp matches the live file (unified validation key,
+    same as the hash/vfp caches). If `cache` is None, every path is a miss.
 
-    If `cache` is None, every path is a miss.
-
-    Lookups run in a thread pool (`max_workers` default 32) — each
-    per-file check is I/O-bound (read + parse) and independent, so
-    concurrent execution on SSD/NVMe pushes the total phase time
-    ~10× lower than sequential.
-
-    `on_batch(batch_size)` fires every `batch_size` files (default
-    1000) from the consumer thread (after results are collected in
-    submission order via `ThreadPoolExecutor.map`) — no locking
-    needed for the callback.
+    `on_batch(n)` fires every `batch_size` files so callers can drive a
+    progress bar; the work itself is one in-memory pass.
     """
     if cache is None:
         return {}, [p for p, _, _ in paths_with_meta]
 
+    rows = cache_db.load_all(cache.library_root)
     hits: dict[Path, FileMetadata] = {}
     misses: list[Path] = []
     in_batch = 0
-
-    def check_one(
-        item: tuple[Path, int, int],
-    ) -> tuple[Path, dict[str, object] | None]:
-        path, size, _mtime_ns = item
-        return path, cache.get(path, expected_size=size)
-
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        for path, cached in executor.map(check_one, paths_with_meta):
-            if cached is not None:
-                hits[path] = FileMetadata(path=path, raw=cached)
-            else:
-                misses.append(path)
-            in_batch += 1
-            if in_batch >= batch_size:
-                if on_batch is not None:
-                    on_batch(in_batch)
-                in_batch = 0
+    for path, size, mtime_ns in paths_with_meta:
+        row = rows.get(path)
+        if (
+            row is not None
+            and row.meta is not None
+            and row.size == size
+            and row.mtime_ns == mtime_ns
+        ):
+            hits[path] = FileMetadata(path=path, raw=row.meta)
+        else:
+            misses.append(path)
+        in_batch += 1
+        if in_batch >= batch_size and on_batch is not None:
+            on_batch(in_batch)
+            in_batch = 0
 
     if in_batch > 0 and on_batch is not None:
         on_batch(in_batch)

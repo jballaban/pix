@@ -1,6 +1,13 @@
 # Hash
 
-`pix hash <library-root>` populates the **per-file content-hash cache** at `<library-root>\.pix\cache\<absolute-path-mirror>\<filename>.hash` for every file missing or stale. It does not touch file metadata. It does not invoke ExifTool. Its only outputs are tiny JSON cache files.
+`pix hash <library-root>` populates the **content-hash cache** for every file missing or stale. It does not touch file metadata. It does not invoke ExifTool.
+
+> **Storage note (current code):** the hash now lives in the `hash` column of the
+> shared SQLite store `<library>\.pix\cache.db` (one row per file, keyed by path),
+> not a per-file `.hash` sidecar. Validation is unchanged — `(size, mtime_ns)`
+> against the live file — and `computed_at` is no longer stored. The per-file
+> JSON-sidecar details below are historical; see
+> [implementation.md → Cache store](implementation.md#cache-store) for the store.
 
 ## Why cache, not metadata
 

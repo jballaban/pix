@@ -436,7 +436,7 @@ def test_apply_cache_sidecars_follow_suffix_swap(
     def rec(_lib: Path, old: Path, new: Path) -> None:
         relocations.append((old, new))
 
-    monkeypatch.setattr(organize_mod, "relocate_all", rec)
+    monkeypatch.setattr(organize_mod.cache_db, "relocate", rec)
 
     # Swap the two names (X→_001, Y→bare): a 2-cycle the scheduler breaks
     # with a temp park.

@@ -25,7 +25,7 @@ from pix.cleanup import (
     cleanup_rename_orphans,
     wipe_staging,
 )
-from pix.cache_base import prune_orphans, relocate_all, remove_all
+from pix import cache_db
 from pix.config import Config, settings_path
 from pix.duration import format_duration_precise
 from pix.errors import restore_orphaned_errors, restore_stale_errors
@@ -303,7 +303,7 @@ def _run_migrate(
     # suffixes from older pix versions (currently `.cache` → renamed
     # to `.meta` in v0.1.88).
     expected_paths = {p for p in source_files}
-    prune_stats = prune_orphans(
+    prune_stats = cache_db.prune(
         root, expected_paths, allowed_prefix=folder
     )
     if prune_stats.orphans_removed or prune_stats.legacy_removed:
@@ -469,45 +469,42 @@ def _post_apply_cache_update(
     plan: Plan,
     kept_line_ids: set[str],
 ) -> None:
-    """Update the per-file metadata cache to reflect apply's mutations.
+    """Update the cache row to reflect apply's mutations.
 
-    Walks the applied plan lines and reflects each into ALL cache
-    sidecars (.meta/.hash), not just .meta — a pure RENAME leaves
-    bytes/size/mtime untouched, so the .hash entry stays valid
-    and must travel with the file instead of being orphaned and pruned:
-    - DELETE / STASH: removes every sidecar (file gone).
-    - CONVERT+RENAME+TAG: removes every old sidecar; the new file's
-      .meta was already written inside apply (via the live ExifTool
-      session); its .hash is recomputed by a later pix hash run.
-    - RENAME: relocates every sidecar alongside the media rename.
-    - TAG: merges the written pix:* fields into the cached .meta
-      in place (the tag write changed mtime, so the .hash at this
-      path is now stale — left for validation to reject on next read).
-    - RENAME+TAG: relocate every sidecar first (apply already moved the
-      file), then update_metadata using `target_path` so cache.add
-      stats the file at its current location. Calling update_metadata
-      with abs_path here would silently fail the stat and leave the
-      cache entry with the pre-tag size — guaranteed mismatch next run.
+    Each row holds meta+hash+vfp under one `(size, mtime_ns)` stamp:
+    - DELETE / STASH: drop the row (file gone).
+    - CONVERT+RENAME+TAG: drop the old row; the new file's meta was
+      already written inside apply (via the live ExifTool session); its
+      hash/vfp are computed by later pix hash / dedupe runs.
+    - RENAME: relocate the row alongside the media rename (bytes/stamp
+      unchanged, so hash/vfp travel with it instead of being re-derived).
+    - TAG: merge the written pix:* fields and re-stamp via
+      `update_metadata`, which carries the content hash + fingerprint
+      forward (a metadata write leaves content unchanged) — so an
+      incremental re-sync no longer needlessly re-hashes the file.
+    - RENAME+TAG: relocate the row first (apply already moved the file),
+      then `update_metadata` using `target_path` so the stat hits the
+      file at its current location.
     """
     root = cache.library_root
     for ln in plan.lines:
         if ln.line_id not in kept_line_ids:
             continue
         if ln.action == Action.DELETE:
-            remove_all(root, ln.abs_path)
+            cache_db.remove(root, ln.abs_path)
         elif ln.action == Action.STASH:
-            remove_all(root, ln.abs_path)
+            cache_db.remove(root, ln.abs_path)
         elif ln.action == Action.CONVERT_RENAME_TAG:
-            remove_all(root, ln.abs_path)  # old file gone; new .meta written in apply
+            cache_db.remove(root, ln.abs_path)  # old file gone; new meta written in apply
         elif ln.action == Action.RENAME:
             if ln.target_path is not None:
-                relocate_all(root, ln.abs_path, ln.target_path)
+                cache_db.relocate(root, ln.abs_path, ln.target_path)
         elif ln.action == Action.TAG:
             if ln.pix_writes:
                 cache.update_metadata(ln.abs_path, dict(ln.pix_writes))
         elif ln.action == Action.RENAME_TAG:
             if ln.target_path is not None:
-                relocate_all(root, ln.abs_path, ln.target_path)
+                cache_db.relocate(root, ln.abs_path, ln.target_path)
                 if ln.pix_writes:
                     cache.update_metadata(
                         ln.target_path, dict(ln.pix_writes)

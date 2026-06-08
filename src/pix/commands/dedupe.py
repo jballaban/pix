@@ -27,7 +27,7 @@ from pathlib import Path
 import typer
 
 from pix import banner, debug, dedupe_review
-from pix.cache_base import prune_orphans, remove_all
+from pix import cache_db
 from pix.checkout import CheckoutOpen, ensure_no_open_checkout
 from pix.dedupe import (
     DEFAULT_MAX_DISTANCE,
@@ -44,11 +44,7 @@ from pix.dedupe import (
 )
 from pix.duration import format_duration_precise
 from pix.editor import open_in_editor, parse_kept_line_ids, prompt_apply
-from pix.hash_cache import (
-    read_all_cached_hashes,
-    read_cached_hash,
-    write_cached_hash,
-)
+from pix.hash_cache import read_all_cached_hashes
 from pix.library_lock import LockHeld, acquire as acquire_lock
 from pix.metadata import (
     ExifToolFailed,
@@ -65,7 +61,6 @@ from pix.root import NoLibraryRoot, resolve as resolve_root
 from pix.scan import walk_source_files
 from pix.vfp_cache import (
     read_all_cached_fingerprints,
-    read_cached_fingerprint,
     write_cached_fingerprint,
 )
 from pix.video_fingerprint import (
@@ -164,7 +159,7 @@ def _build_result(
         raise typer.Exit()
 
     library_files = [p for p, _, _ in scanned]
-    prune_stats = prune_orphans(root, set(library_files))
+    prune_stats = cache_db.prune(root, set(library_files))
     if prune_stats.orphans_removed or prune_stats.legacy_removed:
         _plog(
             plan_log_path,
@@ -520,22 +515,12 @@ def _apply_result(
     kept_line_ids: set[str],
 ) -> None:
     """Apply `kept_line_ids` of `result`: conserve+remove losers, MERGE tags
-    onto keepers, update caches (incl. re-stamping each merged keeper's
-    metadata-invariant content hash). Shared by auto + commit."""
-    # A MERGE tag-write bumps the keeper's (size, mtime) — invalidating every
-    # cache key — but it only touches metadata, so the *values* of the
-    # content hash and perceptual fingerprint are unchanged. Capture them
-    # before apply and re-stamp them against the new (size, mtime) afterward,
-    # so a no-op re-run doesn't re-hash or (the expensive one) re-fingerprint
-    # these keepers. The metadata cache (.meta) is intentionally left to
-    # refresh — its value genuinely changed.
-    merge_keepers = [
-        ln.abs_path
+    onto keepers, update the cache. Shared by auto + commit."""
+    merge_lines = [
+        ln
         for ln in result.plan.lines
         if ln.line_id in kept_line_ids and ln.action == Action.MERGE
     ]
-    pre_hashes = {p: read_cached_hash(root, p) for p in merge_keepers}
-    pre_fingerprints = {p: read_cached_fingerprint(root, p) for p in merge_keepers}
 
     apply_log_path = runs_dir / "apply.log"
     try:
@@ -550,28 +535,27 @@ def _apply_result(
             typer.echo(f"Error: apply failed: {e}", err=True)
             raise typer.Exit(code=1) from e
 
-        # Only removed losers (DEDUP) lose their caches — never the kept
-        # keepers (MERGE), whose abs_path is the surviving file.
+        # Removed losers (DEDUP) drop their row entirely.
         for ln in result.plan.lines:
             if ln.line_id in kept_line_ids and ln.action == Action.DEDUP:
-                remove_all(root, ln.abs_path)
-        for keeper in merge_keepers:
+                cache_db.remove(root, ln.abs_path)
+        # A MERGE tag-write bumps the keeper's (size, mtime) but only touches
+        # metadata, so its content hash and fingerprint are unchanged. Reflect
+        # the merge tags into the cached meta, re-stamp, and carry the hash +
+        # fingerprint forward — a no-op re-run then won't re-hash or (the
+        # expensive one) re-fingerprint these keepers.
+        for ln in merge_lines:
             try:
-                st = keeper.stat()
+                st = ln.abs_path.stat()
             except OSError:
                 continue
-            size, mtime_ns = st.st_size, st.st_mtime_ns
-            hash_hex = pre_hashes.get(keeper)
-            if hash_hex is not None:
-                write_cached_hash(
-                    root, keeper, hash_hex=hash_hex, size=size, mtime_ns=mtime_ns
-                )
-            fingerprint = pre_fingerprints.get(keeper)
-            if fingerprint is not None:
-                write_cached_fingerprint(
-                    root, keeper, fingerprint=fingerprint,
-                    size=size, mtime_ns=mtime_ns,
-                )
+            cache_db.note_inplace_metadata_change(
+                root,
+                ln.abs_path,
+                meta_updates=dict(ln.pix_writes),
+                size=st.st_size,
+                mtime_ns=st.st_mtime_ns,
+            )
 
         typer.echo("")
         typer.echo(f"Removed {removed} duplicate(s).")

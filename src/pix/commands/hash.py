@@ -16,7 +16,7 @@ from typing import IO
 import typer
 
 from pix import banner
-from pix.cache_base import prune_orphans
+from pix import cache_db
 from pix.checkout import CheckoutOpen, ensure_no_open_checkout
 from pix.content_hash import compute_content_hash
 from pix.duration import (
@@ -111,7 +111,7 @@ def _run_hash(root: Path, no_prompt: bool = False) -> None:
     # Drop cache sidecars whose source files no longer exist anywhere
     # in the library, plus any legacy-suffix sidecars from older pix
     # versions. Hash walks the whole library, so no prefix scoping.
-    prune_stats = prune_orphans(root, {p for p, _, _ in scanned})
+    prune_stats = cache_db.prune(root, {p for p, _, _ in scanned})
     if prune_stats.orphans_removed or prune_stats.legacy_removed:
         _plog(
             plan_log_path,

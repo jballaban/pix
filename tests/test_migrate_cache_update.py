@@ -78,7 +78,7 @@ def test_rename_tag_updates_cache_at_target_path_with_post_tag_size(
         action=Action.RENAME_TAG,
         abs_path=abs_path,
         target_path=target_path,
-        pix_writes={"XMP:pix:DateAuto": "2023-08-15-14:32:05"},
+        pix_writes={"XMP:DateAuto": "2023-08-15-14:32:05"},
     )
     _post_apply_cache_update(cache, _make_plan([line]), {"L001"})
 
@@ -86,7 +86,7 @@ def test_rename_tag_updates_cache_at_target_path_with_post_tag_size(
     # must hit.
     cached = cache.get(target_path, expected_size=110)
     assert cached is not None, "cache entry missing or size mismatch"
-    assert cached.get("XMP:pix:DateAuto") == "2023-08-15-14:32:05"
+    assert cached.get("XMP:DateAuto") == "2023-08-15-14:32:05"
     assert cached.get("EXIF:DateTimeOriginal") == "2023:08:15 14:32:05"
 
     # And the entry at abs_path should be gone — the sidecar moved.
@@ -101,7 +101,7 @@ def test_pure_tag_updates_cache_in_place(tmp_path: Path) -> None:
 
     f = library_root / "2023-08-15_143205.jpg"
     f.write_bytes(b"y" * 200)
-    cache.add(f, {"EXIF:Make": "Canon"})
+    cache.add(f, {"XMP:OriginalPath": "Canon"})
 
     f.write_bytes(b"y" * 215)  # tag write grew file by 15 bytes
 
@@ -109,14 +109,14 @@ def test_pure_tag_updates_cache_in_place(tmp_path: Path) -> None:
         line_id="L001",
         action=Action.TAG,
         abs_path=f,
-        pix_writes={"XMP:pix:EventAuto": "birthday"},
+        pix_writes={"XMP:EventAuto": "birthday"},
     )
     _post_apply_cache_update(cache, _make_plan([line]), {"L001"})
 
     cached = cache.get(f, expected_size=215)
     assert cached is not None
-    assert cached.get("XMP:pix:EventAuto") == "birthday"
-    assert cached.get("EXIF:Make") == "Canon"
+    assert cached.get("XMP:EventAuto") == "birthday"
+    assert cached.get("XMP:OriginalPath") == "Canon"
 
 
 def test_pure_rename_moves_cache_intact(tmp_path: Path) -> None:
@@ -129,7 +129,7 @@ def test_pure_rename_moves_cache_intact(tmp_path: Path) -> None:
     abs_path = library_root / "DSC_0042.JPG"
     target_path = library_root / "2023-08-15_143205.jpg"
     abs_path.write_bytes(b"z" * 300)
-    cache.add(abs_path, {"EXIF:Make": "Nikon"})
+    cache.add(abs_path, {"XMP:OriginalPath": "Nikon"})
     abs_path.rename(target_path)
 
     line = _line(
@@ -142,7 +142,7 @@ def test_pure_rename_moves_cache_intact(tmp_path: Path) -> None:
 
     cached = cache.get(target_path, expected_size=300)
     assert cached is not None
-    assert cached.get("EXIF:Make") == "Nikon"
+    assert cached.get("XMP:OriginalPath") == "Nikon"
     assert cache.get(abs_path) is None
 
 
@@ -169,7 +169,7 @@ def test_skipped_lines_dont_mutate_cache(tmp_path: Path) -> None:
 
     f = library_root / "keep_me.jpg"
     f.write_bytes(b"hello")
-    cache.add(f, {"EXIF:Make": "preserved"})
+    cache.add(f, {"XMP:OriginalPath": "preserved"})
 
     line = _line(line_id="L001", action=Action.DELETE, abs_path=f)
     _post_apply_cache_update(cache, _make_plan([line]), set())  # nothing kept

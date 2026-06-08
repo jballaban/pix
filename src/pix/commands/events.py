@@ -7,34 +7,31 @@ none of them are dated). It backs the context-menu Set-event autocomplete
 (the range is shown as a hint to tell similar events apart), and is handy on
 its own to see what events exist and roughly when.
 
-Reads only the `.meta` cache sidecars (no media walk, no ExifTool), so it's
-fast and reflects the last cached metadata — close enough for suggestions.
-Files with no cached metadata (un-migrated, or cache not yet built) simply
-don't contribute, and the `EVENT_NULL` force-null override resolves to no
+Reads only the cached metadata (no media walk, no ExifTool) — one query over
+`cache.db`, so it's fast and reflects the last cached metadata, close enough for
+suggestions. Files with no cached metadata (un-migrated, or cache not yet built)
+simply don't contribute, and the `EVENT_NULL` force-null override resolves to no
 event (so blanked files don't pollute the list).
 """
 
 from __future__ import annotations
 
 import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from typing import cast
 
 import typer
 
-from pix import cache_base
+from pix import cache_db
 from pix.events import effective_event, events_cache_path
 from pix.metadata import FileMetadata
-from pix.metadata_cache import SUFFIX as META_SUFFIX
 from pix.plan import effective_date
 from pix.root import NoLibraryRoot, resolve as resolve_root
 
-# Scanning a TB-scale library's .meta sidecars takes a few seconds, too slow to
-# block an autocomplete prompt every time. Serve a recent cached list instantly
-# instead; `set`/`clear` invalidate it (see events.invalidate_events_cache), and
-# this TTL is the backstop for events introduced by other ops (e.g. migrate).
+# A query over cache.db is quick, but still too slow to block an autocomplete
+# prompt every keystroke. Serve a recent cached list instantly instead;
+# `set`/`clear` invalidate it (see events.invalidate_events_cache), and this TTL
+# is the backstop for events introduced by other ops (e.g. migrate).
 _CACHE_TTL_SECONDS = 6 * 3600
 
 
@@ -75,37 +72,19 @@ def list_events(path: Path | None = None) -> None:
     except OSError:
         pass  # missing / stale / unreadable → recompute below
 
-    cache_root = cache_base.cache_root_for(root)
-    if not cache_root.is_dir():
-        return  # no metadata cache yet → no suggestions
-
-    meta_files = list(cache_root.rglob(f"*{META_SUFFIX}"))
-
-    def info_of(meta_file: Path) -> tuple[str, datetime | None] | None:
-        data = cache_base.read_json(meta_file)
-        if data is None:
-            return None
-        md = data.get("metadata")
-        if not isinstance(md, dict):
-            return None
-        meta = FileMetadata(path=meta_file, raw=cast("dict[str, object]", md))
-        event = effective_event(meta)
-        if not event:
-            return None
-        return (event, effective_date(meta))
-
     # event -> (min_date, max_date); a date of None just doesn't widen the span.
     spans: dict[str, tuple[datetime | None, datetime | None]] = {}
-    with ThreadPoolExecutor(max_workers=cache_base.DEFAULT_WORKERS) as executor:
-        for result in executor.map(info_of, meta_files):
-            if result is None:
-                continue
-            event, dt = result
-            lo, hi = spans.get(event, (None, None))
-            if dt is not None:
-                lo = dt if lo is None or dt < lo else lo
-                hi = dt if hi is None or dt > hi else hi
-            spans[event] = (lo, hi)
+    for path, md in cache_db.iter_meta(root):
+        meta = FileMetadata(path=path, raw=md)
+        event = effective_event(meta)
+        if not event:
+            continue
+        dt = effective_date(meta)
+        lo, hi = spans.get(event, (None, None))
+        if dt is not None:
+            lo = dt if lo is None or dt < lo else lo
+            hi = dt if hi is None or dt > hi else hi
+        spans[event] = (lo, hi)
 
     text = "".join(
         f"{event}\t{format_range(*spans[event])}\n"

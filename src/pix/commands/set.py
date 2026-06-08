@@ -27,13 +27,12 @@ from pathlib import Path
 
 import typer
 
-from pix import banner
+from pix import banner, cache_db
 from pix.apply import ApplyError, apply_plan
 from pix.checkout import CheckoutOpen, ensure_no_open_checkout
 from pix.config import Config, settings_path
 from pix.editor import prompt_proceed
 from pix.events import EVENT_NULL, cached_event_names, invalidate_events_cache
-from pix.hash_cache import read_cached_hash, write_cached_hash
 from pix.library_lock import LockHeld, acquire as acquire_lock
 from pix.metadata import (
     ExifToolFailed,
@@ -322,16 +321,6 @@ def _apply_overrides(
             typer.echo("Aborted; no changes made.")
             return
 
-    # The override write only touches metadata, which the content hash
-    # excludes — but it bumps size+mtime and staleness the hash cache key.
-    # Capture each current hash and re-key it post-write so organize doesn't
-    # demand a fresh `pix hash`.
-    pre_hashes: dict[Path, str] = {}
-    for ln in lines:
-        h = read_cached_hash(root, ln.abs_path)
-        if h is not None:
-            pre_hashes[ln.abs_path] = h
-
     apply_log_path = runs_dir / "apply.log"
     try:
         try:
@@ -346,17 +335,25 @@ def _apply_overrides(
             typer.echo(f"Error: apply failed: {e}", err=True)
             raise typer.Exit(code=1) from e
 
-        rekeyed = 0
-        for path, hash_hex in pre_hashes.items():
+        # The override write only touches metadata: the file's content — and
+        # so its content hash and perceptual fingerprint — is unchanged, but
+        # the write bumps (size, mtime_ns) and stales the cache stamp. Reflect
+        # the new tag value into the cached meta, re-stamp, and carry the hash
+        # + fingerprint forward so organize/dedupe don't demand a fresh
+        # `pix hash` / re-fingerprint. Files that failed (moved to errors/)
+        # fail the stat and are skipped.
+        for ln in lines:
             try:
-                st = path.stat()
+                st = ln.abs_path.stat()
             except OSError:
                 continue
-            write_cached_hash(
-                root, path, hash_hex=hash_hex,
-                size=st.st_size, mtime_ns=st.st_mtime_ns,
+            cache_db.note_inplace_metadata_change(
+                root,
+                ln.abs_path,
+                meta_updates=dict(ln.pix_writes),
+                size=st.st_size,
+                mtime_ns=st.st_mtime_ns,
             )
-            rekeyed += 1
 
         # An event change can add/remove a unique event, so drop the cached
         # event list — the next autocomplete fetch then reflects this edit.

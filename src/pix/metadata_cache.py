@@ -1,45 +1,26 @@
-"""Per-file persistent metadata cache.
+"""Persistent metadata cache — facade over the SQLite store (`pix.cache_db`).
 
-One tiny JSON sidecar per media file under `<library>/.pix/cache/`,
-suffix `.meta`:
+Keeps the `PerFileCache` API the rest of pix already calls; the storage is now
+one row per file in `<library>/.pix/cache.db` (see `pix.cache_db`). The `meta`
+column holds the (filtered) ExifTool JSON, validated together with the file's
+content caches on `(size, mtime_ns)`.
 
-    media:  G:\\pix\\raw\\2023\\Hawaii\\foo.jpg
-    cache:  <library>/.pix/cache/G/pix/raw/2023/Hawaii/foo.jpg.meta
-
-Cache file format:
-
-    {"v": 1, "size": 4521234, "metadata": { ... ExifTool JSON ... }}
-
-Validation is by `size` only — under pix's single-writer trust model,
-size is enough insurance against the rare in-place edit. (Hash and
-video caches also check mtime_ns; the metadata cache deliberately
-doesn't, because pix's own TAG writes change mtime but we refresh
-the cache synchronously, so an mtime check would cause spurious
-invalidations after every tag write.)
-
-Mutations are best-effort: if a rename or delete on the cache file
-fails, the next run just rebuilds that one entry from ExifTool.
-Non-atomic writes (`pix.cache_base.write_json_plain` — no `.tmp`/fsync)
-since these run thousands of times per migrate batch and rebuilding
-one stray truncated entry from ExifTool is cheap.
+Mutations are best-effort: a failed write just means the next run rebuilds that
+one entry from ExifTool.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
 
-from pix import cache_base
-
-
-CACHE_FILE_VERSION: int = 1
-SUFFIX: str = ".meta"
+from pix import cache_db
+from pix.metadata_filter import filter_consumed
 
 
 @dataclass(frozen=True)
 class PerFileCache:
-    """Persistent metadata cache rooted at `<library>/.pix/`."""
+    """Metadata cache rooted at `<library>/.pix/cache.db`."""
 
     library_root: Path
 
@@ -47,79 +28,66 @@ class PerFileCache:
     def for_library(cls, library_root: Path) -> "PerFileCache":
         return cls(library_root=library_root)
 
-    def cache_path_for(self, media_path: Path) -> Path:
-        """Return the cache file path that mirrors `media_path`."""
-        return cache_base.cache_path_for(
-            self.library_root, media_path, SUFFIX
-        )
-
     def get(
         self,
         media_path: Path,
         expected_size: int | None = None,
+        expected_mtime_ns: int | None = None,
     ) -> dict[str, object] | None:
         """Return cached metadata if present and current; else None.
 
-        If `expected_size` is given, validates the cache entry's
-        recorded size against it. Pass `None` to skip validation —
-        e.g. update-after-write, where the caller knows the cache is
-        fresh and re-stat'ing the file would be redundant.
+        With `expected_size` / `expected_mtime_ns` (from the scandir walk),
+        validates the row's stamp — both are checked when given (unified key).
+        Pass neither to skip validation (e.g. update-after-write, where the
+        caller knows the cache is fresh).
         """
-        data = cache_base.read_json(self.cache_path_for(media_path))
-        if data is None:
+        row = cache_db.get(self.library_root, media_path)
+        if row is None or row.meta is None:
             return None
-        if data.get("v") != CACHE_FILE_VERSION:
+        if expected_size is not None and row.size != expected_size:
             return None
-        if expected_size is not None and data.get("size") != expected_size:
+        if expected_mtime_ns is not None and row.mtime_ns != expected_mtime_ns:
             return None
-        metadata = data.get("metadata")
-        if not isinstance(metadata, dict):
-            return None
-        return cast("dict[str, object]", metadata)
+        return row.meta
 
     def add(self, media_path: Path, metadata: dict[str, object]) -> None:
-        """Write a cache entry for `media_path`.
-
-        Records the current file size for later validation. If the file
-        disappears between metadata read and cache write, silently
-        skip — next run rebuilds.
-        """
+        """Write a metadata row for `media_path`, stamping the current
+        `(size, mtime_ns)`. Stores only the consumed tags (see
+        `pix.metadata_filter`). Skips silently if the file vanished."""
         try:
-            size = media_path.stat().st_size
+            st = media_path.stat()
         except OSError:
             return
-        cache_base.write_json_plain(
-            self.cache_path_for(media_path),
-            {
-                "v": CACHE_FILE_VERSION,
-                "size": size,
-                "metadata": metadata,
-            },
+        cache_db.put_meta(
+            self.library_root,
+            media_path,
+            filter_consumed(metadata),
+            size=st.st_size,
+            mtime_ns=st.st_mtime_ns,
         )
 
     def remove(self, media_path: Path) -> None:
-        """Delete the cache entry for `media_path` if present."""
-        cache_base.remove(self.cache_path_for(media_path))
+        """Delete the cache row for `media_path` if present."""
+        cache_db.remove(self.library_root, media_path)
 
-    def rename(
-        self, old_media_path: Path, new_media_path: Path
-    ) -> None:
-        """Move the cache file alongside a media file rename/move."""
-        cache_base.rename(
-            self.cache_path_for(old_media_path),
-            self.cache_path_for(new_media_path),
-        )
+    def rename(self, old_media_path: Path, new_media_path: Path) -> None:
+        """Move the cache row alongside a media file rename/move."""
+        cache_db.relocate(self.library_root, old_media_path, new_media_path)
 
     def update_metadata(
         self, media_path: Path, updates: dict[str, object]
     ) -> None:
-        """Merge `updates` into the cached metadata dict for `media_path`.
-
-        No-op if there's no cache entry to update. Re-stamps `size` to
-        the file's current size after the update.
-        """
-        current = self.get(media_path)
-        if current is None:
+        """Reflect an in-place metadata-only write: merge `updates`, re-stamp,
+        and carry the content hash + fingerprint forward (unchanged by a
+        metadata write). No-op if there's no row yet."""
+        try:
+            st = media_path.stat()
+        except OSError:
             return
-        merged = {**current, **updates}
-        self.add(media_path, merged)
+        cache_db.note_inplace_metadata_change(
+            self.library_root,
+            media_path,
+            meta_updates=updates,
+            size=st.st_size,
+            mtime_ns=st.st_mtime_ns,
+        )

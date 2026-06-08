@@ -36,8 +36,7 @@ from pix.metadata import (
     ExifToolNotFound,
     read_metadata_batched,
 )
-from pix.metadata_cache import SUFFIX as META_SUFFIX
-from pix import cache_base
+from pix import cache_db
 from pix.root import NoLibraryRoot, resolve as resolve_root
 from pix.scan import walk_source_files
 
@@ -105,13 +104,10 @@ def _normalize(deg: int) -> int:
 
 
 def _cached_original(root: Path, src: Path) -> str | None:
-    data = cache_base.read_json(cache_base.cache_path_for(root, src, META_SUFFIX))
-    if not data:
+    row = cache_db.get(root, src)
+    if row is None or row.meta is None:
         return None
-    md = data.get("metadata")
-    if not isinstance(md, dict):
-        return None
-    val = md.get(PIX_ORIGINAL_PATH)  # pyright: ignore[reportUnknownMemberType]
+    val = row.meta.get(PIX_ORIGINAL_PATH)
     return val if isinstance(val, str) else None
 
 

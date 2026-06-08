@@ -16,7 +16,7 @@ Language: **Python 3.12+**.
 | Image decode/encode | `Pillow` + `pillow-heif` |
 | Video remux | `ffmpeg` (subprocess; bundled `.exe` or on PATH) — lossless `-c copy` container normalization, never re-encode |
 | Metadata read/write | `ExifTool` (subprocess via `pyexiftool`) — only tool that reliably handles EXIF/XMP/IPTC across photo + video formats including MWG face regions. **Reads:** bulk-extract with `exiftool -j -r -G:1 <folder>` once per migrate, populating an in-memory cache (see [migrate.md → Metadata cache](migrate.md#metadata-cache)). **Writes:** per-file via `-overwrite_original`, using `-stay_open` mode (one long-running ExifTool process per migrate, communicating via stdin/stdout) to avoid the ~200ms-per-spawn overhead. |
-| Format-aware content hash (tier 1) | hand-rolled framing: JPEG → strip APP-marker metadata (APP1/EXIF, APP1/XMP, APP13/IPTC, …) and hash the rest; MP4 / ISO BMFF → parse boxes and hash only the concatenated `mdat` payload(s). Hashed with `blake3` (256-bit, hex-encoded). Stored in the per-file cache under `.pix/cache/` by `pix hash` (see [hash.md](hash.md)). |
+| Format-aware content hash (tier 1) | hand-rolled framing: JPEG → strip APP-marker metadata (APP1/EXIF, APP1/XMP, APP13/IPTC, …) and hash the rest; MP4 / ISO BMFF → parse boxes and hash only the concatenated `mdat` payload(s). Hashed with `blake3` (256-bit, hex-encoded). Stored in the SQLite cache store `.pix/cache.db` by `pix hash` (see [hash.md](hash.md)). |
 | Perceptual hash (tier 2) | `imagehash` (photos), sampled-frame imagehash (videos) |
 | Face detection + embedding | `insightface` (ONNX-backed) |
 | Identity clustering | `hdbscan` or cosine-similarity threshold |
@@ -95,6 +95,36 @@ Use `\\?\` prefixes on all FS paths.
 - `.pix/runs/` holds full file captures from every migrate run — syncing roughly doubles cloud storage per run, and run folders accumulate until the user deletes them.
 - `.pix/checkouts/` contains hard links to library files; some sync clients treat each link as an independent file and re-upload.
 - `.pix/staging/` and `.pix/faces/` are local working state / recreatable cache.
+- `.pix/cache.db` (+ its `-wal`/`-shm`) is the recreatable cache store (below).
+
+## Cache store
+
+All derived caches live in one SQLite DB, `<library>/.pix/cache.db` (WAL mode),
+one row per library file keyed by absolute path: `files(path, size, mtime_ns,
+meta, hash, vfp)`. It replaces the former per-file sidecar tree
+(`.pix/cache/<mirror>.meta`/`.hash`/`.vfp`) — up to three tiny files per media
+file — which made every command stat+read+parse ~200k files just to answer
+"what changed?". The store loads in one `SELECT`; prune/relocate/remove and the
+`pix events` query are one statement each.
+
+**Validation (unified key).** A row's `(size, mtime_ns)` is the file's identity;
+a column (`meta`/`hash`/`vfp`) is valid iff it is non-NULL *and* the row stamp
+matches the live file. Every in-place pix write that bumps mtime goes through
+`cache_db.note_inplace_metadata_change`, which re-stamps, merges the new tags
+into `meta`, and carries the content `hash` + `vfp` forward (a metadata-only
+write leaves content — hence hash/fingerprint — unchanged). So set/clear,
+rotate-retag, dedupe MERGE, and migrate's in-place TAG no longer force a
+needless re-hash/re-fingerprint.
+
+**What's stored in `meta`.** Only the tags pix consumes (`pix.metadata_filter`):
+`SourceFile`, the `pix:*` fields, the DateAuto candidates, and face/region tags
+— not the full ExifTool dump. Live reads (`pix meta`) bypass the cache and still
+see every tag.
+
+**Migration.** On first open of a library that still has the legacy
+`.pix/cache/` tree, the store folds each still-valid sidecar into a row and
+reaps the tree (one-time, idempotent, gated on an `import_done` flag). The
+single-writer library lock serializes writers; WAL allows concurrent readers.
 
 `pix init` prints a one-time reminder to add `.pix` to the sync client's exclude rules. For Synology Drive Client on Windows: **Settings → Sync Rules → Excluded folders → add `.pix`**. The actual library files (outside `.pix/`) sync normally.
 
