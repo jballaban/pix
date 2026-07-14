@@ -1,7 +1,7 @@
-"""Implementation of `pix set` — write a tag override onto specific files.
+"""Implementation of `pix tag set` — write a tag override onto specific files.
 
-`pix set <tag> <value> <path>...` writes `pix:EventOverride` /
-`pix:DateOverride` to each named path. `pix clear` is the inverse: for
+`pix tag set <tag> <value> <path>...` writes `pix:EventOverride` /
+`pix:DateOverride` to each named path. `pix tag clear` is the inverse: for
 **date** it removes the override (reverting to the auto date); for **event**
 it blanks the *effective* value — writing an `EVENT_NULL` force-null
 override when an auto event would otherwise show, so "Clear" means "no
@@ -155,7 +155,7 @@ def set_override(
     """Write a tag override on `paths` (or clear it when `clear` is set).
 
     `value` is ignored when `clear` is True. Exposed as two CLI commands —
-    `pix set <tag> <value> <paths>` and `pix clear <tag> <paths>` — so the
+    `pix tag set <tag> <value> <paths>` and `pix tag clear <tag> <paths>` — so the
     value is always an explicit positional and never an empty-string arg
     (which the shell drops)."""
     banner()
@@ -305,7 +305,7 @@ def _apply_overrides(
         else f"set {tag} override → {value!r}"
     )
     plan_path.write_text(
-        f"# pix set: {action_desc}\n"
+        f"# pix tag set: {action_desc}\n"
         f"# Run ID: {run_id}\n#\n"
         + "\n".join(f"{ln.line_id} | TAG | {ln.rel_path} | {ln.details}" for ln in lines)
         + "\n",

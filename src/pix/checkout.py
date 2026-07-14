@@ -1,11 +1,11 @@
-"""`pix checkout` — tag editing via folder-shuffle.
+"""`pix tag checkout` — tag editing via folder-shuffle.
 
 See spec/tag-editing.md for the full design. This module owns the
 *core* of checkout (no CLI concerns — that's commands/checkout.py):
 
 - The freeze guard (`ensure_no_open_checkout`) every other write-mode
   command calls: while `<library>/.pix/checkout/` exists, only
-  `pix checkout --commit` / `--reset` may run.
+  `pix tag checkout --commit` / `--reset` may run.
 - The on-disk snapshot (`Snapshot`, `read_snapshot`, `write_snapshot`)
   — the baseline commit diffs the shuffled workspace against. Keyed by
   NTFS file-ID so a shuffled link can be matched back to its library
@@ -64,12 +64,12 @@ class CheckoutError(Exception):
 
 
 class CheckoutExists(CheckoutError):
-    """Raised when `pix checkout <path> <template>` is run with one already open."""
+    """Raised when `pix tag checkout <path> <template>` is run with one already open."""
 
     def __init__(self, checkout_path: Path) -> None:
         super().__init__(
             f"A checkout is already open at {checkout_path}. Run "
-            f"`pix checkout --commit` or `pix checkout --reset` first."
+            f"`pix tag checkout --commit` or `pix tag checkout --reset` first."
         )
 
 
@@ -100,8 +100,8 @@ class CheckoutOpen(Exception):
         else:
             detail = ""
         super().__init__(
-            f"A checkout is open{detail}. Run `pix checkout --commit` or "
-            f"`pix checkout --reset` before any other operation."
+            f"A checkout is open{detail}. Run `pix tag checkout --commit` or "
+            f"`pix tag checkout --reset` before any other operation."
         )
 
 
@@ -228,7 +228,7 @@ def read_snapshot(library_root: Path) -> Snapshot | None:
 def ensure_no_open_checkout(library_root: Path) -> None:
     """Refuse if a checkout is open (the library-wide freeze).
 
-    Every write-mode command except `pix checkout --commit`/`--reset`
+    Every write-mode command except `pix tag checkout --commit`/`--reset`
     calls this after resolving the root. See spec/tag-editing.md →
     The freeze.
     """

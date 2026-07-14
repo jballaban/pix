@@ -190,7 +190,7 @@ def load_all(library_root: Path) -> dict[Path, CacheRow]:
 
 def iter_meta(library_root: Path) -> Iterator[tuple[Path, dict[str, object]]]:
     """Yield `(path, metadata)` for every row with a non-NULL meta column.
-    Backs `pix events` (one query, no per-file reads)."""
+    Backs `pix info events` (one query, no per-file reads)."""
     conn = _connect(library_root)
     for row in conn.execute(
         "SELECT path, meta FROM files WHERE meta IS NOT NULL"

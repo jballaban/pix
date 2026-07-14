@@ -1,4 +1,4 @@
-"""Tests for `pix rotate` — helpers and validation (no ffmpeg needed)."""
+"""Tests for `pix tag rotate` — helpers and validation (no ffmpeg needed)."""
 
 from __future__ import annotations
 

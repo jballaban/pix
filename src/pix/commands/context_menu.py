@@ -11,7 +11,7 @@ trick: a parent verb with `MUIVerb` + an empty `SubCommands` value makes
 Explorer render its `shell` subkey as a submenu, repeated to nest. Each leaf's
 `command` points at the packaged launcher `pix/resources/pixtag.ps1` with the
 chosen `-Tag`/`-Op`; the launcher (a collation shim) aggregates a multi-select
-and calls `pix set` / `pix clear` (see the script header).
+and calls `pix tag set` / `pix tag clear` (see the script header).
 
 Windows-only: the registry + Explorer integration has no meaning elsewhere, so
 the command refuses up front on other platforms. `winreg` is imported lazily,

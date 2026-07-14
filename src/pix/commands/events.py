@@ -1,4 +1,4 @@
-"""Implementation of `pix events` — list the library's unique event names.
+"""Implementation of `pix info events` — list the library's unique event names.
 
 Read-only and pipe-friendly (no version banner): prints one line per unique
 effective event, case-insensitively sorted, as `name<TAB>range` — where

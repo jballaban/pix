@@ -67,7 +67,9 @@ pix dedupe D:\photos                          # collapse duplicates
 pix organize D:\photos "{year}/{event}/{month}"   # reshape the library
 ```
 
-`pix meta <file>` shows what date sources and tags pix sees for one file.
+`pix info meta <file>` shows what date sources and tags pix sees for one file.
+Tag edits on specific files live under `pix tag` (`set` / `clear` / `rotate` /
+`checkout`); read-only inspection lives under `pix info` (`meta` / `events`).
 
 ## Settings (`.pix/pix.yaml`)
 

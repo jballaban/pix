@@ -1,4 +1,4 @@
-"""Implementation of `pix rotate <degrees> <paths>` — lossless video rotation.
+"""Implementation of `pix tag rotate <degrees> <paths>` — lossless video rotation.
 
 Adds `<degrees>` of **clockwise** display rotation to each video by rewriting
 only the container's rotation matrix (`ffmpeg -c copy` — no re-encode, no

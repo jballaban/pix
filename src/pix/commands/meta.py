@@ -1,4 +1,4 @@
-"""Implementation of `pix meta <path>` — read-only single-file inspector.
+"""Implementation of `pix info meta <path>` — read-only single-file inspector.
 
 Prints what pix "sees" for one file so the user can decide how to act
 on it without re-deriving by hand:

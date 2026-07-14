@@ -1,4 +1,4 @@
-"""Tests for `pix set` / `pix clear` — tag-override writes on specific files.
+"""Tests for `pix tag set` / `pix tag clear` — tag-override writes on specific files.
 
 The exiftool-backed metadata read and the apply are monkeypatched so these
 stay fast and deterministic; they exercise validation, library scoping,
@@ -250,7 +250,7 @@ def test_clear_event_blanks_auto_derived_event(
 ) -> None:
     """Clearing an event that comes from EventAuto (no override) writes the
     force-null sentinel so the effective event becomes empty — the case where
-    `pix clear` used to be a confusing no-op."""
+    `pix tag clear` used to be a confusing no-op."""
     root = _lib(tmp_path)
     f = root / "x.jpg"
     f.write_bytes(b"x")

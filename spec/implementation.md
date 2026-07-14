@@ -105,7 +105,7 @@ meta, hash, vfp)`. It replaces the former per-file sidecar tree
 (`.pix/cache/<mirror>.meta`/`.hash`/`.vfp`) — up to three tiny files per media
 file — which made every command stat+read+parse ~200k files just to answer
 "what changed?". The store loads in one `SELECT`; prune/relocate/remove and the
-`pix events` query are one statement each.
+`pix info events` query are one statement each.
 
 **Validation (unified key).** A row's `(size, mtime_ns)` is the file's identity;
 a column (`meta`/`hash`/`vfp`) is valid iff it is non-NULL *and* the row stamp
@@ -118,7 +118,7 @@ needless re-hash/re-fingerprint.
 
 **What's stored in `meta`.** Only the tags pix consumes (`pix.metadata_filter`):
 `SourceFile`, the `pix:*` fields, the DateAuto candidates, and face/region tags
-— not the full ExifTool dump. Live reads (`pix meta`) bypass the cache and still
+— not the full ExifTool dump. Live reads (`pix info meta`) bypass the cache and still
 see every tag.
 
 **Migration.** On first open of a library that still has the legacy

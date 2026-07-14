@@ -356,7 +356,7 @@ def derive_date_auto(meta: FileMetadata) -> datetime | None:
 
 @dataclass(frozen=True)
 class DateCandidate:
-    """One evaluated date source, for the `pix meta` inspector.
+    """One evaluated date source, for the `pix info meta` inspector.
 
     `parsed` is the datetime the source yields (None if it produced
     nothing). `note` is a short human status: matched / unparseable /

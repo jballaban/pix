@@ -15,7 +15,7 @@ this allowlist stays in sync with the constants the code actually reads — so
 the duplication can't silently drift.
 
 Live reads are unaffected: `read_metadata_batched` returns the *full* metadata
-for the current run; only the persisted copy is trimmed. `pix meta` reads the
+for the current run; only the persisted copy is trimmed. `pix info meta` reads the
 live file (no cache), so diagnostics still see every tag.
 """
 
@@ -71,7 +71,7 @@ def consumed_read_args() -> list[str]:
     `SourceFile` is always emitted by `-j` regardless, so it's not requested.
 
     Opt-in: callers filling the cache pass this to `read_metadata_batched`;
-    `pix meta` (which displays make/model/comment) reads the full set.
+    `pix info meta` (which displays make/model/comment) reads the full set.
     """
     explicit = sorted(
         f"-{k}"

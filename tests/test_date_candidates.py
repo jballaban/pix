@@ -1,4 +1,4 @@
-"""Tests for `pix.dates.date_candidates` — the `pix meta` date explainer."""
+"""Tests for `pix.dates.date_candidates` — the `pix info meta` date explainer."""
 
 from __future__ import annotations
 

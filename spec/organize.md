@@ -172,7 +172,7 @@ organize:
   template: "{year}/{month}/{event}"
 ```
 
-This is the library's **default shape**. A bare **`pix organize`** (no template argument) re-applies the stored template — re-shaping the library back to its default after, e.g., a [`pix checkout --commit`](tag-editing.md) changed some tags and left files where they no longer belong. If no template is stored yet, bare `pix organize` errors and asks for one.
+This is the library's **default shape**. A bare **`pix organize`** (no template argument) re-applies the stored template — re-shaping the library back to its default after, e.g., a [`pix tag checkout --commit`](tag-editing.md) changed some tags and left files where they no longer belong. If no template is stored yet, bare `pix organize` errors and asks for one.
 
 The key is **optional**. Writing it preserves the other key pix manages (`runs_dir`) and drops anything else (unknown keys, comments). A subsequent `pix organize <different-template>` overwrites it. There's no separate "set template" command.
 

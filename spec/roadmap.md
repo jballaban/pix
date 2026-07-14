@@ -27,12 +27,12 @@ change. See [perf-backlog.md → Considered and dropped](perf-backlog.md).
 
 ## Tag editing — removal, blanking, and override review
 
-`pix checkout` currently supports **assigning** a tag (drag a file into a value
+`pix tag checkout` currently supports **assigning** a tag (drag a file into a value
 folder → set that override). Still to build (see [tag-editing.md](tag-editing.md)):
 
 - **Removing / blanking** a tag (move-up-to-parent; the "set to nothing"
   representation) — commit reports these as skipped today.
-- **`pix checkout --overrides`** review mode.
+- **`pix tag checkout --overrides`** review mode.
 - **Face checkout (`{face}`)** — depends on migrate-time face detection, also
   not yet built.
 

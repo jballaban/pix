@@ -28,22 +28,22 @@ PIX_MERGE_EVENT: str = "XMP:MergeEvent"
 
 # Force-null sentinel for `pix:EventOverride`: an explicit "no event" that
 # beats `pix:EventAuto` (an absent/empty override otherwise reverts to the
-# auto). Mirrors the `*` null convention used for date overrides. `pix clear
-# event` writes this when a file would otherwise show an auto-derived event.
+# auto). Mirrors the `*` null convention used for date overrides. `pix tag
+# clear event` writes this when a file would otherwise show an auto-derived event.
 EVENT_NULL: str = "*"
 
 
 def events_cache_path(library_root: Path) -> Path:
-    """Path to the cached unique-event list (backs `pix events`/autocomplete)."""
+    """Path to the cached unique-event list (backs `pix info events`/autocomplete)."""
     return library_root / ".pix" / "events.cache"
 
 
 def cached_event_names(library_root: Path) -> list[str]:
     """Event names from the cached list, or [] if there's no cache.
 
-    Best-effort: the cache (written by `pix events`, format `name<TAB>range`
-    per line) may be stale or absent. Used for case-alignment on `pix set`;
-    the menu warms the cache via `pix events` right before set, so there it's
+    Best-effort: the cache (written by `pix info events`, format `name<TAB>range`
+    per line) may be stale or absent. Used for case-alignment on `pix tag set`;
+    the menu warms the cache via `pix info events` right before set, so there it's
     current.
     """
     try:
@@ -54,7 +54,7 @@ def cached_event_names(library_root: Path) -> list[str]:
 
 
 def invalidate_events_cache(library_root: Path) -> None:
-    """Drop the cached event list so the next `pix events` recomputes it.
+    """Drop the cached event list so the next `pix info events` recomputes it.
 
     Called after a tag write that can change the set of events (set/clear), so
     a value you just assigned shows up in the next autocomplete. Best-effort.

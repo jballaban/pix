@@ -42,7 +42,7 @@ dedupe rewrite.**
   the source container/extension as-is (still tagged + organized), surface a
   count. **Never re-encode.** Rare (exotic AVI/MJPEG/uncompressed).
 - **Rotation:** remux preserves the matrix, so the §2#1 bug disappears by
-  construction. `pix rotate` stays as the manual fix-up tool.
+  construction. `pix tag rotate` stays as the manual fix-up tool.
 - **`pix:*` metadata:** the §2#4 fragility is already handled — the normal
   CONVERT+RENAME+TAG action re-applies pix tags after the remux, so `-c copy`
   dropping the XMP namespace is a non-issue in the live pipeline (it only bit
@@ -139,7 +139,7 @@ Relevant memories: `project_hevc_canonical_video`, `project_hybrid_gpu_encoding`
    path bakes rotation; remux preserves the matrix; only NVENC re-encode broke
    it. Fixed forward in **v0.1.161** (rotated clips drop `-hwaccel_output_format
    cuda` so autorotate runs). Existing files recovered via a lossless
-   rotation-tag-add (`pix rotate`, v0.1.162) using conserved originals to
+   rotation-tag-add (`pix tag rotate`, v0.1.162) using conserved originals to
    determine the angle.
 2. **Re-encoding is lossy and irreversible.** Every transcode loses quality;
    re-running migrate/sync once re-encoded the whole H.264 library to HEVC
@@ -217,7 +217,7 @@ and most of the fragility above.
   (cross-res deferred) may need lifting if backups differ in resolution; (d) tag
   merge must consolidate `pix:*` onto the chosen original keeper.
 - **Rotation.** Remux preserves the rotation matrix (verified), so the rotation
-  bug simply disappears under remux-only — `pix rotate` remains as the manual
+  bug simply disappears under remux-only — `pix tag rotate` remains as the manual
   fix-up tool.
 
 ---

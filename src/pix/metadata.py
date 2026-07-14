@@ -131,7 +131,7 @@ def read_metadata_batched(
     `tags`: optional ExifTool `-TAG` args restricting which tags are read
     (e.g. `metadata_filter.consumed_read_args()`). None reads everything —
     the cache-fill callers pass the consumed allowlist to shrink the read;
-    `pix meta` leaves it None to display every tag.
+    `pix info meta` leaves it None to display every tag.
 
     Returns a dict keyed by absolute file path.
     """

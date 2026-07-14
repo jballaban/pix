@@ -21,7 +21,7 @@ Nine top-level operations. `init`, `migrate`, `hash`, `dedupe`, `organize`, and 
 | `merge <src> <dst>` | Combine two already-migrated trees; reuses `dedupe`. | — | Deferred (after dedupe) |
 | `organize [<template>]` | Physically rearrange files per a template (bare = re-apply the stored default). Single-valued tags only. | [organize.md](organize.md) | **v1 implemented** |
 | `sync <path> [<template>]` | Run migrate → hash → dedupe → organize back-to-back, non-interactively (auto-apply, stop on first error). | [sync.md](sync.md) | **v1 implemented** |
-| `checkout <path> <template>` / `checkout --commit` / `checkout --reset` | Tag editing via folder-shuffle, scoped to `<path>` (like migrate). Compound single-valued templates; commit writes tags only. | [tag-editing.md](tag-editing.md) | **Designed (pending build)** |
+| `tag checkout <path> <template>` / `tag checkout --commit` / `tag checkout --reset` | Tag editing via folder-shuffle, scoped to `<path>` (like migrate). Compound single-valued templates; commit writes tags only. | [tag-editing.md](tag-editing.md) | **Designed (pending build)** |
 | `export <template>` | Produce a copy/link-based derived view at a separate path. Read-only. | [export.md](export.md) | Sketched |
 
 The plan-applying ops (`migrate`, `hash`, `dedupe`, `organize`) share a `--no-prompt` flag that skips the `Apply?` / `Proceed?` confirmation and applies the generated plan directly — the plan is still written to the run folder. `sync` is the composition of all four under `--no-prompt`.
@@ -63,7 +63,7 @@ Lock files live in `.pix/lock` so they're excluded from sync clients alongside t
 
 This is intentionally a coarse lock: one operation at a time, library-wide. Finer-grained locking (e.g., letting `pix hash` run concurrently with `pix migrate` on disjoint subtrees) is a future-work concession, not a v1 design goal.
 
-**Checkout freeze.** Separately from the per-invocation lock, an **open tag-editing checkout freezes the whole library**: while `<library>\.pix\checkout\` exists, every command except `pix checkout --commit` and `pix checkout --reset` refuses up front. A checkout materializes hard links whose identity commit relies on (NTFS file-ID); migrate/dedupe/organize would all invalidate that identity if they ran mid-session. The freeze is enforced by folder presence (a checkout session spans many invocations, so the lock can't cover it). See [tag-editing.md → The freeze](tag-editing.md#the-freeze--an-open-checkout-locks-the-library).
+**Checkout freeze.** Separately from the per-invocation lock, an **open tag-editing checkout freezes the whole library**: while `<library>\.pix\checkout\` exists, every command except `pix tag checkout --commit` and `pix tag checkout --reset` refuses up front. A checkout materializes hard links whose identity commit relies on (NTFS file-ID); migrate/dedupe/organize would all invalidate that identity if they ran mid-session. The freeze is enforced by folder presence (a checkout session spans many invocations, so the lock can't cover it). See [tag-editing.md → The freeze](tag-editing.md#the-freeze--an-open-checkout-locks-the-library).
 
 ## Open decisions
 

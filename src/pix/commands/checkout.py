@@ -1,12 +1,12 @@
-"""Implementation of `pix checkout` — tag editing via folder-shuffle.
+"""Implementation of `pix tag checkout` — tag editing via folder-shuffle.
 
 Three actions on one command (see spec/tag-editing.md → CLI surface):
 
-- `pix checkout <path> <template>` — start: materialize a scoped
+- `pix tag checkout <path> <template>` — start: materialize a scoped
   hard-link workspace + snapshot.
-- `pix checkout --reset`           — discard the open checkout.
-- `pix checkout --commit`          — apply tag edits (NOT yet built).
-- bare `pix checkout`              — status.
+- `pix tag checkout --reset`           — discard the open checkout.
+- `pix tag checkout --commit`          — apply tag edits (NOT yet built).
+- bare `pix tag checkout`              — status.
 
 Core logic lives in `pix.checkout`; this module is the CLI shell:
 argument dispatch, root resolution, metadata loading, and console
@@ -66,7 +66,7 @@ def run_checkout(
     commit: bool,
     reset: bool,
 ) -> None:
-    """Dispatch the `pix checkout` action based on flags + positionals."""
+    """Dispatch the `pix tag checkout` action based on flags + positionals."""
     if commit and reset:
         typer.echo(
             "Error: --commit and --reset are mutually exclusive.", err=True
@@ -93,7 +93,7 @@ def run_checkout(
         banner()
         typer.echo(
             "Error: starting a checkout needs both <path> and <template>, "
-            "e.g. `pix checkout . {year}/{event}`. For the whole library, "
+            "e.g. `pix tag checkout . {year}/{event}`. For the whole library, "
             "pass the library root as <path>.",
             err=True,
         )
@@ -117,7 +117,7 @@ def _do_status() -> None:
     banner()
     if not is_open(root):
         typer.echo("No checkout open.")
-        typer.echo("Start one with `pix checkout <path> <template>`.")
+        typer.echo("Start one with `pix tag checkout <path> <template>`.")
         return
 
     cdir = checkout_dir(root)
@@ -130,7 +130,7 @@ def _do_status() -> None:
         typer.echo(f"  Links:    {len(snap.links)}")
     else:
         typer.echo("  (snapshot.json missing or unreadable)")
-    typer.echo("Run `pix checkout --commit` or `pix checkout --reset`.")
+    typer.echo("Run `pix tag checkout --commit` or `pix tag checkout --reset`.")
 
 
 # --- reset -------------------------------------------------------------------
@@ -174,7 +174,7 @@ def _do_commit() -> None:
     if snap is None:
         typer.echo(
             "Error: the checkout snapshot is missing or unreadable. Run "
-            "`pix checkout --reset` and start the checkout over.",
+            "`pix tag checkout --reset` and start the checkout over.",
             err=True,
         )
         raise typer.Exit(code=1)
@@ -245,7 +245,7 @@ def _run_commit(root: Path, template: Template, snap: Snapshot) -> None:
     if not lines:
         typer.echo(
             "Nothing to commit; checkout left open "
-            "(use `pix checkout --reset` to discard it)."
+            "(use `pix tag checkout --reset` to discard it)."
         )
         return
 
@@ -493,7 +493,7 @@ def _materialize(
     typer.echo(f"Template: {template_str}")
     typer.echo(
         "Shuffle the links in your file explorer, then "
-        "`pix checkout --commit` (or `--reset` to discard)."
+        "`pix tag checkout --commit` (or `--reset` to discard)."
     )
 
 

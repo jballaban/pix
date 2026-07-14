@@ -1,4 +1,4 @@
-"""Tests for `pix events` — the unique-event lister that backs autocomplete."""
+"""Tests for `pix info events` — the unique-event lister that backs autocomplete."""
 
 from __future__ import annotations
 

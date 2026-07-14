@@ -1,27 +1,27 @@
-# Tag editing — `pix checkout`
+# Tag editing — `pix tag checkout`
 
 The workflow for applying user **overrides** on `_auto` tags after [migrate](migrate.md) has run. Migrate writes heuristics (`_auto` baselines); this workflow captures human judgment (`DateOverride`, `EventOverride`, face identities). See [tags.md](tags.md) for the tag model this edits.
 
-Unlike migrate (per-file, in-place) and organize (structural moves), tag-editing is a **folder-shuffle UI**: pix materializes a temporary workspace of links shaped by a template, the user rearranges links in their file explorer, and `pix checkout --commit` infers the implied tag changes from where things ended up.
+Unlike migrate (per-file, in-place) and organize (structural moves), tag-editing is a **folder-shuffle UI**: pix materializes a temporary workspace of links shaped by a template, the user rearranges links in their file explorer, and `pix tag checkout --commit` infers the implied tag changes from where things ended up.
 
 ## CLI surface
 
-All tag-editing is expressed as actions on the single `pix checkout` command:
+All tag-editing is expressed as actions on the single `pix tag checkout` command:
 
 | Invocation | Effect |
 |---|---|
-| `pix checkout <path> <template>` | Start a checkout scoped to `<path>` and below: materialize the workspace for `<template>`. Both args required — the path resolves the library root and bounds the file set, exactly like `pix migrate <folder>`. Refuses if a checkout is already open. |
-| `pix checkout --commit` | Diff the open checkout against its snapshot, write the inferred tag changes, tear the workspace down. No positional args. Errors if no checkout is open. |
-| `pix checkout --reset` | Discard the open checkout (delete the workspace + snapshot). No tags written. No positional args. Errors if no checkout is open. |
-| `pix checkout` (no args) | Status: if a checkout is open, print its template, scope, creation time, link count, and workspace path, plus a hint to `--commit`/`--reset`. If none is open, print a usage hint. |
+| `pix tag checkout <path> <template>` | Start a checkout scoped to `<path>` and below: materialize the workspace for `<template>`. Both args required — the path resolves the library root and bounds the file set, exactly like `pix migrate <folder>`. Refuses if a checkout is already open. |
+| `pix tag checkout --commit` | Diff the open checkout against its snapshot, write the inferred tag changes, tear the workspace down. No positional args. Errors if no checkout is open. |
+| `pix tag checkout --reset` | Discard the open checkout (delete the workspace + snapshot). No tags written. No positional args. Errors if no checkout is open. |
+| `pix tag checkout` (no args) | Status: if a checkout is open, print its template, scope, creation time, link count, and workspace path, plus a hint to `--commit`/`--reset`. If none is open, print a usage hint. |
 
 `--commit` and `--reset` are mutually exclusive and take no positional arguments.
 
 ## The cycle
 
-1. **`pix checkout F:\photos\2023 {year}/{event}`** builds `<library-root>/.pix/checkout/` — a folder tree shaped by the template, whose leaves are **hard links** to the library files under `<path>` (here `F:\photos\2023`; see [Scope](#scope) and [Materializing the workspace](#materializing-the-workspace)). A snapshot of the starting state is written to `.pix/checkout/snapshot.json`.
+1. **`pix tag checkout F:\photos\2023 {year}/{event}`** builds `<library-root>/.pix/checkout/` — a folder tree shaped by the template, whose leaves are **hard links** to the library files under `<path>` (here `F:\photos\2023`; see [Scope](#scope) and [Materializing the workspace](#materializing-the-workspace)). A snapshot of the starting state is written to `.pix/checkout/snapshot.json`.
 2. The user shuffles links between folders in their file explorer (over minutes, hours, or days).
-3. **`pix checkout --commit`** diffs the workspace against the snapshot, infers the implied tag changes, shows a plan, and on accept writes the override tags into the files and tears the workspace down. Or **`pix checkout --reset`** throws the session away.
+3. **`pix tag checkout --commit`** diffs the workspace against the snapshot, infers the implied tag changes, shows a plan, and on accept writes the override tags into the files and tears the workspace down. Or **`pix tag checkout --reset`** throws the session away.
 
 Commit **only writes tags.** It does not rename files or move them between folders. The library therefore becomes *eventually consistent*: a committed date change is reflected in the file's canonical name on the next [`pix migrate`](library.md#canonical-filename) (RENAME) and in its folder location on the next [`pix organize`](organize.md) (MOVE). Commit captures intent; migrate/organize materialize it.
 
@@ -34,15 +34,15 @@ The rest of this spec describes the full eventual design (removing/blanking tags
 - **Workspace layout (one uniform rule).** Render each level's value as a folder and **stop at the first level the file has no value for**; the file rests in whatever's built so far — the **root** if the first level is missing. So `{year}/{event}` with no event → `2023/`; `{event}/{year}` with no event → the root (no bucket, no year breakdown). Because we stop at the first gap, a later level's folder never appears where it could be mistaken for an earlier token. These valueless files are drag-*out* sources — you grab them and drop them into a value.
 - **Templates** must be one bare tag per level (`{year}/{event}`, not `{year}-archive/{event}`), since commit reverses folder names back into values.
 
-Deferred to a later build (separate design, with the "set to nothing" marker if wanted): removing/emptying a tag, the `pix checkout --overrides` review mode, and faces. The detailed folder-shuffle and face sections below describe that fuller design — they are **not** v1.
+Deferred to a later build (separate design, with the "set to nothing" marker if wanted): removing/emptying a tag, the `pix tag checkout --overrides` review mode, and faces. The detailed folder-shuffle and face sections below describe that fuller design — they are **not** v1.
 
 ## The freeze — an open checkout locks the library
 
-While a checkout is open — its `.pix/checkout/snapshot.json` is present — **every pix command except `pix checkout --commit` and `pix checkout --reset` refuses up front**, with:
+While a checkout is open — its `.pix/checkout/snapshot.json` is present — **every pix command except `pix tag checkout --commit` and `pix tag checkout --reset` refuses up front**, with:
 
 ```
 A checkout is open (template: {year}/{event}, started 2026-05-28 15:00).
-Run `pix checkout --commit` or `pix checkout --reset` before any other operation.
+Run `pix tag checkout --commit` or `pix tag checkout --reset` before any other operation.
 ```
 
 This includes `migrate`, `organize`, `dedupe`, `hash`, and `upgrade`. Exit non-zero, no work done.
@@ -64,15 +64,15 @@ The freeze is enforced by the **snapshot's presence** (`.pix/checkout/snapshot.j
 The required `<path>` argument does double duty, exactly like `pix migrate <folder>`:
 
 - **Resolves the library root** — pix walks up from `<path>` looking for `.pix/`.
-- **Bounds the file set** — only files at or under `<path>` are linked into the workspace. A whole-library checkout is `pix checkout <library-root> <template>` (or `pix checkout . <template>` run from the root).
+- **Bounds the file set** — only files at or under `<path>` are linked into the workspace. A whole-library checkout is `pix tag checkout <library-root> <template>` (or `pix tag checkout . <template>` run from the root).
 
 `<path>` must resolve to a location **at or under the library root**, and **not inside `.pix/`** (tool scaffolding — nothing to edit). Either violation aborts before any work.
 
-Scope is by **physical location**, not tag value: `pix checkout F:\photos\2023 {event}` checks out whatever currently lives under `2023\`. Because the library's shape is organize-driven this usually lines up with the obvious dimension, but the rule is simply "files under this path, now."
+Scope is by **physical location**, not tag value: `pix tag checkout F:\photos\2023 {event}` checks out whatever currently lives under `2023\`. Because the library's shape is organize-driven this usually lines up with the obvious dimension, but the rule is simply "files under this path, now."
 
 Scoping keeps the workspace navigable on a large library — materializing hard links for an entire TB-scale tree (and then shuffling it in Explorer) is unwieldy; a scoped checkout is something a human can actually work through.
 
-Unlike [organize](organize.md#cwd-constraint), checkout has **no CWD constraint** — it never moves library files or removes empty folders, so running it from inside the library (`pix checkout . <template>`) is a first-class use.
+Unlike [organize](organize.md#cwd-constraint), checkout has **no CWD constraint** — it never moves library files or removes empty folders, so running it from inside the library (`pix tag checkout . <template>`) is a first-class use.
 
 The [freeze](#the-freeze--an-open-checkout-locks-the-library) is always **library-wide**, regardless of scope: an open checkout blocks every other op everywhere, because they could invalidate the checked-out inodes no matter which subtree was scoped.
 
@@ -84,7 +84,7 @@ Unlike organize, checkout does **not** require `pix hash` — identity is by ino
 
 ## Materializing the workspace
 
-`pix checkout <template>`:
+`pix tag checkout <template>`:
 
 1. **Resolves the library root** by walking up from `<path>` for `.pix/` (like `pix migrate <folder>`), **validates the template** against the [template grammar](tags.md#template-grammar), and **validates the scope** (see [Scope](#scope)).
 2. **Allocates** `<library-root>/.pix/checkout/` (fails if it already exists — one checkout at a time).
@@ -178,7 +178,7 @@ Commit handles this implicitly as part of writing the override change; no separa
 
 ## Commit: inferring and applying changes
 
-`pix checkout --commit`:
+`pix tag checkout --commit`:
 
 1. **Acquire the library lock**; load `.pix/checkout/snapshot.json`.
 2. **Allocate a run folder** `<library-root>/.pix/runs/<run-id>/` (same shape and id format as migrate's).
@@ -257,13 +257,13 @@ Commit avoids that needless rehash: for each file it's about to TAG it captures 
 
 ## Reset
 
-`pix checkout --reset` empties `.pix/checkout/` (deletes the snapshot + links, **keeping the folder**) and exits. No tags are written, no run folder is allocated, the library is untouched, and — with the snapshot gone — the freeze lifts. It's the throw-away for a checkout the user no longer wants to commit.
+`pix tag checkout --reset` empties `.pix/checkout/` (deletes the snapshot + links, **keeping the folder**) and exits. No tags are written, no run folder is allocated, the library is untouched, and — with the snapshot gone — the freeze lifts. It's the throw-away for a checkout the user no longer wants to commit.
 
 ## Face-specific checkout: `{face}` (deferred)
 
 > **Status: deferred.** Depends on migrate-time face detection, which is [postponed until last](README.md#open-decisions). The semantics below are designed; they build on the multi-valued single-token rule above and will extend the snapshot schema with per-region identity when implemented.
 
-`pix checkout {face}` is the canonical way to label faces, including cold-start (zero confirmed identities). No separate seeding command.
+`pix tag checkout {face}` is the canonical way to label faces, including cold-start (zero confirmed identities). No separate seeding command.
 
 Each face region (see [tags.md](tags.md#structured-metadata-face-regions)) has three states based on identity + `confirmed` flag:
 

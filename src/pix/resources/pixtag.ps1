@@ -325,7 +325,7 @@ if ($Run) {
         }
         else {
             # Offer existing library events (with their date ranges) as
-            # type-ahead suggestions. `pix events` emits `name<TAB>range`.
+            # type-ahead suggestions. `pix info events` emits `name<TAB>range`.
             $names = @()
             $ranges = @{}
             try {

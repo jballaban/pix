@@ -941,7 +941,7 @@ _OVERRIDE_RE = re.compile(
 
 def valid_date_override(value: str) -> bool:
     """True if `value` is a well-formed `DateOverride` pattern
-    (`YYYY-MM-DD-HH:MM:SS`, any component may be `*`). Used by `pix set`
+    (`YYYY-MM-DD-HH:MM:SS`, any component may be `*`). Used by `pix tag set`
     to validate a date override before writing it."""
     return _OVERRIDE_RE.match(value) is not None
 
