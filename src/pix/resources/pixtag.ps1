@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
-  Windows Explorer context-menu launcher for `pix set` / `pix clear` / `pix meta`.
+  Windows Explorer context-menu launcher for `pix tag set` / `pix tag clear` /
+  `pix tag rotate` / `pix info meta`.
 
 .DESCRIPTION
   Registered by `pix context-menu install` as a cascading menu:
@@ -282,10 +283,10 @@ if ($Run) {
     # meta is read-only and single-file; run it for each selected item in turn.
     if ($Op -eq 'meta') {
         Write-Host ''
-        Write-Host "pix meta - $($items.Count) item(s):" -ForegroundColor Cyan
+        Write-Host "pix info meta - $($items.Count) item(s):" -ForegroundColor Cyan
         foreach ($it in $items) {
             Write-Host ''
-            & pix meta $it
+            & pix info meta $it
         }
         Write-Host ''
         Read-Host 'Press Enter to close'
@@ -295,15 +296,15 @@ if ($Run) {
     # rotate: lossless, no value prompt, no organize (orientation only).
     if ($Op -eq 'rotate') {
         Write-Host ''
-        Write-Host "pix rotate $Deg - $($items.Count) item(s):" -ForegroundColor Cyan
-        & pix rotate $Deg --no-prompt @items
+        Write-Host "pix tag rotate $Deg - $($items.Count) item(s):" -ForegroundColor Cyan
+        & pix tag rotate $Deg --no-prompt @items
         Write-Host ''
         Read-Host 'Press Enter to close'
         return
     }
 
     Write-Host ''
-    Write-Host "pix $Op $Tag - $($items.Count) item(s) selected:" -ForegroundColor Cyan
+    Write-Host "pix tag $Op $Tag - $($items.Count) item(s) selected:" -ForegroundColor Cyan
     foreach ($i in ($items | Select-Object -First 10)) { Write-Host "  $i" }
     if ($items.Count -gt 10) { Write-Host "  ... and $($items.Count - 10) more" }
     Write-Host ''
@@ -314,7 +315,7 @@ if ($Run) {
     # to the media inside), but pix does — its prompt shows "clear ... on N
     # file(s)" and gates the mis-click.
     if ($Op -eq 'clear') {
-        & pix clear $Tag @items
+        & pix tag clear $Tag @items
     }
     else {
         if ($Tag -eq 'date') {
@@ -328,7 +329,7 @@ if ($Run) {
             $names = @()
             $ranges = @{}
             try {
-                foreach ($row in (& pix events $items[0] 2>$null)) {
+                foreach ($row in (& pix info events $items[0] 2>$null)) {
                     if (-not $row) { continue }
                     $parts = $row -split "`t", 2
                     $names += $parts[0]
@@ -343,7 +344,7 @@ if ($Run) {
             Read-Host 'Press Enter to close'
             return
         }
-        & pix set $Tag $value --no-prompt @items
+        & pix tag set $Tag $value --no-prompt @items
     }
 
     # Tag write succeeded → organize the affected folder so the files move now.

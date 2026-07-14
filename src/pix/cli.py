@@ -34,6 +34,23 @@ app: typer.Typer = typer.Typer(
     no_args_is_help=True,
 )
 
+# Grouped sub-commands. `tag` collects the operations that write tags to
+# specific files (set/clear/rotate/checkout); `info` collects the read-only
+# inspectors (meta/events). Registered at the bottom of this module.
+tag_app: typer.Typer = typer.Typer(
+    name="tag",
+    help="Edit tags on specific files: set / clear / rotate / checkout.",
+    no_args_is_help=True,
+)
+info_app: typer.Typer = typer.Typer(
+    name="info",
+    help="Read-only inspection: meta / events.",
+    no_args_is_help=True,
+)
+
+app.add_typer(tag_app, name="tag")
+app.add_typer(info_app, name="info")
+
 
 def _force_utf8_output() -> None:
     """Make stdout/stderr UTF-8 so non-ASCII never crashes a run.
@@ -138,7 +155,7 @@ def organize(
     organize_library(path=path, template_str=template, no_prompt=no_prompt)
 
 
-@app.command("set")
+@tag_app.command("set")
 def set_(
     tag: Annotated[
         str,
@@ -172,7 +189,7 @@ def set_(
     set_override(tag=tag, value=value, paths=paths, no_prompt=no_prompt)
 
 
-@app.command("clear")
+@tag_app.command("clear")
 def clear_(
     tag: Annotated[
         str,
@@ -196,7 +213,7 @@ def clear_(
     set_override(tag=tag, value="", paths=paths, no_prompt=no_prompt, clear=True)
 
 
-@app.command("rotate")
+@tag_app.command("rotate")
 def rotate(
     degrees: Annotated[
         int,
@@ -236,7 +253,7 @@ def context_menu_(
     context_menu(action=action)
 
 
-@app.command("meta")
+@info_app.command("meta")
 def meta(
     path: Annotated[
         Path,
@@ -249,7 +266,7 @@ def meta(
     meta_file(path)
 
 
-@app.command("events")
+@info_app.command("events")
 def events(
     path: Annotated[
         Path | None,
@@ -265,7 +282,7 @@ def events(
     list_events(path)
 
 
-@app.command("checkout")
+@tag_app.command("checkout")
 def checkout(
     path: Annotated[
         Path | None,

@@ -43,7 +43,7 @@ _OPS: tuple[tuple[str, str], ...] = (("set", "Set value..."), ("clear", "Clear")
 _ROTATE_LABEL = "Rotate"
 _ROTATIONS: tuple[tuple[int, str], ...] = ((90, "Rotate right"), (270, "Rotate left"))
 # Top-level leaves shown only on files (not folders), as (key, label, op).
-# `meta` is the read-only single-file inspector (`pix meta`).
+# `meta` is the read-only single-file inspector (`pix info meta`).
 _FILE_VERBS: tuple[tuple[str, str, str], ...] = (("info", "Info", "meta"),)
 
 # Parents under which the "Pix" cascade lives (files `*` and folders).
