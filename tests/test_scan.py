@@ -43,6 +43,29 @@ def test_walk_skips_nested_pix_dirs(tmp_path: Path) -> None:
     assert found == {"good.jpg", "subdir/alsogood.jpg"}
 
 
+def test_walk_skips_sync_client_workdir_and_system_files(tmp_path: Path) -> None:
+    """A file-sync client's working dir and OS junk files must not be treated
+    as source — otherwise migrate aborts on their unknown extensions."""
+    root = tmp_path / "src"
+    root.mkdir()
+    (root / "photo.jpg").write_bytes(b"")
+    # Synology Drive Client's working area (with extension-less temp files).
+    (root / ".SynologyWorkingDirectory" / "Temp").mkdir(parents=True)
+    (root / ".SynologyWorkingDirectory" / "Temp" / ".zxctq2n9").write_bytes(b"x")
+    # OS junk files at any level.
+    (root / "desktop.ini").write_text("[.ShellClassInfo]")
+    (root / "Thumbs.db").write_bytes(b"x")
+    (root / "trip").mkdir()
+    (root / "trip" / "DESKTOP.INI").write_text("x")  # case-insensitive
+    (root / "trip" / "real.jpg").write_bytes(b"")
+
+    found = {
+        p.relative_to(root.resolve()).as_posix()
+        for p, _, _ in walk_source_files(root)
+    }
+    assert found == {"photo.jpg", "trip/real.jpg"}
+
+
 def test_walk_returns_file_sizes(tmp_path: Path) -> None:
     """Each entry pairs the absolute path with its size and mtime_ns."""
     root = tmp_path / "src"

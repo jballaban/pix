@@ -5,9 +5,21 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+# Directories never treated as source. `.pix` is pix's own state. The others
+# are private working areas that file-sync clients create *inside* the synced
+# root — Synology Drive Client populates `.SynologyWorkingDirectory` with
+# extension-less temp files during active sync, which would otherwise abort
+# migrate (unknown extension). Pruned at any depth.
+_SKIP_DIRS: frozenset[str] = frozenset({".pix", ".SynologyWorkingDirectory"})
+
+# System/junk files that are never media and would otherwise trip the
+# extension policy. Matched case-insensitively (Windows).
+_SKIP_FILES: frozenset[str] = frozenset({"desktop.ini", "thumbs.db"})
+
 
 def walk_source_files(folder: Path) -> list[tuple[Path, int, int]]:
-    """Walk `folder` recursively for files, skipping `.pix/` state directories.
+    """Walk `folder` recursively for files, skipping `.pix/` and sync-client
+    state directories (see `_SKIP_DIRS`) and system junk files (`_SKIP_FILES`).
 
     Returns `(absolute_path, file_size_bytes, mtime_ns)` triples. Both
     size and mtime come free from the directory entry on Windows (NTFS
@@ -37,9 +49,11 @@ def walk_source_files(folder: Path) -> list[tuple[Path, int, int]]:
             with os.scandir(dirpath) as it:
                 for entry in it:
                     if entry.is_dir(follow_symlinks=False):
-                        if entry.name != ".pix":
+                        if entry.name not in _SKIP_DIRS:
                             stack.append(entry.path)
                     elif entry.is_file(follow_symlinks=False):
+                        if entry.name.lower() in _SKIP_FILES:
+                            continue
                         st = entry.stat()
                         out.append(
                             (Path(entry.path), st.st_size, st.st_mtime_ns)
