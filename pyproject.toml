@@ -31,6 +31,11 @@ dev = [
     "pyright>=1.1.380",
     "types-pyyaml>=6.0",
 ]
+# Windows-only WPD/MTP probe tooling (tools/probe_wpd.py) for import spec
+# validation. Not a runtime dep of pix; optional.
+probe = [
+    "comtypes>=1.4 ; sys_platform == 'win32'",
+]
 
 [tool.pyright]
 include = ["src", "tests"]

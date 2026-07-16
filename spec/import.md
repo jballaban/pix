@@ -55,7 +55,7 @@ interfaces from `PortableDeviceApi.dll` + `PortableDeviceTypes.dll`.
 - Device object ids are short opaque tokens (`o1058`, `oF99`, `s10001`), not paths.
 
 **Single-lane model.** An MTP device gives one serialized command/response
-session (assumed — [W2](#validation-results), untested). So the architecture is *not*
+session (confirmed — [W2](#validation-results): ~40 MB/s single lane). So the architecture is *not*
 "enumerate thread + download thread":
 
 - **One MTP thread** owns the device and **interleaves** enumerate and download:
@@ -246,9 +246,12 @@ of **CONFIRMED** / **CORRECTED** (assumption was wrong; spec above fixed) /
 - **W1 — CONFIRMED.** WPD enumerates objects and streams content from Python via
   `comtypes` (not `pywin32` — it does not wrap WPD). Auto-gen from
   `PortableDeviceApi.dll` + `PortableDeviceTypes.dll`.
-- **W2 — UNVALIDATED.** Single-lane / no-concurrency-win claim was not tested
-  (needs a threaded overlap experiment). The interleave design does not depend on
-  it being *false*; it only needs enumeration to be slow (W3), which holds.
+- **W2 — CONFIRMED.** Single-lane. Serial read = 40.0 MB/s; a second session opens
+  fine *sequentially*, but two sessions streaming *concurrently* had one rejected
+  with `0x800700AA "resource in use"`, and aggregate throughput was 41 MB/s
+  (ratio 1.02 vs serial — no win). The USB/MTP pipe is a hard ~40 MB/s single lane
+  and concurrent stream access is actively refused → interleave enumerate+download
+  on **one** MTP thread; parallel download threads are pointless and error-prone.
 - **W3 — CONFIRMED.** Cold enumeration ≈ **27 objects/s** (one `Next` + one
   `GetValues` per object through comtypes). A large roll is minutes of enumerate
   before any download → the interleave (live denominator, early progress) is
