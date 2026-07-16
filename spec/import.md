@@ -122,12 +122,35 @@ them** (import never deletes), so a lost `.pix/local` just means re-import.
 
 **Files are pristine** — never modified at import. Provenance rides in a
 **sidecar** per file: `<name>.importinfo` (YAML, matching the `.stashinfo` /
-`.errorinfo` convention), recording:
+`.errorinfo` convention), **written when the file reaches `VERIFIED`** (see
+below), recording:
 
 - device serial + friendly name
 - stable object id (PUID, or the fallback composite — see below)
 - device path (for `OriginalPath`)
 - capture date, original filename, size
+
+**On-disk states.** A file lands at its **final** `./import/…` path the moment its
+download completes; the `.importinfo` sidecar's **presence is the verified marker**
+(written only at `VERIFIED`, never at download). The three states are
+self-describing on disk — which is exactly what the [loop's](#import-loop--traverse-download-verify)
+resume reads:
+
+| State | On disk |
+|-------|---------|
+| downloading | temp name (transient marker `*.__*`), *not* the final name |
+| `DOWNLOADED` (unverified) | file at final path, **no sidecar** |
+| `VERIFIED` | file at final path **+ `.importinfo` sidecar** |
+
+- Download streams to the temp name, checks `bytes == size`, atomic-renames to the
+  final path, reads it back off disk == stream. The rename is the commit, so a
+  partial download can never masquerade as complete.
+- The **sidecar write is the `DOWNLOADED → VERIFIED` commit**. Because migrate's
+  ingest needs the sidecar for provenance, **migrate only ever touches VERIFIED
+  files** — an unverified straggler is invisible to it, no extra check.
+- Resume: temp `*.__*` → discard + re-download; final file **without** sidecar →
+  re-verify; final file **with** sidecar → skip. Already-verified files are never
+  re-verified.
 
 **Migrate ingest → provenance becomes in-file.** When migrate's import-ingest
 pre-pass moves a landed file into the library, it reads the `.importinfo`
@@ -190,14 +213,17 @@ downloads agree + the on-disk file reads back equal to what we received.**
 
 **Per-object state:** `NEW → DOWNLOADED (unverified) → VERIFIED`, plus `FAILED`.
 
-- **Download** (`NEW`→`DOWNLOADED`): stream to a temp name → check
-  `bytes-read == MTP-reported size` (truncation) and a clean complete read → read
-  the temp back off disk and confirm it equals the stream (bad write) → atomic
-  rename to final (+ its `.importinfo` sidecar, per [Landing](#landing--tracking))
-  → record the fingerprint. Catches truncation and disk-write corruption.
+- **Download** (`NEW`→`DOWNLOADED`): stream to a temp name (`*.__*`) → check
+  `bytes-read == MTP-reported size` (truncation) and a clean complete read → atomic
+  rename to the **final** path → read it back off disk and confirm it equals the
+  stream (bad write). **No sidecar yet.** Catches truncation and disk-write
+  corruption; the rename is the commit, so a partial can't look complete.
 - **Verify** (`DOWNLOADED`→`VERIFIED`): a **later traversal** re-downloads the
-  object and compares fingerprints. Match → `VERIFIED`. Mismatch → the read was
-  flaky; re-download to break the tie (two that agree win).
+  object and compares it to the **already-landed file** — the disk file is read #1,
+  the re-download read #2, so nothing is carried in memory between them. Match →
+  **write the `.importinfo` sidecar** (the commit to `VERIFIED`, per
+  [Landing](#landing--tracking)). Mismatch → the read was flaky; re-download to
+  break the tie (two that agree win).
 
 **The loop.** One traversal is the drain-as-you-go DFS above. A traversal is
 **dirty** if it downloaded anything — a new pull *or* a verify re-pull. After a
@@ -208,9 +234,11 @@ enumerated, nothing left to verify) ends the run — which is exactly "no new fi
 - **discovery** — re-enumerating catches objects MTP **lazily reveals** on a later
   pass (observed: the first sweep can under-report);
 - **verification** — the second (and if needed third) independent read per object;
-- **resume** — an interrupted run just re-traverses; an already-landed file is
-  taken as `DOWNLOADED` (never re-pulled as new) and carried through verify, so the
-  expensive first download is never repeated.
+- **resume** — an interrupted run just re-traverses; on-disk state is
+  self-describing (see [Landing](#landing--tracking)): a landed file **with** a
+  sidecar is `VERIFIED` (skip), **without** one is `DOWNLOADED` (only re-verified,
+  never re-pulled as new), and a temp `*.__*` is discarded. The expensive first
+  download is never repeated, and verified files aren't re-verified.
 
 **Termination is file-level, not loop-level.** Each object carries an attempt
 counter; when it exceeds N (size mismatch, read-back failure, or two reads that
