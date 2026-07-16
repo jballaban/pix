@@ -27,7 +27,17 @@ class NoLibraryRoot(Exception):
 
 
 def resolve(start: Path | None = None) -> Path:
-    """Resolve the library root. Raises `NoLibraryRoot` if none is found."""
+    """Resolve the library root. Raises `NoLibraryRoot` if none is found.
+
+    Every resolution also ensures the `.pix/local/` layout exists and folds
+    any legacy top-level state into it (see `ensure_local_layout`).
+    """
+    root = _resolve_root(start)
+    ensure_local_layout(root)
+    return root
+
+
+def _resolve_root(start: Path | None) -> Path:
     if start is not None:
         found = _walk_up(start.resolve())
         if found is not None:
@@ -59,3 +69,54 @@ def _walk_up(start: Path) -> Path | None:
         if (parent / ".pix").is_dir():
             return parent
     return None
+
+
+# --- The machine-local state dir (`.pix/local/`) -----------------------------
+
+LOCAL_DIRNAME: str = "local"
+
+# State folded from `.pix/<name>` into `.pix/local/<name>` for libraries
+# created before the local/ grouping existed. All of it is regenerable cache
+# or transient workspace — safe to relocate. `cache.db` is NOT listed here:
+# it needs a WAL checkpoint before the move, so `cache_db` relocates it lazily
+# (and falls back to the old path until then). The `lock` is ephemeral, so
+# there's nothing durable to move — `library_lock` just stale-cleans any
+# pre-upgrade lock at the old path.
+_LEGACY_LOCAL_ITEMS: tuple[str, ...] = ("staging", "checkout", "events.cache")
+
+
+def local_dir(library_root: Path) -> Path:
+    """The machine-local, never-synced state dir: `<library>/.pix/local/`.
+
+    Holds regenerable caches (`cache.db`), the library `lock`, and transient
+    workspaces (`staging/`, `checkout/`, `faces/`). Grouped under one folder so
+    a file-sync client (Synology Drive, ...) can exclude it as a single unit
+    while still syncing the durable `.pix/{runs,errors,stash}` data.
+    """
+    return library_root / ".pix" / LOCAL_DIRNAME
+
+
+def ensure_local_layout(library_root: Path) -> None:
+    """Create `.pix/local/` and fold any legacy top-level state into it.
+
+    One-time, idempotent, best-effort. Runs on every root resolution (cheap
+    once migrated: a `mkdir(exist_ok)` plus a few stats). A move that fails —
+    e.g. a directory held open by a concurrent process — is left for the next
+    run; nothing is lost. `cache.db` is relocated separately by `cache_db`
+    (it needs a checkpoint first), and the `lock` by `library_lock`.
+    """
+    pix = library_root / ".pix"
+    local = pix / LOCAL_DIRNAME
+    try:
+        local.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return
+    for name in _LEGACY_LOCAL_ITEMS:
+        src = pix / name
+        dst = local / name
+        if not src.exists() or dst.exists():
+            continue
+        try:
+            src.rename(dst)  # same-volume, atomic
+        except OSError:
+            pass  # deferred to the next run

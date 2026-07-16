@@ -14,11 +14,15 @@ import typer
 
 from pix import banner
 from pix.config import CONFIG_FILENAME
+from pix.root import local_dir
 
 SYNC_REMINDER = """\
-Reminder: exclude .pix/ from any file-sync clients (Synology Drive, OneDrive,
-Dropbox, ...). .pix/runs/ accumulates full file captures from every migrate
-run, which would roughly double cloud storage per run.
+Reminder for file-sync clients (Synology Drive, OneDrive, Dropbox, ...):
+exclude .pix/local/ from syncing. It holds regenerable caches (cache.db), the
+machine-local lock, and transient workspaces (staging, checkout) — syncing it
+risks cache corruption and wasted churn. The durable data (.pix/runs holds
+full run captures, .pix/errors and .pix/stash hold only-copy files) may be
+synced or backed up, but note .pix/runs roughly doubles storage per migrate run.
 """
 
 # Seed contents of pix.yaml: just a header comment. Settings (runs_dir,
@@ -55,6 +59,9 @@ def init_library(path: Path | None) -> None:
 
     target.mkdir(parents=True, exist_ok=True)
     pix_dir.mkdir()
+    # Create local/ up front so it exists to be deselected in a sync client
+    # before the first run (you can't exclude a folder that isn't there yet).
+    local_dir(target).mkdir()
     (pix_dir / CONFIG_FILENAME).write_text(_SETTINGS_HEADER, encoding="utf-8")
 
     typer.echo(f"Initialized pix library root at {target}.")

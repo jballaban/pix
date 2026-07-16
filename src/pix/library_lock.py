@@ -24,6 +24,8 @@ from typing import Iterator
 import psutil
 import typer
 
+from pix.root import local_dir
+
 
 class LockHeld(Exception):
     """Raised when another live pix process holds the library lock."""
@@ -39,6 +41,13 @@ class LockHeld(Exception):
 
 
 def _lock_path(library_root: Path) -> Path:
+    return local_dir(library_root) / "lock"
+
+
+def _legacy_lock_path(library_root: Path) -> Path:
+    """Pre-`local/` lock location, `<library>/.pix/lock`. A lock here can only
+    be from an old-binary run: honor it if that PID is a live pix (avoids a
+    cross-binary double-op race during an upgrade), else stale-clean it."""
     return library_root / ".pix" / "lock"
 
 
@@ -90,6 +99,19 @@ def acquire(library_root: Path, op: str) -> Iterator[None]:
     """
     lock_file = _lock_path(library_root)
     lock_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Honor / stale-clean a lock left at the pre-`local/` path by an old binary.
+    legacy = _legacy_lock_path(library_root)
+    if legacy.exists():
+        prior = _read_lock(legacy)
+        if prior is not None and _is_pix_process(prior[0]):
+            raise LockHeld(*prior)
+        typer.echo(
+            f"cleaning stale lock from PID {prior[0] if prior else '?'}",
+            err=True,
+        )
+        with contextlib.suppress(OSError):
+            legacy.unlink()
 
     # Bounded retry to handle the (rare) race where two pix processes
     # both try to stale-clean and re-acquire simultaneously.

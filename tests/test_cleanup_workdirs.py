@@ -17,17 +17,19 @@ def test_removes_empty_workdirs_including_nested_empty_subdirs(
     tmp_path: Path,
 ) -> None:
     pix = _pix(tmp_path)
-    # errors with an empty mirrored subtree, plus empty staging + stash.
+    # errors with an empty mirrored subtree, plus empty local/staging + stash.
     (pix / "errors" / "G" / "pix" / "2020").mkdir(parents=True)
-    (pix / "staging").mkdir()
+    (pix / "local" / "staging").mkdir(parents=True)
     (pix / "stash").mkdir()
 
     removed = cleanup_empty_pix_workdirs(tmp_path)
 
-    assert sorted(removed) == ["errors", "staging", "stash"]
+    assert sorted(removed) == ["errors", "local/staging", "stash"]
     assert not (pix / "errors").exists()
-    assert not (pix / "staging").exists()
+    assert not (pix / "local" / "staging").exists()
     assert not (pix / "stash").exists()
+    # local/ itself is never reaped — it must persist for the sync exclude.
+    assert (pix / "local").exists()
 
 
 def test_keeps_non_empty_workdir(tmp_path: Path) -> None:
@@ -35,14 +37,14 @@ def test_keeps_non_empty_workdir(tmp_path: Path) -> None:
     held = pix / "errors" / "G" / "pix"
     held.mkdir(parents=True)
     (held / "still_here.jpg").write_bytes(b"x")
-    (pix / "staging").mkdir()  # empty → should go
+    (pix / "local" / "staging").mkdir(parents=True)  # empty → should go
 
     removed = cleanup_empty_pix_workdirs(tmp_path)
 
-    assert removed == ["staging"]
+    assert removed == ["local/staging"]
     assert (pix / "errors").exists()  # has a file → kept
     assert (held / "still_here.jpg").exists()
-    assert not (pix / "staging").exists()
+    assert not (pix / "local" / "staging").exists()
 
 
 def test_missing_workdirs_are_a_noop(tmp_path: Path) -> None:

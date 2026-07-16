@@ -40,6 +40,7 @@ import typer
 
 from pix import cache_base
 from pix.metadata_filter import filter_consumed
+from pix.root import local_dir
 
 
 SCHEMA_VERSION: int = 1
@@ -79,13 +80,63 @@ _conns: dict[str, sqlite3.Connection] = {}
 
 
 def db_path(library_root: Path) -> Path:
-    """Return the on-disk DB path: `<library>/.pix/cache.db`."""
-    return library_root / ".pix" / "cache.db"
+    """Return the on-disk DB path: `<library>/.pix/local/cache.db`.
+
+    Self-healing across the pre-`local/` layout: prefer the new location, but
+    fall back to the legacy `<library>/.pix/cache.db` while it still exists and
+    hasn't been relocated yet (see `_relocate_legacy_db`). Never returns a path
+    that would strand a populated legacy DB behind a fresh empty one.
+    """
+    new = local_dir(library_root) / "cache.db"
+    if new.exists():
+        return new
+    legacy = library_root / ".pix" / "cache.db"
+    if legacy.exists():
+        return legacy
+    return new
+
+
+def _relocate_legacy_db(library_root: Path) -> None:
+    """Move a pre-`local/` `.pix/cache.db` into `.pix/local/`, once.
+
+    Checkpoints (TRUNCATE) and closes first so the `-wal`/`-shm` merge into the
+    `.db` and are removed on clean close — then a single-file rename moves the
+    whole cache with no risk of a split `.db`/`-wal` pair. Best-effort: if the
+    rename fails (file held open), `db_path` keeps using the legacy path until
+    the next run retries.
+    """
+    new = local_dir(library_root) / "cache.db"
+    if new.exists():
+        return
+    legacy = library_root / ".pix" / "cache.db"
+    if not legacy.exists():
+        return
+    new.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        tmp = sqlite3.connect(str(legacy), isolation_level=None)
+        try:
+            tmp.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        finally:
+            tmp.close()
+    except sqlite3.Error:
+        pass
+    try:
+        legacy.rename(new)
+    except OSError:
+        return
+    for suffix in ("-wal", "-shm"):  # defensive: should be gone post-checkpoint
+        residual = legacy.with_name(legacy.name + suffix)
+        if residual.exists():
+            try:
+                residual.rename(new.with_name(new.name + suffix))
+            except OSError:
+                pass
 
 
 def _connect(library_root: Path) -> sqlite3.Connection:
     """Open (or reuse) the library's connection, init schema, run the
     one-time sidecar import if a legacy `.pix/cache/` tree is present."""
+    _relocate_legacy_db(library_root)
     key = str(db_path(library_root))
     existing = _conns.get(key)
     if existing is not None:

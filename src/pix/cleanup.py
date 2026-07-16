@@ -96,14 +96,16 @@ def scan_cleanup_markers(folder: Path) -> CleanupMarkers:
 
 
 # `.pix/` working subfolders migrate owns and can reap once empty: errors
-# (quarantine; migrate restores/re-attempts its contents), staging (CONVERT
-# / repair scratch; wiped at the start of every migrate), and stash (the
-# STASH extension action; emptied only when the user deals with the files).
-_PIX_WORKDIRS: tuple[str, ...] = ("errors", "staging", "stash")
+# (quarantine; migrate restores/re-attempts its contents), local/staging
+# (CONVERT / repair scratch; wiped at the start of every migrate), and stash
+# (the STASH extension action; emptied only when the user deals with the
+# files). Paths are relative to `.pix/`; `local/` itself is never reaped so it
+# stays available for the sync-client exclude.
+_PIX_WORKDIRS: tuple[str, ...] = ("errors", "local/staging", "stash")
 
 
 def cleanup_empty_pix_workdirs(library_root: Path) -> list[str]:
-    """Remove now-empty `.pix/{errors,staging,stash}` trees (bottom-up).
+    """Remove now-empty `.pix/{errors,local/staging,stash}` trees (bottom-up).
 
     These accumulate empty subdirectories as their contents are resolved
     (errors restored, staging swept, stash cleared by the user). Removal is

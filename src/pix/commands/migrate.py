@@ -49,7 +49,7 @@ from pix.plan import (
     lookup_policy,
 )
 from pix.progress import LiveProgress
-from pix.root import NoLibraryRoot, resolve as resolve_root
+from pix.root import NoLibraryRoot, local_dir, resolve as resolve_root
 from pix.scan import walk_source_files
 from pix.stash import restore_stale_stash
 
@@ -111,7 +111,7 @@ def _run_migrate(
     runs_dir = config.runs_base(root) / run_id
     runs_dir.mkdir(parents=True, exist_ok=True)
     plan_log_path = runs_dir / "plan.log"
-    staging_dir = root / ".pix" / "staging"
+    staging_dir = local_dir(root) / "staging"
 
     _plog(plan_log_path, f"Library root: {root}")
     _plog(plan_log_path, f"Source: {folder}")

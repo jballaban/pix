@@ -206,8 +206,8 @@ def test_set_dedupes_overlapping_file_and_folder(
 
 def _seed_events_cache(root: Path, *names: str) -> None:
     """Write the events cache (name<TAB>range lines) used for case-alignment."""
-    (root / ".pix").mkdir(parents=True, exist_ok=True)
-    (root / ".pix" / "events.cache").write_text(
+    (root / ".pix" / "local").mkdir(parents=True, exist_ok=True)
+    (root / ".pix" / "local" / "events.cache").write_text(
         "".join(f"{n}\t\n" for n in names), encoding="utf-8"
     )
 

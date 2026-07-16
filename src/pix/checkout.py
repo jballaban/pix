@@ -51,6 +51,7 @@ from pix.plan import (
     PIX_ORIGINAL_PATH,
     effective_date,
 )
+from pix.root import local_dir
 
 CHECKOUT_DIRNAME: str = "checkout"
 SNAPSHOT_FILENAME: str = "snapshot.json"
@@ -109,8 +110,8 @@ class CheckoutOpen(Exception):
 
 
 def checkout_dir(library_root: Path) -> Path:
-    """The single checkout workspace, `<library>/.pix/checkout/`."""
-    return library_root / ".pix" / CHECKOUT_DIRNAME
+    """The single checkout workspace, `<library>/.pix/local/checkout/`."""
+    return local_dir(library_root) / CHECKOUT_DIRNAME
 
 
 def _snapshot_path(library_root: Path) -> Path:

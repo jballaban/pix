@@ -15,7 +15,7 @@ def test_acquire_no_existing_lock(tmp_path: Path) -> None:
     """Acquire on a clean library: lock file appears, then disappears on exit."""
     root = tmp_path / "lib"
     root.mkdir()
-    lock_file = root / ".pix" / "lock"
+    lock_file = root / ".pix" / "local" / "lock"
     assert not lock_file.exists()
 
     with acquire(root, "hash"):
@@ -34,7 +34,7 @@ def test_acquire_released_on_exception(tmp_path: Path) -> None:
     """An exception in the with-block still releases the lock."""
     root = tmp_path / "lib"
     root.mkdir()
-    lock_file = root / ".pix" / "lock"
+    lock_file = root / ".pix" / "local" / "lock"
 
     with pytest.raises(RuntimeError):
         with acquire(root, "hash"):
@@ -49,8 +49,8 @@ def test_acquire_refuses_when_live_pix_holds_lock(
 ) -> None:
     """A lock from a live pix process: acquire raises LockHeld."""
     root = tmp_path / "lib"
-    (root / ".pix").mkdir(parents=True)
-    lock_file = root / ".pix" / "lock"
+    (root / ".pix" / "local").mkdir(parents=True)
+    lock_file = root / ".pix" / "local" / "lock"
     lock_file.write_text(
         "99999\nmigrate\n2026-05-23T15:32:01\n", encoding="utf-8"
     )
@@ -74,8 +74,8 @@ def test_acquire_stale_cleans_when_holder_is_dead(
 ) -> None:
     """A lock from a dead process: stale-clean, log, take the lock."""
     root = tmp_path / "lib"
-    (root / ".pix").mkdir(parents=True)
-    lock_file = root / ".pix" / "lock"
+    (root / ".pix" / "local").mkdir(parents=True)
+    lock_file = root / ".pix" / "local" / "lock"
     lock_file.write_text(
         "12345\nmigrate\n2026-05-23T15:32:01\n", encoding="utf-8"
     )
@@ -98,8 +98,8 @@ def test_acquire_stale_cleans_malformed_lock(
 ) -> None:
     """A malformed lock file is treated as stale and removed."""
     root = tmp_path / "lib"
-    (root / ".pix").mkdir(parents=True)
-    lock_file = root / ".pix" / "lock"
+    (root / ".pix" / "local").mkdir(parents=True)
+    lock_file = root / ".pix" / "local" / "lock"
     lock_file.write_text("garbage", encoding="utf-8")
 
     # No PID-check call should reach _is_pix_process for a malformed lock,
@@ -110,6 +110,46 @@ def test_acquire_stale_cleans_malformed_lock(
         pass
 
     assert not lock_file.exists()
+
+
+def test_acquire_honors_live_legacy_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A live lock left at the pre-`local/` path blocks acquire (upgrade race)."""
+    root = tmp_path / "lib"
+    (root / ".pix").mkdir(parents=True)
+    legacy = root / ".pix" / "lock"
+    legacy.write_text("99999\nmigrate\n2026-05-23T15:32:01\n", encoding="utf-8")
+
+    monkeypatch.setattr(library_lock, "_is_pix_process", lambda pid: True)
+
+    with pytest.raises(LockHeld) as exc:
+        with acquire(root, "hash"):
+            pass
+    assert exc.value.pid == 99999
+    # Legacy lock left untouched; no new lock created.
+    assert legacy.read_text(encoding="utf-8").startswith("99999")
+    assert not (root / ".pix" / "local" / "lock").exists()
+
+
+def test_acquire_stale_cleans_legacy_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A dead lock at the pre-`local/` path is cleaned, then acquire proceeds
+    at the new `.pix/local/lock` location."""
+    root = tmp_path / "lib"
+    (root / ".pix").mkdir(parents=True)
+    legacy = root / ".pix" / "lock"
+    legacy.write_text("12345\nmigrate\n2026-05-23T15:32:01\n", encoding="utf-8")
+
+    monkeypatch.setattr(library_lock, "_is_pix_process", lambda pid: False)
+
+    new_lock = root / ".pix" / "local" / "lock"
+    with acquire(root, "hash"):
+        assert new_lock.is_file()
+        assert not legacy.exists()  # legacy cleaned
+
+    assert not new_lock.exists()
 
 
 def test_is_pix_process_returns_false_for_nonexistent_pid() -> None:

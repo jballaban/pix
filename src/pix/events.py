@@ -14,6 +14,7 @@ from pathlib import Path, PurePath
 
 from pix import debug
 from pix.metadata import FileMetadata
+from pix.root import local_dir
 
 # Constants used by callers (defined here so plan.py doesn't have to
 # stutter `PIX_EVENT_*` definitions; events.py owns the event-related
@@ -35,7 +36,7 @@ EVENT_NULL: str = "*"
 
 def events_cache_path(library_root: Path) -> Path:
     """Path to the cached unique-event list (backs `pix info events`/autocomplete)."""
-    return library_root / ".pix" / "events.cache"
+    return local_dir(library_root) / "events.cache"
 
 
 def cached_event_names(library_root: Path) -> list[str]:
