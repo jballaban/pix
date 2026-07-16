@@ -1,10 +1,12 @@
 # Import — `pix import`
 
-> **Status: designed; assumptions pending validation.** This spec is written
-> against *expected* MTP/WPD/iOS behavior. Everything in
-> [Assumptions to validate](#assumptions-to-validate) must be confirmed against
-> real devices (iPhone + Android over USB) before building — several design
-> choices depend on them. Treat this file as a plan to verify, not settled fact.
+> **Status: core assumptions validated on a real iPhone (iOS, over WPD); Android
+> still unvalidated.** The WPD/iOS claims below were measured against an iPhone
+> (device serial `M2DF33MY06`) using Python + `comtypes` — see
+> [Validation results](#validation-results). Several assumptions were **wrong as
+> originally written** (notably camera-roll structure — no `DCIM/NNNAPPLE` over
+> MTP) and have been corrected inline. Android behavior is still assumed, not
+> measured.
 
 ## Purpose & scope
 
@@ -38,11 +40,22 @@ landed files into the library.
 
 Phones present over USB as **Windows Portable Devices (WPD)** — an MTP/PTP
 device in the shell namespace, **not** a drive letter, so there is no path to
-`os.scandir`. Access is via the WPD API (COM; `pywin32` or a wrapper) — see
-[assumption W1](#w-access--enumeration).
+`os.scandir`. Access is via the WPD COM API. **`pywin32` does not wrap WPD**;
+the working path (validated) is **`comtypes`**, which auto-generates the COM
+interfaces from `PortableDeviceApi.dll` + `PortableDeviceTypes.dll`.
+
+**comtypes gotchas found during validation** (matter for the build):
+
+- `IEnumPortableDeviceObjectIDs::Next` returns an `LPWSTR[]` array, but comtypes
+  surfaces **only the first element** — so either call `Next(1)` (one object id
+  per round-trip, what the probe does) or hand-write a memberspec to get true
+  batching. Batching matters for enumeration cost (see W3).
+- `IPortableDeviceManager::GetDevices` uses the count-then-array two-call pattern;
+  comtypes returns the in/out params as a list `[array, count]`.
+- Device object ids are short opaque tokens (`o1058`, `oF99`, `s10001`), not paths.
 
 **Single-lane model.** An MTP device gives one serialized command/response
-session (assumed — [W2](#w-access--enumeration)). So the architecture is *not*
+session (assumed — [W2](#validation-results), untested). So the architecture is *not*
 "enumerate thread + download thread":
 
 - **One MTP thread** owns the device and **interleaves** enumerate and download:
@@ -63,7 +76,7 @@ per-file byte progress for large videos.
 
 ## Device registry & naming
 
-Each device has a stable serial (assumed — [D1](#d-device-identity)). On connect,
+Each device has a stable serial (confirmed — [D1](#validation-results)). On connect,
 look it up in a registry mapping `serial → friendly name`; on an unknown serial,
 **prompt the user to name it** (so data is labeled by a human name, not a UUID).
 
@@ -73,15 +86,27 @@ survive a cache wipe.
 
 ## What we import — camera roll only
 
-"Camera roll" resolves per platform (confirm — [C1](#c-camera-roll--formats)):
+"Camera roll" resolves per platform. Platform is decided from the WPD device
+manufacturer (`Apple Inc.` → iOS rules; USB VID `0x05AC`).
 
-- **iOS:** all of `DCIM/` (the `NNNAPPLE` folders).
-- **Android:** `DCIM/Camera/` specifically (Android's `DCIM` also holds other
-  apps' folders and `.thumbnails`).
+- **iOS (measured):** iOS does **not** expose `DCIM/NNNAPPLE` over MTP. It
+  presents a single functional object **"Internal Storage"** whose direct
+  children are **capture-month buckets** named `YYYYMM_a` / `YYYYMM_b`
+  (the `_b`/`_c` suffix is overflow when a month is large) — e.g.
+  `Internal Storage/202605_a/IMG_7399.JPG`. On this device the roll was 27 such
+  folders. So the iOS import target is simply **everything under "Internal
+  Storage"** — there is no `DCIM/` level to scope to, and no non-camera-roll
+  siblings were present to exclude.
+- **Android (assumed, unvalidated):** `DCIM/Camera/` specifically (Android's
+  `DCIM` also holds other apps' folders and `.thumbnails`).
 
-Platform is decided from the WPD device manufacturer (Apple → iOS rules). The
-device's own sub-structure under the camera-roll root is **preserved** on
-landing (import is true to the source; migrate flattens later).
+The device's own sub-structure is **preserved** on landing (import is true to
+the source; migrate flattens later), so the month-bucket names are harmless.
+
+**`.AAE` sidecars (new, measured).** iOS surfaces Apple edit sidecars
+(`IMG_xxxx.AAE`, non-destructive edit instructions) over MTP — 73 in the sample
+roll. They are **not** originals. **Import skips `.AAE`** (migrate would only
+treat them as junk); the edited render is already a separate object in the roll.
 
 ## Landing & tracking
 
@@ -107,8 +132,9 @@ sidecar and writes the provenance **into the resulting library file** as pix
 tags — then drops the sidecar. Because the **library stores only jpg/mp4** (both
 embed XMP), no library-side sidecar is ever needed. The two tags:
 
-- `pix:ImportId` = `<serial>:<object-id>` — the durable, convert-surviving skip
-  key (survives HEIC→jpg per the CONVERT-preserves-metadata invariant).
+- `pix:ImportId` = `<serial>:<persistent-unique-id>` — the durable,
+  convert-surviving skip key (survives HEIC→jpg per the CONVERT-preserves-metadata
+  invariant). Uses the PUID, **not** the raw object id — see [I1](#validation-results).
 - `pix:OriginalPath` = the **device** path (from the sidecar) — more meaningful
   and permanent than the transient staging path.
 
@@ -121,9 +147,13 @@ derivable from **cheap MTP metadata only** (never a content hash — that needs
 the download we're avoiding):
 
 - **Preferred key:** WPD persistent unique id (`WPD_OBJECT_PERSISTENT_UNIQUE_ID`)
-  — stable for the same object across reconnects (assumed — [I1](#i-incremental-identity)).
+  — **validated stable** on iOS across unplug/replug *and* a full reboot (146/146
+  unchanged; the object id itself was also stable, but the PUID is the documented
+  contract) — see [I1](#validation-results). Still unvalidated on Android.
 - **Fallback key:** `(filename, size, capture-date)` composite (all cheap object
-  properties). Filename alone is unsafe — iPhones recycle `IMG_0001` past 9999.
+  properties, all confirmed readable without download). Filename alone is unsafe —
+  iPhones recycle `IMG_0001`, and non-camera filenames are randomized 4-letter
+  stems (`FLAO4412`), so name collisions are real; size+date disambiguate.
 
 **Manifest = a regenerable cache** (a table in `.pix/local/cache.db`), not
 only-copy state. It's the union of two durable sources and rebuilds from them:
@@ -172,13 +202,17 @@ Two iOS settings can corrupt a library import; the **first is worse**:
 
 1. **"Keep Originals" vs "Automatic" transfer** (Settings → Photos → Transfer to
    Mac or PC). On **Automatic**, iOS transcodes over USB — HEIC→JPEG, HEVC→H.264
-   — so you'd import lossy re-encodes. This is likely **detectable** (camera-roll
-   objects arriving as `.JPG`/H.264 where HEIC/HEVC were expected — confirm
-   [S1](#s-ios-settings)); a hard warning (or gate) is warranted. Prerequisite:
-   set **Keep Originals**.
+   — so you'd import lossy re-encodes. **Detection must use file extension, not
+   the WPD format GUID** (measured: HEIC and JPEG both report format
+   `{38010000-…}`; MOV and MP4 both report `{300D0000-…}` — the GUID buckets by
+   broad type, never by codec/container). The reliable tell is the **extension
+   mix**: Keep-Originals rolls contain `.HEIC` (confirmed present alongside `.JPG`
+   on the test device); an all-`.JPG`, zero-`.HEIC` roll is the Automatic-mode
+   signature. A hard warning (or gate) on that signature is warranted.
+   Prerequisite: set **Keep Originals**.
 2. **"Optimize iPhone Storage"** — full-res lives in iCloud; the device may hold
    only a downscaled copy, and MTP only sees what's physically present.
-   **Not reliably detectable** ([S2](#s-ios-settings)). Best-effort: warn on
+   **Not reliably detectable** ([S2](#validation-results), untested). Best-effort: warn on
    improbably-small-for-type files (strongest signal on video); collect into an
    end-of-run report. Prerequisite: **Download Originals to this iPhone**.
 
@@ -201,55 +235,77 @@ fail/hard-warn only on the detectable format-mismatch case.
   ("yes, NOW delete from the phone"), never implicit.
 - **Android edge devices / non-DCIM sources**, screenshots, other albums.
 
-## Assumptions to validate
+## Validation results
 
-Each is a **testable claim + method**. Validate on a real iPhone (and an Android)
-over USB before building. Group by area; IDs are referenced above.
+Measured on a real **iPhone (iOS) over WPD** — device serial `M2DF33MY06`, USB
+VID `0x05AC` — using Python + `comtypes`, ~900-file sampled roll. Status is one
+of **CONFIRMED** / **CORRECTED** (assumption was wrong; spec above fixed) /
+**UNVALIDATED** (not yet tested). **Android is entirely unvalidated.**
 
 ### W — access & enumeration
-- **W1.** WPD is reachable from Python well enough to enumerate objects and
-  stream content (via `pywin32` COM to the WPD API, or a maintained wrapper).
-  *Test:* enumerate DCIM and read one file's bytes.
-- **W2.** An MTP device serializes commands / permits effectively one session;
-  concurrent device ops give no throughput win. *Test:* attempt overlapping
-  enumerate+read; measure vs. serial.
-- **W3.** Enumeration is slow enough (per-object round-trips) to justify the
-  interleave. *Test:* time a full camera-roll enumeration on a large roll.
-- **W4.** Object **size** and **capture/modified date** are available as cheap
-  properties *without* reading content. *Test:* read those props; confirm no bulk
-  transfer occurs.
+- **W1 — CONFIRMED.** WPD enumerates objects and streams content from Python via
+  `comtypes` (not `pywin32` — it does not wrap WPD). Auto-gen from
+  `PortableDeviceApi.dll` + `PortableDeviceTypes.dll`.
+- **W2 — UNVALIDATED.** Single-lane / no-concurrency-win claim was not tested
+  (needs a threaded overlap experiment). The interleave design does not depend on
+  it being *false*; it only needs enumeration to be slow (W3), which holds.
+- **W3 — CONFIRMED.** Cold enumeration ≈ **27 objects/s** (one `Next` + one
+  `GetValues` per object through comtypes). A large roll is minutes of enumerate
+  before any download → the interleave (live denominator, early progress) is
+  justified. Levers: batched `Next` (needs a hand-written memberspec) and
+  `IPortableDevicePropertiesBulk`. (Windows' warm WPD property cache makes a
+  second pass far faster, but cold is the number that matters.)
+- **W4 — CONFIRMED.** `ORIGINAL_FILE_NAME`, `SIZE`, `DATE_CREATED`, and
+  `PERSISTENT_UNIQUE_ID` all read as cheap properties, no content transfer. Two
+  gotchas: **`WPD_OBJECT_NAME` is empty on iOS** (use `ORIGINAL_FILE_NAME`), and
+  `DATE_CREATED` is a **string** `YYYY/MM/DD:HH:MM:SS.fff`, not `VT_DATE`.
 
 ### D — device identity
-- **D1.** WPD exposes a **stable device serial** (`WPD_DEVICE_SERIAL_NUMBER`)
-  that is identical across disconnect/reconnect (and ideally reboot). *Test:*
-  read it, reconnect, compare.
+- **D1 — CONFIRMED.** `WPD_DEVICE_SERIAL_NUMBER` = `M2DF33MY06`, identical across
+  unplug/replug **and** a full reboot. Manufacturer `Apple Inc.` drives iOS
+  platform detection.
 
-### I — incremental identity (the one the user most wants to confirm)
-- **I1.** `WPD_OBJECT_PERSISTENT_UNIQUE_ID` exists per object and is **stable
-  across disconnect/reconnect** for the same photo. *Test:* record IDs for a set
-  of photos, disconnect, reconnect, re-enumerate, confirm unchanged. **If it
-  fails, we fall back to `(filename,size,date)`** — so also capture those to
-  confirm the fallback is viable.
+### I — incremental identity (the one the user most wanted to confirm)
+- **I1 — CONFIRMED (iOS).** `WPD_OBJECT_PERSISTENT_UNIQUE_ID` exists per object
+  (form `{0000XXXX-0000-0000-YYXX-000000000000}`, derived from the object id) and
+  was **stable across both unplug/replug and a full power-cycle** — 146/146
+  sampled objects unchanged, and the raw object id was also stable. The PUID is
+  the documented-stable contract we key on. Fallback `(filename,size,date)` also
+  confirmed viable (all three cheap-readable). **Android unvalidated** — MTP
+  handle churn is more likely there; retest before trusting the PUID cross-platform.
 
 ### C — camera roll & formats
-- **C1.** Camera-roll structure is `DCIM/NNNAPPLE/` (iOS) and `DCIM/Camera/`
-  (Android). *Test:* enumerate device root; record the actual tree.
-- **C2.** Live Photos present as two correlatable objects (`IMG_1234.HEIC` +
-  `IMG_1234.MOV`). *Test:* inspect a Live Photo's objects.
+- **C1 — CORRECTED.** iOS does **not** expose `DCIM/NNNAPPLE` over MTP. It exposes
+  `Internal Storage/<YYYYMM>_<a|b>/` capture-month buckets (27 folders measured).
+  Import target = everything under "Internal Storage". Android (`DCIM/Camera/`)
+  still assumed.
+- **C2 — CONFIRMED.** Live Photos present as correlatable stem pairs
+  (`IMG_xxxx.{HEIC|JPG}` + `IMG_xxxx.MOV`); 50 pairs in the sample.
+- **C3 (new) — CONFIRMED.** WPD **format GUID does not distinguish codec/container**
+  — HEIC and JPEG both report `{38010000-…}`; MOV and MP4 both `{300D0000-…}`.
+  Any format decision (transcode detection, image-vs-video) must use the
+  **extension**. Also: `.AAE` edit sidecars appear over MTP and are skipped.
 
 ### S — iOS settings
-- **S1.** "Automatic" transfer surfaces camera-roll photos as `.JPG` (and video
-  as H.264) — i.e. the format-mismatch tell is real and detectable. *Test:*
-  toggle the setting; observe object extensions/types over MTP.
-- **S2.** Optimized-storage behavior over MTP: do not-downloaded originals appear
-  at all, appear downscaled, or are absent? Is an original-resolution property
-  exposed to beat the size heuristic? *Test:* with optimized storage on and some
-  photos not-downloaded, enumerate and inspect size vs. any resolution property.
+- **S1 — CONFIRMED (mechanism) / partially tested.** The transcode tell is real
+  but is **extension-based, not GUID-based** (see C3). `.HEIC` present alongside
+  `.JPG` on the test device ⇒ Keep-Originals. The Automatic-mode signature
+  (all-`.JPG`, zero-`.HEIC`) was not directly induced by toggling the setting.
+- **S2 — UNVALIDATED.** Optimized-storage-over-MTP behavior (do undownloaded
+  originals appear / downscale / vanish; any resolution property to beat the size
+  heuristic) was not tested — the test device had originals present.
 
 ### V — verification / transfer
-- **V1.** Large-file reads can be chunked for byte-progress; whether a partial
-  read is resumable mid-file (likely not — assume whole-file retry). *Test:*
-  interrupt a video read; observe.
+- **V1 — CONFIRMED.** A 168 MB `.MOV` read fully; bytes-read **exactly matched**
+  the reported `SIZE` (size-match verification works); 256 KB optimal buffer,
+  ~40 MB/s over USB; chunked reads → per-file byte progress works. Mid-file resume
+  not tested — assume whole-file retry.
+
+### Probe tooling
+The validation probe (`comtypes`-based WPD walker: `list` / `report` / `snapshot`
+/ `compare` modes) lives outside the repo (session scratchpad). It is the
+reproducible harness for re-running these checks — notably **I1/D1 on Android**
+and **S2** — before/while building.
 
 ## Cross-references
 
