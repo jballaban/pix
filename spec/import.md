@@ -58,16 +58,19 @@ interfaces from `PortableDeviceApi.dll` + `PortableDeviceTypes.dll`.
 session (confirmed — [W2](#validation-results): ~40 MB/s single lane). So the architecture is *not*
 "enumerate thread + download thread":
 
-- **One MTP thread** owns the device and **interleaves** enumerate and download:
-  enumerate a chunk (a camera-roll subfolder → object list + cheap metadata),
-  queue it, download a few, enumerate the next chunk, repeat. This makes the
-  progress **denominator grow progressively** instead of blocking on a full scan.
+- **One MTP thread** owns the device and interleaves enumerate + download as a
+  **depth-first, drain-as-you-go walk**: at each folder, enumerate its children,
+  **download the files right there** (files before descending), then recurse into
+  subfolders. Downloads begin seconds in — there is **no full-tree pre-scan** — so
+  a device yanked mid-run has already yielded everything shallow. This is
+  deliberate: optimize for **getting bytes off the device** before it can vanish.
 - **One worker thread** (or main) does off-device work: write bytes, verify,
-  update the manifest, drive the UI. This overlaps disk/verify with the next MTP
-  read (modest win) and keeps the UI responsive.
+  drive the UI — overlapping disk/verify with the next MTP read.
 
-Interleaving buys **early progress and a live denominator**, not raw throughput
-(the USB pipe is the ceiling).
+Interleaving buys **early bytes-off-device and a live denominator**, not raw
+throughput (the USB pipe is the ~40 MB/s ceiling). The same walk drives discovery
+*and* verification, re-run in a loop — see
+[Import loop](#import-loop--traverse-download-verify).
 
 **Progress model.** Two moving counters — `downloaded` (numerator) and `found`
 (denominator, still growing while enumeration continues) — plus bytes and a
@@ -175,26 +178,49 @@ and, while the manifest cache is intact, it is **not** re-imported. Only if the
 cache is lost *and* regenerated does a since-deleted file re-download (rare;
 findable by date).
 
-## Retry, resume, verification
+## Import loop — traverse, download, verify
 
-**Three failure tiers:**
+Verification here is **device→disk only**: did the bytes land intact? It is *not*
+about migrate, the library, or the manifest, and **nothing is persisted** — the
+per-object fingerprint (a content hash) is throwaway run state used only to
+compare two reads. There is no device-side checksum to trust (MTP exposes none —
+confirmed [V2](#validation-results)), and USB already CRC-checks and retries every
+packet, so the strongest practical guarantee is: **size matches + two independent
+downloads agree + the on-disk file reads back equal to what we received.**
 
-- **File-level transient** (read timeout, single-object error) → retry that
-  object N times with backoff.
-- **Session drop** (device unplugged / sleeps / re-enumerates) → re-open the
-  session and resume, skipping manifest-completed files.
-- **Permanent** (unreadable / access denied / decode) → log, skip, continue;
-  never abort the whole run. Report at the end.
+**Per-object state:** `NEW → DOWNLOADED (unverified) → VERIFIED`, plus `FAILED`.
 
-The manifest doubles as the **resume checkpoint**: a file is recorded as imported
-only after a verified, atomic landing, so an interrupted import re-runs and skips
-completed files for free.
+- **Download** (`NEW`→`DOWNLOADED`): stream to a temp name → check
+  `bytes-read == MTP-reported size` (truncation) and a clean complete read → read
+  the temp back off disk and confirm it equals the stream (bad write) → atomic
+  rename to final (+ its `.importinfo` sidecar, per [Landing](#landing--tracking))
+  → record the fingerprint. Catches truncation and disk-write corruption.
+- **Verify** (`DOWNLOADED`→`VERIFIED`): a **later traversal** re-downloads the
+  object and compares fingerprints. Match → `VERIFIED`. Mismatch → the read was
+  flaky; re-download to break the tie (two that agree win).
 
-**Atomic landing + verification:** download to a temp name → verify
-`bytes-read == MTP-reported size` and a clean complete read → atomic rename to
-final → write the `.importinfo` sidecar → record in the manifest. Never leave a
-partial file that looks complete. (No source content hash is available without
-downloading, so verification is size-match + clean read.)
+**The loop.** One traversal is the drain-as-you-go DFS above. A traversal is
+**dirty** if it downloaded anything — a new pull *or* a verify re-pull. After a
+full traversal, **if dirty, traverse again**; a fully clean traversal (nothing new
+enumerated, nothing left to verify) ends the run — which is exactly "no new files
+*and* everything verified," reached naturally. One mechanism, three jobs:
+
+- **discovery** — re-enumerating catches objects MTP **lazily reveals** on a later
+  pass (observed: the first sweep can under-report);
+- **verification** — the second (and if needed third) independent read per object;
+- **resume** — an interrupted run just re-traverses; an already-landed file is
+  taken as `DOWNLOADED` (never re-pulled as new) and carried through verify, so the
+  expensive first download is never repeated.
+
+**Termination is file-level, not loop-level.** Each object carries an attempt
+counter; when it exceeds N (size mismatch, read-back failure, or two reads that
+never agree) the object is marked `FAILED` → logged, skipped, reported at the end,
+and **no longer counts as dirty**. So one genuinely-flaky photo can neither spin
+the run forever nor abort the other files. (A high global loop cap can back this
+up, but the per-file counter is what actually converges the loop.)
+
+**Session drop** (unplug / sleep / re-enumerate) is not a failure tier of its own:
+re-open the session and the loop resumes from current on-disk state.
 
 ## iOS caveats — originals & optimized storage
 
@@ -303,12 +329,19 @@ of **CONFIRMED** / **CORRECTED** (assumption was wrong; spec above fixed) /
   the reported `SIZE` (size-match verification works); 256 KB optimal buffer,
   ~40 MB/s over USB; chunked reads → per-file byte progress works. Mid-file resume
   not tested — assume whole-file retry.
+- **V2 (new) — CONFIRMED.** Reads are **deterministic**: the same 43 MB object read
+  twice hashed identically, and the landed file read back off disk matched the
+  stream. This is the empirical basis for verify-by-re-download (see
+  [Import loop](#import-loop--traverse-download-verify)). **No device-side hash
+  exists** — `GetSupportedProperties` returns count 0 on iOS and MTP has no
+  checksum property, so verification must hash bytes we read ourselves.
 
 ### Probe tooling
 The validation probe (`comtypes`-based WPD walker: `list` / `report` / `snapshot`
-/ `compare` modes) lives outside the repo (session scratchpad). It is the
-reproducible harness for re-running these checks — notably **I1/D1 on Android**
-and **S2** — before/while building.
+/ `compare` / `w2` modes) is committed at **`tools/probe_wpd.py`** (comtypes is an
+optional Windows-only `probe` dep group). It is the reproducible harness for
+re-running these checks — notably **I1/D1 on Android** and **S2** — before/while
+building.
 
 ## Cross-references
 
