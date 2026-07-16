@@ -34,9 +34,7 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
 import sqlite3
-import tempfile
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
@@ -91,19 +89,18 @@ def _norm(p: str | Path) -> str:
 
 
 def _read_sessions(data_dir: Path) -> list[_Session] | None:
-    """Read `session_table` from a private snapshot of `sys.sqlite`.
+    """Read `session_table` from `sys.sqlite`.
 
-    Copies the DB (+ any WAL sidecars) to a temp dir first so we never touch or
-    lock the client's live file. Returns None on any read error.
+    Opens the client's file **read-only and immutable** (`?immutable=1`): no
+    locking, no shared-memory file, no interference with the running client,
+    and fast enough to run on every command. Returns None on any read error
+    (→ the caller treats it as unverifiable and continues).
     """
-    db_dir = data_dir / "db"
-    if not (db_dir / "sys.sqlite").exists():
+    src = data_dir / "db" / "sys.sqlite"
+    if not src.exists():
         return None
-    tmp = Path(tempfile.mkdtemp(prefix="pix-syno-"))
     try:
-        for f in db_dir.glob("sys.sqlite*"):
-            shutil.copy2(f, tmp / f.name)
-        con = sqlite3.connect(str(tmp / "sys.sqlite"))
+        con = sqlite3.connect(f"{src.as_uri()}?immutable=1", uri=True)
         try:
             rows = con.execute(
                 "SELECT id, share_name, sync_folder, "
@@ -114,8 +111,6 @@ def _read_sessions(data_dir: Path) -> list[_Session] | None:
             con.close()
     except (sqlite3.Error, OSError):
         return None
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
     out: list[_Session] = []
     for sid, share, folder, win_odm, mac_odm in rows:
         if not folder:

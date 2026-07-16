@@ -7,7 +7,20 @@ from pathlib import Path
 
 import pytest
 
-from pix import cache_db
+from pix import cache_db, sync_check
+
+
+@pytest.fixture(autouse=True)
+def _neutralize_sync_check(  # pyright: ignore[reportUnusedFunction]
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`resolve` runs a sync-client readiness `boot_check` on every command.
+    Tests must not depend on whether the dev machine has Synology Drive Client
+    installed, so make the detector see no client (→ silent no-op). Tests that
+    exercise `sync_check` directly pass an explicit `data_dir` and bypass this.
+    """
+    monkeypatch.setattr(sync_check, "_synology_data_dir", lambda: None)
+    sync_check._cache.clear()
 
 
 @pytest.fixture(autouse=True)

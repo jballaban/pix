@@ -114,7 +114,7 @@ So in Synology Drive Client → Sync Rules, add two filename patterns: **`*.__*`
 
 ### Readiness gate (`sync_check`)
 
-pix validates the sync client **read-only** and refuses to mutate a library whose covering sync task isn't safe. It never writes the client's config — that's an undocumented, version-fragile private format — it only reads it and prints exactly what to fix. The check runs from `library_lock.acquire`, so every write-mode command (those that take the library lock) is gated uniformly; `pix init` runs it informationally; pure read-only inspection (`pix info …`) doesn't acquire the lock and so is never gated (and autocomplete stays fast).
+pix validates the sync client **read-only** and refuses to operate on a library whose covering sync task isn't safe. It never writes the client's config — that's an undocumented, version-fragile private format — it only reads it and prints exactly what to fix. The check is part of `root.boot_check`, the single per-command bootstrap validation run from `root.resolve` — so **every** command that resolves a library goes through it in one place (no validations drifting across steps). It's cheap enough to run unconditionally (`sys.sqlite` is opened read-only/immutable, no copy). `pix init` doesn't resolve a root, so it runs its own non-blocking readiness report instead.
 
 For Synology Drive Client on Windows it reads `%LOCALAPPDATA%\SynologyDrive\data` (from a private snapshot copy, never the live files): `db/sys.sqlite` → `session_table` for the task→`sync_folder` mapping and the On-Demand flag (`use_windows_cloud_file_api`), and the covering task's `session/<id>/conf/blacklist.filter` for the operative exclude rules. It **blocks (exit 1) only on a confirmed problem**:
 

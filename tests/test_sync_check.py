@@ -6,6 +6,9 @@ import os
 import sqlite3
 from pathlib import Path
 
+import pytest
+import typer
+
 from pix import sync_check
 from pix.sync_check import (
     NOT_INSTALLED,
@@ -13,6 +16,7 @@ from pix.sync_check import (
     NOT_SYNCED,
     READY,
     UNVERIFIABLE,
+    SyncReadiness,
     check_sync_readiness,
 )
 
@@ -63,6 +67,31 @@ def _sess(root: Path, *, on_demand: bool) -> dict[str, object]:
         "folder": str(root) + os.sep,  # Synology stores a trailing separator
         "on_demand": on_demand,
     }
+
+
+def test_require_ready_blocks_only_when_mutating(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A not-ready task raises (exit) with block=True and only warns with
+    block=False."""
+    r = SyncReadiness(
+        NOT_READY, share="t", folder="x", on_demand=True, missing=()
+    )
+    monkeypatch.setattr(sync_check, "check_sync_readiness", lambda root: r)
+    with pytest.raises(typer.Exit):
+        sync_check.require_ready(tmp_path, block=True)
+    sync_check.require_ready(tmp_path, block=False)  # must not raise
+
+
+def test_require_ready_silent_when_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        sync_check,
+        "check_sync_readiness",
+        lambda root: SyncReadiness(READY, share="t", folder="x"),
+    )
+    sync_check.require_ready(tmp_path, block=True)  # no raise
 
 
 def test_no_synology_config_is_not_installed(tmp_path: Path) -> None:

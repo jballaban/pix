@@ -21,6 +21,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from pix import sync_check
+
 
 class NoLibraryRoot(Exception):
     """Raised when no library root can be resolved."""
@@ -29,12 +31,35 @@ class NoLibraryRoot(Exception):
 def resolve(start: Path | None = None) -> Path:
     """Resolve the library root. Raises `NoLibraryRoot` if none is found.
 
-    Every resolution also ensures the `.pix/local/` layout exists and folds
-    any legacy top-level state into it (see `ensure_local_layout`).
+    Every resolution runs `boot_check` — the single per-command bootstrap
+    validation — so the checks live in one place rather than drifting across
+    steps.
     """
     root = _resolve_root(start)
-    ensure_local_layout(root)
+    boot_check(root)
     return root
+
+
+def boot_check(library_root: Path) -> None:
+    """The single per-command bootstrap validation.
+
+    Kept deliberately in one function, run from `resolve` (which every command
+    goes through), so validations don't accrete at different steps. Each check
+    is cheap, so running them on every command — even when a given command
+    wouldn't strictly need one — is fine.
+
+    1. **Layout** — ensure `.pix/local/` exists and fold any legacy top-level
+       state into it (idempotent).
+    2. **Sync readiness** — refuse (exit non-zero) if a file-sync client is
+       covering this library unsafely (On-Demand placeholders, or pix's churn
+       not excluded); warn-and-continue for uncertain states. Read-only,
+       self-correcting. See `pix.sync_check`.
+
+    `pix init` doesn't resolve a root (it creates one), so it runs its own
+    non-blocking readiness report instead.
+    """
+    ensure_local_layout(library_root)
+    sync_check.require_ready(library_root, block=True)
 
 
 def _resolve_root(start: Path | None) -> Path:
