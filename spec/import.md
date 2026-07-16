@@ -85,6 +85,9 @@ per-file byte progress for large videos.
 Each device has a stable serial (confirmed — [D1](#validation-results)). On connect,
 look it up in a registry mapping `serial → friendly name`; on an unknown serial,
 **prompt the user to name it** (so data is labeled by a human name, not a UUID).
+The friendly name becomes a **folder name** under `.pix/local/import/`, so sanitize
+it to a filesystem-safe form. (Android serials can be duplicate/garbage on cheap
+devices — a known hazard, filed under the Android-unvalidated banner.)
 
 Registry storage: durable, non-regenerable, tiny — lives in the **synced `.pix/`
 durable tier** (e.g. `.pix/devices.yaml`), *not* `.pix/local`, so device names
@@ -109,14 +112,16 @@ manufacturer (`Apple Inc.` → iOS rules; USB VID `0x05AC`).
 The device's own sub-structure is **preserved** on landing (import is true to
 the source; migrate flattens later), so the month-bucket names are harmless.
 
-**Import lands *everything* faithfully — no filtering.** Import is a dumb,
-byte-exact copier: it takes every object under the camera-roll root as-is and has
-**no format opinions**. Deciding what is junk (e.g. `.AAE` edit sidecars — 73
-measured in the sample) or unsupported is a downstream **ingestion/migrate**
-policy, not import's job. This keeps import simple and true-to-source, and defers
-the risk of silently dropping something (e.g. whether an `.AAE`'s edit is already
-a separate rendered object — unconfirmed). See
-[Ingestion seam — issues to resolve](#ingestion-seam--issues-to-resolve-deferred).
+**Import lands everything faithfully except an explicit non-media skip-list.**
+Import is a dumb, byte-exact copier with **no format opinions** — it takes every
+object under the camera-roll root as-is, *including unknown extensions* (so it
+never silently drops something it doesn't recognise). The **one** exception is a
+small, explicit denylist of known non-media companions, currently just **`.AAE`**
+(Apple's non-destructive edit-instruction sidecars — 73 in the sample; not media,
+never wanted). Accepted consequence: for a photo edited non-destructively (stored
+as original + `.AAE`), skipping the `.AAE` means the **original** lands, not the
+edited render. A `.__*`-style temp or the sync-client working dirs are not on a
+phone, so nothing else needs filtering.
 
 ## Landing & tracking
 
@@ -127,6 +132,20 @@ per [C1](#validation-results)). Chosen because
 (they upload once, later, when migrate moves them into the library). Pending
 imports have no off-machine backup, which is acceptable: **the phone still holds
 them** (import never deletes), so a lost `.pix/local` just means re-import.
+
+**Path safety.** `ORIGINAL_FILE_NAME` from the device is untrusted: sanitize for
+NTFS (strip/replace invalid chars, reserved names `CON`/`AUX`/…, trailing dots and
+spaces), and open all paths `\\?\`-prefixed for length (per
+[implementation.md](implementation.md)). Two distinct device objects can sanitize
+to the **same** landing path — detect the collision and disambiguate with a short
+PUID-derived suffix, so object B is never mistaken for object A's straggler. The
+`.importinfo` sidecar is itself written **temp-then-rename**, so a crash mid-write
+can't leave a corrupt sidecar that reads as `VERIFIED`.
+
+**Concurrency.** `pix import` takes the library write lock (`.pix/local/lock`) like
+every other write-mode op — a long import blocks migrate/organize for its duration.
+Accepted: import is a deliberate, user-initiated session, and the lock is what
+keeps a future ingest pre-pass from racing a running import over the same tree.
 
 **Files are pristine** — never modified at import. Provenance rides in a
 **sidecar** per file: `<name>.importinfo` (YAML, matching the `.stashinfo` /
@@ -184,14 +203,20 @@ The skip decision must happen **before** downloading, so the key must be
 derivable from **cheap MTP metadata only** (never a content hash — that needs
 the download we're avoiding):
 
-- **Preferred key:** WPD persistent unique id (`WPD_OBJECT_PERSISTENT_UNIQUE_ID`)
-  — **validated stable** on iOS across unplug/replug *and* a full reboot (146/146
+- **Preferred key:** `PUID + size` — `WPD_OBJECT_PERSISTENT_UNIQUE_ID`
+  **validated stable** on iOS across unplug/replug *and* a full reboot (146/146
   unchanged; the object id itself was also stable, but the PUID is the documented
-  contract) — see [I1](#validation-results). Still unvalidated on Android.
+  contract) — see [I1](#validation-results). **`+ size`** guards optimized-storage:
+  if the phone once served a downscaled proxy (imported under that PUID) and later
+  holds the full-res original, the size differs → the object is treated as new and
+  re-imported rather than masked forever by the bare PUID. Still unvalidated on
+  Android.
 - **Fallback key:** `(filename, size, capture-date)` composite (all cheap object
   properties, all confirmed readable without download). Filename alone is unsafe —
   iPhones recycle `IMG_0001`, and non-camera filenames are randomized 4-letter
   stems (`FLAO4412`), so name collisions are real; size+date disambiguate.
+  `capture-date` is normalised to a canonical ISO-8601 UTC string before it enters
+  the key (iOS serves a `YYYY/MM/DD:…` string; Android may differ).
 
 **Manifest = a regenerable cache** (a table in `.pix/local/cache.db`), not
 only-copy state. It's the union of two durable sources and rebuilds from them:
@@ -199,10 +224,17 @@ only-copy state. It's the union of two durable sources and rebuilds from them:
 - **committed** — `pix:ImportId` tags on library jpg/mp4 files.
 - **pending** — `.importinfo` sidecars in `.pix/local/import/`.
 
-Skip an enumerated device object iff its key is in the manifest (pending or
-committed). Because the manifest is a cache, losing `.pix/local` is safe: the
-committed half regenerates from library tags; the pending half is re-downloaded
-from the phone (they land dated-old and are easy to find/purge).
+**Per-object decision (one unified procedure).** For each enumerated device object:
+
+1. key (`PUID+size`) in the manifest (pending or committed) → **skip**;
+2. else a landing file already exists at its path **without** a sidecar → it's a
+   `DOWNLOADED`-unverified straggler from a prior run → **verify** it (don't re-pull
+   as new);
+3. else → **download**.
+
+Because the manifest is a cache, losing `.pix/local` is safe: the committed half
+regenerates from library tags; the pending half is re-downloaded from the phone
+(they land dated-old and are easy to find/purge).
 
 **dedupe is the correctness backstop.** The manifest is purely a download-skip
 optimization; anything that slips through and is re-downloaded gets caught by
@@ -230,12 +262,16 @@ downloads agree + the on-disk file reads back equal to what we received.**
   rename to the **final** path → read it back off disk and confirm it equals the
   stream (bad write). **No sidecar yet.** Catches truncation and disk-write
   corruption; the rename is the commit, so a partial can't look complete.
-- **Verify** (`DOWNLOADED`→`VERIFIED`): a **later traversal** re-downloads the
-  object and compares it to the **already-landed file** — the disk file is read #1,
-  the re-download read #2, so nothing is carried in memory between them. Match →
-  **write the `.importinfo` sidecar** (the commit to `VERIFIED`, per
-  [Landing](#landing--tracking)). Mismatch → the read was flaky; re-download to
-  break the tie (two that agree win).
+- **Verify** (`DOWNLOADED`→`VERIFIED`): a **later traversal** first does a cheap
+  **size pre-check** (enumerated `SIZE` vs the landed file); on mismatch the object
+  changed on-device (edit, optimized-storage rehydration) → re-download fresh. Then
+  it re-downloads and compares to the **already-landed file** — the disk file is
+  read #1, the re-download read #2, so nothing is carried in memory between them.
+  Outcomes: two reads **agree with disk** → **write the `.importinfo` sidecar**
+  (the commit to `VERIFIED`, per [Landing](#landing--tracking)). Two reads agree
+  with **each other but not disk** → the device content changed → **device wins**:
+  overwrite the landed file and mark `VERIFIED`. Two reads **disagree** → flaky;
+  re-download to break the tie (two that agree win), up to the attempt cap.
 
 **The loop.** One traversal is the drain-as-you-go DFS above. A traversal is
 **dirty** if it downloaded anything — a new pull *or* a verify re-pull. After a
@@ -252,15 +288,29 @@ enumerated, nothing left to verify) ends the run — which is exactly "no new fi
   never re-pulled as new), and a temp `*.__*` is discarded. The expensive first
   download is never repeated, and verified files aren't re-verified.
 
+**Accepted cost.** Verify re-downloads every object → the run moves ~**2× the
+bytes** over the ~40 MB/s pipe. This is the deliberate price of device→disk
+confidence; enumeration is *not* extra (each pass enumerates once, for discovery,
+and verification piggybacks on that same walk). Progress counts verify re-pulls
+**separately** from `downloaded` so the numerator isn't inflated.
+
 **Termination is file-level, not loop-level.** Each object carries an attempt
-counter; when it exceeds N (size mismatch, read-back failure, or two reads that
-never agree) the object is marked `FAILED` → logged, skipped, reported at the end,
-and **no longer counts as dirty**. So one genuinely-flaky photo can neither spin
-the run forever nor abort the other files. (A high global loop cap can back this
-up, but the per-file counter is what actually converges the loop.)
+counter; when it exceeds **N (=3)** (size mismatch, read-back failure, or two reads
+that never agree) the object is marked `FAILED` → logged, skipped, reported at the
+end, and **no longer counts as dirty**. So one genuinely-flaky photo can neither
+spin the run forever nor abort the other files. `FAILED` is **run-state only, not
+persisted** — a later run re-attempts it (a transient fault may have cleared). A
+high global loop cap backs this up, but the per-file counter is what converges the
+loop.
+
+**Start-of-run sweep.** Before traversing, delete any stale `*.__*` temps under the
+landing root (interrupted partial downloads from a prior run) — analogous to
+migrate's cleanup pass. Complete-but-unverified files (final name, no sidecar) are
+**kept** and picked up as `DOWNLOADED` by the skip procedure.
 
 **Session drop** (unplug / sleep / re-enumerate) is not a failure tier of its own:
-re-open the session and the loop resumes from current on-disk state.
+re-open the session and the loop resumes from current on-disk state (a full
+re-enumeration — accepted; flaky cables on a huge roll will re-walk).
 
 ## iOS caveats — originals & optimized storage
 
