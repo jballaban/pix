@@ -27,8 +27,13 @@ def _make_syno(
     tmp: Path,
     sessions: list[dict[str, object]],
     filters: dict[int, tuple[list[str], list[str], list[str]] | None],
+    dot_off: set[int] = frozenset(),  # sessions with dot-prefix sync OFF
 ) -> Path:
-    """Build a fake `%LOCALAPPDATA%\\SynologyDrive\\data` tree; return it."""
+    """Build a fake `%LOCALAPPDATA%\\SynologyDrive\\data` tree; return it.
+
+    `dot_off` sessions get `black_prefix = "."` (dotfiles excluded, i.e. the
+    "sync files beginning with ." setting turned off). Absent = dotfiles sync.
+    """
     data = tmp / "syno" / "data"
     (data / "db").mkdir(parents=True)
     con = sqlite3.connect(str(data / "db" / "sys.sqlite"))
@@ -51,10 +56,14 @@ def _make_syno(
         conf.mkdir(parents=True)
         dirp, suf, glb = f
         q = lambda xs: ", ".join(f'"{x}"' for x in xs)  # noqa: E731
+        common = "[Common]\n"
+        if sid in dot_off:
+            common += 'black_prefix = "."\n'
+        common += f"black_dir_prefix = {q(dirp)}\n\n"
         text = (
             "[Version]\nmajor = 1\nminor = 1\n\n"
-            f"[Common]\nblack_dir_prefix = {q(dirp)}\n\n"
-            f"[File]\nblack_suffix = {q(suf)}\nblack_glob = {q(glb)}\n"
+            + common
+            + f"[File]\nblack_suffix = {q(suf)}\nblack_glob = {q(glb)}\n"
         )
         (conf / "blacklist.filter").write_text(text, encoding="utf-8")
     return data
@@ -155,6 +164,37 @@ def test_exiftool_rule_via_glob_counts(tmp_path: Path) -> None:
     )
     r = check_sync_readiness(lib, data_dir=data)
     assert r.state == READY, r
+
+
+def test_dot_prefix_off_is_not_ready(tmp_path: Path) -> None:
+    """Dot-prefix sync off (`.pix` never syncs → runs/errors/stash not backed
+    up) is a confirmed not-ready condition, even though it's corruption-safe."""
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    data = _make_syno(
+        tmp_path, [_sess(lib, on_demand=False)], {2: _ALL_RULES}, dot_off={2}
+    )
+    r = check_sync_readiness(lib, data_dir=data)
+    assert r.state == NOT_READY
+    assert any("period" in m.lower() for m in r.missing)
+    # It must NOT complain about .pix/local here (moot — all of .pix excluded).
+    assert not any(".pix/local" in m for m in r.missing)
+
+
+def test_markers_still_required_when_dot_prefix_off(tmp_path: Path) -> None:
+    """Transient markers aren't dot-prefixed, so they must be excluded even
+    when dot-prefix sync is off."""
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    data = _make_syno(
+        tmp_path, [_sess(lib, on_demand=False)],
+        {2: (["/.pix/local"], ["_exiftool_tmp"], [])},  # no *.__* glob
+        dot_off={2},
+    )
+    r = check_sync_readiness(lib, data_dir=data)
+    assert r.state == NOT_READY
+    assert any("*.__*" in m for m in r.missing)  # marker rule still demanded
+    assert any("period" in m.lower() for m in r.missing)
 
 
 def test_library_not_covered_by_any_task(tmp_path: Path) -> None:

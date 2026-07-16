@@ -16,15 +16,22 @@ lives under ``%LOCALAPPDATA%\\SynologyDrive\\data``:
   daemon reads at startup (``black_dir_prefix`` / ``black_suffix`` /
   ``black_glob``).
 
-For the task covering a given library we validate two things:
+For the task covering a given library we validate three things:
 
 1. **Files are persisted, not On-Demand placeholders.** pix reads/hashes/
    converts the actual bytes; On-Demand (Cloud Files API) would trigger
    downloads or fail.
-2. **pix's transient churn is excluded** — ``.pix/local/`` and the transient
-   markers (``*.__*`` and ``*_exiftool_tmp``, see `pix.markers`). Sample marker
-   names are matched against the configured globs/suffixes semantically, so an
-   equivalent-but-different rule still counts.
+2. **Dot-prefixed files sync** (``black_prefix`` is not ``"."``). When the
+   client's "sync files beginning with ." setting is off it excludes all of
+   ``.pix/`` — safe (no corruption) but ``.pix/{runs,errors,stash}`` (rollback
+   captures, quarantine, stash) never reach the sync target. We require it on
+   so that durable state is backed up.
+3. **pix's transient churn is excluded** — ``.pix/local/`` (only meaningful
+   when ``.pix`` syncs, i.e. dot-prefix on) and the transient markers
+   (``*.__*`` and ``*_exiftool_tmp``, see `pix.markers`; these are never
+   dot-prefixed, so they need excluding regardless of the dot-prefix setting).
+   Marker samples are matched against the configured globs/suffixes
+   semantically, so an equivalent-but-different rule still counts.
 
 Anywhere else (no Synology client, non-Windows, unreadable config) the check is
 a no-op or a warning; it only hard-blocks on a *confidently* not-ready task.
@@ -168,7 +175,7 @@ def _parse_blacklist(
             assigns[current] += " " + line.strip()
     return {
         k: re.findall(r'"([^"]*)"', assigns.get(k, ""))
-        for k in ("black_dir_prefix", "black_suffix", "black_glob")
+        for k in ("black_prefix", "black_dir_prefix", "black_suffix", "black_glob")
     }
 
 
@@ -255,12 +262,29 @@ def _compute(root: Path, data_dir: Path | None) -> SyncReadiness:
     missing: list[str] = []
     rules_checked = filt is not None
     if filt is not None:
-        prefix = _expected_local_prefix(root, sess.folder)
-        if not _dir_excluded(prefix, filt["black_dir_prefix"]):
+        # "Sync files beginning with ." — when OFF, the client excludes all
+        # dotfiles (`black_prefix = "."`), so `.pix/` never syncs. That's safe
+        # (no cache corruption) but means `.pix/{runs,errors,stash}` — the
+        # rollback captures, quarantine, and stash — are NOT backed up. Require
+        # it ON so that durable state reaches the sync target. When it's ON,
+        # `.pix` syncs and `.pix/local` must be carved out to avoid corruption.
+        dot_prefix_off = "." in filt["black_prefix"]
+        if dot_prefix_off:
             missing.append(
-                f"Exclude the folder '.pix/local' from this task "
-                f"(its path here: {prefix})."
+                "Enable 'Sync files/folders whose names begin with a period (.)'"
+                " for this task — it's currently off, so all of .pix/ stays "
+                "local-only and .pix/runs, .pix/errors, .pix/stash are NOT "
+                "backed up to the sync target."
             )
+        else:
+            prefix = _expected_local_prefix(root, sess.folder)
+            if not _dir_excluded(prefix, filt["black_dir_prefix"]):
+                missing.append(
+                    f"Exclude the folder '.pix/local' from this task "
+                    f"(its path here: {prefix})."
+                )
+        # Transient markers are NOT dot-prefixed, so they can sync regardless of
+        # the dot-prefix setting — always require their exclusions.
         marker_names, exif_name = _sample_markers()
         if not all(_excluded(n, filt) for n in marker_names):
             missing.append(
