@@ -25,6 +25,17 @@ changes the conservation artifact format, so it should be designed *with*
 rollback (rollback is the artifact's only consumer), not as a standalone perf
 change. See [perf-backlog.md → Considered and dropped](perf-backlog.md).
 
+## Import from devices — `pix import`
+
+Pull new photos/videos directly off a connected phone (iPhone/Android over USB /
+MTP-WPD) into `.pix/local/import/`, incrementally (skip already-imported without
+re-downloading), then hand off to migrate. Fully designed in
+[import.md](import.md) — but **gated on validating MTP/WPD/iOS assumptions**
+against real devices (persistent object IDs, single-session behavior, cheap
+metadata, camera-roll structure, iOS "Keep Originals"/optimized-storage
+behavior). See that spec's "Assumptions to validate" before building. Branch:
+`device-import`.
+
 ## Tag editing — removal, blanking, and override review
 
 `pix tag checkout` currently supports **assigning** a tag (drag a file into a value

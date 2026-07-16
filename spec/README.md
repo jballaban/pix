@@ -10,11 +10,12 @@ The tool is named `pix`. The CLI is invoked as `pix <op> ...`.
 
 ## Operations
 
-Nine top-level operations. `init`, `migrate`, `hash`, `dedupe`, `organize`, and `sync` are implemented; the rest are designed-pending-build, sketched, or deferred.
+Ten top-level operations. `init`, `migrate`, `hash`, `dedupe`, `organize`, and `sync` are implemented; the rest are designed-pending-build, sketched, or deferred.
 
 | Op | What it does | Spec | Status |
 |---|---|---|---|
 | `init [<path>]` | Establish a library root by creating `<path>\.pix\` with default config. | [library.md](library.md#establishing-a-root) | **v1 implemented** |
+| `import` | Pull **new** photos/videos off a connected phone (iPhone/Android, USB) into `.pix/local/import/`; isolated front-end that hands off to migrate. | [import.md](import.md) | **Designed; assumptions pending validation** |
 | `migrate <folder>` | Per-file **in-place** normalization: convert formats, rename, re-derive `_auto` tags, write tags into files. | [migrate.md](migrate.md) | **v1 implemented** (face detection deferred — see [Open decisions](#open-decisions)) |
 | `hash <library-root>` | Populate the content-hash cache (a column in the shared SQLite store `.pix/local/cache.db` — see [implementation.md → Cache store](implementation.md#cache-store)) for every file missing or stale. Decoupled from migrate so migrate's hot path stays fast. | [hash.md](hash.md) | **v1 implemented** |
 | `dedupe` | Find duplicates by content hash across the library and remove redundant copies. | [dedupe.md](dedupe.md) | **v1 implemented** |
