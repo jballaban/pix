@@ -24,6 +24,7 @@ from typing import Iterator
 import psutil
 import typer
 
+from pix import sync_check
 from pix.root import local_dir
 
 
@@ -97,6 +98,12 @@ def acquire(library_root: Path, op: str) -> Iterator[None]:
     Release is best-effort on exit — if the unlink fails for any
     reason, the next invocation will detect the dead PID and stale-clean.
     """
+    # Bootup validation for every write-mode op: a file-sync client covering
+    # this library must be safe (files persisted, pix's churn excluded), or we
+    # refuse before touching anything. Read-only; blocks only on a confirmed
+    # not-ready task. Runs here because every mutating command acquires the lock.
+    sync_check.require_ready(library_root, block=True)
+
     lock_file = _lock_path(library_root)
     lock_file.parent.mkdir(parents=True, exist_ok=True)
 

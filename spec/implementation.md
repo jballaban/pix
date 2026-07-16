@@ -112,6 +112,17 @@ So in Synology Drive Client → Sync Rules, add two filename patterns: **`*.__*`
 
 **Excluding them is safe — they are never the sole copy of data.** By the soft-delete/conservation invariant, every destructive step captures the original into `.pix/runs/` *before* the committed file is finalized (`apply._apply_convert` moves the source into the run folder in step 3, before renaming the converted marker to its canonical name in step 4; `safe_move` never destroys the source until the capture completes). At every instant the authoritative bytes live either in the media tree (under a committed name) or in synced `.pix/runs/`; the marker only ever holds *reproducible* output. Excluding them costs at most re-doing that work, never data — **provided `.pix/runs/` stays on synced/durable storage.** If `runs_dir` is relocated to a non-synced volume, that guarantee lapses for the CONVERT marker (the original would live only on the un-synced volume), so keep run captures synced or backed up whenever the markers are excluded.
 
+### Readiness gate (`sync_check`)
+
+pix validates the sync client **read-only** and refuses to mutate a library whose covering sync task isn't safe. It never writes the client's config — that's an undocumented, version-fragile private format — it only reads it and prints exactly what to fix. The check runs from `library_lock.acquire`, so every write-mode command (those that take the library lock) is gated uniformly; `pix init` runs it informationally; pure read-only inspection (`pix info …`) doesn't acquire the lock and so is never gated (and autocomplete stays fast).
+
+For Synology Drive Client on Windows it reads `%LOCALAPPDATA%\SynologyDrive\data` (from a private snapshot copy, never the live files): `db/sys.sqlite` → `session_table` for the task→`sync_folder` mapping and the On-Demand flag (`use_windows_cloud_file_api`), and the covering task's `session/<id>/conf/blacklist.filter` for the operative exclude rules. It **blocks (exit 1) only on a confirmed problem**:
+
+- **On-Demand Sync is ON** — files would be placeholders, not real bytes; pix must read/hash/convert the actual data.
+- **Missing exclusions** — `.pix/local`, or the transient markers (`*.__*` / `*_exiftool_tmp`), matched *semantically* (sample marker names tested against the configured globs/suffixes, so an equivalent-but-different rule still counts).
+
+Everything else degrades safely and never blocks: no client installed / non-Windows / the library isn't inside a sync task → an informational note; config present but unparseable → warn and continue. That last case is the self-correcting property — if Synology changes the on-disk format, `sync_check` reads nothing it trusts, warns, and lets work proceed; we then update the parser. It only ever hard-blocks on a rule it read and understood.
+
 ## Cache store
 
 All derived caches live in one SQLite DB, `<library>/.pix/local/cache.db` (WAL mode),

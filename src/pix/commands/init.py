@@ -12,7 +12,7 @@ from pathlib import Path
 
 import typer
 
-from pix import banner
+from pix import banner, sync_check
 from pix.config import CONFIG_FILENAME
 from pix.root import local_dir
 
@@ -73,3 +73,7 @@ def init_library(path: Path | None) -> None:
     typer.echo(f"Initialized pix library root at {target}.")
     typer.echo()
     typer.echo(SYNC_REMINDER)
+
+    # If this new root already sits inside a sync task, validate it now
+    # (informational — init never blocks).
+    sync_check.require_ready(target, block=False)
