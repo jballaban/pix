@@ -29,11 +29,8 @@ from pathlib import Path
 
 from pix.dates import parse_exiftool_datetime
 from pix.exiftool_session import ExifToolSession
+from pix.markers import CONVERT_INFIX, EXIFTOOL_TMP_SUFFIX, RENAME_SUFFIX
 from pix.timeout import safe_rename
-
-_RENAME_SUFFIX: str = ".__pixrename__"
-_MIGRATE_INFIX: str = ".__migrate__."
-_EXIFTOOL_TMP_SUFFIX: str = "_exiftool_tmp"
 
 
 class CleanupError(Exception):
@@ -80,11 +77,11 @@ def scan_cleanup_markers(folder: Path) -> CleanupMarkers:
                     if not entry.is_file(follow_symlinks=False):
                         continue
                     name = entry.name
-                    if name.endswith(_RENAME_SUFFIX):
+                    if name.endswith(RENAME_SUFFIX):
                         rename_orphans.append(Path(entry.path))
-                    elif _MIGRATE_INFIX in name:
+                    elif CONVERT_INFIX in name:
                         migrate_markers.append(Path(entry.path))
-                    elif name.endswith(_EXIFTOOL_TMP_SUFFIX):
+                    elif name.endswith(EXIFTOOL_TMP_SUFFIX):
                         exiftool_tmps.append(Path(entry.path))
         except OSError:
             continue
@@ -151,7 +148,7 @@ def cleanup_rename_orphans(orphans: list[Path]) -> list[Path]:
     """
     resolved: list[Path] = []
     for path in orphans:
-        original_name = path.name[: -len(_RENAME_SUFFIX)]
+        original_name = path.name[: -len(RENAME_SUFFIX)]
         original = path.parent / original_name
         if original.exists():
             path.unlink()
@@ -207,11 +204,11 @@ def cleanup_migrate_markers(markers: list[Path]) -> list[str]:
 
 def _split_marker_name(name: str) -> tuple[str, str]:
     """Split `{original}.__migrate__.{new-ext}` into (original, new-ext)."""
-    idx = name.rfind(_MIGRATE_INFIX)
+    idx = name.rfind(CONVERT_INFIX)
     if idx < 0:
         raise ValueError("missing __migrate__ infix")
     original = name[:idx]
-    new_ext = name[idx + len(_MIGRATE_INFIX):]
+    new_ext = name[idx + len(CONVERT_INFIX):]
     if not original or not new_ext:
         raise ValueError("empty original or extension component")
     if "." in new_ext:

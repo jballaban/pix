@@ -29,6 +29,7 @@ from pix.dates import (
     parse_exiftool_datetime,
 )
 from pix.events import derive_event_auto
+from pix.markers import CONVERT_INFIX
 from pix.metadata import FileMetadata
 from pix.progress import LiveProgress
 
@@ -320,7 +321,7 @@ def attach_paths(
         target_ext = ln.target_filename.rsplit(".", 1)[-1].lower()
         staging_path = staging_dir / f"{ln.line_id}_{ln.abs_path.stem}.{target_ext}"
         marker_path = (
-            ln.abs_path.parent / f"{ln.abs_path.name}.__migrate__.{target_ext}"
+            ln.abs_path.parent / f"{ln.abs_path.name}{CONVERT_INFIX}{target_ext}"
         )
         capture_path = data_dir / base
         target_path = ln.abs_path.parent / ln.target_filename

@@ -31,6 +31,7 @@ from pix.editor import prompt_proceed
 from pix.events import PIX_ORIGINAL_PATH
 from pix.hash_cache import read_cached_hash, write_cached_hash
 from pix.library_lock import LockHeld, acquire as acquire_lock
+from pix.markers import ROTATE_INFIX
 from pix.metadata import (
     ExifToolFailed,
     ExifToolNotFound,
@@ -168,7 +169,7 @@ def _apply(root: Path, videos: list[Path], degrees: int) -> None:
     failed: list[Path] = []
     for src in videos:
         new_rot = _normalize(_stored_rotation(src, ffprobe) - degrees)
-        tmp = src.with_name(f"{src.stem}.__rot__{src.suffix}")
+        tmp = src.with_name(f"{src.stem}{ROTATE_INFIX}{src.suffix}")
         try:
             pre_hash = read_cached_hash(root, src)
             orig_op = _cached_original(root, src)

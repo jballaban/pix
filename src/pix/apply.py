@@ -37,6 +37,7 @@ from pix.convert import (
     remux_repair,
 )
 from pix.errors import move_to_errors
+from pix.markers import RENAME_SUFFIX
 from pix.timeout import OperationTimeout, safe_move, safe_rename
 from pix.exiftool_session import (
     ExifToolSession,
@@ -821,7 +822,7 @@ def _apply_rename(ln: PlanLine) -> None:
         # - On hard crash (process killed) between steps A and B, the file
         #   sits at the intermediate name. The next `pix migrate` run
         #   recovers it via `pix.cleanup.cleanup_rename_orphans`.
-        intermediate = ln.abs_path.parent / f"{src_name}.__pixrename__"
+        intermediate = ln.abs_path.parent / f"{src_name}{RENAME_SUFFIX}"
         if intermediate.exists():
             raise ApplyError(
                 f"{ln.line_id}: rename intermediate {intermediate.name} "

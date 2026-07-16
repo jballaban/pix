@@ -23,6 +23,12 @@ machine-local lock, and transient workspaces (staging, checkout) — syncing it
 risks cache corruption and wasted churn. The durable data (.pix/runs holds
 full run captures, .pix/errors and .pix/stash hold only-copy files) may be
 synced or backed up, but note .pix/runs roughly doubles storage per migrate run.
+
+Also add two filename exclude rules for pix's transient markers, which live
+briefly in the media tree during runs (safe to exclude — never the sole copy
+of data):
+    *.__*            (pix's own markers: rename/convert/organize/rotate)
+    *_exiftool_tmp   (ExifTool's atomic-write temp)
 """
 
 # Seed contents of pix.yaml: just a header comment. Settings (runs_dir,

@@ -38,6 +38,7 @@ from typing import IO
 from pix.dates import format_pix_datetime
 from pix.duration import format_duration_compact, format_size
 from pix.events import effective_event
+from pix.markers import ORGANIZE_TMP_SUFFIX
 from pix.metadata import FileMetadata
 from pix import cache_db
 from pix.timeout import safe_rename
@@ -605,11 +606,11 @@ def _schedule_moves(runnable: list[PlanLine]) -> list[_MoveOp]:
     # Leftovers are cycle-involved. Park, then unpark to real targets.
     leftover = [line_by_id[lid] for lid in indegree if lid not in placed]
     for ln in leftover:
-        tmp = ln.abs_path.parent / f"{ln.line_id}.__organize_tmp__"
+        tmp = ln.abs_path.parent / f"{ln.line_id}{ORGANIZE_TMP_SUFFIX}"
         ops.append(_MoveOp(ln, ln.abs_path, tmp, final=False))
     for ln in leftover:
         assert ln.target_path is not None
-        tmp = ln.abs_path.parent / f"{ln.line_id}.__organize_tmp__"
+        tmp = ln.abs_path.parent / f"{ln.line_id}{ORGANIZE_TMP_SUFFIX}"
         ops.append(_MoveOp(ln, tmp, ln.target_path, final=True))
     return ops
 

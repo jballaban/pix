@@ -104,6 +104,14 @@ The durable state stays top-level and may be synced or backed up deliberately: `
 
 **Upgrade path.** Libraries created before `.pix/local/` existed fold into the new layout automatically on the next command — `root.ensure_local_layout` moves the workspaces, `cache_db` relocates the DB via a WAL checkpoint + single-file rename (self-healing: the old path keeps working until the move succeeds, so no data loss), and `library_lock` stale-cleans any pre-upgrade lock. A read-only `pix info events` is enough to trigger all of it.
 
+### Transient markers in the media tree
+
+Migrate, organize, and rotate also create short-lived marker/intermediate files *in the media tree itself* (beside the real files), which flicker in and out during a run and, after an interrupted run, linger until the next migrate's cleanup pass resolves them. They should be excluded too — a live sync client otherwise wastes effort uploading files that vanish mid-upload. pix names all of them with a single convention so **one filename rule covers every case**: every pix-authored marker embeds `.__` (`pix.markers.MARKER_INFIX`), matched by `*.__*` — the rename intermediate (`.__pixrename__`), CONVERT marker (`<name>.__migrate__.<ext>`), organize park (`.__organize_tmp__`), and rotate remux temp (`.__rot__.<ext>`). `pix.markers` is the single source of truth; `test_markers` enforces that the convention holds. The one transient pix does *not* name is ExifTool's atomic-write temp `*_exiftool_tmp` (ExifTool creates it; pix only cleans it up), which needs its own rule.
+
+So in Synology Drive Client → Sync Rules, add two filename patterns: **`*.__*`** and **`*_exiftool_tmp`**.
+
+**Excluding them is safe — they are never the sole copy of data.** By the soft-delete/conservation invariant, every destructive step captures the original into `.pix/runs/` *before* the committed file is finalized (`apply._apply_convert` moves the source into the run folder in step 3, before renaming the converted marker to its canonical name in step 4; `safe_move` never destroys the source until the capture completes). At every instant the authoritative bytes live either in the media tree (under a committed name) or in synced `.pix/runs/`; the marker only ever holds *reproducible* output. Excluding them costs at most re-doing that work, never data — **provided `.pix/runs/` stays on synced/durable storage.** If `runs_dir` is relocated to a non-synced volume, that guarantee lapses for the CONVERT marker (the original would live only on the un-synced volume), so keep run captures synced or backed up whenever the markers are excluded.
+
 ## Cache store
 
 All derived caches live in one SQLite DB, `<library>/.pix/local/cache.db` (WAL mode),
