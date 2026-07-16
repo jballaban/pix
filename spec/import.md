@@ -1,12 +1,15 @@
 # Import — `pix import`
 
-> **Status: core assumptions validated on a real iPhone (iOS, over WPD); Android
-> still unvalidated.** The WPD/iOS claims below were measured against an iPhone
-> (device serial `M2DF33MY06`) using Python + `comtypes` — see
-> [Validation results](#validation-results). Several assumptions were **wrong as
-> originally written** (notably camera-roll structure — no `DCIM/NNNAPPLE` over
-> MTP) and have been corrected inline. Android behavior is still assumed, not
-> measured.
+> **Status: building the device→disk import only. Ingestion is deferred.** The
+> WPD/iOS claims below were validated against a real iPhone (serial `M2DF33MY06`)
+> via `comtypes` — see [Validation results](#validation-results); several original
+> assumptions were **wrong** (notably no `DCIM/NNNAPPLE` over MTP) and are
+> corrected inline. **Scope of the current build:** pull files off the device and
+> land them verified under `.pix/local/import/` — nothing consumes them yet. The
+> **migrate ingest seam** (landed files → library) is explicitly out of scope and
+> tracked as open work in
+> [Ingestion seam — issues to resolve](#ingestion-seam--issues-to-resolve-deferred).
+> Android behavior is still assumed, not measured.
 
 ## Purpose & scope
 
@@ -106,15 +109,20 @@ manufacturer (`Apple Inc.` → iOS rules; USB VID `0x05AC`).
 The device's own sub-structure is **preserved** on landing (import is true to
 the source; migrate flattens later), so the month-bucket names are harmless.
 
-**`.AAE` sidecars (new, measured).** iOS surfaces Apple edit sidecars
-(`IMG_xxxx.AAE`, non-destructive edit instructions) over MTP — 73 in the sample
-roll. They are **not** originals. **Import skips `.AAE`** (migrate would only
-treat them as junk); the edited render is already a separate object in the roll.
+**Import lands *everything* faithfully — no filtering.** Import is a dumb,
+byte-exact copier: it takes every object under the camera-roll root as-is and has
+**no format opinions**. Deciding what is junk (e.g. `.AAE` edit sidecars — 73
+measured in the sample) or unsupported is a downstream **ingestion/migrate**
+policy, not import's job. This keeps import simple and true-to-source, and defers
+the risk of silently dropping something (e.g. whether an `.AAE`'s edit is already
+a separate rendered object — unconfirmed). See
+[Ingestion seam — issues to resolve](#ingestion-seam--issues-to-resolve-deferred).
 
 ## Landing & tracking
 
 **Landing:** `.pix/local/import/<friendly-name>/<device-relative-path>`, e.g.
-`.pix/local/import/Jamies-iPhone/DCIM/100APPLE/IMG_0001.HEIC`. Chosen because
+`.pix/local/import/Jamies-iPhone/202605_a/IMG_7399.HEIC` (iOS month-bucket path,
+per [C1](#validation-results)). Chosen because
 `.pix/local` is **excluded from sync** → pending imports don't double-upload
 (they upload once, later, when migrate moves them into the library). Pending
 imports have no off-machine backup, which is acceptable: **the phone still holds
@@ -152,19 +160,23 @@ resume reads:
   re-verify; final file **with** sidecar → skip. Already-verified files are never
   re-verified.
 
-**Migrate ingest → provenance becomes in-file.** When migrate's import-ingest
-pre-pass moves a landed file into the library, it reads the `.importinfo`
-sidecar and writes the provenance **into the resulting library file** as pix
-tags — then drops the sidecar. Because the **library stores only jpg/mp4** (both
-embed XMP), no library-side sidecar is ever needed. The two tags:
+**Migrate ingest → provenance becomes in-file (DEFERRED — not built here).** The
+intent: migrate's import-ingest pre-pass reads the `.importinfo` sidecar, writes
+the provenance **into the resulting library file** as pix tags, then drops the
+sidecar (library stores only jpg/mp4, both embed XMP, so no library-side sidecar).
+The two intended tags:
 
 - `pix:ImportId` = `<serial>:<persistent-unique-id>` — the durable,
   convert-surviving skip key (survives HEIC→jpg per the CONVERT-preserves-metadata
   invariant). Uses the PUID, **not** the raw object id — see [I1](#validation-results).
-- `pix:OriginalPath` = the **device** path (from the sidecar) — more meaningful
-  and permanent than the transient staging path.
+- `pix:OriginalPath` = the **device** path (from the sidecar).
 
-Add `pix:ImportId` to `metadata_filter` so it's cached and queryable.
+**This whole seam is unbuilt and under-designed** — destination folder, sidecar→tag
+sequencing, crash windows, and several cross-spec conflicts are open. It is
+explicitly **out of scope for the current import build** and tracked in
+[Ingestion seam — issues to resolve](#ingestion-seam--issues-to-resolve-deferred).
+Until it exists, `pix import` lands verified files that nothing yet consumes — by
+design.
 
 ## Incremental import (skip already-imported)
 
@@ -288,6 +300,50 @@ fail/hard-warn only on the detectable format-mismatch case.
 - **Phone-side deletion after import** — a future, explicitly gated action
   ("yes, NOW delete from the phone"), never implicit.
 - **Android edge devices / non-DCIM sources**, screenshots, other albums.
+
+## Ingestion seam — issues to resolve (deferred)
+
+The import-ingest pre-pass (landed files → library) is **not being built yet**;
+`pix import` currently lands verified files that nothing consumes. These must be
+resolved before that seam is designed/built. IDs in parentheses are from the
+Fable design review.
+
+- **ING-1 — Design the ingest pre-pass properly (B1).** The "analogous to
+  errors/stash restore" hand-wave doesn't hold. Specify at migrate's worked-example
+  fidelity: the **destination folder** in the library (migrate is otherwise
+  in-place — `migrate.md`: "Files never move between folders" — so this needs an
+  explicit carve-out); the **sidecar→tag sequencing** (for HEIC, `pix:ImportId`/
+  `OriginalPath` can only be written during the CONVERT+TAG action); the **crash
+  table** for every window (file moved but sidecar not; tags written but sidecar
+  not dropped; sidecar dropped but CONVERT fails → `.pix/errors/` with no ImportId);
+  and the manifest consequence (a mid-ingest file is in neither pending nor
+  committed half — dedupe backstops the re-download; state it).
+- **ING-2 — `EventAuto` month-bucket corruption (B2).** `pix:OriginalPath` =
+  `…/202605_a/IMG_7399.JPG`; `tags.md` EventAuto strips `^[\d\-_. ]+` from the
+  parent folder → `202605_a` → `"a"`, so **every imported photo would get
+  `EventAuto="a"` (or `"b"`)**. Fix in ingest (suppress folder-derived EventAuto
+  for device paths) or in the heuristic (reject single-letter residues / recognise
+  `YYYYMM_x` buckets). Decide before any device `OriginalPath` is written — it's
+  write-once. (Also: does import even record the raw month-bucket path, or a
+  normalised one? Affects this.)
+- **ING-3 — `.importinfo` vs migrate's fail-fast (S6/B1).** `.importinfo` is not in
+  `EXTENSION_POLICY`; if sidecars sit in the migrate-walked tree, the
+  unknown-extension abort kills the run. And since import lands **everything**, any
+  stray phone extension (esp. Android) hits the same fail-fast. Ingest needs a
+  skip-and-report policy for unknowns and a defined home for sidecars.
+- **ING-4 — `OriginalPath` write-once override (B1).** Migrate's first-migrate logic
+  sets `OriginalPath = current source path` (`library.md`); import wants the
+  **device** path. Specify the override; getting it wrong is permanent.
+- **ING-5 — Live Photo pairing at rename (S7).** `IMG_xxxx.HEIC` + `IMG_xxxx.MOV`
+  share a capture time; migrate's canonical rename + `_NNN` content-hash tiebreaker
+  scrambles the pairing (the failure mode `.insv` got a carve-out for). Decide
+  whether pairing is preserved or explicitly not.
+- **ING-6 — Invariant + delete-gate wording (N2/N3).** `implementation.md` says
+  `.pix/local/` loss "never [costs] library data" — untrue while pending imports
+  are the only local copy; amend it. The deferred phone-deletion action must gate
+  on **"ingested + synced"**, not merely `VERIFIED`. Define when the manifest's
+  committed half (scan of `pix:ImportId`) is rebuilt, and note cache.db loss becomes
+  a behavioural change (delete semantics), not just a perf hit.
 
 ## Validation results
 
