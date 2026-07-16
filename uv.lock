@@ -270,6 +270,7 @@ name = "pix"
 source = { editable = "." }
 dependencies = [
     { name = "blake3" },
+    { name = "comtypes", marker = "sys_platform == 'win32'" },
     { name = "pillow" },
     { name = "pillow-heif" },
     { name = "psutil" },
@@ -283,13 +284,11 @@ dev = [
     { name = "pytest" },
     { name = "types-pyyaml" },
 ]
-probe = [
-    { name = "comtypes", marker = "sys_platform == 'win32'" },
-]
 
 [package.metadata]
 requires-dist = [
     { name = "blake3", specifier = ">=0.4" },
+    { name = "comtypes", marker = "sys_platform == 'win32'", specifier = ">=1.4" },
     { name = "pillow", specifier = ">=10.0" },
     { name = "pillow-heif", specifier = ">=0.16" },
     { name = "psutil", specifier = ">=5.9" },
@@ -303,7 +302,6 @@ dev = [
     { name = "pytest", specifier = ">=8.0" },
     { name = "types-pyyaml", specifier = ">=6.0" },
 ]
-probe = [{ name = "comtypes", marker = "sys_platform == 'win32'", specifier = ">=1.4" }]
 
 [[package]]
 name = "pluggy"

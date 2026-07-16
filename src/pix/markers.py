@@ -37,6 +37,7 @@ RENAME_SUFFIX: str = ".__pixrename__"           # <name>.__pixrename__
 CONVERT_INFIX: str = ".__migrate__."            # <name>.__migrate__.<new-ext>
 ORGANIZE_TMP_SUFFIX: str = ".__organize_tmp__"  # <line-id>.__organize_tmp__
 ROTATE_INFIX: str = ".__rot__"                  # <stem>.__rot__<.ext>
+IMPORT_TMP_SUFFIX: str = ".__import__"          # <name>.__import__ (partial download)
 
 # ExifTool's own atomic-write temp — external (ExifTool names it), does NOT
 # match PIX_MARKER_GLOB; a sync client needs this separate rule.

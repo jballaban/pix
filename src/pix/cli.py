@@ -13,6 +13,7 @@ from pix.commands.context_menu import context_menu
 from pix.commands.dedupe import dedupe_library
 from pix.commands.events import list_events
 from pix.commands.hash import hash_library
+from pix.commands.import_ import import_library
 from pix.commands.init import init_library
 from pix.commands.meta import meta_file
 from pix.commands.migrate import migrate_folder
@@ -315,6 +316,40 @@ def checkout(
 ) -> None:
     """Edit tags by shuffling a hard-link workspace (scoped to <path>)."""
     run_checkout(path, template, commit=commit, reset=reset)
+
+
+@app.command("import")
+def import_(
+    path: Annotated[
+        Path,
+        typer.Argument(
+            help=(
+                "Path inside (or at) the library root, used to resolve the "
+                "library. `.` for CWD. Landed files go under "
+                ".pix/local/import/<device>/."
+            ),
+        ),
+    ],
+    device: Annotated[
+        str | None,
+        typer.Option(
+            "--device",
+            help=(
+                "Select the connected device by serial or (friendly/model) "
+                "name substring. Required when more than one device is present."
+            ),
+        ),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Enumerate and report new-vs-already-imported counts; download nothing.",
+        ),
+    ] = False,
+) -> None:
+    """Pull new photos/videos off a connected phone into .pix/local/import/ (verified)."""
+    import_library(path=path, device=device, dry_run=dry_run)
 
 
 @app.command("hash")

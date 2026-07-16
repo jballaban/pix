@@ -10,6 +10,9 @@ dependencies = [
     "pillow-heif>=0.16",
     "blake3>=0.4",
     "psutil>=5.9",
+    # WPD/MTP device access for `pix import` (Windows-only). No stubs; wpd.py
+    # types the COM objects as Any and suppresses pyright's import checks.
+    "comtypes>=1.4 ; sys_platform == 'win32'",
 ]
 
 [project.scripts]
@@ -30,11 +33,6 @@ dev = [
     "pytest>=8.0",
     "pyright>=1.1.380",
     "types-pyyaml>=6.0",
-]
-# Windows-only WPD/MTP probe tooling (tools/probe_wpd.py) for import spec
-# validation. Not a runtime dep of pix; optional.
-probe = [
-    "comtypes>=1.4 ; sys_platform == 'win32'",
 ]
 
 [tool.pyright]
