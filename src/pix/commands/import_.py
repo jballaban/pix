@@ -25,6 +25,7 @@ def import_library(
     path: Path,
     *,
     device: str | None = None,
+    name: str | None = None,
     dry_run: bool = False,
 ) -> None:
     """Resolve root, take the lock, and run the device→disk import."""
@@ -41,7 +42,7 @@ def import_library(
     if dry_run:
         # Read-only: no lock, no run folder.
         try:
-            summary = run_import(root, device=device, dry_run=True)
+            summary = run_import(root, device=device, name=name, dry_run=True)
         except ImportError_ as e:
             typer.echo(f"Error: {e}", err=True)
             raise typer.Exit(code=1) from e
@@ -54,7 +55,7 @@ def import_library(
 
     try:
         with acquire_lock(root, "import"):
-            _run(root, device=device)
+            _run(root, device=device, name=name)
     except LockHeld as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
@@ -63,7 +64,7 @@ def import_library(
         raise typer.Exit(code=1) from e
 
 
-def _run(root: Path, *, device: str | None) -> None:
+def _run(root: Path, *, device: str | None, name: str | None) -> None:
     config = Config.load(settings_path(root))
     run_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     runs_dir = config.runs_base(root) / run_id
@@ -72,7 +73,7 @@ def _run(root: Path, *, device: str | None) -> None:
 
     try:
         with apply_log.open("a", encoding="utf-8") as log:
-            summary = run_import(root, device=device, log=log)
+            summary = run_import(root, device=device, name=name, log=log)
     finally:
         typer.echo(f"Log: {apply_log}")
 

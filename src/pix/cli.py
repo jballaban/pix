@@ -340,6 +340,17 @@ def import_(
             ),
         ),
     ] = None,
+    name: Annotated[
+        str | None,
+        typer.Option(
+            "--name",
+            help=(
+                "Assign the selected device's friendly folder name without "
+                "prompting. Persisted to .pix/devices.yaml and reused on future "
+                "runs (also renames a device already named)."
+            ),
+        ),
+    ] = None,
     dry_run: Annotated[
         bool,
         typer.Option(
@@ -349,7 +360,7 @@ def import_(
     ] = False,
 ) -> None:
     """Pull new photos/videos off a connected phone into .pix/local/import/ (verified)."""
-    import_library(path=path, device=device, dry_run=dry_run)
+    import_library(path=path, device=device, name=name, dry_run=dry_run)
 
 
 @app.command("hash")

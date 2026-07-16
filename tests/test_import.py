@@ -162,6 +162,35 @@ def test_friendly_disambiguates_colliding_serials(tmp_path: Path) -> None:
     assert name.startswith("Apple iPhone-")
 
 
+def test_name_flag_sets_and_is_remembered(tmp_path: Path) -> None:
+    (tmp_path / ".pix").mkdir()
+    dev = _dev("SER1", "Apple iPhone")
+    # Explicit --name wins over the WPD default, and persists.
+    got = importer._friendly_for(tmp_path, dev, interactive=False, name="my phone")
+    assert got == "my phone"
+    assert importer._load_registry(tmp_path) == {"SER1": "my phone"}
+    # A later run with no --name reuses the remembered name (no prompt path hit).
+    assert importer._friendly_for(tmp_path, dev, interactive=False) == "my phone"
+
+
+def test_name_flag_renames_known_device(tmp_path: Path) -> None:
+    (tmp_path / ".pix").mkdir()
+    importer._save_registry(tmp_path, {"SER1": "old-name"})
+    got = importer._friendly_for(
+        tmp_path, _dev("SER1", "Apple iPhone"), interactive=False, name="new-name"
+    )
+    assert got == "new-name"
+    assert importer._load_registry(tmp_path)["SER1"] == "new-name"
+
+
+def test_name_flag_sanitized(tmp_path: Path) -> None:
+    (tmp_path / ".pix").mkdir()
+    got = importer._friendly_for(
+        tmp_path, _dev("SER1"), interactive=False, name="a/b:c"
+    )
+    assert got == "a_b_c"
+
+
 # --- landing path collision --------------------------------------------------
 def test_landing_path_disambiguates_collision(tmp_path: Path) -> None:
     used: dict[Path, str] = {}

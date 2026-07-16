@@ -336,12 +336,20 @@ Policy: print both prerequisites on connecting an iPhone; **warn, don't
 fail-hard** on the size heuristic (too many false positives on photos);
 fail/hard-warn only on the detectable format-mismatch case.
 
-## CLI (proposed — refine during build)
+## CLI (implemented)
 
-- `pix import` — auto-detect connected device(s); if one, use it; if several,
-  prompt. Unknown serial → prompt for a name.
-- Flags TBD: `--device <name>`, `--dry-run` (enumerate + report new-vs-skip
-  counts, no download), maybe `--to <path>` to relocate the landing root.
+`pix import <path>` — resolve the library from `<path>`, take the library lock,
+and land the selected device's camera roll under `.pix/local/import/<device>/`.
+
+- Auto-selects the sole connected device; with more than one, `--device
+  <serial-or-name-substring>` picks it (else it errors, listing them).
+- Unknown serial → **prompt** for a friendly name (TTY only; a stdin that can't
+  be read falls back to the WPD name instead of hanging). `--name <friendly>`
+  assigns it without prompting. Names persist in `.pix/devices.yaml` and are
+  **reused on every future run** — a device is named once; `--name` also renames.
+- `--dry-run` — enumerate and report new-vs-already-imported counts; download
+  nothing (read-only: no lock, no run folder).
+- Not built: `--to <path>` (relocate landing root); a per-run `--limit`.
 
 ## Deferred / out of scope
 

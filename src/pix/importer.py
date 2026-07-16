@@ -103,23 +103,36 @@ def sanitize_component(name: str) -> str:
     return cleaned
 
 
-def _friendly_for(root: Path, info: wpd.DeviceInfo, *, interactive: bool) -> str:
-    """Resolve serial → friendly name via the registry; prompt/auto on unknown."""
+def _friendly_for(root: Path, info: wpd.DeviceInfo, *, interactive: bool,
+                  name: str | None = None) -> str:
+    """Resolve serial → friendly folder name, and remember it for future runs.
+
+    Precedence: explicit `--name` > a name remembered from a prior run
+    (`.pix/devices.yaml`) > an interactive prompt > auto-name from WPD. Whatever
+    is resolved is persisted, so a device is only named once — later runs reuse
+    it silently, and a `--name` both sets and remembers (a rename).
+    """
     serial = info.serial or info.device_id
     reg = _load_registry(root)
-    if serial in reg:
-        return reg[serial]
-
-    default = sanitize_component(info.friendly or info.model or serial)
-    if interactive:
-        import typer  # noqa: PLC0415
-
-        name = typer.prompt(
-            f"New device (serial {serial}). Name it", default=default
-        )
-        friendly = sanitize_component(name or default)
+    if name:
+        friendly = sanitize_component(name)
+    elif serial in reg:
+        return reg[serial]  # remembered from a prior run — no prompt
     else:
-        friendly = default
+        default = sanitize_component(info.friendly or info.model or serial)
+        if interactive:
+            import click  # noqa: PLC0415
+            import typer  # noqa: PLC0415
+
+            try:
+                answer = typer.prompt(
+                    f"New device (serial {serial}). Name it", default=default
+                )
+            except (click.exceptions.Abort, EOFError):
+                answer = default  # stdin reported a TTY but can't be read
+            friendly = sanitize_component(answer or default)
+        else:
+            friendly = default
 
     # Avoid two different serials colliding on one folder name.
     if any(v == friendly and k != serial for k, v in reg.items()):
@@ -239,6 +252,7 @@ def run_import(
     root: Path,
     *,
     device: str | None = None,
+    name: str | None = None,
     dry_run: bool = False,
     log: IO[str] | None = None,
 ) -> ImportSummary:
@@ -249,8 +263,8 @@ def run_import(
         raise ImportError_(str(e)) from e
 
     info = _select_device(devices, device)
-    interactive = sys.stdin.isatty() and not dry_run
-    friendly = _friendly_for(root, info, interactive=interactive)
+    interactive = sys.stdin.isatty() and sys.stdout.isatty() and not dry_run
+    friendly = _friendly_for(root, info, interactive=interactive, name=name)
     landing = local_dir(root) / "import" / friendly
     summary = ImportSummary(device=info, landing=landing)
 
