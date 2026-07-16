@@ -31,13 +31,13 @@ Each library is independent. Two libraries on the same machine (e.g., `F:\person
 
 ## No versioning — structural recovery instead
 
-The library is **version-less.** There is no `schema_version`, no `state.yaml`, no `pix upgrade` command, and no schema gate on commands. Any pix build operates on any library directly. This is deliberate: in pix's entire history every "schema bump" was an extension-default change, and the format policy no longer lives in the library at all (it's a build constant — see [migrate.md → Extension policy](migrate.md#extension-policy)). There has never been a structural `.pix/` migration, so the versioning machinery only ever served a job that no longer exists.
+The library is **version-less.** There is no `schema_version`, no `state.yaml`, no `pix upgrade` command, and no schema gate on commands. Any pix build operates on any library directly. This is deliberate: in pix's entire history every "schema bump" was an extension-default change, and the format policy no longer lives in the library at all (it's a build constant — see [migrate.md → Extension policy](migrate.md#extension-policy)). The only structural `.pix/` change to date — folding machine-local state into `.pix/local/` (see File layout) — is handled structurally too: an idempotent, self-healing relocation with no version gate. So the versioning machinery only ever served a job that no longer exists.
 
 Format drift in persisted `.pix/` data is handled **structurally**, by what each kind of data *is*, not by a version number:
 
 | Data | Durability | If a build can't read it |
 |---|---|---|
-| `cache/` (`.meta`/`.hash`/`.vfp`) | regenerable | **regenerate** — an unreadable/stale entry is just a miss; recompute from the file |
+| `local/` (`cache.db`, `lock`, `staging/`, `checkout/`, `faces/`) | regenerable / machine-local | **regenerate / recreate** — an unreadable or stale cache entry is just a miss (recompute from the file); the lock and workspaces are transient |
 | `errors/`, `stash/` | only-copy | **restore** the file to its origin and reprocess (see below) |
 | `runs/` | historical / rollback | **leave** — old run folders are frozen records; new code doesn't reinterpret them |
 
@@ -64,11 +64,16 @@ Per-file `pix:*` XMP fields are likewise absorbed lazily by migrate's re-derivat
   - `pix.yaml` — per-library settings (optional `runs_dir`, `organize.template`). Hand-editable; pix preserves the keys it knows and drops unknown keys/comments on rewrite. The **format policy is not here** — it's a build constant (see [migrate.md → Extension policy](migrate.md#extension-policy)). (Was `config.yaml`.)
   - `runs/<run-id>/` — per-run state. Contains `plan.txt` plus `L<NNN>_<original-filename>` captures for files destroyed during the run (CONVERT/DELETE originals) and `L<NNN>_<original-filename>.xmp` sidecars for TAG-only mutations. Each run folder is independently rollback-able. Run folders accumulate across runs until the user manually deletes them. Run-id is just a folder name on disk; no code reads it back, no marker carries it.
     - **Relocatable (`runs_dir`).** The optional `runs_dir` config key repoints migrate's run folders to another path — typically another **volume** — so a full library drive can offload the conserved-original captures (the bulk of run-folder size, especially during a re-encode pass). When `runs_dir` is on a different volume, captures move cross-volume via copy+delete (`timeout.safe_move`) instead of an atomic same-volume rename: slower, and the capture step is no longer instant, but still crash-safe (the source survives until the copy completes). Only migrate's run folders relocate; **staging, markers, and the media tree stay on the library volume** (their renames must be same-volume/atomic), and `checkout` workspaces stay local too (they hard-link media, which can't cross volumes). The key is optional and doesn't bump `SCHEMA_VERSION`.
-  - `staging/` — shared scratch space for off-library conversions during the current migrate apply. Wiped at the start of every migrate.
   - `stash/` — holding area for files the user wants set aside but not lost (RAW formats, proprietary 360 source files). Flat folder with `<filename>` + `<filename>.stashinfo` (YAML sidecar) per unique-content entry. Created lazily on first stash. See [migrate.md → Stash action](migrate.md#stash-action).
-  - `faces/` — face crop cache + embeddings DB.
-  - `checkouts/<id>/` — active tag-editing workspaces.
-  - Other caches (hash index, EXIF cache, organize-template state).
+  - `errors/` — quarantine for files that failed processing; each keeps its name and its *location* mirrors the source path, with a `.errorinfo` sidecar. Only-copy (see recovery invariant above).
+  - `local/` — **machine-local, never-synced state**, grouped under one folder so a file-sync client can exclude it in a single rule (see [implementation.md → Sync client interaction](implementation.md#sync-client-interaction)). Everything here is regenerable or transient:
+    - `cache.db` (+ `-wal`/`-shm`) — the single-file cache store: hash index, filtered EXIF metadata, and video fingerprints, one row per file. Regenerable — recompute on a miss.
+    - `lock` — the single-active-op library lock (machine-local PID payload; see [README → Concurrency](README.md)).
+    - `staging/` — shared scratch for off-library conversions during the current migrate apply. Wiped at the start of every migrate.
+    - `checkout/` — the active tag-editing workspace (hard links to library files).
+    - `faces/` — face crop cache + embeddings DB.
+
+    `pix init` creates `local/` up front (so a sync client can exclude it before the first run); libraries predating it fold their top-level `cache.db`/`lock`/`staging`/`checkout`/`faces` into `local/` automatically on the next command.
 - **Same-volume constraint** — `.pix/` and source folders being migrated are assumed on the same volume so atomic rename and hard links are available.
 
 ## Canonical filename

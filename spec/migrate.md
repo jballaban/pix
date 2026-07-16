@@ -10,7 +10,7 @@ Migrate honors the spec-wide metadata-preservation invariants: **CONVERT carries
 
 `migrate <folder>` is a single blocking, **sequential** command modelled on `git commit`:
 
-1. **Cleanup pass.** Wipe `.pix\staging\`. Scan `<folder>` for orphan `*.__migrate__.*` markers from previously interrupted runs and resolve them (see [marker cleanup](#marker-cleanup)). There is no resume — interrupted runs are walked away from; cleanup just removes or finalizes their leftovers so the new plan reflects current state.
+1. **Cleanup pass.** Wipe `.pix\local\staging\`. Scan `<folder>` for orphan `*.__migrate__.*` markers from previously interrupted runs and resolve them (see [marker cleanup](#marker-cleanup)). There is no resume — interrupted runs are walked away from; cleanup just removes or finalizes their leftovers so the new plan reflects current state.
 2. **Allocate run folder.** Create `<library-root>\.pix\runs\<run-id>\` where `<run-id>` is a timestamp like `2026-05-16_14-32-01`. The run-id is just a folder name on disk — no code reads it back, no marker carries it.
 3. **Build metadata cache.** Bulk-extract metadata for every file in `<folder>` into an in-memory cache (see [Metadata cache](#metadata-cache)). One ExifTool invocation reads thousands of files in a single subprocess; per-file `pyexiftool` calls would be ~100× slower at TB scale.
 4. **Generate plan.** Walk the cache and write the migration plan to `runs\<run-id>\plan.txt`. Plan generation never reads file metadata directly — it consults the cache.
@@ -80,7 +80,7 @@ Plan generation needs the existing metadata of every file in `<folder>` (current
 **Contents.** For each source file, the cache holds:
 - All `pix:*` fields currently on the file (used to detect what's changing).
 - EXIF/XMP/IPTC fields that contribute to [`DateAuto` derivation](tags.md#dateauto-derivation).
-- Face region structures (read once here; not re-fetched during face detection — that's a separate pipeline that consumes its own cache under `.pix/faces/`).
+- Face region structures (read once here; not re-fetched during face detection — that's a separate pipeline that consumes its own cache under `.pix/local/faces/`).
 - File extension and on-disk filename.
 
 Migrate does not read or write any content hash. Content-hash population lives in [`pix hash`](hash.md), which stores hashes in the `.pix/cache/` layer rather than in file metadata. Migrate and hash are orthogonal.
@@ -338,7 +338,7 @@ Each plan line decomposes into a sequence of small fs ops, each independently sa
 
 For a CONVERT+TAG+RENAME line (the hardest case), the sequence is:
 
-1. **Off-library work** — convert + write tags + validate in `<library-root>\.pix\staging\`. Crash here: temp orphan, deleted by the next run's cleanup. No source-folder impact.
+1. **Off-library work** — convert + write tags + validate in `<library-root>\.pix\local\staging\`. Crash here: temp orphan, deleted by the next run's cleanup. No source-folder impact.
 2. **Bring into source as marker** — single rename of the temp file into the source folder as e.g. `IMG_001.HEIC.__migrate__.jpg` next to `IMG_001.HEIC`. The marker filename encodes "this replaces `IMG_001.HEIC`."
 3. **Capture original** — rename `IMG_001.HEIC` → `<library-root>\.pix\runs\<run-id>\data\L<NNN>_IMG_001.HEIC` (see [conservation captures](#conservation-captures)).
 4. **Finalize name** — rename `IMG_001.HEIC.__migrate__.jpg` to its canonical name (e.g. `2023-08-15_143205.jpg`).
@@ -347,7 +347,7 @@ Each step is one same-volume rename. The marker's existence is the only thing th
 
 ### Convert concurrency
 
-Apply is **logically sequential** — one plan line at a time, in topo order, with a single ExifTool session and an append-only `apply.log`. But step 1 above (the off-library conversion into `.pix\staging\`) is **independent across files**: a video CONVERT is a lossless `-c copy` remux (I/O-bound) and an image CONVERT is a Pillow JPEG encode (CPU-bound). Doing one file at a time leaves the box idle.
+Apply is **logically sequential** — one plan line at a time, in topo order, with a single ExifTool session and an append-only `apply.log`. But step 1 above (the off-library conversion into `.pix\local\staging\`) is **independent across files**: a video CONVERT is a lossless `-c copy` remux (I/O-bound) and an image CONVERT is a Pillow JPEG encode (CPU-bound). Doing one file at a time leaves the box idle.
 
 So the conversion is the *only* part that runs concurrently: a worker pool converts CONVERT staging files **ahead of** the serial loop, bounded to a sliding window. When the loop reaches a CONVERT line it consumes the already-converted staging file and does the metadata copy + the three renames (steps 2–4) on the main thread, in order. Everything with shared state — ExifTool, the crash log, rename slots — stays single-threaded, so atomicity and crash recovery are unchanged: a prefetched staging file is just a step-1 temp orphan, cleaned by the next run if the process dies before the line is finalized. A repair re-run (tag-write salvage) converts inline, since its repaired source differs from what was prefetched.
 
@@ -370,7 +370,7 @@ Markers use a synthetic `.__migrate__.` infix that's collision-proof against rea
 
 Cleanup runs at the start of every `migrate`, before plan generation. It does **not** resume the interrupted work — it just brings the source folder back to a consistent state so the new plan reflects current reality. The new run gets its own `runs/<run-id>/` folder; the interrupted run's folder is left untouched as a historical record.
 
-1. Wipe `.pix\staging\` (any temp orphans from a previous run's step 1).
+1. Wipe `.pix\local\staging\` (any temp orphans from a previous run's step 1).
 2. Glob `**/*.__migrate__.*` under `<source>` and resolve each CONVERT marker `X.{old-ext}.__migrate__.{new-ext}`:
    - **Both marker and `X.{old-ext}` present** (crash between step 2 and 3) → original is fine; delete the marker. The new plan will re-propose the CONVERT.
    - **Marker only, no `X.{old-ext}`** (crash between step 3 and 4) → the original is preserved in the prior run's folder. Read the marker's tags via ExifTool, compute the canonical name, and rename the marker to it. Work is finalized; the new plan won't re-propose it.
@@ -423,8 +423,8 @@ L042 | CONVERT+RENAME+TAG | IMG_4821.HEIC | →2023-08-15_143205.jpg; original_p
 
 **Apply ops (each is one same-volume rename, except step 1 which writes a file):**
 
-1. Decode HEIC, re-encode as JPG, copy non-format-specific metadata from the source (EXIF/XMP/IPTC), then write `pix:DateAuto` + `pix:OriginalPath` into the JPG, validate by re-reading metadata. Result lands at `F:\photos\.pix\staging\IMG_4821.HEIC.tmp.jpg`.
-2. Rename `F:\photos\.pix\staging\IMG_4821.HEIC.tmp.jpg` → `F:\source\trip-2023\IMG_4821.HEIC.__migrate__.jpg`. (Marker is now next to original.)
+1. Decode HEIC, re-encode as JPG, copy non-format-specific metadata from the source (EXIF/XMP/IPTC), then write `pix:DateAuto` + `pix:OriginalPath` into the JPG, validate by re-reading metadata. Result lands at `F:\photos\.pix\local\staging\IMG_4821.HEIC.tmp.jpg`.
+2. Rename `F:\photos\.pix\local\staging\IMG_4821.HEIC.tmp.jpg` → `F:\source\trip-2023\IMG_4821.HEIC.__migrate__.jpg`. (Marker is now next to original.)
 3. Rename `F:\source\trip-2023\IMG_4821.HEIC` → `F:\photos\.pix\runs\2026-05-16_14-32-01\data\L042_IMG_4821.HEIC`. (Original captured.)
 4. Rename `F:\source\trip-2023\IMG_4821.HEIC.__migrate__.jpg` → `F:\source\trip-2023\2023-08-15_143205.jpg`. (Canonical name.)
 

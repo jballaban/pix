@@ -19,7 +19,7 @@ All tag-editing is expressed as actions on the single `pix tag checkout` command
 
 ## The cycle
 
-1. **`pix tag checkout F:\photos\2023 {year}/{event}`** builds `<library-root>/.pix/checkout/` — a folder tree shaped by the template, whose leaves are **hard links** to the library files under `<path>` (here `F:\photos\2023`; see [Scope](#scope) and [Materializing the workspace](#materializing-the-workspace)). A snapshot of the starting state is written to `.pix/checkout/snapshot.json`.
+1. **`pix tag checkout F:\photos\2023 {year}/{event}`** builds `<library-root>/.pix/local/checkout/` — a folder tree shaped by the template, whose leaves are **hard links** to the library files under `<path>` (here `F:\photos\2023`; see [Scope](#scope) and [Materializing the workspace](#materializing-the-workspace)). A snapshot of the starting state is written to `.pix/local/checkout/snapshot.json`.
 2. The user shuffles links between folders in their file explorer (over minutes, hours, or days).
 3. **`pix tag checkout --commit`** diffs the workspace against the snapshot, infers the implied tag changes, shows a plan, and on accept writes the override tags into the files and tears the workspace down. Or **`pix tag checkout --reset`** throws the session away.
 
@@ -38,7 +38,7 @@ Deferred to a later build (separate design, with the "set to nothing" marker if 
 
 ## The freeze — an open checkout locks the library
 
-While a checkout is open — its `.pix/checkout/snapshot.json` is present — **every pix command except `pix tag checkout --commit` and `pix tag checkout --reset` refuses up front**, with:
+While a checkout is open — its `.pix/local/checkout/snapshot.json` is present — **every pix command except `pix tag checkout --commit` and `pix tag checkout --reset` refuses up front**, with:
 
 ```
 A checkout is open (template: {year}/{event}, started 2026-05-28 15:00).
@@ -57,7 +57,7 @@ A checkout link and its library file are two directory entries pointing at the *
 
 Rather than build drift-tolerance (re-identifying orphaned links by content hash, mapping deduped files to surviving keepers), the freeze makes the whole model provably correct: nothing mutates library inodes mid-session, so the snapshot stays valid and commit's identity is exact. The cost — no imports/normalization while a checkout is parked open — is acceptable for a single-user, transient editing session, and `--reset` is the escape hatch.
 
-The freeze is enforced by the **snapshot's presence** (`.pix/checkout/snapshot.json`), not the library lock (the lock lives for one invocation; a checkout session spans many). Each command, after resolving the root, checks for the snapshot and refuses if present. We key on the snapshot rather than the folder so the `.pix/checkout/` folder can persist empty across commit/reset (the workspace path stays put; emptying contents is more robust than removing a folder that may be open in Explorer).
+The freeze is enforced by the **snapshot's presence** (`.pix/local/checkout/snapshot.json`), not the library lock (the lock lives for one invocation; a checkout session spans many). Each command, after resolving the root, checks for the snapshot and refuses if present. We key on the snapshot rather than the folder so the `.pix/local/checkout/` folder can persist empty across commit/reset (the workspace path stays put; emptying contents is more robust than removing a folder that may be open in Explorer).
 
 ## Scope
 
@@ -87,7 +87,7 @@ Unlike organize, checkout does **not** require `pix hash` — identity is by ino
 `pix tag checkout <template>`:
 
 1. **Resolves the library root** by walking up from `<path>` for `.pix/` (like `pix migrate <folder>`), **validates the template** against the [template grammar](tags.md#template-grammar), and **validates the scope** (see [Scope](#scope)).
-2. **Allocates** `<library-root>/.pix/checkout/` (fails if it already exists — one checkout at a time).
+2. **Allocates** `<library-root>/.pix/local/checkout/` (fails if it already exists — one checkout at a time).
 3. **Builds the link tree.** For each library file **under `<path>`**, compute the effective value of each template token, render + sanitize each level to a folder name (identical rules to [organize](organize.md#folder-name-sanitization)), and create a **hard link** at `checkout/<level1>/<level2>/.../<canonical-filename>`. Per-leaf name collisions get the same `_NNN` suffix as organize (cosmetic — identity is not name-based).
 4. **Writes the snapshot** (see below).
 5. Acquires the library lock only **briefly** during materialization, then releases it. The editing session itself is not under the lock; the [freeze](#the-freeze--an-open-checkout-locks-the-library) guards concurrency instead.
@@ -112,7 +112,7 @@ A content-hash fallback (recognizing user-created byte-copies, mapping deduped f
 
 ## The snapshot
 
-Written at checkout time to `.pix/checkout/snapshot.json` — the baseline commit diffs against:
+Written at checkout time to `.pix/local/checkout/snapshot.json` — the baseline commit diffs against:
 
 ```jsonc
 {
@@ -180,7 +180,7 @@ Commit handles this implicitly as part of writing the override change; no separa
 
 `pix tag checkout --commit`:
 
-1. **Acquire the library lock**; load `.pix/checkout/snapshot.json`.
+1. **Acquire the library lock**; load `.pix/local/checkout/snapshot.json`.
 2. **Allocate a run folder** `<library-root>/.pix/runs/<run-id>/` (same shape and id format as migrate's).
 3. **Walk the workspace.** For each leaf link: split its workspace-relative path into level components (mapping each to its token via `template`; a `(null)/` component ⇒ that token is null), and `stat` it to get its `ino`. Collect any links under `(pending-delete)/` separately.
    - **Change detection is name-based.** A token "changed" iff the link's current folder name for that level differs from `sanitize(snapshot value)` — comparing rendered name to rendered name, so a link left untouched in a pix-sanitized folder (e.g. `Birthday_Party`) is *not* a phantom change. The new value is read verbatim from the destination folder name.
@@ -194,7 +194,7 @@ Commit handles this implicitly as part of writing the override change; no separa
 6. **Apply** sequentially. This is migrate's TAG/DELETE machinery verbatim:
    - **TAG** — export the file's current XMP to `runs/<run-id>/data/L<NNN>_<name>.xmp` (conservation capture), then one ExifTool `-overwrite_original` call writing the changed `pix:*` override fields (plus any `*AutoPrevious` reconciliation). Atomicity is ExifTool's own (see [migrate → Example 3](migrate.md#example-3--tag-only)).
    - **DELETE** — move the file → `runs/<run-id>/data/L<NNN>_<name>` (one rename; capture + removal).
-7. **Empty** `.pix/checkout/` (delete the snapshot + unlink the hard links) on a successful apply, **keeping the folder itself** so the workspace path persists. Removing hard links never touches the library files; with the snapshot gone the freeze is lifted.
+7. **Empty** `.pix/local/checkout/` (delete the snapshot + unlink the hard links) on a successful apply, **keeping the folder itself** so the workspace path persists. Removing hard links never touches the library files; with the snapshot gone the freeze is lifted.
 
 `plan.txt` is immutable once written; progress streams to `apply.log`. No markers are needed — TAG and DELETE are each a single atomic step (no CONVERT decomposition).
 
@@ -257,7 +257,7 @@ Commit avoids that needless rehash: for each file it's about to TAG it captures 
 
 ## Reset
 
-`pix tag checkout --reset` empties `.pix/checkout/` (deletes the snapshot + links, **keeping the folder**) and exits. No tags are written, no run folder is allocated, the library is untouched, and — with the snapshot gone — the freeze lifts. It's the throw-away for a checkout the user no longer wants to commit.
+`pix tag checkout --reset` empties `.pix/local/checkout/` (deletes the snapshot + links, **keeping the folder**) and exits. No tags are written, no run folder is allocated, the library is untouched, and — with the snapshot gone — the freeze lifts. It's the throw-away for a checkout the user no longer wants to commit.
 
 ## Face-specific checkout: `{face}` (deferred)
 
@@ -275,7 +275,7 @@ Each face region (see [tags.md](tags.md#structured-metadata-face-regions)) has t
 
 ### Materialized workspace
 
-The checkout renders face crops (hard-linked from the `.pix/faces/` cache) into folders:
+The checkout renders face crops (hard-linked from the `.pix/local/faces/` cache) into folders:
 
 ```
 checkout/

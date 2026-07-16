@@ -3,7 +3,7 @@
 `pix hash <library-root>` populates the **content-hash cache** for every file missing or stale. It does not touch file metadata. It does not invoke ExifTool.
 
 > **Storage note (current code):** the hash now lives in the `hash` column of the
-> shared SQLite store `<library>\.pix\cache.db` (one row per file, keyed by path),
+> shared SQLite store `<library>\.pix\local\cache.db` (one row per file, keyed by path),
 > not a per-file `.hash` sidecar. Validation is unchanged — `(size, mtime_ns)`
 > against the live file — and `computed_at` is no longer stored. The per-file
 > JSON-sidecar details below are historical; see
@@ -107,7 +107,7 @@ A library where every file has a valid cache entry produces an immediate no-op (
 
 ## Concurrency
 
-Acquires the library-wide lock at `<library>\.pix\lock` for the duration of the run. See [README.md → Concurrency](README.md#concurrency).
+Acquires the library-wide lock at `<library>\.pix\local\lock` for the duration of the run. See [README.md → Concurrency](README.md#concurrency).
 
 ## Conservation invariant
 

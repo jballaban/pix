@@ -16,7 +16,7 @@ Language: **Python 3.12+**.
 | Image decode/encode | `Pillow` + `pillow-heif` |
 | Video remux | `ffmpeg` (subprocess; bundled `.exe` or on PATH) — lossless `-c copy` container normalization, never re-encode |
 | Metadata read/write | `ExifTool` (subprocess via `pyexiftool`) — only tool that reliably handles EXIF/XMP/IPTC across photo + video formats including MWG face regions. **Reads:** bulk-extract with `exiftool -j -r -G:1 <folder>` once per migrate, populating an in-memory cache (see [migrate.md → Metadata cache](migrate.md#metadata-cache)). **Writes:** per-file via `-overwrite_original`, using `-stay_open` mode (one long-running ExifTool process per migrate, communicating via stdin/stdout) to avoid the ~200ms-per-spawn overhead. |
-| Format-aware content hash (tier 1) | hand-rolled framing: JPEG → strip APP-marker metadata (APP1/EXIF, APP1/XMP, APP13/IPTC, …) and hash the rest; MP4 / ISO BMFF → parse boxes and hash only the concatenated `mdat` payload(s). Hashed with `blake3` (256-bit, hex-encoded). Stored in the SQLite cache store `.pix/cache.db` by `pix hash` (see [hash.md](hash.md)). |
+| Format-aware content hash (tier 1) | hand-rolled framing: JPEG → strip APP-marker metadata (APP1/EXIF, APP1/XMP, APP13/IPTC, …) and hash the rest; MP4 / ISO BMFF → parse boxes and hash only the concatenated `mdat` payload(s). Hashed with `blake3` (256-bit, hex-encoded). Stored in the SQLite cache store `.pix/local/cache.db` by `pix hash` (see [hash.md](hash.md)). |
 | Perceptual hash (tier 2) | `imagehash` (photos), sampled-frame imagehash (videos) |
 | Face detection + embedding | `insightface` (ONNX-backed) |
 | Identity clustering | `hdbscan` or cosine-similarity threshold |
@@ -90,16 +90,23 @@ Use `\\?\` prefixes on all FS paths.
 
 ## Sync client interaction
 
-`.pix/` must be excluded from any file-sync client (Synology Drive, OneDrive, Dropbox, …). Reasons:
+A pix library is designed to be safely syncable by a file-sync client (Synology Drive, OneDrive, Dropbox, …): the media tree and the durable `.pix/{runs,errors,stash}` data sync normally. The one thing to exclude is **`.pix/local/`**, which groups everything that must not be synced under a single folder (so it takes a single exclude rule):
 
-- `.pix/runs/` holds full file captures from every migrate run — syncing roughly doubles cloud storage per run, and run folders accumulate until the user deletes them.
-- `.pix/checkouts/` contains hard links to library files; some sync clients treat each link as an independent file and re-upload.
-- `.pix/staging/` and `.pix/faces/` are local working state / recreatable cache.
-- `.pix/cache.db` (+ its `-wal`/`-shm`) is the recreatable cache store (below).
+- `cache.db` (+ its `-wal`/`-shm`) — the recreatable cache store (below). A live WAL SQLite copied by a sync client is a corruption/conflict trap, and it's regenerable regardless.
+- `lock` — the library lock; its payload is a machine-local PID, so syncing it invites false locks and conflict-copies across machines.
+- `staging/`, `checkout/`, `faces/` — transient working state / recreatable cache. `checkout/` additionally hard-links library files, which some clients re-upload as independent copies.
+
+**Everything in `.pix/local/` is regenerable or machine-local by design** — losing it costs at most a cache rebuild (re-hash / re-fingerprint), never library data. That's what makes it safe to exclude even if a client's exclude behavior is aggressive. (An *open* checkout is the one thing to close first — commit or reset it — before changing sync rules.)
+
+The durable state stays top-level and may be synced or backed up deliberately: `.pix/runs/` holds full file captures from every migrate run (syncing roughly doubles cloud storage per run — relocate via `runs_dir` if that's too heavy), and `.pix/errors/`, `.pix/stash/` hold only-copy files.
+
+**In Synology Drive Client:** Sync Tasks → select the task → Sync Rules → Selective Sync → deselect `.pix/local` (one entry; no name/extension filters needed). `pix init` creates `.pix/local/` up front so it exists to be deselected *before* the first run.
+
+**Upgrade path.** Libraries created before `.pix/local/` existed fold into the new layout automatically on the next command — `root.ensure_local_layout` moves the workspaces, `cache_db` relocates the DB via a WAL checkpoint + single-file rename (self-healing: the old path keeps working until the move succeeds, so no data loss), and `library_lock` stale-cleans any pre-upgrade lock. A read-only `pix info events` is enough to trigger all of it.
 
 ## Cache store
 
-All derived caches live in one SQLite DB, `<library>/.pix/cache.db` (WAL mode),
+All derived caches live in one SQLite DB, `<library>/.pix/local/cache.db` (WAL mode),
 one row per library file keyed by absolute path: `files(path, size, mtime_ns,
 meta, hash, vfp)`. It replaces the former per-file sidecar tree
 (`.pix/cache/<mirror>.meta`/`.hash`/`.vfp`) — up to three tiny files per media
@@ -126,9 +133,9 @@ see every tag.
 reaps the tree (one-time, idempotent, gated on an `import_done` flag). The
 single-writer library lock serializes writers; WAL allows concurrent readers.
 
-`pix init` prints a one-time reminder to add `.pix` to the sync client's exclude rules. For Synology Drive Client on Windows: **Settings → Sync Rules → Excluded folders → add `.pix`**. The actual library files (outside `.pix/`) sync normally.
+`pix init` prints a one-time reminder to exclude `.pix/local/` from the sync client (see "Sync client interaction" above for the full rationale and the Synology steps). The media tree and the durable `.pix/{runs,errors,stash}` data sync normally.
 
-Empirically verifying the exclude is honored is a deployment-time check, not a design unknown — there are no hard links outside `.pix/` in the design, so the sync client never has to reason about them once the exclude is in place.
+The one remaining sync unknown is not about `.pix/` at all: whether a client recognizes `organize`'s library-wide file **moves** as renames (cheap, server-side move) or re-uploads them (delete + create). This is a per-client, deployment-time question — Synology Drive Client logs a `Locally renamed` action when it recognizes a move, but large batches have been reported to degrade to re-upload, so it's worth measuring at scale before trusting a full-vault reorganize. Hard links exist only under `.pix/local/checkout` (excluded), so once `.pix/local` is excluded the client never has to reason about links.
 
 ## Environment notes
 
