@@ -133,14 +133,13 @@ def _friendly_for(root: Path, info: wpd.DeviceInfo, *, interactive: bool,
     else:
         default = sanitize_component(info.friendly or info.model or serial)
         if interactive:
-            import click  # noqa: PLC0415
             import typer  # noqa: PLC0415
 
             try:
                 answer = typer.prompt(
                     f"New device (serial {serial}). Name it", default=default
                 )
-            except (click.exceptions.Abort, EOFError):
+            except (typer.Abort, EOFError):
                 answer = default  # stdin reported a TTY but can't be read
             friendly = sanitize_component(answer or default)
         else:
