@@ -273,26 +273,37 @@ downloads agree + the on-disk file reads back equal to what we received.**
   overwrite the landed file and mark `VERIFIED`. Two reads **disagree** → flaky;
   re-download to break the tie (two that agree win), up to the attempt cap.
 
-**The loop.** One traversal is the drain-as-you-go DFS above. A traversal is
-**dirty** if it downloaded anything — a new pull *or* a verify re-pull. After a
-full traversal, **if dirty, traverse again**; a fully clean traversal (nothing new
-enumerated, nothing left to verify) ends the run — which is exactly "no new files
-*and* everything verified," reached naturally. One mechanism, three jobs:
+**The loop — download-first, verify-last (two phases).** To get bytes off the
+device as fast as possible (and to make an interrupted run maximise *new*
+downloads before spending a second transfer on verification), the run is two
+phases, each its own dirty-loop of drain-as-you-go DFS traversals:
 
-- **discovery** — re-enumerating catches objects MTP **lazily reveals** on a later
-  pass (observed: the first sweep can under-report);
-- **verification** — the second (and if needed third) independent read per object;
-- **resume** — an interrupted run just re-traverses; on-disk state is
-  self-describing (see [Landing](#landing--tracking)): a landed file **with** a
-  sidecar is `VERIFIED` (skip), **without** one is `DOWNLOADED` (only re-verified,
-  never re-pulled as new), and a temp `*.__*` is discarded. The expensive first
-  download is never repeated, and verified files aren't re-verified.
+- **Phase A — download.** Traverse and download every `NEW` file. A file that's
+  already `DOWNLOADED` but unverified is **deferred** (skipped, *not* verified
+  yet); verified/known files are skipped. Loop until a full traversal downloads
+  nothing new (so lazy-revealed new files are still caught — the first sweep can
+  under-report).
+- **Phase B — verify.** Traverse and verify every deferred `DOWNLOADED` file
+  (writing its sidecar → `VERIFIED`). Loop until a full traversal does nothing.
+  A new file revealed only now is still downloaded here and verified on the next
+  Phase-B pass.
+
+A traversal is **dirty** if it did transfer work (a download, or a verify
+re-pull). One mechanism, three jobs: **discovery** (re-enumeration catches MTP's
+lazily-revealed objects), **verification** (the deferred second read), and
+**resume** — an interrupted run just re-runs: on-disk state is self-describing
+(see [Landing](#landing--tracking)) — a landed file **with** a sidecar is
+`VERIFIED` (skip), **without** one is `DOWNLOADED` (deferred in Phase A, verified
+in Phase B, never re-pulled as new), and a temp `*.__*` is discarded. So a second
+run first finishes any outstanding **new** downloads, and only then verifies.
 
 **Accepted cost.** Verify re-downloads every object → the run moves ~**2× the
-bytes** over the ~40 MB/s pipe. This is the deliberate price of device→disk
-confidence; enumeration is *not* extra (each pass enumerates once, for discovery,
-and verification piggybacks on that same walk). Progress counts verify re-pulls
-**separately** from `downloaded` so the numerator isn't inflated.
+bytes** over the ~40 MB/s pipe — the deliberate price of device→disk confidence.
+The two-phase split adds enumeration sweeps (Phase A until new-dry, then Phase B
+until verify-dry), but only the **first** sweep is slow: WPD warm-caches object
+metadata, so subsequent sweeps are cheap (measured ~27 obj/s cold vs thousands/s
+warm). Progress names the current row's action (download/verify/skip/defer) and
+throttles console writes (~100 ms), so it's readable without a write per file.
 
 **Termination is file-level, not loop-level.** Each object carries an attempt
 counter; when it exceeds **N (=3)** (size mismatch, read-back failure, or two reads

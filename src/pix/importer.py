@@ -398,13 +398,19 @@ def _import_loop(info: wpd.DeviceInfo, friendly: str, landing: Path,
         ):
             progress.begin(f"import {friendly}")
 
-            def act(obj: wpd.WpdObject, device_path: str) -> bool:
-                """Handle one file object; return True if it caused a download.
+            def act(obj: wpd.WpdObject, device_path: str, verify_phase: bool) -> bool:
+                """Handle one file object; return True if it did transfer work.
 
-                The live line shows the action on the current row ("skipped <path>",
-                or a download/verify's own per-file line). Updates run per file but
-                LiveProgress throttles actual console writes (~100ms), so a big tree
-                of skips stays responsive without a write per file.
+                Two-phase: download-first, verify-last. In the download phase a
+                DOWNLOADED-but-unverified file is **deferred** (not verified yet), so
+                an interrupted run always maximises new downloads before spending a
+                second transfer on verification. The verify phase does the deferred
+                verifications (and picks up any late-revealed new file).
+
+                The live line names the current row's action ("skipped"/"defer"/
+                a download or verify's own per-file line). Updates run per file but
+                LiveProgress throttles console writes (~100ms), so a big tree stays
+                responsive without a write per file.
                 """
                 key = _skip_key(obj)
                 if _is_skippable_companion(obj):
@@ -422,7 +428,11 @@ def _import_loop(info: wpd.DeviceInfo, friendly: str, landing: Path,
                     skipped_keys.add(key)
                     return False
                 try:
-                    if landed.exists():  # DOWNLOADED straggler → verify
+                    if landed.exists():  # DOWNLOADED, awaiting verification
+                        if not verify_phase:
+                            progress.begin("defer", device_path)  # verify later
+                            skipped_keys.add(key)
+                            return False
                         status = _verify(dev, obj, landed, device_path, info, manifest,
                                          key, attempts, failed_keys, summary, progress,
                                          log, active)
@@ -443,18 +453,26 @@ def _import_loop(info: wpd.DeviceInfo, friendly: str, landing: Path,
                     _fail(obj, key, device_path, attempts, failed_keys, summary, log, str(e))
                     return False
 
-            for pass_no in range(1, _MAX_PASSES + 1):
-                summary.passes = pass_no
-                try:
-                    dirty = _traverse(dev, wpd.DEVICE_ROOT, "", act)
-                except DeviceLost:
-                    raise
-                except Exception as e:  # enumeration failed — device gone?
-                    if not _alive(dev):
-                        raise DeviceLost("enumeration") from e
-                    raise
-                if not dirty:
-                    break
+            def run_phase(verify_phase: bool) -> None:
+                """Loop full traversals until one does no transfer work."""
+                for _ in range(_MAX_PASSES):
+                    summary.passes += 1
+                    try:
+                        dirty = _traverse(
+                            dev, wpd.DEVICE_ROOT, "",
+                            lambda o, p: act(o, p, verify_phase),
+                        )
+                    except DeviceLost:
+                        raise
+                    except Exception as e:  # enumeration failed — device gone?
+                        if not _alive(dev):
+                            raise DeviceLost("enumeration") from e
+                        raise
+                    if not dirty:
+                        return
+
+            run_phase(verify_phase=False)  # Phase A: download every new file
+            run_phase(verify_phase=True)   # Phase B: verify the deferred ones
     except DeviceLost as e:
         summary.device_lost = True
         _log(log, "DISCONNECT", str(e), detail="device lost; re-run to resume")
