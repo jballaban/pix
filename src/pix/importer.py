@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, IO, cast
 
@@ -54,6 +55,7 @@ class ImportSummary:
     failed: list[str] = field(default_factory=lambda: [])
     bytes_downloaded: int = 0
     passes: int = 0
+    apply_log: Path | None = None
 
 
 class ImportError_(Exception):
@@ -254,9 +256,15 @@ def run_import(
     device: str | None = None,
     name: str | None = None,
     dry_run: bool = False,
-    log: IO[str] | None = None,
+    runs_base: Path | None = None,
 ) -> ImportSummary:
-    """Select a device and land its camera roll, verified, under `.pix/local/import/`."""
+    """Select a device and land its camera roll, verified, under `.pix/local/import/`.
+
+    Device selection and naming happen **before** any run folder is created, so a
+    no/multiple/unknown-device error leaves no empty run folder behind. When
+    `runs_base` is given, the run folder + `apply.log` are created only once a
+    device is settled (its path is returned on `summary.apply_log`).
+    """
     try:
         devices = wpd.list_devices()
     except wpd.WpdUnavailable as e:
@@ -272,9 +280,28 @@ def run_import(
         _dry_run(info, landing, summary)
         return summary
 
+    # Only now — a device is selected and named — create the run folder + log.
     landing.mkdir(parents=True, exist_ok=True)
+    log: IO[str] | None = None
+    if runs_base is not None:
+        run_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        runs_dir = runs_base / run_id
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        summary.apply_log = runs_dir / "apply.log"
+        log = summary.apply_log.open("a", encoding="utf-8")
+    try:
+        _import_loop(info, friendly, landing, summary, log)
+    finally:
+        if log is not None:
+            log.close()
+    return summary
+
+
+def _import_loop(info: wpd.DeviceInfo, friendly: str, landing: Path,
+                 summary: ImportSummary, log: IO[str] | None) -> None:
+    """The drain-as-you-go DFS + dirty re-loop (run folder already set up)."""
     swept = _sweep_temps(landing)
-    if swept and log is not None:
+    if swept:
         _log(log, "sweep", f"removed {swept} stale temp(s)")
 
     manifest = _scan_manifest(landing)
@@ -482,8 +509,6 @@ def _log(log: IO[str] | None, state: str, path: str,
          detail: str | None = None, *, size: int | None = None) -> None:
     if log is None:
         return
-    from datetime import datetime  # noqa: PLC0415
-
     ts = datetime.now().isoformat(timespec="milliseconds")
     extra = f"  [size={size}]" if size is not None else ""
     tail = f" : {detail}" if detail else ""

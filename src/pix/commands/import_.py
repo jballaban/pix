@@ -8,7 +8,6 @@ spec/import.md → Ingestion seam). Runs under the library write lock.
 
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 
 import typer
@@ -66,16 +65,13 @@ def import_library(
 
 def _run(root: Path, *, device: str | None, name: str | None) -> None:
     config = Config.load(settings_path(root))
-    run_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    runs_dir = config.runs_base(root) / run_id
-    runs_dir.mkdir(parents=True, exist_ok=True)
-    apply_log = runs_dir / "apply.log"
-
-    try:
-        with apply_log.open("a", encoding="utf-8") as log:
-            summary = run_import(root, device=device, name=name, log=log)
-    finally:
-        typer.echo(f"Log: {apply_log}")
+    # run_import creates the run folder only after a device is selected+named, so
+    # a selection error leaves no empty run folder behind.
+    summary = run_import(
+        root, device=device, name=name, runs_base=config.runs_base(root)
+    )
+    if summary.apply_log is not None:
+        typer.echo(f"Log: {summary.apply_log}")
 
     typer.echo("")
     typer.echo(
