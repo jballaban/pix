@@ -228,8 +228,30 @@ def _sweep_temps(landing: Path) -> int:
 
 
 # --- device selection --------------------------------------------------------
-def _select_device(devices: list[wpd.DeviceInfo], selector: str | None
-                   ) -> wpd.DeviceInfo:
+class NeedsDeviceChoice(Exception):
+    """Internal signal: the caller must pick a device (prompt, or require --device).
+
+    Carries the devices to choose among.
+    """
+
+    def __init__(self, devices: list[wpd.DeviceInfo]) -> None:
+        super().__init__("device choice required")
+        self.devices = devices
+
+
+def _describe(d: wpd.DeviceInfo) -> str:
+    return f"{d.friendly or d.model or '?'} (serial {d.serial})"
+
+
+def _select_device(devices: list[wpd.DeviceInfo], selector: str | None,
+                   known: frozenset[str] | set[str] = frozenset()) -> wpd.DeviceInfo:
+    """Pick the import source, registry-driven.
+
+    `--device` matches by serial/name substring (power-user override). Otherwise:
+    a lone connected device (nothing to choose) or exactly one **known** device
+    (in `.pix/devices.yaml`) is auto-selected; zero-or-multiple known among
+    several devices raises `NeedsDeviceChoice` so the caller can prompt a picker.
+    """
     if selector:
         s = selector.lower()
         matches = [
@@ -243,20 +265,35 @@ def _select_device(devices: list[wpd.DeviceInfo], selector: str | None
         if len(matches) > 1:
             raise ImportError_(
                 f"--device {selector!r} is ambiguous: "
-                + ", ".join(d.friendly or d.device_id for d in matches)
+                + ", ".join(_describe(d) for d in matches)
             )
         return matches[0]
+
     if not devices:
         raise ImportError_("no portable devices connected.")
-    if len(devices) > 1:
-        listing = "\n".join(
-            f"  - {d.friendly or d.model or '?'} (serial {d.serial})"
-            for d in devices
+    if len(devices) == 1:
+        return devices[0]
+    known_connected = [d for d in devices if d.serial in known]
+    if len(known_connected) == 1:
+        return known_connected[0]
+    raise NeedsDeviceChoice(devices)
+
+
+def _prompt_device_choice(devices: list[wpd.DeviceInfo]) -> wpd.DeviceInfo:
+    """Interactive numbered picker over connected devices."""
+    import click  # noqa: PLC0415
+    import typer  # noqa: PLC0415
+
+    typer.echo("Select a device to import from:")
+    for i, d in enumerate(devices, start=1):
+        typer.echo(f"  [{i}] {_describe(d)}")
+    try:
+        choice: int = click.prompt(
+            "Device number", type=click.IntRange(1, len(devices))
         )
-        raise ImportError_(
-            "multiple devices connected; pass --device <name-or-serial>:\n" + listing
-        )
-    return devices[0]
+    except (click.exceptions.Abort, EOFError) as e:
+        raise ImportError_("no device selected.") from e
+    return devices[choice - 1]
 
 
 # --- the loop ----------------------------------------------------------------
@@ -280,8 +317,18 @@ def run_import(
     except wpd.WpdUnavailable as e:
         raise ImportError_(str(e)) from e
 
-    info = _select_device(devices, device)
     interactive = sys.stdin.isatty() and sys.stdout.isatty() and not dry_run
+    try:
+        info = _select_device(devices, device, known=set(_load_registry(root)))
+    except NeedsDeviceChoice as e:
+        if interactive:
+            info = _prompt_device_choice(e.devices)
+        else:
+            listing = "\n".join(f"  - {_describe(d)}" for d in e.devices)
+            raise ImportError_(
+                "more than one device connected and not exactly one known; "
+                "pass --device <name-or-serial>:\n" + listing
+            ) from e
     friendly = _friendly_for(root, info, interactive=interactive, name=name)
     landing = local_dir(root) / "import" / friendly
     summary = ImportSummary(device=info, landing=landing)
@@ -383,7 +430,6 @@ def _import_loop(info: wpd.DeviceInfo, friendly: str, landing: Path,
     # A file downloaded/verified this run isn't "skipped" even if a later clean
     # pass re-encountered it after its sidecar landed.
     summary.skipped = len(skipped_keys - downloaded_keys - verified_keys)
-    return summary
 
 
 def _traverse(dev: wpd.Device, parent_id: str, rel: str,

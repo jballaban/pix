@@ -346,8 +346,12 @@ fail/hard-warn only on the detectable format-mismatch case.
 `pix import <path>` — resolve the library from `<path>`, take the library lock,
 and land the selected device's camera roll under `.pix/local/import/<device>/`.
 
-- Auto-selects the sole connected device; with more than one, `--device
-  <serial-or-name-substring>` picks it (else it errors, listing them).
+- **Device selection is registry-driven.** A lone connected device, or exactly
+  one **known** device (previously named, in `.pix/devices.yaml`), is
+  auto-selected. Otherwise — multiple known, or none known among several — pix
+  **prompts a numbered picker** when interactive; non-interactively it exits
+  listing the devices and asking for `--device <serial-or-name-substring>`.
+  `--device` always overrides (matches serial/friendly/model substring).
 - Unknown serial → **prompt** for a friendly name (TTY only; a stdin that can't
   be read falls back to the WPD name instead of hanging). `--name <friendly>`
   assigns it without prompting. Names persist in `.pix/devices.yaml` and are

@@ -28,8 +28,15 @@ def _obj(**kw: object) -> WpdObject:
 
 def _dev(serial: str = "SER1", friendly: str = "iPhone") -> DeviceInfo:
     return DeviceInfo(
-        device_id=f"\\\\?\\usb#{serial}", manufacturer="Apple Inc.",
+        device_id=f"\\\\?\\usb#vid_05ac&pid_12a8#{serial}", manufacturer="Apple Inc.",
         model="Apple iPhone", serial=serial, friendly=friendly,
+    )
+
+
+def _reader(serial: str = "20070818") -> DeviceInfo:
+    return DeviceInfo(
+        device_id=f"\\\\?\\swd#wpdbusenum#_??_usbstor#disk&ven_generic-&prod_multi-card#{serial}",
+        manufacturer="Generic-", model="Multi-Card", serial=serial, friendly="E:\\",
     )
 
 
@@ -129,9 +136,46 @@ def test_select_none_connected() -> None:
         importer._select_device([], None)
 
 
-def test_select_multiple_requires_selector() -> None:
-    with pytest.raises(ImportError_, match="multiple devices"):
-        importer._select_device([_dev("A"), _dev("B", "Pixel")], None)
+def test_lone_device_auto_selected_even_if_unknown() -> None:
+    d = _dev("SER1")
+    assert importer._select_device([d], None, known=set()) is d
+
+
+def test_one_known_among_several_auto_selected() -> None:
+    phone, reader = _dev("SER1", "Apple iPhone"), _reader()
+    got = importer._select_device([phone, reader], None, known={"SER1"})
+    assert got.serial == "SER1"
+
+
+def test_zero_known_among_several_needs_choice() -> None:
+    with pytest.raises(importer.NeedsDeviceChoice) as ei:
+        importer._select_device([_dev("A"), _reader()], None, known=set())
+    assert len(ei.value.devices) == 2
+
+
+def test_multiple_known_needs_choice() -> None:
+    with pytest.raises(importer.NeedsDeviceChoice):
+        importer._select_device([_dev("A"), _dev("B", "Pixel")], None,
+                                known={"A", "B"})
+
+
+def test_prompt_device_choice_returns_selection(monkeypatch: "pytest.MonkeyPatch") -> None:
+    import click
+
+    monkeypatch.setattr(click, "prompt", lambda *a, **k: 2)
+    devs = [_dev("A", "iPhone"), _dev("B", "Pixel")]
+    assert importer._prompt_device_choice(devs) is devs[1]
+
+
+def test_prompt_device_choice_abort_raises(monkeypatch: "pytest.MonkeyPatch") -> None:
+    import click
+
+    def boom(*a: object, **k: object) -> object:
+        raise click.exceptions.Abort()
+
+    monkeypatch.setattr(click, "prompt", boom)
+    with pytest.raises(ImportError_, match="no device selected"):
+        importer._prompt_device_choice([_dev("A"), _dev("B", "Pixel")])
 
 
 def test_select_by_serial_substring() -> None:
