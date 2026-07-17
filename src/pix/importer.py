@@ -280,20 +280,28 @@ def _select_device(devices: list[wpd.DeviceInfo], selector: str | None,
 
 
 def _prompt_device_choice(devices: list[wpd.DeviceInfo]) -> wpd.DeviceInfo:
-    """Interactive numbered picker over connected devices."""
-    import click  # noqa: PLC0415
+    """Interactive numbered picker over connected devices.
+
+    Reads via the builtin `input()` (not click.prompt) to keep the console
+    interaction minimal and portable. Raises `ImportError_` on EOF / Ctrl-C /
+    repeated invalid input; the caller downgrades any failure to the
+    non-interactive "pass --device" guidance.
+    """
     import typer  # noqa: PLC0415
 
     typer.echo("Select a device to import from:")
     for i, d in enumerate(devices, start=1):
         typer.echo(f"  [{i}] {_describe(d)}")
-    try:
-        choice: int = click.prompt(
-            "Device number", type=click.IntRange(1, len(devices))
-        )
-    except (click.exceptions.Abort, EOFError) as e:
-        raise ImportError_("no device selected.") from e
-    return devices[choice - 1]
+    for _ in range(5):
+        typer.echo(f"Device number [1-{len(devices)}]: ", nl=False)
+        try:
+            raw = input().strip()
+        except (EOFError, KeyboardInterrupt) as e:
+            raise ImportError_("no device selected.") from e
+        if raw.isdigit() and 1 <= int(raw) <= len(devices):
+            return devices[int(raw) - 1]
+        typer.echo(f"  not a valid choice; enter 1-{len(devices)}.")
+    raise ImportError_("no valid device selection after several attempts.")
 
 
 # --- the loop ----------------------------------------------------------------
@@ -321,14 +329,23 @@ def run_import(
     try:
         info = _select_device(devices, device, known=set(_load_registry(root)))
     except NeedsDeviceChoice as e:
-        if interactive:
-            info = _prompt_device_choice(e.devices)
-        else:
-            listing = "\n".join(f"  - {_describe(d)}" for d in e.devices)
+        listing = "\n".join(f"  - {_describe(d)}" for d in e.devices)
+        base = "pass --device <name-or-serial>:\n" + listing
+        if not interactive:
             raise ImportError_(
-                "more than one device connected and not exactly one known; "
-                "pass --device <name-or-serial>:\n" + listing
+                "more than one device connected and not exactly one known; " + base
             ) from e
+        try:
+            info = _prompt_device_choice(e.devices)
+        except ImportError_:
+            # user made no selection (declined / EOF)
+            raise ImportError_("no device selected; " + base) from None
+        except Exception as pe:  # noqa: BLE001 — picker unusable in this terminal
+            # Don't crash: fall back to the non-interactive guidance, surfacing
+            # the underlying cause so it can be diagnosed/reported.
+            raise ImportError_(
+                f"interactive device picker unavailable ({pe!r}); " + base
+            ) from pe
     friendly = _friendly_for(root, info, interactive=interactive, name=name)
     landing = local_dir(root) / "import" / friendly
     summary = ImportSummary(device=info, landing=landing)

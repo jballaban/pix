@@ -160,20 +160,23 @@ def test_multiple_known_needs_choice() -> None:
 
 
 def test_prompt_device_choice_returns_selection(monkeypatch: "pytest.MonkeyPatch") -> None:
-    import click
-
-    monkeypatch.setattr(click, "prompt", lambda *a, **k: 2)
+    monkeypatch.setattr("builtins.input", lambda: "2")
     devs = [_dev("A", "iPhone"), _dev("B", "Pixel")]
     assert importer._prompt_device_choice(devs) is devs[1]
 
 
-def test_prompt_device_choice_abort_raises(monkeypatch: "pytest.MonkeyPatch") -> None:
-    import click
+def test_prompt_device_choice_retries_then_selects(monkeypatch: "pytest.MonkeyPatch") -> None:
+    answers = iter(["", "99", "1"])
+    monkeypatch.setattr("builtins.input", lambda: next(answers))
+    devs = [_dev("A", "iPhone"), _dev("B", "Pixel")]
+    assert importer._prompt_device_choice(devs) is devs[0]
 
-    def boom(*a: object, **k: object) -> object:
-        raise click.exceptions.Abort()
 
-    monkeypatch.setattr(click, "prompt", boom)
+def test_prompt_device_choice_eof_raises(monkeypatch: "pytest.MonkeyPatch") -> None:
+    def boom() -> str:
+        raise EOFError()
+
+    monkeypatch.setattr("builtins.input", boom)
     with pytest.raises(ImportError_, match="no device selected"):
         importer._prompt_device_choice([_dev("A"), _dev("B", "Pixel")])
 
