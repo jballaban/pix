@@ -256,6 +256,38 @@ def test_name_flag_sanitized(tmp_path: Path) -> None:
     assert got == "a_b_c"
 
 
+# --- per-file transfer progress ----------------------------------------------
+def test_active_transfer_percent_bytes_and_timer(monkeypatch: "pytest.MonkeyPatch") -> None:
+    a = importer._ActiveTransfer()
+    assert a.render() is None  # nothing active
+
+    clock = [1000.0]
+    monkeypatch.setattr(importer.time, "monotonic", lambda: clock[0])
+    a.begin("download", "IMG.MOV", 200)
+    a.advance(50)
+    body = a.render()
+    assert body is not None
+    assert "download IMG.MOV" in body
+    assert "25%" in body
+    assert "[" not in body  # <1s elapsed → no per-file timer yet
+
+    clock[0] = 1002.5  # 2.5s elapsed
+    assert "[" in (a.render() or "")  # per-file timer now shown
+
+    a.clear()
+    assert a.render() is None
+
+
+def test_active_transfer_no_total_shows_bytes(monkeypatch: "pytest.MonkeyPatch") -> None:
+    a = importer._ActiveTransfer()
+    monkeypatch.setattr(importer.time, "monotonic", lambda: 5.0)
+    a.begin("download", "X", None)  # size unknown
+    a.advance(1_500_000)
+    body = a.render() or ""
+    assert "%" not in body  # no percentage without a known total
+    assert "download X" in body
+
+
 # --- liveness probe ----------------------------------------------------------
 def test_alive_true_when_info_ok() -> None:
     class FakeDev:

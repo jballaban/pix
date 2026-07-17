@@ -16,6 +16,7 @@ file-level: an object that fails N times is `FAILED`, reported, and skipped.
 from __future__ import annotations
 
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -25,6 +26,7 @@ import yaml
 from blake3 import blake3
 
 from pix import wpd
+from pix.duration import format_duration_compact, format_size
 from pix.markers import IMPORT_TMP_SUFFIX
 from pix.progress import LiveProgress
 from pix.root import local_dir
@@ -387,8 +389,12 @@ def _import_loop(info: wpd.DeviceInfo, friendly: str, landing: Path,
     verified_keys: set[tuple[str, int | None]] = set()
     skipped_keys: set[tuple[str, int | None]] = set()
 
+    active = _ActiveTransfer()
     try:
-        with wpd.open_device(info.device_id) as dev, LiveProgress() as progress:
+        with (
+            wpd.open_device(info.device_id) as dev,
+            LiveProgress(status_provider=active.render) as progress,
+        ):
             progress.begin(f"import {friendly}")
 
             def act(obj: wpd.WpdObject, device_path: str) -> bool:
@@ -409,13 +415,15 @@ def _import_loop(info: wpd.DeviceInfo, friendly: str, landing: Path,
                 try:
                     if landed.exists():  # DOWNLOADED straggler → verify
                         status = _verify(dev, obj, landed, device_path, info, manifest,
-                                         key, attempts, failed_keys, summary, progress, log)
+                                         key, attempts, failed_keys, summary, progress,
+                                         log, active)
                         if status == "verified":
                             verified_keys.add(key)
                         elif status == "redownloaded":
                             downloaded_keys.add(key)
                         return True
-                    _download(dev, obj, landed, summary, progress, log, device_path)
+                    _download(dev, obj, landed, summary, progress, log, device_path,
+                              active)
                     downloaded_keys.add(key)
                     return True
                 except DeviceLost:
@@ -482,20 +490,69 @@ def _landing_path(landing: Path, device_path: str, used: dict[Path, str],
     return landed
 
 
+class _ActiveTransfer:
+    """Mutable per-file transfer state backing the live status line.
+
+    Shared with LiveProgress via `status_provider=render`, so the current file's
+    %, bytes, and its own elapsed timer are recomputed on every render — including
+    the 1s background tick, so the per-file timer keeps climbing even if a read
+    stalls (that's how a stuck transfer shows up). The size is known up front
+    (`WPD_OBJECT_SIZE`), so a real percentage is available.
+    """
+
+    def __init__(self) -> None:
+        self._verb = ""
+        self._name = ""
+        self._done = 0
+        self._total: int | None = None
+        self._start = 0.0
+        self._active = False
+
+    def begin(self, verb: str, name: str, total: int | None) -> None:
+        self._verb, self._name, self._total = verb, name, total
+        self._done, self._start, self._active = 0, time.monotonic(), True
+
+    def advance(self, n: int) -> None:
+        self._done += n
+
+    def clear(self) -> None:
+        self._active = False
+
+    def render(self) -> str | None:
+        if not self._active:
+            return None
+        parts = [f"{self._verb} {self._name}"]
+        if self._total:
+            parts.append(f"{self._done * 100 // self._total:>3}%")
+            parts.append(f"{format_size(self._done)}/{format_size(self._total)}")
+        else:
+            parts.append(format_size(self._done))
+        elapsed = time.monotonic() - self._start
+        if elapsed >= 1.0:  # per-file timer, only once it's worth showing
+            parts.append(f"[{format_duration_compact(elapsed)}]")
+        return "  ".join(parts)
+
+
 def _download(dev: wpd.Device, obj: wpd.WpdObject, landed: Path,
               summary: ImportSummary, progress: LiveProgress,
-              log: IO[str] | None, device_path: str) -> None:
+              log: IO[str] | None, device_path: str,
+              active: _ActiveTransfer) -> None:
     """Stream to temp, verify size + read-back, atomic-rename to final (DOWNLOADED)."""
     landed.parent.mkdir(parents=True, exist_ok=True)
     tmp = landed.with_name(landed.name + IMPORT_TMP_SUFFIX)
     progress.begin("download", device_path)
+    active.begin("download", obj.filename, obj.size)
     hasher = blake3()
     total = 0
-    with tmp.open("wb") as f:
-        for block in dev.stream(obj.id, _CHUNK):
-            f.write(block)
-            hasher.update(block)
-            total += len(block)
+    try:
+        with tmp.open("wb") as f:
+            for block in dev.stream(obj.id, _CHUNK):
+                f.write(block)
+                hasher.update(block)
+                total += len(block)
+                active.advance(len(block))
+    finally:
+        active.clear()
     if obj.size is not None and total != obj.size:
         tmp.unlink(missing_ok=True)
         raise OSError(f"size mismatch: read {total}, expected {obj.size}")
@@ -511,7 +568,8 @@ def _verify(dev: wpd.Device, obj: wpd.WpdObject, landed: Path, device_path: str,
             info: wpd.DeviceInfo, manifest: set[tuple[str, int | None]],
             key: tuple[str, int | None], attempts: dict[tuple[str, int | None], int],
             failed: set[tuple[str, int | None]], summary: ImportSummary,
-            progress: LiveProgress, log: IO[str] | None) -> str:
+            progress: LiveProgress, log: IO[str] | None,
+            active: _ActiveTransfer) -> str:
     """Re-read from device and compare to the landed file; commit sidecar on match.
 
     Returns "verified", "redownloaded" (size changed → fresh pull, verify later),
@@ -520,19 +578,19 @@ def _verify(dev: wpd.Device, obj: wpd.WpdObject, landed: Path, device_path: str,
     progress.begin("verify", device_path)
     # Cheap size pre-check: a changed on-device size ⇒ re-download fresh.
     if obj.size is not None and landed.stat().st_size != obj.size:
-        _download(dev, obj, landed, summary, progress, log, device_path)
+        _download(dev, obj, landed, summary, progress, log, device_path, active)
         return "redownloaded"
     disk = _hash_file(landed)
-    dev_hash = _hash_stream(dev, obj.id)
+    dev_hash = _hash_stream(dev, obj.id, active, obj.filename, obj.size)
     if dev_hash == disk:
         _write_sidecar(landed, info, obj, device_path)
         manifest.add(key)
         _log(log, "VERIFIED", device_path)
         return "verified"
     # Disagreement: adjudicate with a third read.
-    dev_hash2 = _hash_stream(dev, obj.id)
+    dev_hash2 = _hash_stream(dev, obj.id, active, obj.filename, obj.size)
     if dev_hash == dev_hash2:  # two device reads agree, disk differs → device wins
-        _download(dev, obj, landed, summary, progress, log, device_path)
+        _download(dev, obj, landed, summary, progress, log, device_path, active)
         _write_sidecar(landed, info, obj, device_path)
         manifest.add(key)
         _log(log, "VERIFIED", device_path, detail="device-wins overwrite")
@@ -599,10 +657,20 @@ def _hash_file(path: Path) -> str:
     return hasher.hexdigest()
 
 
-def _hash_stream(dev: wpd.Device, obj_id: str) -> str:
+def _hash_stream(dev: wpd.Device, obj_id: str,
+                 active: "_ActiveTransfer | None" = None,
+                 name: str = "", total: int | None = None) -> str:
     hasher = blake3()
-    for block in dev.stream(obj_id, _CHUNK):
-        hasher.update(block)
+    if active is not None:
+        active.begin("verify", name, total)
+    try:
+        for block in dev.stream(obj_id, _CHUNK):
+            hasher.update(block)
+            if active is not None:
+                active.advance(len(block))
+    finally:
+        if active is not None:
+            active.clear()
     return hasher.hexdigest()
 
 
