@@ -257,7 +257,7 @@ def test_name_flag_sanitized(tmp_path: Path) -> None:
 
 
 # --- per-file transfer progress ----------------------------------------------
-def test_active_transfer_percent_bytes_and_timer(monkeypatch: "pytest.MonkeyPatch") -> None:
+def test_active_transfer_percent_and_timer(monkeypatch: "pytest.MonkeyPatch") -> None:
     a = importer._ActiveTransfer()
     assert a.render() is None  # nothing active
 
@@ -269,6 +269,7 @@ def test_active_transfer_percent_bytes_and_timer(monkeypatch: "pytest.MonkeyPatc
     assert body is not None
     assert "download IMG.MOV" in body
     assert "25%" in body
+    assert "/" not in body and "MB" not in body  # no byte counter
     assert "[" not in body  # <1s elapsed → no per-file timer yet
 
     clock[0] = 1002.5  # 2.5s elapsed
@@ -278,14 +279,13 @@ def test_active_transfer_percent_bytes_and_timer(monkeypatch: "pytest.MonkeyPatc
     assert a.render() is None
 
 
-def test_active_transfer_no_total_shows_bytes(monkeypatch: "pytest.MonkeyPatch") -> None:
+def test_active_transfer_no_total_shows_no_percent(monkeypatch: "pytest.MonkeyPatch") -> None:
     a = importer._ActiveTransfer()
     monkeypatch.setattr(importer.time, "monotonic", lambda: 5.0)
     a.begin("download", "X", None)  # size unknown
     a.advance(1_500_000)
     body = a.render() or ""
-    assert "%" not in body  # no percentage without a known total
-    assert "download X" in body
+    assert body == "download X"  # just verb + name; no %, no byte counter
 
 
 # --- liveness probe ----------------------------------------------------------

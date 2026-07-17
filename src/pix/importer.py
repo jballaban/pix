@@ -26,7 +26,7 @@ import yaml
 from blake3 import blake3
 
 from pix import wpd
-from pix.duration import format_duration_compact, format_size
+from pix.duration import format_duration_compact
 from pix.markers import IMPORT_TMP_SUFFIX
 from pix.progress import LiveProgress
 from pix.root import local_dir
@@ -494,10 +494,10 @@ class _ActiveTransfer:
     """Mutable per-file transfer state backing the live status line.
 
     Shared with LiveProgress via `status_provider=render`, so the current file's
-    %, bytes, and its own elapsed timer are recomputed on every render — including
-    the 1s background tick, so the per-file timer keeps climbing even if a read
-    stalls (that's how a stuck transfer shows up). The size is known up front
-    (`WPD_OBJECT_SIZE`), so a real percentage is available.
+    percentage and its own elapsed timer are recomputed on every render —
+    including the 1s background tick, so the per-file timer keeps climbing even if
+    a read stalls (that's how a stuck transfer shows up). The size is known up
+    front (`WPD_OBJECT_SIZE`), so a real percentage is available.
     """
 
     def __init__(self) -> None:
@@ -524,9 +524,6 @@ class _ActiveTransfer:
         parts = [f"{self._verb} {self._name}"]
         if self._total:
             parts.append(f"{self._done * 100 // self._total:>3}%")
-            parts.append(f"{format_size(self._done)}/{format_size(self._total)}")
-        else:
-            parts.append(format_size(self._done))
         elapsed = time.monotonic() - self._start
         if elapsed >= 1.0:  # per-file timer, only once it's worth showing
             parts.append(f"[{format_duration_compact(elapsed)}]")
