@@ -288,6 +288,27 @@ def test_active_transfer_no_total_shows_no_percent(monkeypatch: "pytest.MonkeyPa
     assert body == "download X"  # just verb + name; no %, no byte counter
 
 
+def test_active_transfer_begin_resets_done_no_stale_percent(monkeypatch: "pytest.MonkeyPatch") -> None:
+    # Guards the 5000% bug: a new small file must not show the previous large
+    # file's byte count. begin() resets done under the lock.
+    a = importer._ActiveTransfer()
+    monkeypatch.setattr(importer.time, "monotonic", lambda: 0.0)
+    a.begin("download", "BIG.MOV", 250_000_000)
+    a.advance(250_000_000)  # 100% of the big file
+    a.begin("download", "SMALL.JPG", 5_000_000)  # switch to a small file
+    body = a.render() or ""
+    assert "0%" in body
+    assert "5000%" not in body
+
+
+def test_active_transfer_percent_clamped(monkeypatch: "pytest.MonkeyPatch") -> None:
+    a = importer._ActiveTransfer()
+    monkeypatch.setattr(importer.time, "monotonic", lambda: 0.0)
+    a.begin("download", "X", 100)
+    a.advance(500)  # done > total → clamp to 100%, never absurd
+    assert "100%" in (a.render() or "")
+
+
 # --- liveness probe ----------------------------------------------------------
 def test_alive_true_when_info_ok() -> None:
     class FakeDev:

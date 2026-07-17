@@ -16,6 +16,7 @@ file-level: an object that fails N times is `FAILED`, reported, and skipped.
 from __future__ import annotations
 
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -398,17 +399,16 @@ def _import_loop(info: wpd.DeviceInfo, friendly: str, landing: Path,
             progress.begin(f"import {friendly}")
 
             def act(obj: wpd.WpdObject, device_path: str) -> bool:
-                """Handle one file object; return True if it caused a download."""
-                # Live scan position + tally, so a long stretch of already-verified
-                # files visibly moves instead of looking stalled. A download/verify
-                # immediately overrides this with its own per-file line.
-                progress.begin(
-                    f"{len(downloaded_keys)} new, {len(verified_keys)} verified, "
-                    f"{len(skipped_keys)} skipped",
-                    device_path,
-                )
+                """Handle one file object; return True if it caused a download.
+
+                The live line shows the action on the current row ("skipped <path>",
+                or a download/verify's own per-file line). Updates run per file but
+                LiveProgress throttles actual console writes (~100ms), so a big tree
+                of skips stays responsive without a write per file.
+                """
                 key = _skip_key(obj)
                 if _is_skippable_companion(obj):
+                    progress.begin("skipped", device_path)
                     skipped_keys.add(key)
                     return False
                 if key in failed_keys:
@@ -418,6 +418,7 @@ def _import_loop(info: wpd.DeviceInfo, friendly: str, landing: Path,
                 if key in manifest or sidecar.exists():  # already imported / VERIFIED
                     if sidecar.exists():
                         manifest.add(key)
+                    progress.begin("skipped", device_path)
                     skipped_keys.add(key)
                     return False
                 try:
@@ -506,9 +507,16 @@ class _ActiveTransfer:
     including the 1s background tick, so the per-file timer keeps climbing even if
     a read stalls (that's how a stuck transfer shows up). The size is known up
     front (`WPD_OBJECT_SIZE`), so a real percentage is available.
+
+    A **lock** is essential: `render` runs on LiveProgress's background thread
+    while `begin`/`advance` mutate on the main thread. Without it a render could
+    read a new (small) file's `total` alongside the previous (large) file's stale
+    `done` → absurd percentages (e.g. a 250 MB video's bytes over a 5 MB JPG =
+    5000%). The lock lets `render` snapshot a consistent (done, total).
     """
 
     def __init__(self) -> None:
+        self._lock = threading.Lock()
         self._verb = ""
         self._name = ""
         self._done = 0
@@ -517,22 +525,29 @@ class _ActiveTransfer:
         self._active = False
 
     def begin(self, verb: str, name: str, total: int | None) -> None:
-        self._verb, self._name, self._total = verb, name, total
-        self._done, self._start, self._active = 0, time.monotonic(), True
+        with self._lock:
+            self._verb, self._name, self._total = verb, name, total
+            self._done, self._start, self._active = 0, time.monotonic(), True
 
     def advance(self, n: int) -> None:
-        self._done += n
+        with self._lock:
+            self._done += n
 
     def clear(self) -> None:
-        self._active = False
+        with self._lock:
+            self._active = False
 
     def render(self) -> str | None:
-        if not self._active:
-            return None
-        parts = [f"{self._verb} {self._name}"]
-        if self._total:
-            parts.append(f"{self._done * 100 // self._total:>3}%")
-        elapsed = time.monotonic() - self._start
+        with self._lock:  # consistent snapshot; see class docstring
+            if not self._active:
+                return None
+            verb, name, done, total, start = (
+                self._verb, self._name, self._done, self._total, self._start
+            )
+        parts = [f"{verb} {name}"]
+        if total:
+            parts.append(f"{min(100, done * 100 // total):>3}%")
+        elapsed = time.monotonic() - start
         if elapsed >= 1.0:  # per-file timer, only once it's worth showing
             parts.append(f"[{format_duration_compact(elapsed)}]")
         return "  ".join(parts)
