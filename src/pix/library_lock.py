@@ -17,9 +17,9 @@ from __future__ import annotations
 
 import contextlib
 import os
+from collections.abc import Generator
 from datetime import datetime
 from pathlib import Path
-from typing import Iterator
 
 import psutil
 import typer
@@ -88,7 +88,7 @@ def _read_lock(lock_file: Path) -> tuple[int, str, str] | None:
 
 
 @contextlib.contextmanager
-def acquire(library_root: Path, op: str) -> Iterator[None]:
+def acquire(library_root: Path, op: str) -> Generator[None, None, None]:
     """Acquire the library-wide lock; release on exit.
 
     Raises `LockHeld` if a live pix process already holds the lock.

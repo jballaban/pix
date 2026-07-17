@@ -275,7 +275,7 @@ class ExifToolSession:
             return None
         if not isinstance(data, list) or not data:
             return None
-        first = data[0]
+        first = cast("list[object]", data)[0]
         if not isinstance(first, dict):
             return None
         entry = cast("dict[str, object]", first)
