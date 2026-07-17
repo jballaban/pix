@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+from collections.abc import Mapping, Sequence, Set as AbstractSet
 from pathlib import Path
 
 import pytest
@@ -25,9 +26,9 @@ _ALL_RULES = (["/.pix/local"], ["_exiftool_tmp"], ["*.__*"])
 
 def _make_syno(
     tmp: Path,
-    sessions: list[dict[str, object]],
+    sessions: Sequence[Mapping[str, object]],
     filters: dict[int, tuple[list[str], list[str], list[str]] | None],
-    dot_off: set[int] = frozenset(),  # sessions with dot-prefix sync OFF
+    dot_off: AbstractSet[int] = frozenset(),  # sessions with dot-prefix sync OFF
 ) -> Path:
     """Build a fake `%LOCALAPPDATA%\\SynologyDrive\\data` tree; return it.
 

@@ -41,6 +41,16 @@ pythonVersion = "3.12"
 typeCheckingMode = "strict"
 reportUnknownMemberType = false  # typer/yaml have permissive stubs
 
+# Tests are intentionally loose: they white-box internal helpers (private access)
+# and use untyped lambdas/args as fixtures. Relax only those "unknown/private"
+# rules for tests/ — real type mismatches (reportArgumentType, etc.) still fire.
+[[tool.pyright.executionEnvironments]]
+root = "tests"
+reportPrivateUsage = false
+reportUnknownLambdaType = false
+reportUnknownArgumentType = false
+reportUnknownVariableType = false
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
