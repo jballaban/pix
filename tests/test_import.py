@@ -126,9 +126,6 @@ def test_sweep_temps_removes_partials(tmp_path: Path) -> None:
 
 
 # --- device selection --------------------------------------------------------
-def test_select_single_device() -> None:
-    d = _dev()
-    assert importer._select_device([d], None) is d
 
 
 def test_select_none_connected() -> None:
@@ -136,9 +133,15 @@ def test_select_none_connected() -> None:
         importer._select_device([], None)
 
 
-def test_lone_device_auto_selected_even_if_unknown() -> None:
+def test_lone_unknown_device_needs_choice() -> None:
+    # A single *unknown* device is NOT auto-selected — ask (so a cancel saves nothing).
+    with pytest.raises(importer.NeedsDeviceChoice):
+        importer._select_device([_dev("SER1")], None, known=set())
+
+
+def test_lone_known_device_auto_selected() -> None:
     d = _dev("SER1")
-    assert importer._select_device([d], None, known=set()) is d
+    assert importer._select_device([d], None, known={"SER1"}) is d
 
 
 def test_one_known_among_several_auto_selected() -> None:
@@ -199,6 +202,21 @@ def test_friendly_registers_and_persists(tmp_path: Path) -> None:
     # Persisted and reused on second call.
     assert importer._load_registry(tmp_path) == {"SER1": "Apple iPhone"}
     assert importer._friendly_for(tmp_path, _dev("SER1", "renamed?"), interactive=False) == "Apple iPhone"
+
+
+def test_naming_abort_does_not_register(tmp_path: Path, monkeypatch: "pytest.MonkeyPatch") -> None:
+    import typer
+
+    (tmp_path / ".pix").mkdir()
+
+    def abort(*a: object, **k: object) -> object:
+        raise typer.Abort()
+
+    monkeypatch.setattr(typer, "prompt", abort)
+    with pytest.raises(typer.Abort):
+        importer._friendly_for(tmp_path, _dev("SER1"), interactive=True)
+    # The whole point: a cancelled naming prompt writes nothing to the registry.
+    assert importer._load_registry(tmp_path) == {}
 
 
 def test_friendly_disambiguates_colliding_serials(tmp_path: Path) -> None:

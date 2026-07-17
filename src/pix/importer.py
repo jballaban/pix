@@ -135,12 +135,12 @@ def _friendly_for(root: Path, info: wpd.DeviceInfo, *, interactive: bool,
         if interactive:
             import typer  # noqa: PLC0415
 
-            try:
-                answer = typer.prompt(
-                    f"New device (serial {serial}). Name it", default=default
-                )
-            except (typer.Abort, EOFError):
-                answer = default  # stdin reported a TTY but can't be read
+            # Ctrl-C / EOF here must CANCEL the run, not fall through to a default
+            # and register the device. Let the abort propagate — nothing below
+            # (including the registry save) runs.
+            answer = typer.prompt(
+                f"New device (serial {serial}). Name it", default=default
+            )
             friendly = sanitize_component(answer or default)
         else:
             friendly = default
@@ -246,10 +246,11 @@ def _select_device(devices: list[wpd.DeviceInfo], selector: str | None,
                    known: frozenset[str] | set[str] = frozenset()) -> wpd.DeviceInfo:
     """Pick the import source, registry-driven.
 
-    `--device` matches by serial/name substring (power-user override). Otherwise:
-    a lone connected device (nothing to choose) or exactly one **known** device
-    (in `.pix/devices.yaml`) is auto-selected; zero-or-multiple known among
-    several devices raises `NeedsDeviceChoice` so the caller can prompt a picker.
+    `--device` matches by serial/name substring (power-user override). Otherwise
+    only **exactly one known** device (in `.pix/devices.yaml`) is auto-selected;
+    anything else — zero known, multiple known, or a single *unknown* device —
+    raises `NeedsDeviceChoice` so the caller prompts a picker (and a cancel there
+    registers nothing).
     """
     if selector:
         s = selector.lower()
@@ -270,11 +271,11 @@ def _select_device(devices: list[wpd.DeviceInfo], selector: str | None,
 
     if not devices:
         raise ImportError_("no portable devices connected.")
-    if len(devices) == 1:
-        return devices[0]
     known_connected = [d for d in devices if d.serial in known]
     if len(known_connected) == 1:
         return known_connected[0]
+    # Zero or multiple known (even a single unknown device) → ask; never
+    # silently auto-select/register a device the user didn't choose.
     raise NeedsDeviceChoice(devices)
 
 
