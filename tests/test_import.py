@@ -191,6 +191,23 @@ def test_name_flag_sanitized(tmp_path: Path) -> None:
     assert got == "a_b_c"
 
 
+# --- liveness probe ----------------------------------------------------------
+def test_alive_true_when_info_ok() -> None:
+    class FakeDev:
+        def info(self) -> object:
+            return object()
+
+    assert importer._alive(FakeDev()) is True  # type: ignore[arg-type]
+
+
+def test_alive_false_when_info_raises() -> None:
+    class DeadDev:
+        def info(self) -> object:
+            raise RuntimeError("session dropped")
+
+    assert importer._alive(DeadDev()) is False  # type: ignore[arg-type]
+
+
 # --- landing path collision --------------------------------------------------
 def test_landing_path_disambiguates_collision(tmp_path: Path) -> None:
     used: dict[Path, str] = {}

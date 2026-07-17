@@ -56,10 +56,20 @@ class ImportSummary:
     bytes_downloaded: int = 0
     passes: int = 0
     apply_log: Path | None = None
+    device_lost: bool = False
 
 
 class ImportError_(Exception):
     """A fatal import setup error (device selection, WPD unavailable)."""
+
+
+class DeviceLost(Exception):
+    """The device session dropped mid-run (unplug / sleep / re-enumerate).
+
+    Distinguished from a transient per-object glitch by a liveness probe
+    (`_alive`): a dropped session ends the run gracefully — re-running resumes
+    from on-disk state (verified files skipped, partial temps swept).
+    """
 
 
 # --- device registry (durable, synced .pix/devices.yaml) ---------------------
@@ -313,45 +323,60 @@ def _import_loop(info: wpd.DeviceInfo, friendly: str, landing: Path,
     verified_keys: set[tuple[str, int | None]] = set()
     skipped_keys: set[tuple[str, int | None]] = set()
 
-    with wpd.open_device(info.device_id) as dev, LiveProgress() as progress:
-        progress.begin(f"import {friendly}")
+    try:
+        with wpd.open_device(info.device_id) as dev, LiveProgress() as progress:
+            progress.begin(f"import {friendly}")
 
-        def act(obj: wpd.WpdObject, device_path: str) -> bool:
-            """Handle one file object; return True if it caused a download."""
-            key = _skip_key(obj)
-            if _is_skippable_companion(obj):
-                skipped_keys.add(key)
-                return False
-            if key in failed_keys:
-                return False
-            landed = _landing_path(landing, device_path, used_paths, obj)
-            sidecar = _sidecar_path(landed)
-            if key in manifest or sidecar.exists():  # already imported / VERIFIED
-                if sidecar.exists():
-                    manifest.add(key)
-                skipped_keys.add(key)
-                return False
-            try:
-                if landed.exists():  # DOWNLOADED straggler → verify
-                    status = _verify(dev, obj, landed, device_path, info, manifest,
-                                     key, attempts, failed_keys, summary, progress, log)
-                    if status == "verified":
-                        verified_keys.add(key)
-                    elif status == "redownloaded":
-                        downloaded_keys.add(key)
+            def act(obj: wpd.WpdObject, device_path: str) -> bool:
+                """Handle one file object; return True if it caused a download."""
+                key = _skip_key(obj)
+                if _is_skippable_companion(obj):
+                    skipped_keys.add(key)
+                    return False
+                if key in failed_keys:
+                    return False
+                landed = _landing_path(landing, device_path, used_paths, obj)
+                sidecar = _sidecar_path(landed)
+                if key in manifest or sidecar.exists():  # already imported / VERIFIED
+                    if sidecar.exists():
+                        manifest.add(key)
+                    skipped_keys.add(key)
+                    return False
+                try:
+                    if landed.exists():  # DOWNLOADED straggler → verify
+                        status = _verify(dev, obj, landed, device_path, info, manifest,
+                                         key, attempts, failed_keys, summary, progress, log)
+                        if status == "verified":
+                            verified_keys.add(key)
+                        elif status == "redownloaded":
+                            downloaded_keys.add(key)
+                        return True
+                    _download(dev, obj, landed, summary, progress, log, device_path)
+                    downloaded_keys.add(key)
                     return True
-                _download(dev, obj, landed, summary, progress, log, device_path)
-                downloaded_keys.add(key)
-                return True
-            except Exception as e:  # noqa: BLE001 — per-object isolation
-                _fail(obj, key, device_path, attempts, failed_keys, summary, log, str(e))
-                return False
+                except DeviceLost:
+                    raise
+                except Exception as e:  # noqa: BLE001 — per-object isolation
+                    if not _alive(dev):
+                        raise DeviceLost(device_path) from e
+                    _fail(obj, key, device_path, attempts, failed_keys, summary, log, str(e))
+                    return False
 
-        for pass_no in range(1, _MAX_PASSES + 1):
-            summary.passes = pass_no
-            dirty = _traverse(dev, wpd.DEVICE_ROOT, "", act)
-            if not dirty:
-                break
+            for pass_no in range(1, _MAX_PASSES + 1):
+                summary.passes = pass_no
+                try:
+                    dirty = _traverse(dev, wpd.DEVICE_ROOT, "", act)
+                except DeviceLost:
+                    raise
+                except Exception as e:  # enumeration failed — device gone?
+                    if not _alive(dev):
+                        raise DeviceLost("enumeration") from e
+                    raise
+                if not dirty:
+                    break
+    except DeviceLost as e:
+        summary.device_lost = True
+        _log(log, "DISCONNECT", str(e), detail="device lost; re-run to resume")
 
     summary.downloaded = len(downloaded_keys)
     summary.verified = len(verified_keys)
@@ -486,7 +511,20 @@ def _dry_run(info: wpd.DeviceInfo, landing: Path, summary: ImportSummary) -> Non
         _traverse(dev, wpd.DEVICE_ROOT, "", act)
 
 
-# --- hashing + logging -------------------------------------------------------
+# --- liveness + hashing + logging --------------------------------------------
+def _alive(dev: wpd.Device) -> bool:
+    """Cheap probe: can we still read a device property? False ⇒ session dropped.
+
+    Used on any mid-run error to tell a real disconnect (end gracefully, resume
+    on re-run) from a transient per-object glitch (retry that object, continue).
+    """
+    try:
+        dev.info()
+        return True
+    except Exception:  # noqa: BLE001 — any failure here means the session is unusable
+        return False
+
+
 def _hash_file(path: Path) -> str:
     hasher = blake3()
     with path.open("rb") as f:

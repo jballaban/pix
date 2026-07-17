@@ -308,9 +308,14 @@ landing root (interrupted partial downloads from a prior run) — analogous to
 migrate's cleanup pass. Complete-but-unverified files (final name, no sidecar) are
 **kept** and picked up as `DOWNLOADED` by the skip procedure.
 
-**Session drop** (unplug / sleep / re-enumerate) is not a failure tier of its own:
-re-open the session and the loop resumes from current on-disk state (a full
-re-enumeration — accepted; flaky cables on a huge roll will re-walk).
+**Session drop** (unplug / sleep). On any mid-run device error a **liveness probe**
+(re-read a device property) distinguishes a dropped session from a transient
+per-object glitch: a live device → retry that object (per-file cap); a dropped
+session → **end the run gracefully** (report progress, exit non-zero, no
+traceback). No in-run reconnect — the user replugs and **re-runs**, which resumes
+from on-disk state (verified files skipped, partial `*.__*` temps swept and
+re-pulled, downloaded-but-unverified files re-verified). Nothing is corrupted or
+lost across the drop.
 
 ## iOS caveats — originals & optimized storage
 

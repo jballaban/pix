@@ -84,6 +84,15 @@ def _run(root: Path, *, device: str | None, name: str | None) -> None:
         f"verified {summary.verified}, skipped {summary.skipped}, "
         f"in {summary.passes} pass(es)."
     )
+    if summary.device_lost:
+        typer.echo("")
+        typer.echo(
+            "Device disconnected mid-run. Progress above is saved — replug and "
+            "re-run to resume (verified files are skipped, partial downloads "
+            "re-pulled).",
+            err=True,
+        )
+        raise typer.Exit(code=1)
     if summary.failed:
         typer.echo(f"{len(summary.failed)} file(s) FAILED:", err=True)
         for p in summary.failed:
