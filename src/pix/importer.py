@@ -399,6 +399,14 @@ def _import_loop(info: wpd.DeviceInfo, friendly: str, landing: Path,
 
             def act(obj: wpd.WpdObject, device_path: str) -> bool:
                 """Handle one file object; return True if it caused a download."""
+                # Live scan position + tally, so a long stretch of already-verified
+                # files visibly moves instead of looking stalled. A download/verify
+                # immediately overrides this with its own per-file line.
+                progress.begin(
+                    f"{len(downloaded_keys)} new, {len(verified_keys)} verified, "
+                    f"{len(skipped_keys)} skipped",
+                    device_path,
+                )
                 key = _skip_key(obj)
                 if _is_skippable_companion(obj):
                     skipped_keys.add(key)
