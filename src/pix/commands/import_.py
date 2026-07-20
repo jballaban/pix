@@ -78,12 +78,33 @@ def _run(root: Path, *, device: str | None, name: str | None) -> None:
         f"Device: {summary.device.friendly} (serial {summary.device.serial})"
     )
     typer.echo(f"Landed: {summary.landing}")
+    recovered = (
+        f", recovered {summary.recovered}" if summary.recovered else ""
+    )
     typer.echo(
         f"Downloaded {summary.downloaded} file(s) "
         f"({format_size(summary.bytes_downloaded)}), "
-        f"verified {summary.verified}, skipped {summary.skipped}, "
+        f"verified {summary.verified}, skipped {summary.skipped}{recovered}, "
         f"in {summary.passes} pass(es)."
     )
+    if summary.needs_session:
+        typer.echo("")
+        typer.echo(
+            f"{len(summary.needs_session)} file(s) failed to validate and need a "
+            "device reconnect to retry — unplug, replug, and re-run:"
+        )
+        for p in summary.needs_session:
+            typer.echo(f"  {p}")
+    if summary.failed_media:
+        typer.echo("")
+        typer.echo(
+            f"{len(summary.failed_media)} file(s) could not be validated even after "
+            "a reconnect — likely damaged on the device; resolve them there "
+            "(re-export / delete), then re-run:",
+            err=True,
+        )
+        for p in summary.failed_media:
+            typer.echo(f"  {p}", err=True)
     if summary.device_lost:
         typer.echo("")
         typer.echo(
@@ -97,4 +118,8 @@ def _run(root: Path, *, device: str | None, name: str | None) -> None:
         typer.echo(f"{len(summary.failed)} file(s) FAILED:", err=True)
         for p in summary.failed:
             typer.echo(f"  {p}", err=True)
+        raise typer.Exit(code=1)
+    if summary.failed_media:
+        # Terminal validation failures need user action → nonzero exit (the
+        # detail was already printed above).
         raise typer.Exit(code=1)

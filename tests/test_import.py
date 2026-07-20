@@ -8,6 +8,7 @@ manifest regeneration, device selection, and the friendly-name registry.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Callable
 
 import pytest
 
@@ -333,3 +334,245 @@ def test_landing_path_disambiguates_collision(tmp_path: Path) -> None:
     b = importer._landing_path(tmp_path, "d/IMG.HEIC", used, _obj(puid="{B}"))
     assert a != b
     assert a.name == "IMG.HEIC"
+
+
+# --- media_check (read-only validation tripwire) -----------------------------
+def test_media_check_valid_image(tmp_path: Path) -> None:
+    from PIL import Image
+
+    from pix.media_check import media_check
+
+    p = tmp_path / "ok.jpg"
+    Image.new("RGB", (4, 4), "red").save(p, "JPEG")
+    assert media_check(p) is None
+
+
+def test_media_check_corrupt_image_returns_reason(tmp_path: Path) -> None:
+    from pix.media_check import media_check
+
+    p = tmp_path / "broken.jpg"
+    p.write_bytes(b"this is not a jpeg")
+    reason = media_check(p)
+    assert reason is not None and "decode failed" in reason
+
+
+def test_media_check_unknown_extension_is_exempt(tmp_path: Path) -> None:
+    from pix.media_check import media_check
+
+    p = tmp_path / "mystery.dat"
+    p.write_bytes(b"\x00\x01\x02 whatever")
+    assert media_check(p) is None  # no validator → verified on bytes alone
+
+
+def test_media_check_video_exempt_when_ffprobe_missing(
+    tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+) -> None:
+    from pix import media_check as mc_mod
+
+    monkeypatch.setattr(mc_mod.shutil, "which", lambda _name: None)
+    p = tmp_path / "clip.mov"
+    p.write_bytes(b"garbage")
+    # Missing tool is an environment problem, not a bad file → exempt.
+    assert mc_mod.media_check(p) is None
+
+
+# --- .importissue marker round-trip ------------------------------------------
+def test_issue_write_read_and_scan(tmp_path: Path) -> None:
+    landing = tmp_path / "import" / "iPhone"
+    a = landing / "A.HEIC"
+    b = landing / "B.HEIC"
+    a.parent.mkdir(parents=True)
+    a.write_bytes(b"a")
+    b.write_bytes(b"b")
+    importer._write_issue(a, _dev(), _obj(orig="A.HEIC"), "A.HEIC",
+                          state="needs-session", attempts=1, last_error="bad")
+    importer._write_issue(b, _dev(), _obj(orig="B.HEIC"), "B.HEIC",
+                          state="failed", attempts=2, last_error="still bad")
+
+    data = importer._read_issue(importer._issue_path(a))
+    assert data is not None and data["state"] == "needs-session"
+    assert data["attempts"] == 1
+
+    needs, failed = importer._scan_issues(landing)
+    assert needs == ["A.HEIC"]
+    assert failed == ["B.HEIC"]
+
+
+def test_issue_write_is_atomic_no_temp_left(tmp_path: Path) -> None:
+    landed = tmp_path / "IMG.HEIC"
+    landed.write_bytes(b"x")
+    importer._write_issue(landed, _dev(), _obj(), "dev/IMG.HEIC",
+                          state="failed", attempts=3, last_error="e")
+    assert list(tmp_path.glob("*.__import__")) == []
+
+
+# --- import loop: download → validate → recover (fake device) ----------------
+class _FakeDev:
+    """Minimal stand-in for wpd.Device: a static child tree + byte content."""
+
+    def __init__(self, tree: dict[str, list[WpdObject]],
+                 content: dict[str, bytes]) -> None:
+        self._tree = tree
+        self._content = content
+
+    def __enter__(self) -> "_FakeDev":
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+    def children(self, parent_id: str = "DEVICE"):  # noqa: ANN201
+        return list(self._tree.get(parent_id, []))
+
+    def stream(self, obj_id: str, chunk: int = 256 * 1024):  # noqa: ANN201
+        data = self._content[obj_id]
+        for i in range(0, len(data), chunk):
+            yield data[i:i + chunk]
+
+    def info(self) -> DeviceInfo:
+        return _dev()
+
+
+def _file_obj(oid: str, name: str, data: bytes) -> WpdObject:
+    return _obj(id=oid, orig=name, size=len(data), puid=f"{{P-{oid}}}")
+
+
+def _scripted_media_check(script: dict[str, list[str | None]]):  # noqa: ANN201
+    """A fake media_check driven by a per-filename queue of results."""
+    def mc(path: Path) -> str | None:
+        seq = script.get(path.name)
+        if seq:
+            return seq.pop(0)
+        return None
+    return mc
+
+
+def _run_loop(
+    monkeypatch: "pytest.MonkeyPatch", tmp_path: Path,
+    tree: dict[str, list[WpdObject]], content: dict[str, bytes],
+    script: dict[str, list[str | None]],
+    setup: Callable[[Path], None] | None = None,
+) -> "tuple[importer.ImportSummary, Path]":
+    landing = tmp_path / "import" / "iPhone"
+    landing.mkdir(parents=True, exist_ok=True)
+    if setup is not None:
+        setup(landing)
+    summary = importer.ImportSummary(device=_dev(), landing=landing)
+    fake = _FakeDev(tree, content)
+    monkeypatch.setattr(importer.wpd, "open_device", lambda _dev_id: fake)
+    monkeypatch.setattr(importer, "media_check", _scripted_media_check(script))
+    importer._import_loop(tmp_path, _dev(), "iPhone", landing, summary, None)
+    return summary, landing
+
+
+def test_loop_happy_path_single_download(
+    tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+) -> None:
+    obj = _file_obj("o1", "IMG.HEIC", b"good-bytes")
+    summary, landing = _run_loop(
+        monkeypatch, tmp_path, {"DEVICE": [obj]}, {"o1": b"good-bytes"}, {}
+    )
+    assert summary.downloaded == 1
+    assert summary.verified == 1
+    assert summary.recovered == 0
+    assert summary.needs_session == [] and summary.failed_media == []
+    assert importer._sidecar_path(landing / "IMG.HEIC").exists()
+
+
+def test_loop_recovers_same_session(
+    tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+) -> None:
+    obj = _file_obj("o1", "IMG.HEIC", b"bytes")
+    # First probe fails, the same-session re-download's probe passes.
+    summary, landing = _run_loop(
+        monkeypatch, tmp_path, {"DEVICE": [obj]}, {"o1": b"bytes"},
+        {"IMG.HEIC": ["decode failed: x", None]},
+    )
+    assert summary.recovered == 1
+    assert summary.verified == 1
+    assert not importer._issue_path(landing / "IMG.HEIC").exists()
+    log = tmp_path / ".pix" / "import-verify.log"
+    text = log.read_text(encoding="utf-8")
+    assert "media-check-failed" in text and "recovered-same-session" in text
+
+
+def test_loop_parks_needs_session_after_same_session_fail(
+    tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+) -> None:
+    obj = _file_obj("o1", "IMG.HEIC", b"bytes")
+    # Both the initial probe and the same-session re-download fail.
+    summary, landing = _run_loop(
+        monkeypatch, tmp_path, {"DEVICE": [obj]}, {"o1": b"bytes"},
+        {"IMG.HEIC": ["bad-1", "bad-2"]},
+    )
+    assert summary.verified == 0
+    assert summary.needs_session == ["IMG.HEIC"]
+    issue = importer._read_issue(importer._issue_path(landing / "IMG.HEIC"))
+    assert issue is not None and issue["state"] == "needs-session"
+    # Parked this run — NOT retried as a fresh session within the same run.
+    assert summary.failed_media == []
+
+
+def test_loop_fresh_session_retry_recovers(
+    tmp_path: Path, monkeypatch: "pytest.MonkeyPatch", capsys: "pytest.CaptureFixture[str]"
+) -> None:
+    obj = _file_obj("o1", "IMG.HEIC", b"fresh-good")
+
+    def setup(landing: Path) -> None:
+        landed = landing / "IMG.HEIC"
+        landed.write_bytes(b"old-bad")
+        importer._write_issue(landed, _dev(), obj, "IMG.HEIC",
+                              state="needs-session", attempts=1, last_error="bad")
+
+    # Retry's probe passes (script empty → None).
+    summary, landing = _run_loop(
+        monkeypatch, tmp_path, {"DEVICE": [obj]}, {"o1": b"fresh-good"}, {}, setup
+    )
+    assert summary.recovered == 1
+    assert summary.verified == 1
+    assert not importer._issue_path(landing / "IMG.HEIC").exists()
+    assert importer._sidecar_path(landing / "IMG.HEIC").exists()
+    # Start-of-run reconnect notice printed for the pre-existing needs-session.
+    assert "need a device reconnect" in capsys.readouterr().out
+
+
+def test_loop_fresh_session_retry_goes_terminal(
+    tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+) -> None:
+    obj = _file_obj("o1", "IMG.HEIC", b"still-bad")
+
+    def setup(landing: Path) -> None:
+        landed = landing / "IMG.HEIC"
+        landed.write_bytes(b"old-bad")
+        importer._write_issue(landed, _dev(), obj, "IMG.HEIC",
+                              state="needs-session", attempts=1, last_error="bad")
+
+    summary, landing = _run_loop(
+        monkeypatch, tmp_path, {"DEVICE": [obj]}, {"o1": b"still-bad"},
+        {"IMG.HEIC": ["still bad after reconnect"]}, setup,
+    )
+    assert summary.verified == 0
+    assert summary.failed_media == ["IMG.HEIC"]
+    issue = importer._read_issue(importer._issue_path(landing / "IMG.HEIC"))
+    assert issue is not None and issue["state"] == "failed"
+    assert issue["attempts"] == 2
+
+
+def test_loop_terminal_failed_is_skipped(
+    tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+) -> None:
+    obj = _file_obj("o1", "IMG.HEIC", b"whatever")
+
+    def setup(landing: Path) -> None:
+        landed = landing / "IMG.HEIC"
+        landed.write_bytes(b"landed")
+        importer._write_issue(landed, _dev(), obj, "IMG.HEIC",
+                              state="failed", attempts=2, last_error="dead")
+
+    summary, _ = _run_loop(
+        monkeypatch, tmp_path, {"DEVICE": [obj]}, {"o1": b"whatever"}, {}, setup
+    )
+    # Terminal → never re-downloaded, still reported so the user keeps seeing it.
+    assert summary.downloaded == 0
+    assert summary.verified == 0
+    assert summary.failed_media == ["IMG.HEIC"]

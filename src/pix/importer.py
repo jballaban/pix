@@ -3,14 +3,23 @@
 Pulls new photos/videos off a connected phone and lands them, verified, under
 `.pix/local/import/<friendly-name>/`. It does **nothing else** — no convert,
 tag, dedupe, or organize; the (not-yet-built) migrate ingest pre-pass consumes
-the landed files later. Verification is device→disk only: a file is `VERIFIED`
-only when an independent second read agrees, at which point its `.importinfo`
-sidecar is written (sidecar presence *is* the VERIFIED marker).
+the landed files later.
 
-The traversal is a drain-as-you-go DFS (files before subfolders) re-run in a
+Verification is device→disk only, on two independent axes:
+
+- **Transfer integrity** — bytes-read == MTP-reported size, plus a disk
+  read-back == the received stream. Established at download, no second transfer.
+- **Media integrity** — a local, read-only `media_check` (Pillow / ffprobe)
+  confirms the landed bytes actually parse. On a **hard** failure the recovery
+  ladder escalates the freshness of the transfer: one same-session re-download,
+  then a persisted `needs-session` state (retried once on a later, operator-
+  reconnected run), then a terminal `failed` state reported to the user. A clean
+  media_check writes the `.importinfo` sidecar (its presence *is* VERIFIED).
+
+The traversal is a drain-as-you-go DFS (files before subfolders) re-run in one
 loop until a pass is "clean" (nothing downloaded); the same pass does discovery
-(catching objects MTP reveals lazily), verification, and resume. Termination is
-file-level: an object that fails N times is `FAILED`, reported, and skipped.
+(catching objects MTP reveals lazily), recovery, and resume. Termination is
+file-level (attempt caps / bounded ladder), never loop-level.
 """
 
 from __future__ import annotations
@@ -29,6 +38,7 @@ from blake3 import blake3
 from pix import wpd
 from pix.duration import format_duration_compact
 from pix.markers import IMPORT_TMP_SUFFIX
+from pix.media_check import media_check
 from pix.progress import LiveProgress
 from pix.root import local_dir
 
@@ -45,6 +55,10 @@ _MAX_ATTEMPTS: int = 3
 _MAX_PASSES: int = 100
 
 _SIDECAR_EXT: str = ".importinfo"
+# The media-integrity problem marker (mutually exclusive with `.importinfo`).
+_ISSUE_EXT: str = ".importissue"
+# Durable, append-only media-recovery event log (synced `.pix/` tier).
+_VERIFY_LOG_NAME: str = "import-verify.log"
 _CHUNK: int = 256 * 1024
 
 
@@ -60,6 +74,10 @@ class ImportSummary:
     passes: int = 0
     apply_log: Path | None = None
     device_lost: bool = False
+    # Media-integrity recovery outcomes (spec/import.md → Recovery ladder):
+    recovered: int = 0                # media-check fails fixed by a re-download
+    needs_session: list[str] = field(default_factory=lambda: [])  # awaiting reconnect
+    failed_media: list[str] = field(default_factory=lambda: [])   # terminal, resolve on device
 
 
 class ImportError_(Exception):
@@ -199,6 +217,77 @@ def _read_sidecar(sidecar: Path) -> dict[str, Any] | None:
     except (OSError, yaml.YAMLError):
         return None
     return cast("dict[str, Any]", loaded) if isinstance(loaded, dict) else None
+
+
+# --- media-integrity problem marker (.importissue) ---------------------------
+def _issue_path(landed: Path) -> Path:
+    return landed.with_name(landed.name + _ISSUE_EXT)
+
+
+def _write_issue(landed: Path, info: wpd.DeviceInfo, obj: wpd.WpdObject,
+                 device_path: str, *, state: str, attempts: int,
+                 last_error: str) -> None:
+    """Write/replace the `.importissue` marker (temp-then-rename), the record of
+    a media-integrity dead-end. Mutually exclusive with `.importinfo`."""
+    data = {
+        "state": state,               # "needs-session" | "failed"
+        "attempts": attempts,
+        "last_error": last_error,
+        "serial": info.serial,
+        "puid": obj.puid,
+        "device_path": device_path,
+        "original_filename": obj.filename,
+        "size": obj.size,
+    }
+    issue = _issue_path(landed)
+    tmp = issue.with_name(issue.name + IMPORT_TMP_SUFFIX)
+    tmp.write_text(
+        yaml.safe_dump(data, default_flow_style=False, sort_keys=False),
+        encoding="utf-8",
+    )
+    tmp.replace(issue)
+
+
+def _read_issue(issue: Path) -> dict[str, Any] | None:
+    try:
+        loaded = yaml.safe_load(issue.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return None
+    return cast("dict[str, Any]", loaded) if isinstance(loaded, dict) else None
+
+
+def _scan_issues(landing: Path) -> tuple[list[str], list[str]]:
+    """Partition on-disk `.importissue` markers into (needs_session, failed) —
+    each a list of device paths, for the start/end-of-run reporting."""
+    needs: list[str] = []
+    failed: list[str] = []
+    if not landing.is_dir():
+        return needs, failed
+    for issue in landing.rglob(f"*{_ISSUE_EXT}"):
+        data = _read_issue(issue)
+        if data is None:
+            continue
+        where = str(data.get("device_path") or issue.name)
+        if data.get("state") == "failed":
+            failed.append(where)
+        elif data.get("state") == "needs-session":
+            needs.append(where)
+    return needs, failed
+
+
+# --- durable media-recovery event log ----------------------------------------
+def _append_verify_log(root: Path, friendly: str, device_path: str,
+                       event: str, detail: str) -> None:
+    """Append one tab-separated line to `.pix/import-verify.log` (durable/synced).
+
+    Rare by design (media-check hard-fails only), so this file stays tiny; a
+    nonzero line count after real use answers "did re-download ever help?".
+    """
+    p = root / ".pix" / _VERIFY_LOG_NAME
+    p.parent.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().isoformat(timespec="milliseconds")
+    with p.open("a", encoding="utf-8") as f:
+        f.write(f"{ts}\t{friendly}\t{event}\t{device_path}\t{detail}\n")
 
 
 def _scan_manifest(landing: Path) -> set[tuple[str, int | None]]:
@@ -367,19 +456,30 @@ def run_import(
         summary.apply_log = runs_dir / "apply.log"
         log = summary.apply_log.open("a", encoding="utf-8")
     try:
-        _import_loop(info, friendly, landing, summary, log)
+        _import_loop(root, info, friendly, landing, summary, log)
     finally:
         if log is not None:
             log.close()
     return summary
 
 
-def _import_loop(info: wpd.DeviceInfo, friendly: str, landing: Path,
+def _import_loop(root: Path, info: wpd.DeviceInfo, friendly: str, landing: Path,
                  summary: ImportSummary, log: IO[str] | None) -> None:
     """The drain-as-you-go DFS + dirty re-loop (run folder already set up)."""
     swept = _sweep_temps(landing)
     if swept:
         _log(log, "sweep", f"removed {swept} stale temp(s)")
+
+    # Operator-driven fresh-session retry: if a prior run parked files as
+    # `needs-session`, this run *is* the fresh session (we trust the operator
+    # reconnected). Announce it so they can abort + reconnect if they didn't.
+    pending_reconnect, _ = _scan_issues(landing)
+    if pending_reconnect:
+        _echo_line(
+            f"{len(pending_reconnect)} file(s) need a device reconnect to retry — "
+            "if you haven't unplugged/replugged since the last run, quit, "
+            "reconnect, and re-run."
+        )
 
     manifest = _scan_manifest(landing)
     used_paths: dict[Path, str] = {}
@@ -389,6 +489,12 @@ def _import_loop(info: wpd.DeviceInfo, friendly: str, landing: Path,
     downloaded_keys: set[tuple[str, int | None]] = set()
     verified_keys: set[tuple[str, int | None]] = set()
     skipped_keys: set[tuple[str, int | None]] = set()
+    recovered_keys: set[tuple[str, int | None]] = set()
+    # Keys parked as `needs-session` *this run*. The dirty-loop re-traverses, so
+    # without this a marker just written would be re-read as a fresh-session
+    # retry in the next pass of the same session — collapsing the escalation.
+    # A future run (fresh session_parked) picks the on-disk marker up correctly.
+    session_parked: set[tuple[str, int | None]] = set()
 
     active = _ActiveTransfer()
     try:
@@ -398,26 +504,82 @@ def _import_loop(info: wpd.DeviceInfo, friendly: str, landing: Path,
         ):
             progress.begin(f"import {friendly}")
 
-            def act(obj: wpd.WpdObject, device_path: str, verify_phase: bool) -> bool:
-                """Handle one file object; return True if it did transfer work.
+            def commit_verified(landed: Path, obj: wpd.WpdObject,
+                                device_path: str, key: tuple[str, int | None]) -> None:
+                """Write the `.importinfo` sidecar (the VERIFIED commit) and drop
+                any stale `.importissue` marker — the two are mutually exclusive."""
+                _write_sidecar(landed, info, obj, device_path)
+                manifest.add(key)
+                _issue_path(landed).unlink(missing_ok=True)
+                verified_keys.add(key)
+                _log(log, "VERIFIED", device_path)
 
-                Two-phase: download-first, verify-last. In the download phase a
-                DOWNLOADED-but-unverified file is **deferred** (not verified yet), so
-                an interrupted run always maximises new downloads before spending a
-                second transfer on verification. The verify phase does the deferred
-                verifications (and picks up any late-revealed new file).
+            def event(device_path: str, ev: str, detail: str) -> None:
+                _append_verify_log(root, friendly, device_path, ev, detail)
+                _echo_line(f"  ! {ev}: {device_path}" + (f"  ({detail})" if detail else ""))
 
-                The live line names the current row's action ("skipped"/"defer"/
-                a download or verify's own per-file line). Updates run per file but
-                LiveProgress throttles console writes (~100ms), so a big tree stays
-                responsive without a write per file.
+            def validate_and_commit(obj: wpd.WpdObject, landed: Path,
+                                    device_path: str, key: tuple[str, int | None],
+                                    *, just_downloaded: bool) -> bool:
+                """Media-check the landed bytes; commit VERIFIED, or run the
+                same-session recovery step (one re-download) and, on continued
+                failure, park the file as `needs-session`.
+
+                `just_downloaded` distinguishes a fresh NEW download (transfer
+                work already done) from re-probing a straggler's on-disk bytes.
+                Returns True if any transfer work happened (drives the dirty-loop).
                 """
+                progress.begin("verify", device_path)
+                reason = media_check(landed)
+                if reason is None:
+                    commit_verified(landed, obj, device_path, key)
+                    return just_downloaded
+                # Hard media failure → one same-session re-download.
+                event(device_path, "media-check-failed", reason)
+                _download(dev, obj, landed, summary, progress, log, device_path, active)
+                downloaded_keys.add(key)
+                reason2 = media_check(landed)
+                if reason2 is None:
+                    event(device_path, "recovered-same-session", "")
+                    recovered_keys.add(key)
+                    commit_verified(landed, obj, device_path, key)
+                    return True
+                _write_issue(landed, info, obj, device_path, state="needs-session",
+                             attempts=1, last_error=reason2)
+                session_parked.add(key)
+                event(device_path, "needs-session", reason2)
+                return True
+
+            def fresh_session_retry(obj: wpd.WpdObject, landed: Path,
+                                    device_path: str, key: tuple[str, int | None],
+                                    prior: dict[str, Any]) -> bool:
+                """A `needs-session` file, retried once on this (fresh) session.
+                Recovers → VERIFIED; still broken → terminal `failed`."""
+                _download(dev, obj, landed, summary, progress, log, device_path, active)
+                downloaded_keys.add(key)
+                reason = media_check(landed)
+                if reason is None:
+                    event(device_path, "recovered-fresh-session", "")
+                    recovered_keys.add(key)
+                    commit_verified(landed, obj, device_path, key)
+                    return True
+                attempts_n = int(prior.get("attempts", 1)) + 1
+                _write_issue(landed, info, obj, device_path, state="failed",
+                             attempts=attempts_n, last_error=reason)
+                event(device_path, "failed-terminal", reason)
+                return True
+
+            def act(obj: wpd.WpdObject, device_path: str) -> bool:
+                """Handle one file object; return True if it did transfer work."""
                 key = _skip_key(obj)
                 if _is_skippable_companion(obj):
                     progress.begin("skipped", device_path)
                     skipped_keys.add(key)
                     return False
                 if key in failed_keys:
+                    return False
+                if key in session_parked:  # parked this run; retry only next run
+                    progress.begin("parked", device_path)
                     return False
                 landed = _landing_path(landing, device_path, used_paths, obj)
                 sidecar = _sidecar_path(landed)
@@ -428,23 +590,32 @@ def _import_loop(info: wpd.DeviceInfo, friendly: str, landing: Path,
                     skipped_keys.add(key)
                     return False
                 try:
-                    if landed.exists():  # DOWNLOADED, awaiting verification
-                        if not verify_phase:
-                            progress.begin("defer", device_path)  # verify later
+                    issue = _issue_path(landed)
+                    if issue.exists():
+                        data = _read_issue(issue) or {}
+                        if data.get("state") == "failed":  # terminal — leave it
+                            progress.begin("failed", device_path)
                             skipped_keys.add(key)
                             return False
-                        status = _verify(dev, obj, landed, device_path, info, manifest,
-                                         key, attempts, failed_keys, summary, progress,
-                                         log, active)
-                        if status == "verified":
-                            verified_keys.add(key)
-                        elif status == "redownloaded":
+                        # needs-session → one fresh-session retry (this run).
+                        return fresh_session_retry(obj, landed, device_path, key, data)
+                    if landed.exists():  # DOWNLOADED straggler (no marker yet)
+                        # Cheap size pre-check: a changed on-device size ⇒ the
+                        # object changed (edit / optimized-storage rehydration) →
+                        # re-download fresh; else re-probe the local bytes.
+                        if obj.size is not None and landed.stat().st_size != obj.size:
+                            _download(dev, obj, landed, summary, progress, log,
+                                      device_path, active)
                             downloaded_keys.add(key)
-                        return True
+                            return validate_and_commit(obj, landed, device_path, key,
+                                                       just_downloaded=True)
+                        return validate_and_commit(obj, landed, device_path, key,
+                                                   just_downloaded=False)
                     _download(dev, obj, landed, summary, progress, log, device_path,
                               active)
                     downloaded_keys.add(key)
-                    return True
+                    return validate_and_commit(obj, landed, device_path, key,
+                                               just_downloaded=True)
                 except DeviceLost:
                     raise
                 except Exception as e:  # noqa: BLE001 — per-object isolation
@@ -453,35 +624,33 @@ def _import_loop(info: wpd.DeviceInfo, friendly: str, landing: Path,
                     _fail(obj, key, device_path, attempts, failed_keys, summary, log, str(e))
                     return False
 
-            def run_phase(verify_phase: bool) -> None:
-                """Loop full traversals until one does no transfer work."""
-                for _ in range(_MAX_PASSES):
-                    summary.passes += 1
-                    try:
-                        dirty = _traverse(
-                            dev, wpd.DEVICE_ROOT, "",
-                            lambda o, p: act(o, p, verify_phase),
-                        )
-                    except DeviceLost:
-                        raise
-                    except Exception as e:  # enumeration failed — device gone?
-                        if not _alive(dev):
-                            raise DeviceLost("enumeration") from e
-                        raise
-                    if not dirty:
-                        return
-
-            run_phase(verify_phase=False)  # Phase A: download every new file
-            run_phase(verify_phase=True)   # Phase B: verify the deferred ones
+            # One dirty-loop: download + local validate + recovery all inline.
+            # Repeat full traversals until a pass does no transfer work (so
+            # lazily-revealed objects are still caught).
+            for _ in range(_MAX_PASSES):
+                summary.passes += 1
+                try:
+                    dirty = _traverse(dev, wpd.DEVICE_ROOT, "", act)
+                except DeviceLost:
+                    raise
+                except Exception as e:  # enumeration failed — device gone?
+                    if not _alive(dev):
+                        raise DeviceLost("enumeration") from e
+                    raise
+                if not dirty:
+                    break
     except DeviceLost as e:
         summary.device_lost = True
         _log(log, "DISCONNECT", str(e), detail="device lost; re-run to resume")
 
     summary.downloaded = len(downloaded_keys)
     summary.verified = len(verified_keys)
+    summary.recovered = len(recovered_keys)
     # A file downloaded/verified this run isn't "skipped" even if a later clean
     # pass re-encountered it after its sidecar landed.
     summary.skipped = len(skipped_keys - downloaded_keys - verified_keys)
+    # Authoritative problem set = the markers left on disk at the end.
+    summary.needs_session, summary.failed_media = _scan_issues(landing)
 
 
 def _traverse(dev: wpd.Device, parent_id: str, rel: str,
@@ -602,47 +771,6 @@ def _download(dev: wpd.Device, obj: wpd.WpdObject, landed: Path,
     _log(log, "DOWNLOADED", device_path, size=total)
 
 
-def _verify(dev: wpd.Device, obj: wpd.WpdObject, landed: Path, device_path: str,
-            info: wpd.DeviceInfo, manifest: set[tuple[str, int | None]],
-            key: tuple[str, int | None], attempts: dict[tuple[str, int | None], int],
-            failed: set[tuple[str, int | None]], summary: ImportSummary,
-            progress: LiveProgress, log: IO[str] | None,
-            active: _ActiveTransfer) -> str:
-    """Re-read from device and compare to the landed file; commit sidecar on match.
-
-    Returns "verified", "redownloaded" (size changed → fresh pull, verify later),
-    or "flaky" (reads disagreed; retry or FAILED at the cap).
-    """
-    progress.begin("verify", device_path)
-    # Cheap size pre-check: a changed on-device size ⇒ re-download fresh.
-    if obj.size is not None and landed.stat().st_size != obj.size:
-        _download(dev, obj, landed, summary, progress, log, device_path, active)
-        return "redownloaded"
-    disk = _hash_file(landed)
-    dev_hash = _hash_stream(dev, obj.id, active, obj.filename, obj.size)
-    if dev_hash == disk:
-        _write_sidecar(landed, info, obj, device_path)
-        manifest.add(key)
-        _log(log, "VERIFIED", device_path)
-        return "verified"
-    # Disagreement: adjudicate with a third read.
-    dev_hash2 = _hash_stream(dev, obj.id, active, obj.filename, obj.size)
-    if dev_hash == dev_hash2:  # two device reads agree, disk differs → device wins
-        _download(dev, obj, landed, summary, progress, log, device_path, active)
-        _write_sidecar(landed, info, obj, device_path)
-        manifest.add(key)
-        _log(log, "VERIFIED", device_path, detail="device-wins overwrite")
-        return "verified"
-    attempts[key] = attempts.get(key, 0) + 1
-    if attempts[key] >= _MAX_ATTEMPTS:
-        failed.add(key)
-        summary.failed.append(device_path)
-        _log(log, "FAILED", device_path, detail="reads never agreed")
-    else:
-        _log(log, "FLAKY", device_path, detail=f"attempt {attempts[key]}")
-    return "flaky"
-
-
 def _fail(obj: wpd.WpdObject, key: tuple[str, int | None], device_path: str,
           attempts: dict[tuple[str, int | None], int],
           failed: set[tuple[str, int | None]], summary: ImportSummary,
@@ -695,23 +823,6 @@ def _hash_file(path: Path) -> str:
     return hasher.hexdigest()
 
 
-def _hash_stream(dev: wpd.Device, obj_id: str,
-                 active: "_ActiveTransfer | None" = None,
-                 name: str = "", total: int | None = None) -> str:
-    hasher = blake3()
-    if active is not None:
-        active.begin("verify", name, total)
-    try:
-        for block in dev.stream(obj_id, _CHUNK):
-            hasher.update(block)
-            if active is not None:
-                active.advance(len(block))
-    finally:
-        if active is not None:
-            active.clear()
-    return hasher.hexdigest()
-
-
 def _log(log: IO[str] | None, state: str, path: str,
          detail: str | None = None, *, size: int | None = None) -> None:
     if log is None:
@@ -721,3 +832,11 @@ def _log(log: IO[str] | None, state: str, path: str,
     tail = f" : {detail}" if detail else ""
     log.write(f"{ts} {state:<11} {path}{extra}{tail}\n")
     log.flush()
+
+
+def _echo_line(msg: str) -> None:
+    """Print a standalone console line during a run. A leading newline clears any
+    live `\\r` progress line so the message lands cleanly on its own row."""
+    import typer  # noqa: PLC0415
+
+    typer.echo("\n" + msg)
