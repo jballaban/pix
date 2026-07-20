@@ -1,15 +1,13 @@
 # Import — `pix import`
 
-> **Status: building the device→disk import only. Ingestion is deferred.** The
-> WPD/iOS claims below were validated against a real iPhone (serial `M2DF33MY06`)
-> via `comtypes` — see [Validation results](#validation-results); several original
-> assumptions were **wrong** (notably no `DCIM/NNNAPPLE` over MTP) and are
-> corrected inline. **Scope of the current build:** pull files off the device and
-> land them verified under `.pix/local/import/` — nothing consumes them yet. The
-> **migrate ingest seam** (landed files → library) is explicitly out of scope and
-> tracked as open work in
-> [Ingestion seam — issues to resolve](#ingestion-seam--issues-to-resolve-deferred).
-> Android behavior is still assumed, not measured.
+> **Status.** The **device→disk import is built** (WPD/iOS validated against a real
+> iPhone, serial `M2DF33MY06`, via `comtypes` — see
+> [Validation results](#validation-results); several original assumptions were
+> **wrong**, notably no `DCIM/NNNAPPLE` over MTP, and are corrected inline). The
+> **ingest seam** (landed files → library) is now **designed but not yet
+> implemented** — see [Ingestion (migrate pre-pass)](#ingestion-migrate-pre-pass);
+> until it lands, `pix import` lands verified files that nothing consumes. Android
+> behavior is still assumed, not measured.
 
 ## Purpose & scope
 
@@ -191,23 +189,17 @@ self-describing on disk — which is exactly what the
   → retry once on this (fresh) session; with **no** marker → re-probe locally.
   Already-`VERIFIED` files are never re-touched.
 
-**Migrate ingest → provenance becomes in-file (DEFERRED — not built here).** The
-intent: migrate's import-ingest pre-pass reads the `.importinfo` sidecar, writes
-the provenance **into the resulting library file** as pix tags, then drops the
-sidecar (library stores only jpg/mp4, both embed XMP, so no library-side sidecar).
-The two intended tags:
+**Migrate ingest → provenance becomes in-file.** Migrate's import-ingest pre-pass
+(designed in [Ingestion](#ingestion-migrate-pre-pass)) reads the `.importinfo`
+sidecar, writes the provenance **into the resulting library file** as pix tags, then
+drops the sidecar (library stores only jpg/mp4, both embed XMP, so no library-side
+sidecar). The two tags:
 
 - `pix:ImportId` = `<serial>:<persistent-unique-id>` — the durable,
   convert-surviving skip key (survives HEIC→jpg per the CONVERT-preserves-metadata
   invariant). Uses the PUID, **not** the raw object id — see [I1](#validation-results).
-- `pix:OriginalPath` = the **device** path (from the sidecar).
-
-**This whole seam is unbuilt and under-designed** — destination folder, sidecar→tag
-sequencing, crash windows, and several cross-spec conflicts are open. It is
-explicitly **out of scope for the current import build** and tracked in
-[Ingestion seam — issues to resolve](#ingestion-seam--issues-to-resolve-deferred).
-Until it exists, `pix import` lands verified files that nothing yet consumes — by
-design.
+- `pix:OriginalPath` = the **device** path, taken from the sidecar's `device_path`
+  (frozen at import, *before* any merge — see [Ingestion](#ingestion-migrate-pre-pass)).
 
 ## Incremental import (skip already-imported)
 
@@ -477,51 +469,125 @@ and land the selected device's camera roll under `.pix/local/import/<device>/`.
   ("yes, NOW delete from the phone"), never implicit.
 - **Android edge devices / non-DCIM sources**, screenshots, other albums.
 
-## Ingestion seam — issues to resolve (deferred)
+## Ingestion (migrate pre-pass)
 
-The import-ingest pre-pass (landed files → library) is **not being built yet**;
-`pix import` currently lands verified files that nothing consumes. These must be
-resolved before that seam is designed/built. IDs in parentheses are from the
-Fable design review.
+> **Status: designed, not yet implemented.** This section is the design of record;
+> the code doesn't do any of it yet. Section IDs (ING-n) trace to the original
+> Fable design review, now resolved.
 
-- **ING-1 — Design the ingest pre-pass properly (B1).** The "analogous to
-  errors/stash restore" hand-wave doesn't hold. Specify at migrate's worked-example
-  fidelity: the **destination folder** in the library (migrate is otherwise
-  in-place — `migrate.md`: "Files never move between folders" — so this needs an
-  explicit carve-out); the **sidecar→tag sequencing** (for HEIC, `pix:ImportId`/
-  `OriginalPath` can only be written during the CONVERT+TAG action); the **crash
-  table** for every window (file moved but sidecar not; tags written but sidecar
-  not dropped; sidecar dropped but CONVERT fails → `.pix/errors/` with no ImportId);
-  and the manifest consequence (a mid-ingest file is in neither pending nor
-  committed half — dedupe backstops the re-download; state it).
-- **ING-2 — `EventAuto` month-bucket corruption (B2).** `pix:OriginalPath` =
-  `…/202605_a/IMG_7399.JPG`; `tags.md` EventAuto strips `^[\d\-_. ]+` from the
-  parent folder → `202605_a` → `"a"`, so **every imported photo would get
-  `EventAuto="a"` (or `"b"`)**. Fix in ingest (suppress folder-derived EventAuto
-  for device paths) or in the heuristic (reject single-letter residues / recognise
-  `YYYYMM_x` buckets). Decide before any device `OriginalPath` is written — it's
-  write-once. (Also: does import even record the raw month-bucket path, or a
-  normalised one? Affects this.)
-- **ING-3 — `.importinfo` vs migrate's fail-fast (S6/B1).** `.importinfo` is not in
-  `EXTENSION_POLICY`; if sidecars sit in the migrate-walked tree, the
-  unknown-extension abort kills the run. And since import lands **everything**, any
-  stray phone extension (esp. Android) hits the same fail-fast. Ingest needs a
-  skip-and-report policy for unknowns and a defined home for sidecars. (Same for the
-  `.importissue` marker — ingest must ignore it and never treat a `failed`/
-  `needs-session` file as ready to migrate.)
-- **ING-4 — `OriginalPath` write-once override (B1).** Migrate's first-migrate logic
-  sets `OriginalPath = current source path` (`library.md`); import wants the
-  **device** path. Specify the override; getting it wrong is permanent.
-- **ING-5 — Live Photo pairing at rename (S7).** `IMG_xxxx.HEIC` + `IMG_xxxx.MOV`
-  share a capture time; migrate's canonical rename + `_NNN` content-hash tiebreaker
-  scrambles the pairing (the failure mode `.insv` got a carve-out for). Decide
-  whether pairing is preserved or explicitly not.
-- **ING-6 — Invariant + delete-gate wording (N2/N3).** `implementation.md` says
-  `.pix/local/` loss "never [costs] library data" — untrue while pending imports
-  are the only local copy; amend it. The deferred phone-deletion action must gate
-  on **"ingested + synced"**, not merely `VERIFIED`. Define when the manifest's
-  committed half (scan of `pix:ImportId`) is rebuilt, and note cache.db loss becomes
-  a behavioural change (delete semantics), not just a perf hit.
+The ingest pre-pass pulls **`VERIFIED`** landed files (those with an `.importinfo`
+sidecar) from `.pix/local/import/` into the library, where the normal pipeline
+(migrate → hash → dedupe → organize) takes over. It runs as a **pre-pass of
+migrate**, mirroring the existing `errors/`/`stash/` restore passes — but with one
+difference that drives the whole design: those passes restore a file to an *origin
+that was already in the media tree*; import files have **no such origin**, so the
+pre-pass genuinely **moves files into the tree** for the first time.
+
+### Flow
+
+```
+.pix/local/import/james/Internal Storage/202605_a/IMG_7399.HEIC   (sync-excluded)
+   │  ingest (migrate pre-pass): MOVE + sidecar rides along
+   ▼
+<root>/incoming/IMG_7399.HEIC   (+ IMG_7399.HEIC.importinfo)      (now synced library content)
+   │  migrate: CONVERT (HEIC→jpg) + RENAME (canonical) + TAG (ImportId, OriginalPath, *Auto)
+   │           then drop the sidecar
+   ▼
+<root>/incoming/2026-05-31_194431.jpg   (EventAuto = "james - 20260720")
+   │  hash + dedupe: a re-import collapses against the existing library automatically
+   ▼
+organize → <root>/2026/james - 20260720/…   (empties incoming/, reaped when empty)
+```
+
+### Trigger & scope (ING-1)
+A **migrate pre-pass**, active only when `<root>/incoming/` lies within the folder
+being migrated (so `pix migrate 2014/` doesn't drag imports in; `pix sync <root>`
+does). Runs under the library lock migrate already holds. No new CLI surface — the
+post-import flow is just `pix import` then `pix sync <root>`.
+
+### Destination — one flat `incoming/` (ING-1)
+Ingest moves each `VERIFIED` file to a single flat `<root>/incoming/<name>`. This
+is migrate's **one carve-out** from "files never move between folders" (`migrate.md`)
+— confined to this move; migrate itself stays in-place afterward. Device month-bucket
+folders are **dropped** (the original path is preserved in the tag, not the layout —
+see below). Two device files that flatten to the same name are disambiguated with a
+short suffix on the move; the collision is transient anyway, since migrate's canonical
+RENAME renames everything by capture date immediately after.
+
+### Provenance — captured at import, written at migrate (ING-4)
+`OriginalPath`'s **value is frozen at import**, before any merge: the `.importinfo`
+sidecar records `device_path` (full, e.g. `Internal Storage/202605_a/IMG_7399.HEIC`)
+the moment the file verifies. The sidecar **travels with its file** into `incoming/`.
+Migrate then writes the tags, valued from the sidecar:
+
+- `pix:OriginalPath` = the sidecar's `device_path` — a **write-once override** of
+  migrate's default ("first-migrate sets `OriginalPath` = current source path", which
+  in `incoming/` would wrongly be the flattened location). Migrate still treats the
+  file as a first-migrate and writes its `*Auto` baselines; only the `OriginalPath`
+  *value* is overridden.
+- `pix:ImportId` = `<serial>:<puid>` — the durable, convert-surviving skip key.
+
+**Sequencing:** for a keep file (jpg/mp4) the tags are written by `RENAME+TAG`; for a
+convert file (HEIC→jpg, MOV→mp4) by `CONVERT+RENAME+TAG` on the output (the
+CONVERT-preserves-metadata invariant carries them across). The sidecar is dropped
+**only after** the tags commit.
+
+### Event — synthetic, per device+day (ING-2)
+Imported files must **not** derive `EventAuto` from their transient folder
+(`incoming/`, or the old month-bucket `202605_a` → `"a"`). Instead, when a file
+carries an `.importinfo` sidecar, migrate sets:
+
+    EventAuto = "<friendly> - <imported_at:YYYYMMDD>"      e.g. "james - 20260720"
+
+`imported_at` is a new field the `.importinfo` sidecar records at verify time; the
+friendly name is used **verbatim** (lowercase stays lowercase). This groups a batch
+into its own event so organize keeps it separate for review (delete junk, etc.). The
+injection happens once, during the ingest migrate; after organize places the files
+into `<root>/<year>/james - 20260720/`, a later migrate re-derives the same event
+from the folder name (it round-trips). Because `{year}` comes from each file's own
+capture date, a batch spanning years fans out across `2014/james - 20260720/`,
+`2026/james - 20260720/`, … — by design (any template token before `{event}` does).
+
+### Live Photo MOVs are dropped (ING-5)
+A Live Photo is an image plus a short motion `.mov` sharing its stem. At ingest, a
+`.mov` is **dropped** (not moved into the library) when it **both** (a) shares its
+stem with a sibling image (`.heic/.heif/.jpg/.jpeg`) in the same import folder **and**
+(b) has a duration ≤ **5 s** (read via ffprobe). Both conditions guard a real short
+clip that happens to share a name. Dropped MOVs are **soft-dropped to the run folder**
+(recoverable), not hard-deleted, and the phone still holds the original. Standalone
+MOVs and long paired MOVs are ingested normally.
+
+### Sidecars & unknowns in the walk (ING-3)
+Only `VERIFIED` files (with `.importinfo`) are ingested; `.importissue`
+(`needs-session`/`failed`) files **never** move into the tree. Inside `incoming/`,
+migrate must treat `.importinfo` as a consumed companion (read it, then drop it),
+never as a walk target — and neither `.importinfo` nor any stray non-policy extension
+may trip migrate's unknown-extension fail-fast: ingest/migrate **skip-and-report**
+unknowns rather than aborting.
+
+### Crash windows (ING-1)
+
+| Crash point | On replay |
+|---|---|
+| File moved to `incoming/`, sidecar not yet moved | Sidecar moves **first** (or file+sidecar as a unit); a file in `incoming/` without its sidecar is treated as a normal library file (no ImportId) — acceptable, dedupe backstops it. |
+| Tags written, sidecar not yet dropped | File already carries `ImportId` → migrate sees provenance present, just drops the leftover sidecar (idempotent). |
+| CONVERT fails after the move | File → `.pix/errors/`; the sidecar's `device_path`/`ImportId` **fold into `.errorinfo`** so provenance survives to the version-bump retry. Never a `.pix/errors/` entry silently missing its ImportId. |
+| Mid-ingest (in neither manifest half) | The file is momentarily absent from both the pending (sidecar gone from `.pix/local/import`) and committed (tag not yet written) halves; a concurrent re-import would re-download it, and **dedupe backstops** the duplicate. |
+
+### Manifest committed-half & delete gate (ING-6)
+The manifest's **committed** half is the set of `pix:ImportId` tags across library
+jpg/mp4 — rebuilt by scanning the library (cached in `cache.db`). This is the durable
+skip that survives a `.pix/local` wipe. Consequences to fold into the specs:
+
+- `implementation.md`'s "`.pix/local/` loss never costs library data" is **false while
+  pending imports are the only local copy** — amend it: a lost `.pix/local` before
+  ingest means re-importing from the phone (the phone is the backup), not data loss,
+  but it is not "free."
+- The future phone-side delete action gates on **ingested *and* synced**, never on
+  `VERIFIED` alone — a `VERIFIED` file still living only in the sync-excluded
+  `.pix/local` has no off-machine copy yet.
+- `cache.db` loss becomes a **behavioral** change here (re-scan rebuilds the committed
+  half; a since-deleted library file could re-import), not just a perf hit.
 
 ## Validation results
 
