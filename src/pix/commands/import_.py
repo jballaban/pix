@@ -45,11 +45,16 @@ def import_library(
         except ImportError_ as e:
             typer.echo(f"Error: {e}", err=True)
             raise typer.Exit(code=1) from e
+        seeded = (
+            f", {summary.seed_skipped} skipped via manifest"
+            if summary.seed_skipped else ""
+        )
         typer.echo(
             f"{summary.device.friendly or summary.device.model} "
             f"(serial {summary.device.serial}): "
-            f"{summary.downloaded} new, {summary.skipped} already imported."
+            f"{summary.downloaded} new, {summary.skipped} already imported{seeded}."
         )
+        _warn_manifests_deprecated(summary)
         return
 
     try:
@@ -61,6 +66,18 @@ def import_library(
     except ImportError_ as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
+
+
+def _warn_manifests_deprecated(summary: object) -> None:
+    """When the seed-manifest folder is present but empty, every device's list
+    has been used up — nudge to delete the now-dead lookup code."""
+    if getattr(summary, "manifests_deprecated", False):
+        typer.echo(
+            "Note: .pix/import-manifests/ is empty — all import-seed manifests "
+            "have been consumed. The manifest-skip lookup is now dead code and "
+            "can be removed.",
+            err=True,
+        )
 
 
 def _run(root: Path, *, device: str | None, name: str | None) -> None:
@@ -81,12 +98,17 @@ def _run(root: Path, *, device: str | None, name: str | None) -> None:
     recovered = (
         f", recovered {summary.recovered}" if summary.recovered else ""
     )
+    seeded = (
+        f", {summary.seed_skipped} skipped via manifest"
+        if summary.seed_skipped else ""
+    )
     typer.echo(
         f"Downloaded {summary.downloaded} file(s) "
         f"({format_size(summary.bytes_downloaded)}), "
-        f"verified {summary.verified}, skipped {summary.skipped}{recovered}, "
+        f"verified {summary.verified}, skipped {summary.skipped}{recovered}{seeded}, "
         f"in {summary.passes} pass(es)."
     )
+    _warn_manifests_deprecated(summary)
     if summary.needs_session:
         typer.echo("")
         typer.echo(

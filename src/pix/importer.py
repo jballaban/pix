@@ -24,6 +24,7 @@ file-level (attempt caps / bounded ladder), never loop-level.
 
 from __future__ import annotations
 
+import json
 import sys
 import threading
 import time
@@ -78,6 +79,9 @@ class ImportSummary:
     recovered: int = 0                # media-check fails fixed by a re-download
     needs_session: list[str] = field(default_factory=lambda: [])  # awaiting reconnect
     failed_media: list[str] = field(default_factory=lambda: [])   # terminal, resolve on device
+    # Import-seed manifest (deprecated-tool skip list) outcomes:
+    seed_skipped: int = 0             # objects skipped via a seed manifest
+    manifests_deprecated: bool = False  # seed folder present but empty → remove the code
 
 
 class ImportError_(Exception):
@@ -290,6 +294,65 @@ def _append_verify_log(root: Path, friendly: str, device_path: str,
         f.write(f"{ts}\t{friendly}\t{event}\t{device_path}\t{detail}\n")
 
 
+# --- import-seed manifests (skip lists from the deprecated external MTP tool) -
+# A one-time bridge: those manifests predate this system and carry no PUID, so
+# their entries can't ride the primary PUID+size skip key — the loop consults
+# this (filename.lower(), size) set separately. Placed by hand (no CLI) under
+# `.pix/import-manifests/manifest.<friendly>.json` in the canonical schema
+# {"files": [[name, size], ...]}. Delete a device's file once its phone-side
+# copies are gone; when the folder is empty the feature is spent (see
+# `_manifests_all_consumed`) and this whole path can be removed.
+_MANIFEST_DIRNAME: str = "import-manifests"
+
+
+def _manifest_dir(root: Path) -> Path:
+    return root / ".pix" / _MANIFEST_DIRNAME
+
+
+def _load_seed(root: Path, friendly: str) -> set[tuple[str, int]]:
+    """Load the seed skip-set for `friendly` → {(filename.lower(), size)}.
+    Empty if there's no manifest for this device (or it's unreadable)."""
+    p = _manifest_dir(root) / f"manifest.{friendly}.json"
+    if not p.is_file():
+        return set()
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    out: set[tuple[str, int]] = set()
+    if not isinstance(raw, dict):
+        return out
+    files = cast("dict[str, Any]", raw).get("files", [])
+    if not isinstance(files, list):
+        return out
+    for entry in cast("list[object]", files):
+        if not isinstance(entry, (list, tuple)):
+            continue
+        seq = cast("list[object]", entry)
+        if len(seq) != 2:
+            continue
+        pair = [str(x) for x in seq]
+        try:
+            out.add((pair[0].lower(), int(pair[1])))
+        except ValueError:
+            continue
+    return out
+
+
+def _manifests_all_consumed(root: Path) -> bool:
+    """True iff the seed folder exists but holds no `manifest.*.json` — the
+    feature has been fully used up, so the whole seed path is now dead code."""
+    d = _manifest_dir(root)
+    return d.is_dir() and not any(d.glob("manifest.*.json"))
+
+
+def _seed_key(obj: wpd.WpdObject) -> tuple[str, int] | None:
+    """The seed fingerprint for a live object, or None if size is unknown."""
+    if obj.size is None:
+        return None
+    return (obj.filename.lower(), obj.size)
+
+
 def _scan_manifest(landing: Path) -> set[tuple[str, int | None]]:
     """Regenerate the pending manifest from `.importinfo` sidecars on disk."""
     manifest: set[tuple[str, int | None]] = set()
@@ -441,9 +504,10 @@ def run_import(
     friendly = _friendly_for(root, info, interactive=interactive, name=name)
     landing = local_dir(root) / "import" / friendly
     summary = ImportSummary(device=info, landing=landing)
+    summary.manifests_deprecated = _manifests_all_consumed(root)
 
     if dry_run:
-        _dry_run(info, landing, summary)
+        _dry_run(info, landing, summary, _load_seed(root, friendly))
         return summary
 
     # Only now — a device is selected and named — create the run folder + log.
@@ -482,6 +546,7 @@ def _import_loop(root: Path, info: wpd.DeviceInfo, friendly: str, landing: Path,
         )
 
     manifest = _scan_manifest(landing)
+    seed = _load_seed(root, friendly)  # deprecated-tool skip list, if any
     used_paths: dict[Path, str] = {}
     attempts: dict[tuple[str, int | None], int] = {}
     failed_keys: set[tuple[str, int | None]] = set()
@@ -490,6 +555,7 @@ def _import_loop(root: Path, info: wpd.DeviceInfo, friendly: str, landing: Path,
     verified_keys: set[tuple[str, int | None]] = set()
     skipped_keys: set[tuple[str, int | None]] = set()
     recovered_keys: set[tuple[str, int | None]] = set()
+    seed_skipped_keys: set[tuple[str, int | None]] = set()
     # Keys parked as `needs-session` *this run*. The dirty-loop re-traverses, so
     # without this a marker just written would be re-read as a fresh-session
     # retry in the next pass of the same session — collapsing the escalation.
@@ -589,6 +655,12 @@ def _import_loop(root: Path, info: wpd.DeviceInfo, friendly: str, landing: Path,
                     progress.begin("skipped", device_path)
                     skipped_keys.add(key)
                     return False
+                sk = _seed_key(obj)
+                if sk is not None and sk in seed:  # deprecated-tool already had it
+                    progress.begin("seed-skip", device_path)
+                    seed_skipped_keys.add(key)
+                    _log(log, "SEED-SKIP", device_path)
+                    return False
                 try:
                     issue = _issue_path(landed)
                     if issue.exists():
@@ -646,6 +718,7 @@ def _import_loop(root: Path, info: wpd.DeviceInfo, friendly: str, landing: Path,
     summary.downloaded = len(downloaded_keys)
     summary.verified = len(verified_keys)
     summary.recovered = len(recovered_keys)
+    summary.seed_skipped = len(seed_skipped_keys)
     # A file downloaded/verified this run isn't "skipped" even if a later clean
     # pass re-encountered it after its sidecar landed.
     summary.skipped = len(skipped_keys - downloaded_keys - verified_keys)
@@ -784,14 +857,18 @@ def _fail(obj: wpd.WpdObject, key: tuple[str, int | None], device_path: str,
         _log(log, "ERROR", device_path, detail=f"{reason} (attempt {attempts[key]})")
 
 
-def _dry_run(info: wpd.DeviceInfo, landing: Path, summary: ImportSummary) -> None:
+def _dry_run(info: wpd.DeviceInfo, landing: Path, summary: ImportSummary,
+             seed: set[tuple[str, int]]) -> None:
     manifest = _scan_manifest(landing)
     with wpd.open_device(info.device_id) as dev:
         def act(obj: wpd.WpdObject, _path: str) -> bool:
+            sk = _seed_key(obj)
             if _is_skippable_companion(obj):
                 summary.skipped += 1
             elif _skip_key(obj) in manifest:
                 summary.skipped += 1
+            elif sk is not None and sk in seed:
+                summary.seed_skipped += 1  # "would skip via manifest"
             else:
                 summary.downloaded += 1  # "would download"
             return False

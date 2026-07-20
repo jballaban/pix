@@ -239,6 +239,8 @@ only-copy state. It's the union of two durable sources and rebuilds from them:
 **Per-object decision (one unified procedure).** For each enumerated device object:
 
 1. key (`PUID+size`) in the manifest (pending or committed) → **skip**;
+1b. else `(filename.lower(), size)` in the device's **import-seed manifest** (see
+   below) → **skip** (`seed-skip`);
 2. else `.importinfo` present at its path → already `VERIFIED` → **skip**;
 3. else `.importissue` present:
    - `state: failed` → terminal → **skip + report** (clearable by deleting the marker);
@@ -264,6 +266,38 @@ optimization; anything that slips through and is re-downloaded gets caught by
 and, while the manifest cache is intact, it is **not** re-imported. Only if the
 cache is lost *and* regenerated does a since-deleted file re-download (rare;
 findable by date).
+
+### Import-seed manifests (transitional, from the deprecated external MTP tool)
+
+A prior MTP tool tracked what it had already pulled in per-device manifest JSONs.
+To avoid re-downloading everything on the first pix imports, those lists **seed**
+the skip set. They are a **one-time bridge**, not a permanent feature:
+
+- **No CLI.** Normalized manifests are placed by hand at
+  `.pix/import-manifests/manifest.<friendly>.json` (durable/synced tier — *not*
+  `.pix/local`, since they're the only copy and not regenerable). Canonical schema:
+  `{"friendly", "source", "device_ids", "files": [[name, size], …]}`. The two
+  legacy on-disk formats (a `{Version,DevicePath,LastSeen}` dict, and a
+  `path → "rel-size"` string map) are normalized **once, out of band**; pix reads
+  only the canonical form.
+- **Attribution = friendly name from the filename.** `manifest.james.json` seeds
+  the device whose friendly name resolves to `james`. The legacy `device_ids`
+  aren't usable for matching (VID/PID only; two different iPhones share
+  `05ac:12a8`), so the friendly name is the sole bridge. A mismatch (device named
+  differently) is a silent no-op → import **reports the seed-skip count** so a
+  naming mismatch is visible.
+- **Match key = `(filename.lower(), size)`.** These lists predate this system and
+  carry **no PUID**, so they can't ride the primary `PUID+size` key — the loop
+  checks this fingerprint as a **separate secondary index**, scoped to the one
+  matching device. `(name, size)` is near-unique in practice (0/0/2 internal
+  collisions across the three real manifests). Accepted risk: unlike an
+  over-download (which `dedupe` backstops), a **false seed-skip is a permanent
+  miss** — but a name+exact-size collision between genuinely different photos is
+  negligible.
+- **Lifecycle.** Delete a device's `manifest.<friendly>.json` once its phone-side
+  copies are gone (the seed is then worthless). When the folder exists but holds
+  **no** `manifest.*.json`, the feature is spent → import prints a **deprecation
+  warning** to remove the whole seed path (loader, secondary check, this section).
 
 ## Import loop — download, validate, recover
 

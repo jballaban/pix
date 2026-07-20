@@ -7,6 +7,7 @@ manifest regeneration, device selection, and the friendly-name registry.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Callable
 
@@ -576,3 +577,66 @@ def test_loop_terminal_failed_is_skipped(
     assert summary.downloaded == 0
     assert summary.verified == 0
     assert summary.failed_media == ["IMG.HEIC"]
+
+
+# --- import-seed manifests (deprecated-tool skip lists) ----------------------
+def _write_seed(tmp_path: Path, friendly: str, files: list[list[object]]) -> None:
+    mdir = tmp_path / ".pix" / "import-manifests"
+    mdir.mkdir(parents=True, exist_ok=True)
+    (mdir / f"manifest.{friendly}.json").write_text(
+        json.dumps({"friendly": friendly, "files": files}), encoding="utf-8"
+    )
+
+
+def test_load_seed_reads_canonical(tmp_path: Path) -> None:
+    _write_seed(tmp_path, "james", [["IMG_1.JPG", 100], ["clip.mov", 200]])
+    assert importer._load_seed(tmp_path, "james") == {("img_1.jpg", 100), ("clip.mov", 200)}
+
+
+def test_load_seed_missing_is_empty(tmp_path: Path) -> None:
+    assert importer._load_seed(tmp_path, "nobody") == set()
+
+
+def test_load_seed_tolerates_garbage(tmp_path: Path) -> None:
+    mdir = tmp_path / ".pix" / "import-manifests"
+    mdir.mkdir(parents=True)
+    (mdir / "manifest.x.json").write_text("{not valid json", encoding="utf-8")
+    assert importer._load_seed(tmp_path, "x") == set()
+
+
+def test_load_seed_skips_bad_entries(tmp_path: Path) -> None:
+    # len!=2 dropped; non-numeric size dropped; numeric-string size kept.
+    _write_seed(tmp_path, "x", [["ok.jpg", 5], ["missing_size"], ["bad", "size"], ["a", "10"]])
+    assert importer._load_seed(tmp_path, "x") == {("ok.jpg", 5), ("a", 10)}
+
+
+def test_seed_key_case_and_size() -> None:
+    assert importer._seed_key(_obj(orig="IMG_1.JPG", size=100)) == ("img_1.jpg", 100)
+    assert importer._seed_key(_obj(size=None)) is None
+
+
+def test_manifests_all_consumed(tmp_path: Path) -> None:
+    assert importer._manifests_all_consumed(tmp_path) is False  # no folder
+    mdir = tmp_path / ".pix" / "import-manifests"
+    mdir.mkdir(parents=True)
+    assert importer._manifests_all_consumed(tmp_path) is True   # folder, no manifests
+    (mdir / "manifest.a.json").write_text("{}", encoding="utf-8")
+    assert importer._manifests_all_consumed(tmp_path) is False  # has one
+
+
+def test_loop_seed_skips_matching_file(
+    tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+) -> None:
+    # _run_loop uses friendly "iPhone". Seed one (name,size); leave another new.
+    _write_seed(tmp_path, "iPhone", [["img_seen.jpg", 111]])
+    seen = _file_obj("o1", "IMG_SEEN.JPG", b"x" * 111)  # matches seed (case-insensitive)
+    fresh = _file_obj("o2", "IMG_NEW.JPG", b"y" * 50)
+    summary, landing = _run_loop(
+        monkeypatch, tmp_path, {"DEVICE": [seen, fresh]},
+        {"o1": b"x" * 111, "o2": b"y" * 50}, {},
+    )
+    assert summary.seed_skipped == 1
+    assert summary.downloaded == 1 and summary.verified == 1
+    assert not (landing / "IMG_SEEN.JPG").exists()      # seed-skipped, never pulled
+    assert (landing / "IMG_NEW.JPG").exists()           # not in seed → downloaded
+    assert not importer._sidecar_path(landing / "IMG_SEEN.JPG").exists()
