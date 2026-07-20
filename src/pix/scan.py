@@ -16,6 +16,12 @@ _SKIP_DIRS: frozenset[str] = frozenset({".pix", ".SynologyWorkingDirectory"})
 # extension policy. Matched case-insensitively (Windows).
 _SKIP_FILES: frozenset[str] = frozenset({"desktop.ini", "thumbs.db"})
 
+# pix's own device-import companion files: the `.importinfo` provenance sidecar
+# (consumed by migrate's ingest by path, never as a walk target) and the
+# `.importissue` problem marker (never ingested). Neither is media; skipping
+# them keeps them out of the extension-policy fail-fast. Matched by suffix.
+_SKIP_SUFFIXES: frozenset[str] = frozenset({".importinfo", ".importissue"})
+
 
 def walk_source_files(folder: Path) -> list[tuple[Path, int, int]]:
     """Walk `folder` recursively for files, skipping `.pix/` and sync-client
@@ -52,7 +58,10 @@ def walk_source_files(folder: Path) -> list[tuple[Path, int, int]]:
                         if entry.name not in _SKIP_DIRS:
                             stack.append(entry.path)
                     elif entry.is_file(follow_symlinks=False):
-                        if entry.name.lower() in _SKIP_FILES:
+                        name_lower = entry.name.lower()
+                        if name_lower in _SKIP_FILES:
+                            continue
+                        if any(name_lower.endswith(s) for s in _SKIP_SUFFIXES):
                             continue
                         st = entry.stat()
                         out.append(

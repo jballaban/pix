@@ -1,13 +1,12 @@
 # Import — `pix import`
 
-> **Status.** The **device→disk import is built** (WPD/iOS validated against a real
-> iPhone, serial `M2DF33MY06`, via `comtypes` — see
-> [Validation results](#validation-results); several original assumptions were
+> **Status.** The **device→disk import and the ingest seam are both built**
+> (WPD/iOS validated against a real iPhone, serial `M2DF33MY06`, via `comtypes` —
+> see [Validation results](#validation-results); several original assumptions were
 > **wrong**, notably no `DCIM/NNNAPPLE` over MTP, and are corrected inline). The
-> **ingest seam** (landed files → library) is now **designed but not yet
-> implemented** — see [Ingestion (migrate pre-pass)](#ingestion-migrate-pre-pass);
-> until it lands, `pix import` lands verified files that nothing consumes. Android
-> behavior is still assumed, not measured.
+> ingest pre-pass (landed files → library) is described in
+> [Ingestion (migrate pre-pass)](#ingestion-migrate-pre-pass) and verified
+> end-to-end. Android behavior is still assumed, not measured.
 
 ## Purpose & scope
 
@@ -471,9 +470,9 @@ and land the selected device's camera roll under `.pix/local/import/<device>/`.
 
 ## Ingestion (migrate pre-pass)
 
-> **Status: designed, not yet implemented.** This section is the design of record;
-> the code doesn't do any of it yet. Section IDs (ING-n) trace to the original
-> Fable design review, now resolved.
+> **Status: implemented** (v0.1.193; `src/pix/ingest.py` + migrate plan-gen/apply
+> hooks). Section IDs (ING-n) trace to the original Fable design review, now
+> resolved.
 
 The ingest pre-pass pulls **`VERIFIED`** landed files (those with an `.importinfo`
 sidecar) from `.pix/local/import/` into the library, where the normal pipeline

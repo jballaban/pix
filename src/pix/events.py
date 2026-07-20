@@ -23,6 +23,11 @@ PIX_EVENT_AUTO: str = "XMP:EventAuto"
 PIX_EVENT_AUTO_PREVIOUS: str = "XMP:EventAutoPrevious"
 PIX_EVENT_OVERRIDE: str = "XMP:EventOverride"
 PIX_ORIGINAL_PATH: str = "XMP:OriginalPath"
+# Device-import provenance: "<serial>:<persistent-unique-id>". Its presence also
+# pins EventAuto (see derive_event_auto) — an imported file's OriginalPath is a
+# device path whose parent is a meaningless capture-month bucket, so the event is
+# the synthetic batch value, not folder-derived. See spec/import.md → Ingestion.
+PIX_IMPORT_ID: str = "XMP:ImportId"
 # Dedupe-consolidated event, consulted before the folder-name heuristic.
 # See spec/tags.md → Merge fields and spec/dedupe.md → Tag merge.
 PIX_MERGE_EVENT: str = "XMP:MergeEvent"
@@ -109,6 +114,15 @@ def derive_event_auto(meta: FileMetadata) -> str | None:
         debug.log(f"  pix:MergeEvent present: {merge!r}")
         debug.log(f"  Result: {merge!r}")
         return merge
+
+    # Device imports: pin to the stored synthetic batch event ("<device> -
+    # <YYYYMMDD>", first written at ingest from the sidecar). Never fold in the
+    # device path's capture-month-bucket parent. Sticky, mirroring how pix pins
+    # normal files' events to their write-once OriginalPath folder.
+    if meta.get_str(PIX_IMPORT_ID):
+        stored = meta.get_str(PIX_EVENT_AUTO)
+        debug.log(f"  Import file (ImportId set) → keep stored EventAuto: {stored!r}")
+        return stored
 
     original = meta.get_str(PIX_ORIGINAL_PATH)
     source = PurePath(original) if original else PurePath(str(meta.path))

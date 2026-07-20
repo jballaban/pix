@@ -294,6 +294,15 @@ def _quarantine_line(
     except ValueError:
         rel_dest = Path(dest.name)
     _log(log, ln, "Quarantined", detail=str(rel_dest).replace("\\", "/"))
+    # Device import: carry the `.importinfo` provenance sidecar into errors
+    # alongside the quarantined file, so ImportId/OriginalPath aren't orphaned
+    # and survive the version-bump retry. Best-effort (errorinfo already records
+    # original_path). See spec/import.md → crash windows.
+    if ln.import_sidecar_path is not None and ln.import_sidecar_path.is_file():
+        try:
+            safe_move(ln.import_sidecar_path, dest.with_name(dest.name + ".importinfo"))
+        except Exception:  # noqa: BLE001 — provenance fold is best-effort
+            pass
     convert_failures.append((ln, error))
     records.append(
         LineRecord(
@@ -774,6 +783,13 @@ def _apply_one(
         )
     else:
         raise ApplyError(f"action {ln.action.value} not supported")
+
+    # Device import: reaching here means the action (incl. its tag write)
+    # succeeded, so the provenance is now in-file — drop the `.importinfo`
+    # sidecar (the VERIFIED→ingested commit). Only import lines set this; a
+    # failure raised above and never reaches here. See spec/import.md.
+    if ln.import_sidecar_path is not None:
+        ln.import_sidecar_path.unlink(missing_ok=True)
 
 
 def _apply_delete(ln: PlanLine, run_dir: Path) -> None:

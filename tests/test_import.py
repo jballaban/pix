@@ -90,7 +90,7 @@ def test_sidecar_write_read_and_manifest(tmp_path: Path) -> None:
     landed.write_bytes(b"pretend-heic")
 
     obj = _obj()
-    importer._write_sidecar(landed, _dev(), obj, "Internal Storage/202605_a/IMG_0001.HEIC")
+    importer._write_sidecar(landed, _dev(), "iPhone", obj, "Internal Storage/202605_a/IMG_0001.HEIC")
 
     sidecar = importer._sidecar_path(landed)
     assert sidecar.exists()
@@ -111,7 +111,7 @@ def test_scan_manifest_empty_when_no_landing(tmp_path: Path) -> None:
 def test_sidecar_write_is_atomic_no_temp_left(tmp_path: Path) -> None:
     landed = tmp_path / "IMG.HEIC"
     landed.write_bytes(b"x")
-    importer._write_sidecar(landed, _dev(), _obj(), "dev/IMG.HEIC")
+    importer._write_sidecar(landed, _dev(), "iPhone", _obj(), "dev/IMG.HEIC")
     leftovers = list(tmp_path.glob("*.__import__"))
     assert leftovers == []
 

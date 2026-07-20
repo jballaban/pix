@@ -10,11 +10,28 @@ from pix.events import (
     EVENT_NULL,
     PIX_EVENT_AUTO,
     PIX_EVENT_OVERRIDE,
+    PIX_IMPORT_ID,
     PIX_ORIGINAL_PATH,
     derive_event_auto,
     effective_event,
 )
 from pix.metadata import FileMetadata
+
+
+def test_derive_event_auto_import_is_sticky() -> None:
+    """An import file's event is pinned to the stored synthetic batch value —
+    NOT re-derived from its device OriginalPath's month-bucket parent (which
+    would strip to 'a'). See spec/import.md → Event (ING-2)."""
+    m = FileMetadata(
+        path=Path("incoming/2026-05-31_194431.jpg"),
+        raw={
+            "SourceFile": "incoming/2026-05-31_194431.jpg",
+            PIX_IMPORT_ID: "SER1:{PUID}",
+            PIX_EVENT_AUTO: "james - 20260720",
+            PIX_ORIGINAL_PATH: "Internal Storage/202605_a/IMG_7399.HEIC",
+        },
+    )
+    assert derive_event_auto(m) == "james - 20260720"
 
 
 def _event_meta(auto: str | None = None, override: str | None = None) -> FileMetadata:

@@ -427,6 +427,39 @@ def test_plan_keep_mp4_is_left_alone_regardless_of_codec(tmp_path: Path) -> None
     assert plan.lines == []
 
 
+def test_generate_plan_uses_import_sidecar_provenance(tmp_path: Path) -> None:
+    """A keep file in incoming/ with an `.importinfo` sidecar gets device-path
+    OriginalPath, an ImportId, and the synthetic batch event — not the flattened
+    location or a folder-derived event. See spec/import.md → Ingestion."""
+    inc = tmp_path / "incoming"
+    inc.mkdir()
+    media = inc / "IMG_1.JPG"
+    media.write_bytes(b"x")
+    (inc / "IMG_1.JPG.importinfo").write_text(
+        "serial: SER1\npuid: '{P1}'\ndevice_name: james\n"
+        "imported_at: '20260720'\n"
+        "device_path: Internal Storage/202605_a/IMG_1.JPG\n",
+        encoding="utf-8",
+    )
+
+    cfg = _config(jpg="keep")
+    cache = {media.resolve(): _meta(str(media))}  # no OriginalPath → first migrate
+    plan = generate_plan(
+        source=inc.resolve(),
+        cache=cache,
+        config=cfg,
+        run_id="r1",
+        run_dir=tmp_path / ".pix" / "runs" / "r1",
+        staging_dir=tmp_path / ".pix" / "local" / "staging",
+    )
+    assert len(plan.lines) == 1
+    ln = plan.lines[0]
+    assert ln.pix_writes["XMP:OriginalPath"] == "Internal Storage/202605_a/IMG_1.JPG"
+    assert ln.pix_writes["XMP:ImportId"] == "SER1:{P1}"
+    assert ln.pix_writes["XMP:EventAuto"] == "james - 20260720"
+    assert ln.import_sidecar_path == (inc / "IMG_1.JPG.importinfo").resolve()
+
+
 def test_plan_insv_is_kept_not_converted(tmp_path: Path) -> None:
     """Name-preserving .insv (Insta360 360 video) is a keep — never routed to
     CONVERT (a remux would strip the Insta360 trailer). An already-tagged one

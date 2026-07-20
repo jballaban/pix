@@ -50,6 +50,7 @@ from pix.plan import (
 )
 from pix.progress import LiveProgress
 from pix.root import NoLibraryRoot, local_dir, resolve as resolve_root
+from pix.ingest import run_ingest
 from pix.scan import walk_source_files
 from pix.stash import restore_stale_stash
 
@@ -284,6 +285,23 @@ def _run_migrate(
         )
         for skip in stash_skipped:
             typer.echo(f"  {skip.entry_path.name}: {skip.reason}", err=True)
+
+    # Import-ingest pre-pass: drain VERIFIED device imports from
+    # `.pix/local/import/` into `<root>/incoming/` so this run's walk picks them
+    # up (only when incoming is within `folder`; Live Photo clips dropped). The
+    # one carve-out from migrate's in-place rule. See spec/import.md → Ingestion.
+    ingest_summary = run_ingest(root, folder, runs_dir)
+    for note in ingest_summary.notes:
+        _plog(plan_log_path, note)
+    if ingest_summary.ingested or ingest_summary.live_photos_dropped:
+        dropped = (
+            f" ({ingest_summary.live_photos_dropped} Live Photo clip(s) dropped)"
+            if ingest_summary.live_photos_dropped else ""
+        )
+        typer.echo(
+            f"Ingested {ingest_summary.ingested} imported file(s) into "
+            f"incoming/{dropped}."
+        )
 
     # Walk is sub-second on the libraries we care about (scandir-based
     # since v0.1.62), so no console ticker — the next phase's progress

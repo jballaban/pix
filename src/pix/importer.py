@@ -38,6 +38,7 @@ from blake3 import blake3
 
 from pix import wpd
 from pix.duration import format_duration_compact
+from pix.ingest import committed_import_ids
 from pix.markers import IMPORT_TMP_SUFFIX
 from pix.media_check import media_check
 from pix.progress import LiveProgress
@@ -194,12 +195,20 @@ def _sidecar_path(landed: Path) -> Path:
     return landed.with_name(landed.name + _SIDECAR_EXT)
 
 
-def _write_sidecar(landed: Path, info: wpd.DeviceInfo, obj: wpd.WpdObject,
-                   device_path: str) -> None:
-    """Write the `.importinfo` sidecar via temp-then-rename (the VERIFIED commit)."""
+def _write_sidecar(landed: Path, info: wpd.DeviceInfo, friendly: str,
+                   obj: wpd.WpdObject, device_path: str) -> None:
+    """Write the `.importinfo` sidecar via temp-then-rename (the VERIFIED commit).
+
+    `friendly` is the **registry** name (the `.pix/local/import/<friendly>/`
+    folder), recorded as `device_name` because the flat `incoming/` landing loses
+    it — ingest derives the synthetic event `"<device_name> - <imported_at>"` from
+    these two fields. `imported_at` is stamped now (verify time), day granularity.
+    """
     data = {
         "serial": info.serial,
-        "friendly": info.friendly,
+        "friendly": info.friendly,       # WPD device friendly (informational)
+        "device_name": friendly,         # registry folder name → event prefix
+        "imported_at": datetime.now().strftime("%Y%m%d"),
         "puid": obj.puid,
         "device_path": device_path,
         "original_filename": obj.filename,
@@ -507,7 +516,8 @@ def run_import(
     summary.manifests_deprecated = _manifests_all_consumed(root)
 
     if dry_run:
-        _dry_run(info, landing, summary, _load_seed(root, friendly))
+        _dry_run(info, landing, summary, _load_seed(root, friendly),
+                 committed_import_ids(root))
         return summary
 
     # Only now — a device is selected and named — create the run folder + log.
@@ -547,6 +557,7 @@ def _import_loop(root: Path, info: wpd.DeviceInfo, friendly: str, landing: Path,
 
     manifest = _scan_manifest(landing)
     seed = _load_seed(root, friendly)  # deprecated-tool skip list, if any
+    committed = committed_import_ids(root)  # ImportIds already in the library
     used_paths: dict[Path, str] = {}
     attempts: dict[tuple[str, int | None], int] = {}
     failed_keys: set[tuple[str, int | None]] = set()
@@ -574,7 +585,7 @@ def _import_loop(root: Path, info: wpd.DeviceInfo, friendly: str, landing: Path,
                                 device_path: str, key: tuple[str, int | None]) -> None:
                 """Write the `.importinfo` sidecar (the VERIFIED commit) and drop
                 any stale `.importissue` marker — the two are mutually exclusive."""
-                _write_sidecar(landed, info, obj, device_path)
+                _write_sidecar(landed, info, friendly, obj, device_path)
                 manifest.add(key)
                 _issue_path(landed).unlink(missing_ok=True)
                 verified_keys.add(key)
@@ -652,6 +663,12 @@ def _import_loop(root: Path, info: wpd.DeviceInfo, friendly: str, landing: Path,
                 if key in manifest or sidecar.exists():  # already imported / VERIFIED
                     if sidecar.exists():
                         manifest.add(key)
+                    progress.begin("skipped", device_path)
+                    skipped_keys.add(key)
+                    return False
+                if (obj.puid and info.serial
+                        and f"{info.serial}:{obj.puid}" in committed):
+                    # Already ingested into the library (durable ImportId record).
                     progress.begin("skipped", device_path)
                     skipped_keys.add(key)
                     return False
@@ -858,7 +875,7 @@ def _fail(obj: wpd.WpdObject, key: tuple[str, int | None], device_path: str,
 
 
 def _dry_run(info: wpd.DeviceInfo, landing: Path, summary: ImportSummary,
-             seed: set[tuple[str, int]]) -> None:
+             seed: set[tuple[str, int]], committed: set[str]) -> None:
     manifest = _scan_manifest(landing)
     with wpd.open_device(info.device_id) as dev:
         def act(obj: wpd.WpdObject, _path: str) -> bool:
@@ -867,6 +884,8 @@ def _dry_run(info: wpd.DeviceInfo, landing: Path, summary: ImportSummary,
                 summary.skipped += 1
             elif _skip_key(obj) in manifest:
                 summary.skipped += 1
+            elif obj.puid and info.serial and f"{info.serial}:{obj.puid}" in committed:
+                summary.skipped += 1  # already ingested into the library
             elif sk is not None and sk in seed:
                 summary.seed_skipped += 1  # "would skip via manifest"
             else:

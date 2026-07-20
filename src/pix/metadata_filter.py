@@ -34,6 +34,7 @@ _CONSUMED_KEYS: frozenset[str] = frozenset(
         "XMP:EventAutoPrevious",
         "XMP:EventOverride",
         "XMP:OriginalPath",
+        "XMP:ImportId",
         "XMP:MergeEvent",
         "XMP:MergeDate",
         # DateAuto candidates (dates.py: photo + video key lists, mtime).

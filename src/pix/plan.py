@@ -18,6 +18,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
+from typing import cast
+
+import yaml
 
 from pix import debug
 from pix.config import Config, ExtensionAction
@@ -28,7 +31,7 @@ from pix.dates import (
     last_derivation_source,
     parse_exiftool_datetime,
 )
-from pix.events import derive_event_auto
+from pix.events import PIX_IMPORT_ID, derive_event_auto
 from pix.markers import CONVERT_INFIX
 from pix.metadata import FileMetadata
 from pix.progress import LiveProgress
@@ -114,6 +117,11 @@ class PlanLine:
     capture_path: Path | None = None
     staging_path: Path | None = None
     marker_path: Path | None = None
+
+    # The `.importinfo` sidecar accompanying a device import (in `incoming/`).
+    # Set on import lines; apply drops it after tags commit, or folds it into
+    # `.errorinfo` on CONVERT failure. See spec/import.md → Ingestion.
+    import_sidecar_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -558,6 +566,46 @@ def is_insta360_lrv(filename: str) -> bool:
     return name_lower.startswith("lrv_") and name_lower.endswith(".insv")
 
 
+@dataclass(frozen=True)
+class ImportContext:
+    """Provenance for a device-imported file, read from its `.importinfo`
+    sidecar in `incoming/`. Overrides migrate's defaults so `OriginalPath` is
+    the device path (not the flattened location) and the event is the synthetic
+    import batch. See spec/import.md → Ingestion (migrate pre-pass)."""
+
+    sidecar_path: Path
+    original_path: str        # device path, frozen at import
+    import_id: str            # "<serial>:<puid>"
+    event: str | None         # "<device_name> - <imported_at>"
+
+
+def _import_context(path: Path) -> ImportContext | None:
+    """Read the `.importinfo` sidecar beside `path`, if any, into a context."""
+    sidecar = path.with_name(path.name + ".importinfo")
+    if not sidecar.is_file():
+        return None
+    try:
+        loaded = yaml.safe_load(sidecar.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return None
+    if not isinstance(loaded, dict):
+        return None
+    data = cast("dict[str, object]", loaded)
+    serial = str(data.get("serial") or "")
+    puid = str(data.get("puid") or "")
+    import_id = f"{serial}:{puid}" if serial and puid else (puid or serial)
+    original = str(data.get("device_path") or path)
+    dev_name = str(data.get("device_name") or "")
+    imported_at = str(data.get("imported_at") or "")
+    event = f"{dev_name} - {imported_at}" if dev_name and imported_at else None
+    return ImportContext(
+        sidecar_path=sidecar,
+        original_path=original,
+        import_id=import_id,
+        event=event,
+    )
+
+
 def _plan_one(
     path: Path,
     meta: FileMetadata,
@@ -567,6 +615,7 @@ def _plan_one(
     """Decide the plan line for one file, or return None if no action is needed."""
     rel = path.relative_to(source)
     rel_str = str(rel)
+    import_ctx = _import_context(path)
 
     with debug.for_file(path):
         policy = lookup_policy(path.name, config.extensions)
@@ -624,6 +673,7 @@ def _plan_one(
                 rel_str=rel_str,
                 target_ext=target_ext,
                 is_first_migrate=is_first_migrate,
+                import_ctx=import_ctx,
             )
 
         # Built-in Insta360 rule: LRV_*.insv are disposable low-res proxies
@@ -646,6 +696,7 @@ def _plan_one(
             path=path,
             rel_str=rel_str,
             is_first_migrate=is_first_migrate,
+            import_ctx=import_ctx,
         )
 
 
@@ -655,6 +706,7 @@ def _plan_convert(
     rel_str: str,
     target_ext: str,
     is_first_migrate: bool,
+    import_ctx: "ImportContext | None" = None,
 ) -> PlanLine:
     canonical_name = _canonical_filename(meta=meta, ext=target_ext)
     details_parts: list[str] = [
@@ -663,8 +715,15 @@ def _plan_convert(
     pix_writes: dict[str, str] = {}
 
     if is_first_migrate:
-        details_parts.append("original_path init")
-        pix_writes["XMP:OriginalPath"] = str(path)
+        # Device imports override OriginalPath with the frozen device path (not
+        # the flattened incoming/ location) and add the ImportId skip key.
+        if import_ctx is not None:
+            details_parts.append("import provenance")
+            pix_writes["XMP:OriginalPath"] = import_ctx.original_path
+            pix_writes[PIX_IMPORT_ID] = import_ctx.import_id
+        else:
+            details_parts.append("original_path init")
+            pix_writes["XMP:OriginalPath"] = str(path)
 
     date_auto = derive_date_auto(meta)
     if date_auto is not None and is_first_migrate:
@@ -673,7 +732,8 @@ def _plan_convert(
         pix_writes[PIX_DATE_AUTO] = formatted
 
     if is_first_migrate:
-        event_auto = derive_event_auto(meta)
+        # Imports get the synthetic batch event; others derive from the folder.
+        event_auto = import_ctx.event if import_ctx is not None else derive_event_auto(meta)
         if event_auto is not None:
             details_parts.append(f"event_auto null→{event_auto}")
             pix_writes[PIX_EVENT_AUTO] = event_auto
@@ -692,6 +752,7 @@ def _plan_convert(
         is_first_migrate=is_first_migrate,
         target_filename=canonical_name,
         pix_writes=pix_writes,
+        import_sidecar_path=import_ctx.sidecar_path if import_ctx else None,
     )
 
 
@@ -700,6 +761,7 @@ def _plan_keep(
     path: Path,
     rel_str: str,
     is_first_migrate: bool,
+    import_ctx: "ImportContext | None" = None,
 ) -> PlanLine | None:
     # --- DateAuto drift check ---
     # Per spec/tags.md → DateAuto derivation, the candidate list is
@@ -869,16 +931,25 @@ def _plan_keep(
 
     needs_tag = False
     if is_first_migrate:
-        details_parts.append("original_path init")
-        pix_writes["XMP:OriginalPath"] = str(path)
         needs_tag = True
+        # Device imports: OriginalPath = frozen device path, add ImportId, and
+        # the event is the synthetic batch (not folder-derived).
+        if import_ctx is not None:
+            details_parts.append("import provenance")
+            pix_writes["XMP:OriginalPath"] = import_ctx.original_path
+            pix_writes[PIX_IMPORT_ID] = import_ctx.import_id
+            event_first = import_ctx.event
+        else:
+            details_parts.append("original_path init")
+            pix_writes["XMP:OriginalPath"] = str(path)
+            event_first = re_derived_event
         if new_auto is not None:
             formatted = format_pix_datetime(new_auto)
             details_parts.append(f"date_auto null→{formatted}")
             pix_writes[PIX_DATE_AUTO] = formatted
-        if re_derived_event is not None:
-            details_parts.append(f"event_auto null→{re_derived_event}")
-            pix_writes[PIX_EVENT_AUTO] = re_derived_event
+        if event_first is not None:
+            details_parts.append(f"event_auto null→{event_first}")
+            pix_writes[PIX_EVENT_AUTO] = event_first
     else:
         if needs_date_auto_write and new_auto is not None:
             formatted = format_pix_datetime(new_auto)
@@ -929,6 +1000,7 @@ def _plan_keep(
         is_first_migrate=is_first_migrate,
         target_filename=canonical_name if needs_rename else None,
         pix_writes=pix_writes,
+        import_sidecar_path=import_ctx.sidecar_path if import_ctx else None,
     )
 
 
