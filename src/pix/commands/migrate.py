@@ -27,7 +27,7 @@ from pix.cleanup import (
     wipe_staging,
 )
 from pix import cache_db
-from pix.config import Config, settings_path
+from pix.config import Config, new_run_dir, settings_path
 from pix.duration import format_duration_precise
 from pix.errors import restore_orphaned_errors, restore_stale_errors
 from pix.editor import open_in_editor, parse_kept_line_ids, prompt_apply
@@ -103,13 +103,11 @@ def _run_migrate(
     # source walk timing, bulk-read timing, etc.) all goes to plan.log
     # so the console stays quiet — only the single rewriting `\r`
     # progress line shows during plan-gen.
-    run_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     # Run folder (with its conserved-original captures) honors the optional
-    # `runs_dir` config key, so a full library drive can offload captures to
-    # another volume. Captures then move cross-volume via safe_move. Staging
+    # `runs_dir` config key via new_run_dir, so a full library drive can offload
+    # captures to another volume (moved cross-volume via safe_move). Staging
     # stays on the library volume (its renames must be same-volume/atomic).
-    runs_dir = config.runs_base(root) / run_id
-    runs_dir.mkdir(parents=True, exist_ok=True)
+    run_id, runs_dir = new_run_dir(root, config)
     plan_log_path = runs_dir / "plan.log"
     staging_dir = local_dir(root) / "staging"
 

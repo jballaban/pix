@@ -29,6 +29,7 @@ import typer
 from pix import banner, debug, dedupe_review
 from pix import cache_db
 from pix.checkout import CheckoutOpen, ensure_no_open_checkout
+from pix.config import Config, new_run_dir, settings_path
 from pix.dedupe import (
     DEFAULT_MAX_DISTANCE,
     DEFAULT_MIN_DISTANCE,
@@ -76,15 +77,8 @@ _MONTAGE_WORKERS = 12
 
 
 def _make_run_dir(root: Path) -> tuple[str, Path]:
-    """Create a fresh `runs/<id>` folder, uniquified if two runs land in the
-    same second (e.g. a fast checkout→commit)."""
-    base = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    runs = root / ".pix" / "runs"
-    run_id, n = base, 2
-    while (runs / run_id).exists():
-        run_id, n = f"{base}_{n}", n + 1
-    (runs / run_id).mkdir(parents=True)
-    return run_id, runs / run_id
+    """Fresh `<runs-base>/<id>` folder — honors the `runs_dir` override."""
+    return new_run_dir(root, Config.load(settings_path(root)))
 
 
 def dedupe_library(

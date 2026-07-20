@@ -30,6 +30,27 @@ def test_acquire_no_existing_lock(tmp_path: Path) -> None:
     assert not lock_file.exists()
 
 
+def test_acquire_warns_about_orphaned_default_runs(
+    tmp_path: Path, capsys: "pytest.CaptureFixture[str]"
+) -> None:
+    """Acquiring the lock surfaces the runs-relocation advisory: run folders
+    left at the default location while runs_dir points elsewhere."""
+    import pix.config as config_mod
+
+    config_mod._RUNS_ORPHAN_WARNED.clear()
+    root = tmp_path / "lib"
+    (root / ".pix" / "runs" / "old-run").mkdir(parents=True)  # orphan at default
+    (root / ".pix" / CONFIG_TAIL).write_text(
+        f"runs_dir: {tmp_path / 'caps'}\n", encoding="utf-8"
+    )
+    with acquire(root, "migrate"):
+        pass
+    assert "old default location" in capsys.readouterr().err
+
+
+CONFIG_TAIL = "pix.yaml"
+
+
 def test_acquire_released_on_exception(tmp_path: Path) -> None:
     """An exception in the with-block still releases the lock."""
     root = tmp_path / "lib"

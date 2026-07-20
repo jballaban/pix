@@ -148,6 +148,16 @@ def acquire(library_root: Path, op: str) -> Generator[None, None, None]:
     finally:
         os.close(fd)
 
+    # Advisory (warn-only, once per root per process): run folders stranded at
+    # the default location after `runs_dir` was repointed. The lock is the one
+    # chokepoint every write op passes through, so this covers them all.
+    from pix.config import (  # noqa: PLC0415 — lazy to avoid import-time coupling
+        Config,
+        settings_path,
+        warn_orphaned_runs,
+    )
+    warn_orphaned_runs(library_root, Config.load(settings_path(library_root)))
+
     try:
         yield
     finally:

@@ -17,7 +17,7 @@ import typer
 from pix import banner, debug
 from pix import cache_db
 from pix.checkout import CheckoutOpen, ensure_no_open_checkout
-from pix.config import Config, set_organize_template, settings_path
+from pix.config import Config, new_run_dir, set_organize_template, settings_path
 from pix.duration import format_duration_precise
 from pix.editor import open_in_editor, parse_kept_line_ids, prompt_apply
 from pix.hash_cache import read_all_cached_hashes
@@ -192,9 +192,7 @@ def _run_organize(
     `scope` bounds which files are (re)organized: the whole library when it's
     the root, or a subtree otherwise (plus the destination folders those files
     target — see `_augment_with_destination_folders`)."""
-    run_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    runs_dir = root / ".pix" / "runs" / run_id
-    runs_dir.mkdir(parents=True)
+    run_id, runs_dir = new_run_dir(root, Config.load(config_path))
     plan_log_path = runs_dir / "plan.log"
 
     scoped = scope != root

@@ -12,6 +12,7 @@ else (unknown keys, comments) when it rewrites the file.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Literal, cast
 
@@ -120,6 +121,78 @@ class Config:
             ),
             runs_dir=_parse_runs_dir(path, data.get("runs_dir")),
         )
+
+
+# Process-level guard so the orphaned-runs advisory prints at most once per
+# library root per invocation (`sync` acquires the lock several times).
+_RUNS_ORPHAN_WARNED: set[str] = set()
+
+
+def orphaned_default_runs(root: Path, config: Config) -> list[Path]:
+    """Run folders left at the default `<root>/.pix/runs` while `runs_dir`
+    points elsewhere — the sign that runs were repointed *after* some had
+    accumulated. Empty unless an override is active and the default holds run
+    folders.
+
+    Stateless by design: only the **default** location is checked. pix keeps no
+    config history, so a move between two overrides (or removing one) can't be
+    detected — that would need persisted state pix deliberately omits.
+    """
+    if not config.runs_dir:
+        return []
+    default = root / ".pix" / "runs"
+    if not default.is_dir():
+        return []
+    try:
+        if default.resolve() == Path(config.runs_dir).resolve():
+            return []
+    except OSError:
+        pass
+    return sorted(p for p in default.iterdir() if p.is_dir())
+
+
+def warn_orphaned_runs(root: Path, config: Config) -> None:
+    """Warn (stderr, once per root per process) about orphaned default runs.
+
+    **Warn-only** — pix never moves them: a run folder can hold the only copy of
+    a pre-convert original, so relocation is a deliberate manual step, not a
+    startup side effect.
+    """
+    if not orphaned_default_runs(root, config):
+        return
+    key = str(root)
+    if key in _RUNS_ORPHAN_WARNED:
+        return
+    _RUNS_ORPHAN_WARNED.add(key)
+    import typer  # noqa: PLC0415
+
+    default = root / ".pix" / "runs"
+    n = len(orphaned_default_runs(root, config))
+    typer.echo(
+        f"Note: runs_dir points to {config.runs_dir}, but {n} run folder(s) "
+        f"remain at the old default location ({default}). pix does not move "
+        f"them automatically — relocate or delete them when convenient.",
+        err=True,
+    )
+
+
+def new_run_dir(root: Path, config: Config) -> tuple[str, Path]:
+    """Mint a fresh run folder and return `(run_id, run_dir)`.
+
+    The **single** place run folders are created, so every operation honors the
+    `runs_dir` override identically (via `runs_base`) instead of hardcoding the
+    default location. The id is a second-granularity timestamp, uniquified
+    (`…_2`, `…_3`, …) when two runs land in the same second (e.g. a fast
+    checkout→commit).
+    """
+    base = config.runs_base(root)
+    stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    run_id, n = stamp, 2
+    while (base / run_id).exists():
+        run_id, n = f"{stamp}_{n}", n + 1
+    run_dir = base / run_id
+    run_dir.mkdir(parents=True)
+    return run_id, run_dir
 
 
 def set_organize_template(path: Path, template: str) -> None:

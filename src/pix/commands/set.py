@@ -30,7 +30,7 @@ import typer
 from pix import banner, cache_db
 from pix.apply import ApplyError, apply_plan
 from pix.checkout import CheckoutOpen, ensure_no_open_checkout
-from pix.config import Config, settings_path
+from pix.config import Config, new_run_dir, settings_path
 from pix.editor import prompt_proceed
 from pix.events import EVENT_NULL, cached_event_names, invalidate_events_cache
 from pix.library_lock import LockHeld, acquire as acquire_lock
@@ -263,9 +263,7 @@ def _apply_overrides(
         _fail(f"exiftool failed reading current tags.\n{e}")
         return
 
-    run_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    runs_dir = config.runs_base(root) / run_id
-    runs_dir.mkdir(parents=True, exist_ok=True)
+    run_id, runs_dir = new_run_dir(root, config)
 
     lines: list[PlanLine] = []
     noop = 0

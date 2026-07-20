@@ -23,6 +23,7 @@ import typer
 
 from pix import banner
 from pix.apply import ApplyError, apply_plan
+from pix.config import Config, new_run_dir, settings_path
 from pix.checkout import (
     CheckoutError,
     CheckoutExists,
@@ -213,9 +214,7 @@ def _run_commit(root: Path, template: Template, snap: Snapshot) -> None:
             typer.echo(f"Error: exiftool failed.\n{e}", err=True)
             raise typer.Exit(code=1) from e
 
-    run_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    runs_dir = root / ".pix" / "runs" / run_id
-    runs_dir.mkdir(parents=True)
+    run_id, runs_dir = new_run_dir(root, Config.load(settings_path(root)))
 
     lines: list[PlanLine] = []
     for assign in diff.assigns:

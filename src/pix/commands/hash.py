@@ -18,6 +18,7 @@ import typer
 from pix import banner
 from pix import cache_db
 from pix.checkout import CheckoutOpen, ensure_no_open_checkout
+from pix.config import Config, new_run_dir, settings_path
 from pix.content_hash import compute_content_hash
 from pix.duration import (
     format_duration,
@@ -71,9 +72,7 @@ def hash_library(path: Path, no_prompt: bool = False) -> None:
 
 def _run_hash(root: Path, no_prompt: bool = False) -> None:
     """Inner workflow, called under the library lock."""
-    run_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    runs_dir = root / ".pix" / "runs" / run_id
-    runs_dir.mkdir(parents=True)
+    _run_id, runs_dir = new_run_dir(root, Config.load(settings_path(root)))
     plan_log_path = runs_dir / "plan.log"
     apply_log_path = runs_dir / "apply.log"
 
