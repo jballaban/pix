@@ -22,8 +22,9 @@ This module owns:
 - Plan serialization (`serialize_plan`) — grouped plan.txt format with
   comment headers + `# WARNING` lines per group.
 - Apply (`apply_plan`) — write MERGE bundles onto keepers (ExifTool),
-  rename each loser into `runs/<run-id>/data/`, then bottom-up
-  empty-folder cleanup. MERGE runs before DEDUP for crash safety.
+  move each loser into `runs/<run-id>/data/` (cross-volume-safe, since
+  `runs_dir` may be relocated), then bottom-up empty-folder cleanup.
+  MERGE runs before DEDUP for crash safety.
 
 CWD constraint and empty-folder cleanup come from `pix.organize` —
 the same checks apply (we'd otherwise fail to clean folders that
@@ -56,7 +57,7 @@ from pix.errors import move_to_errors
 from pix.exiftool_session import ExifToolSession, TagWriteFailed
 from pix.metadata import FileMetadata
 from pix.organize import cleanup_empty_folders  # reused
-from pix.timeout import safe_rename
+from pix.timeout import safe_move
 from pix.plan import (
     PIX_DATE_AUTO,
     PIX_DATE_AUTO_PREVIOUS,
@@ -918,7 +919,9 @@ def _apply_dedup(ln: PlanLine) -> None:
         raise DedupeApplyError(
             f"capture path {ln.capture_path} already exists"
         )
-    safe_rename(ln.abs_path, ln.capture_path)
+    # safe_move (not safe_rename): the run folder may be relocated onto another
+    # volume via `runs_dir`, so the capture can be cross-volume (copy+delete).
+    safe_move(ln.abs_path, ln.capture_path)
 
 
 def _apply_merge(ln: PlanLine, exiftool: ExifToolSession) -> None:

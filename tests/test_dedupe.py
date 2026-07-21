@@ -708,3 +708,36 @@ def test_apply_quarantines_keeper_on_failed_merge_write(
     assert not a.exists()  # keeper moved out of the library
     assert (root / ".pix" / "errors").exists()
     assert not b.exists()
+
+
+def test_apply_dedup_capture_is_cross_volume_safe(
+    tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+) -> None:
+    """The loser capture into the run folder must survive a run folder relocated
+    onto another volume (runs_dir): a same-volume rename fails EXDEV, so
+    _apply_dedup uses safe_move (copy+delete). Regression for WinError 17 seen
+    live with runs_dir=F: and library=G:."""
+    import errno
+
+    from pix.plan import PlanLine
+
+    src = tmp_path / "loser.jpg"
+    src.write_bytes(b"content")
+    capture = tmp_path / "runs" / "data" / "L001_loser.jpg"
+    capture.parent.mkdir(parents=True)
+    ln = PlanLine(
+        line_id="L001", action=Action.DEDUP, rel_path="loser.jpg",
+        details="", abs_path=src, capture_path=capture,
+    )
+
+    # Simulate a cross-volume target: every rename raises EXDEV, forcing the
+    # copy+delete fallback inside safe_move. (Old safe_rename would raise here.)
+    def _exdev(self: Path, target: object) -> None:
+        raise OSError(errno.EXDEV, "cross-device link")
+
+    monkeypatch.setattr(Path, "rename", _exdev)
+
+    dedupe_mod._apply_dedup(ln)
+
+    assert capture.read_bytes() == b"content"
+    assert not src.exists()
