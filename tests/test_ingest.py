@@ -101,6 +101,40 @@ def test_run_ingest_collision_suffix(tmp_path: Path) -> None:
     assert names == ["IMG_1.HEIC", "IMG_1_2.HEIC"]  # second collided → suffixed
 
 
+def test_run_ingest_reaps_drained_folders(tmp_path: Path) -> None:
+    fdir = _import_dir(tmp_path)  # .pix/local/import/james
+    _verified(fdir, "202605_a/IMG_1.HEIC")
+    _verified(fdir, "202606_b/IMG_2.HEIC")
+    runs = tmp_path / ".pix" / "runs" / "r1"; runs.mkdir(parents=True)
+
+    summary = run_ingest(tmp_path, tmp_path, runs)
+
+    assert summary.ingested == 2
+    # Drained device folders — and the now-empty friendly folder — are gone.
+    assert not (fdir / "202605_a").exists()
+    assert not (fdir / "202606_b").exists()
+    assert not fdir.exists()
+    assert summary.folders_reaped >= 2
+    # The import/ container itself is left in place.
+    assert (tmp_path / ".pix" / "local" / "import").is_dir()
+
+
+def test_run_ingest_keeps_folder_with_unprocessed_files(tmp_path: Path) -> None:
+    fdir = _import_dir(tmp_path)
+    _verified(fdir, "202605_a/IMG_1.HEIC")            # ingested
+    (fdir / "202605_a" / "IMG_BAD.JPG").write_bytes(b"x")   # not VERIFIED
+    (fdir / "202605_a" / "IMG_BAD.JPG.importissue").write_text(
+        "state: failed\n", encoding="utf-8"
+    )
+    runs = tmp_path / ".pix" / "runs" / "r1"; runs.mkdir(parents=True)
+
+    run_ingest(tmp_path, tmp_path, runs)
+
+    # Folder still holds the failed file → NOT reaped.
+    assert (fdir / "202605_a").is_dir()
+    assert (fdir / "202605_a" / "IMG_BAD.JPG").exists()
+
+
 def test_run_ingest_records_committed_ids(tmp_path: Path) -> None:
     fdir = _import_dir(tmp_path)
     _verified(fdir, "IMG_1.HEIC", serial="SER1", puid="{P1}")

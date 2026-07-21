@@ -513,6 +513,13 @@ see below). Two device files that flatten to the same name are disambiguated wit
 short suffix on the move; the collision is transient anyway, since migrate's canonical
 RENAME renames everything by capture date immediately after.
 
+**Cleanup.** A file's `.importinfo` sidecar is dropped once its tags commit (or
+folded into `.errorinfo` on CONVERT failure — see crash windows). After draining,
+ingest reaps the now-empty device folders under `.pix/local/import/` bottom-up (a
+folder still holding an unprobed or `.importissue` file is not empty → kept); the
+`import/` container itself stays. The emptied `incoming/` is reaped by organize's
+own empty-folder sweep once it moves the files out.
+
 ### Provenance — captured at import, written at migrate (ING-4)
 `OriginalPath`'s **value is frozen at import**, before any merge: the `.importinfo`
 sidecar records `device_path` (full, e.g. `Internal Storage/202605_a/IMG_7399.HEIC`)

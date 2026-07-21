@@ -19,6 +19,7 @@ See spec/import.md → Ingestion (migrate pre-pass).
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -54,6 +55,7 @@ _FFPROBE_TIMEOUT: float = 30.0
 class IngestSummary:
     ingested: int = 0
     live_photos_dropped: int = 0
+    folders_reaped: int = 0
     notes: list[str] = field(default_factory=lambda: [])
 
 
@@ -111,6 +113,24 @@ def _import_id_from_sidecar(sidecar: Path) -> str | None:
     serial = str(d.get("serial") or "")
     puid = str(d.get("puid") or "")
     return f"{serial}:{puid}" if serial and puid else None
+
+
+def _reap_empty_dirs(top: Path) -> int:
+    """Bottom-up remove empty directories strictly *under* `top` (leaving `top`
+    itself). Drained device folders (`<friendly>/Internal Storage/202605_a/`)
+    become empty once their files are ingested; a folder still holding unprobed
+    or `.importissue` files is not empty and is kept. Best-effort."""
+    if not top.is_dir():
+        return 0
+    subdirs = [Path(dp) for dp, _, _ in os.walk(top) if Path(dp) != top]
+    removed = 0
+    for d in sorted(subdirs, key=lambda p: -len(p.parts)):  # deepest first
+        try:
+            d.rmdir()  # only succeeds while empty
+            removed += 1
+        except OSError:
+            pass
+    return removed
 
 
 def _sidecar_of(media: Path) -> Path:
@@ -225,10 +245,17 @@ def run_ingest(root: Path, folder: Path, runs_dir: Path) -> IngestSummary:
 
     _record_committed(root, new_committed)
 
+    # Reap the now-empty drained device folders under .pix/local/import/ (the
+    # organize empty-folder sweep skips the .pix subtree, so incoming/ is reaped
+    # there but the import source folders are ours to clean).
+    summary.folders_reaped = _reap_empty_dirs(imp)
+
     if summary.ingested or summary.live_photos_dropped:
         summary.notes.append(
             f"ingest: {summary.ingested} file(s) → {inc}"
             + (f", {summary.live_photos_dropped} Live Photo clip(s) dropped"
                if summary.live_photos_dropped else "")
+            + (f", {summary.folders_reaped} empty import folder(s) reaped"
+               if summary.folders_reaped else "")
         )
     return summary
