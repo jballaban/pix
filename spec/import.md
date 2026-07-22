@@ -545,8 +545,11 @@ carries an `.importinfo` sidecar, migrate sets:
 
     EventAuto = "<friendly> - <imported_at:YYYYMMDD>"      e.g. "james - 20260720"
 
-`imported_at` is a new field the `.importinfo` sidecar records at verify time; the
-friendly name is used **verbatim** (lowercase stays lowercase). This groups a batch
+`imported_at` is a field the `.importinfo` sidecar records at verify time; the
+friendly name is used **verbatim** (lowercase stays lowercase). **Fallback:** a
+pre-v0.1.193 sidecar (no `device_name`/`imported_at`) uses its `friendly` (WPD
+name) for the device name and, lacking a date, sets the event to that name alone —
+never a fabricated date, never a silent no-event. This groups a batch
 into its own event so organize keeps it separate for review (delete junk, etc.). The
 injection happens once, during the ingest migrate; after organize places the files
 into `<root>/<year>/james - 20260720/`, a later migrate re-derives the same event

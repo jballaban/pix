@@ -595,9 +595,19 @@ def _import_context(path: Path) -> ImportContext | None:
     puid = str(data.get("puid") or "")
     import_id = f"{serial}:{puid}" if serial and puid else (puid or serial)
     original = str(data.get("device_path") or path)
-    dev_name = str(data.get("device_name") or "")
+    # Event = "<device_name> - <imported_at>". device_name (registry friendly,
+    # written since v0.1.193) falls back to the sidecar's `friendly` (WPD name,
+    # present on older sidecars) so a pre-v0.1.193 sidecar still yields a named
+    # event rather than none. Without `imported_at` (also newer) the event is
+    # just the device name — no fabricated date.
+    dev_name = str(data.get("device_name") or data.get("friendly") or "")
     imported_at = str(data.get("imported_at") or "")
-    event = f"{dev_name} - {imported_at}" if dev_name and imported_at else None
+    if dev_name and imported_at:
+        event = f"{dev_name} - {imported_at}"
+    elif dev_name:
+        event = dev_name
+    else:
+        event = None
     return ImportContext(
         sidecar_path=sidecar,
         original_path=original,

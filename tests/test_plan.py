@@ -460,6 +460,33 @@ def test_generate_plan_uses_import_sidecar_provenance(tmp_path: Path) -> None:
     assert ln.import_sidecar_path == (inc / "IMG_1.JPG.importinfo").resolve()
 
 
+def test_generate_plan_old_sidecar_event_falls_back_to_device_name(
+    tmp_path: Path,
+) -> None:
+    """A pre-v0.1.193 sidecar has `friendly` but no `device_name`/`imported_at`.
+    The event falls back to the device name (no fabricated date) rather than
+    landing the file with no event. See spec/import.md → Event."""
+    inc = tmp_path / "incoming"
+    inc.mkdir()
+    media = inc / "IMG_9.JPG"
+    media.write_bytes(b"x")
+    (inc / "IMG_9.JPG.importinfo").write_text(
+        "serial: M2DF33MY06\npuid: '{P9}'\nfriendly: Apple iPhone\n"
+        "device_path: Internal Storage/202508_a/IMG_9.JPG\n",
+        encoding="utf-8",
+    )
+    cfg = _config(jpg="keep")
+    cache = {media.resolve(): _meta(str(media))}
+    plan = generate_plan(
+        source=inc.resolve(), cache=cache, config=cfg, run_id="r1",
+        run_dir=tmp_path / ".pix" / "runs" / "r1",
+        staging_dir=tmp_path / ".pix" / "local" / "staging",
+    )
+    ln = plan.lines[0]
+    assert ln.pix_writes["XMP:EventAuto"] == "Apple iPhone"  # name only, no date
+    assert ln.pix_writes["XMP:ImportId"] == "M2DF33MY06:{P9}"
+
+
 def test_plan_insv_is_kept_not_converted(tmp_path: Path) -> None:
     """Name-preserving .insv (Insta360 360 video) is a keep — never routed to
     CONVERT (a remux would strip the Insta360 trailer). An already-tagged one
