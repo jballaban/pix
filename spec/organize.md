@@ -55,6 +55,7 @@ The full grammar (filter syntax, `null`, negation) is defined in [tags.md → Te
 
 - `{year}`, `{month}`, `{day}` — derived from effective `date`
 - `{event}` — effective event value
+- `{rating}` — the 0–5 star curation value (`XMP:Rating`); single-valued, so a file lands in exactly one rating folder (`0/`…`5/`), and unrated files go to `(null)/`. See [tags.md](tags.md#rating-curation-standard-field).
 
 `{time}` and `{date}` are rejected at template parse time — per-second / per-timestamp folders are a foot-gun. Multi-valued tokens (`{person}`, `{face}`) are checkout/export only and are rejected here.
 
