@@ -37,6 +37,9 @@ _CONSUMED_KEYS: frozenset[str] = frozenset(
         "XMP:ImportId",
         "XMP:MergeEvent",
         "XMP:MergeDate",
+        # rating tag — the standard XMP:Rating field (rating.py). Read for the
+        # {rating} token (organize/checkout) and dedupe's max-merge.
+        "XMP:Rating",
         # DateAuto candidates (dates.py: photo + video key lists, mtime).
         "EXIF:DateTimeOriginal",
         "EXIF:CreateDate",

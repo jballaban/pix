@@ -384,6 +384,30 @@ def test_writes_event_assign_matching_auto_clears_override() -> None:
     assert writes == {PIX_EVENT_OVERRIDE: ""}  # cleared (D1)
 
 
+def test_writes_rating_assign_on_unrated_file() -> None:
+    from pix.rating import XMP_RATING
+
+    meta = _meta(Path("/x.jpg"))
+    writes, _ = compute_pix_writes({"rating": "5"}, meta)
+    assert writes == {XMP_RATING: "5"}  # standard field, no override
+
+
+def test_writes_rating_reassign_over_existing() -> None:
+    from pix.rating import XMP_RATING
+
+    meta = _meta(Path("/x.jpg"), **{XMP_RATING: 5})
+    writes, _ = compute_pix_writes({"rating": "3"}, meta)
+    assert writes == {XMP_RATING: "3"}
+
+
+def test_writes_rating_noop_when_unchanged() -> None:
+    from pix.rating import XMP_RATING
+
+    meta = _meta(Path("/x.jpg"), **{XMP_RATING: 4})
+    writes, _ = compute_pix_writes({"rating": "4"}, meta)
+    assert writes == {}
+
+
 def test_writes_event_clear_reconciles_autoprevious() -> None:
     meta = _meta(
         Path("/x.jpg"),

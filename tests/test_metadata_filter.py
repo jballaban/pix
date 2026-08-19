@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pix import dates, events, plan
+from pix import dates, events, plan, rating
 from pix.metadata_filter import _is_consumed, consumed_read_args, filter_consumed
 
 
@@ -12,9 +12,9 @@ def test_drops_noise_keeps_consumed() -> None:
         "EXIF:DateTimeOriginal": "2023:08:15 14:32:05",
         "XMP:EventOverride": "Hawaii",
         "XMP:RegionName": "Alice",  # face region — kept
+        "XMP:Rating": "5",  # rating tag — kept
         "EXIF:MakerNoteCanon": "....big blob....",  # noise — dropped
         "EXIF:ThumbnailImage": "base64....",  # noise — dropped
-        "XMP:Rating": "5",  # noise — dropped
     }
     out = filter_consumed(raw)
     assert set(out) == {
@@ -22,6 +22,7 @@ def test_drops_noise_keeps_consumed() -> None:
         "EXIF:DateTimeOriginal",
         "XMP:EventOverride",
         "XMP:RegionName",
+        "XMP:Rating",
     }
 
 
@@ -38,6 +39,7 @@ def test_allowlist_covers_every_consumed_constant() -> None:
         plan.PIX_EVENT_OVERRIDE,
         events.PIX_MERGE_EVENT,
         dates.PIX_MERGE_DATE,
+        rating.XMP_RATING,
         dates._MTIME_KEY,  # pyright: ignore[reportPrivateUsage]
         dates._ORIGINAL_PATH_KEY,  # pyright: ignore[reportPrivateUsage]
         *dates._PHOTO_DATE_KEYS,  # pyright: ignore[reportPrivateUsage]

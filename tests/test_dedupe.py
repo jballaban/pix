@@ -493,6 +493,70 @@ def test_merge_event_not_overwritten_when_keeper_has_one(
     assert PIX_MERGE_EVENT not in g.keeper_writes
 
 
+def test_merge_rating_takes_max_onto_unrated_keeper(
+    tmp_path: Path, patched_hash_cache: dict[Path, str | None]
+) -> None:
+    from pix.rating import XMP_RATING
+
+    root = tmp_path / "lib"
+    root.mkdir()
+    a = root / "a.jpg"  # keeper (lex-smallest); unrated
+    b = root / "b.jpg"  # loser; rated 5
+    for p in (a, b):
+        p.write_bytes(b"")
+    patched_hash_cache[a.resolve()] = "h"
+    patched_hash_cache[b.resolve()] = "h"
+    cache = {
+        a.resolve(): _with_original(a, "F:/2023/a.jpg"),
+        b.resolve(): _with_original(b, "F:/2023/b.jpg", **{XMP_RATING: 5}),
+    }
+    g = group_by_hash(root, cache, patched_hash_cache)[0]
+    assert g.keeper == a.resolve()
+    assert g.keeper_writes[XMP_RATING] == "5"  # curation preserved onto keeper
+
+
+def test_merge_rating_takes_higher_of_two(
+    tmp_path: Path, patched_hash_cache: dict[Path, str | None]
+) -> None:
+    from pix.rating import XMP_RATING
+
+    root = tmp_path / "lib"
+    root.mkdir()
+    a = root / "a.jpg"  # keeper; rated 2
+    b = root / "b.jpg"  # loser; rated 4
+    for p in (a, b):
+        p.write_bytes(b"")
+    patched_hash_cache[a.resolve()] = "h"
+    patched_hash_cache[b.resolve()] = "h"
+    cache = {
+        a.resolve(): _with_original(a, "F:/2023/a.jpg", **{XMP_RATING: 2}),
+        b.resolve(): _with_original(b, "F:/2023/b.jpg", **{XMP_RATING: 4}),
+    }
+    g = group_by_hash(root, cache, patched_hash_cache)[0]
+    assert g.keeper_writes[XMP_RATING] == "4"
+
+
+def test_merge_rating_noop_when_keeper_already_max(
+    tmp_path: Path, patched_hash_cache: dict[Path, str | None]
+) -> None:
+    from pix.rating import XMP_RATING
+
+    root = tmp_path / "lib"
+    root.mkdir()
+    a = root / "a.jpg"  # keeper; rated 5 (already the max)
+    b = root / "b.jpg"  # loser; rated 3
+    for p in (a, b):
+        p.write_bytes(b"")
+    patched_hash_cache[a.resolve()] = "h"
+    patched_hash_cache[b.resolve()] = "h"
+    cache = {
+        a.resolve(): _with_original(a, "F:/2023/a.jpg", **{XMP_RATING: 5}),
+        b.resolve(): _with_original(b, "F:/2023/b.jpg", **{XMP_RATING: 3}),
+    }
+    g = group_by_hash(root, cache, patched_hash_cache)[0]
+    assert XMP_RATING not in g.keeper_writes
+
+
 def test_merge_override_fills_empty_keeper(
     tmp_path: Path, patched_hash_cache: dict[Path, str | None]
 ) -> None:

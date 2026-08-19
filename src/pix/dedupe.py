@@ -57,6 +57,7 @@ from pix.errors import move_to_errors
 from pix.exiftool_session import ExifToolSession, TagWriteFailed
 from pix.metadata import FileMetadata
 from pix.organize import cleanup_empty_folders  # reused
+from pix.rating import XMP_RATING, effective_rating
 from pix.timeout import safe_move
 from pix.plan import (
     PIX_DATE_AUTO,
@@ -285,6 +286,30 @@ def _compute_keeper_merge(
                     f"event_auto: losers diverge {sorted(distinct)} "
                     f"— took {value!r}"
                 )
+
+    # --- rating: max across the group -> XMP:Rating (standard field) ---
+    # Rating has no _auto/override/Merge* companion (spec/tags.md → Rating), so
+    # the consolidated value is written straight to the real field. Max is
+    # deterministic and unambiguous (like MergeDate's min) — no lex tiebreak,
+    # no divergence warning. Preserves curation: a rated loser never loses its
+    # stars to an unrated keeper.
+    rated = [
+        (p, int(r))
+        for p, m in members
+        if (r := effective_rating(m)) is not None
+    ]
+    if rated:
+        max_r = max(v for _, v in rated)
+        keeper_r = effective_rating(keeper_meta)
+        if keeper_r is None or int(keeper_r) < max_r:
+            src = min(
+                (p for p, v in rated if v == max_r),
+                key=lambda p: _sort_key(p, library_root),
+            )
+            writes[XMP_RATING] = str(max_r)
+            notes.append(
+                f"rating →{max_r} (merge ←{_rel_or_abs(src, library_root)})"
+            )
 
     # --- overrides: fill-empty into the real override slot ---
     for label, field_key, getter in (

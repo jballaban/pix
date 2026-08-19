@@ -38,6 +38,7 @@ from typing import IO
 from pix.dates import format_pix_datetime
 from pix.duration import format_duration_compact, format_size
 from pix.events import effective_event
+from pix.rating import effective_rating
 from pix.markers import ORGANIZE_TMP_SUFFIX
 from pix.metadata import FileMetadata
 from pix import cache_db
@@ -102,7 +103,7 @@ class OrganizeApplyError(Exception):
 
 
 ALLOWED_TOKENS: frozenset[str] = frozenset(
-    {"year", "month", "day", "event"}
+    {"year", "month", "day", "event", "rating"}
 )
 _TOKEN_RE = re.compile(r"\{([a-zA-Z]+)\}")
 
@@ -196,6 +197,7 @@ def compute_values(meta: FileMetadata) -> dict[str, str | None]:
         "day": f"{date.day:02d}" if date else None,
         "date": format_pix_datetime(date) if date else None,
         "event": effective_event(meta),
+        "rating": effective_rating(meta),
     }
 
 

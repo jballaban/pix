@@ -51,6 +51,7 @@ from pix.plan import (
     PIX_ORIGINAL_PATH,
     effective_date,
 )
+from pix.rating import XMP_RATING, effective_rating
 from pix.root import local_dir
 
 CHECKOUT_DIRNAME: str = "checkout"
@@ -657,6 +658,15 @@ def compute_pix_writes(
         elif new_event != current:
             writes[PIX_EVENT_OVERRIDE] = new_event
             details.append(f'event→"{new_event}"')
+
+    if "rating" in token_changes:
+        # Rating has no _auto/override — checkout writes the standard XMP:Rating
+        # field directly (spec/tag-editing.md → Rating writes the standard field
+        # directly). No clear-when-equals-auto (there is no auto baseline).
+        new_rating = token_changes["rating"]
+        if new_rating != effective_rating(meta):
+            writes[XMP_RATING] = new_rating
+            details.append(f"rating→{new_rating}")
 
     date_changes = {
         k: v for k, v in token_changes.items() if k in _DATE_SLOT
