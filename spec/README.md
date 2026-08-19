@@ -23,7 +23,7 @@ Ten top-level operations. `init`, `migrate`, `hash`, `dedupe`, `organize`, and `
 | `organize [<template>]` | Physically rearrange files per a template (bare = re-apply the stored default). Single-valued tags only. | [organize.md](organize.md) | **v1 implemented** |
 | `sync <path> [<template>]` | Run migrate → hash → dedupe → organize back-to-back, non-interactively (auto-apply, stop on first error). | [sync.md](sync.md) | **v1 implemented** |
 | `tag checkout <path> <template>` / `tag checkout --commit` / `tag checkout --reset` | Tag editing via folder-shuffle, scoped to `<path>` (like migrate). Compound single-valued templates; commit writes tags only. | [tag-editing.md](tag-editing.md) | **Designed (pending build)** |
-| `export <template>` | Produce a copy/link-based derived view at a separate path. Read-only. | [export.md](export.md) | Sketched |
+| `export [<name>]` | Reconcile named delivery **distributions** (rating-filtered subsets) to separate paths — copy-only, delta sync. Read-only w.r.t. the library. | [export.md](export.md) | **Designed (pending build)** |
 
 The plan-applying ops (`migrate`, `hash`, `dedupe`, `organize`) share a `--no-prompt` flag that skips the `Apply?` / `Proceed?` confirmation and applies the generated plan directly — the plan is still written to the run folder. `sync` is the composition of all four under `--no-prompt`.
 

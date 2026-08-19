@@ -17,6 +17,7 @@ Related:
 | `event` | string | no | freeform |
 | `person` | name | yes (list) | derived from face regions (see below) |
 | `face` | name | yes (list) | same value space as `person`; renders as face crops in templates |
+| `rating` | int 0–5 | no | user curation (stars). Plain standard `XMP:Rating`; **no** `_auto`/override. Drives [export](export.md) distributions. See [Rating](#rating-curation-standard-field). |
 
 There is **one** date tag, not four — having separate `year`/`month`/`day`/`time` tags would multiply the override surface unnecessarily. Templates reference `{year}`, `{month}`, `{day}`, `{time}` as a convenience: they are computed from `date` at render time.
 
@@ -27,6 +28,15 @@ Every tag has a paired `_auto` value (`date_auto`, `event_auto`, …):
 - "Unset" means the override property is **absent** from the file's XMP — not stored as null. Clearing an override (folder-shuffle to `(null)/`) translates to deleting that property entirely. Files in pristine state therefore carry no override properties at all.
 
 The split lets us upgrade `_auto` derivation logic and surface mismatches for review.
+
+### Rating (curation, standard field)
+
+`rating` is a 0–5 star **curation** signal — the human judgment that drives [export](export.md) distributions (e.g. a `rating:5` "top" tier, a `rating:3,4,5` general tier). It is the **one tag that does not follow the `_auto`/override model**, because there is nothing to auto-derive — a rating is pure human judgment, so the guess/override split has no meaning.
+
+- **Plain standard field.** `rating` is stored directly in the industry-standard `XMP:Rating` (integer 0–5). There is no `rating_auto`, no `RatingOverride`, no `MergeRating`, no `*AutoPrevious`.
+- **Read *and written* by pix, last-writer-wins.** Unlike every other standard field (which pix only reads — see [Metadata mapping](#metadata-mapping)), pix reads *and writes* `XMP:Rating`. Because it's the standard field, external tools (Windows Explorer stars, Lightroom, Synology Photos) read and write it too; whoever wrote last wins. **Migrate never touches it.** External authoring is reliable for **photos**; for **videos** pix still reads/writes the field, but external star-rating support is spotty, so video ratings are in practice pix-authored.
+- **Absent / 0 = unrated.** The effective `rating` is the field's value, or unrated when absent (equivalently `0`). `{rating:null}` in a template matches unrated files.
+- **Dedupe consolidation = max.** When [dedupe](dedupe.md#tag-merge) merges a duplicate group, the keeper takes the **maximum** rating across the group (written straight to `XMP:Rating`; deterministic, no divergence tiebreak). A rated copy never loses its stars to an unrated keeper. Pre-merge values are conserved for rollback.
 
 ### Merge fields (cross-duplicate consolidation)
 
@@ -154,7 +164,7 @@ The flat-tag-surface rule still holds: templates only ever see flat tokens; face
 
 ## Metadata mapping
 
-Tag state is persisted in XMP, primarily in a custom `pix` namespace. Standard fields (`EXIF:DateTimeOriginal`, etc.) are read for heuristics on first migrate but **never written** by pix — they remain camera-recorded provenance.
+Tag state is persisted in XMP, primarily in a custom `pix` namespace. Standard fields (`EXIF:DateTimeOriginal`, etc.) are read for heuristics on first migrate but **never written** by pix — they remain camera-recorded provenance. **The one exception is `XMP:Rating`**, which pix reads *and writes* as the `rating` tag (see [Rating](#rating-curation-standard-field)) — it's user curation, not camera-recorded provenance, so pix owns it.
 
 ### Custom namespace
 
@@ -181,6 +191,7 @@ Tag state is persisted in XMP, primarily in a custom `pix` namespace. Standard f
 | Face regions | `XMP-mwg-rs:RegionList` (primary) + `XMP-MP:RegionInfo` (mirror for Windows interop) | ExifTool writes both from one structure. |
 | Per-region confirmed flag | `xmp:pix:FaceConfirmed` (per region) | MWG doesn't define this; pix extends. |
 | Original source path (write-once) | `xmp:pix:OriginalPath` (string) | Set on first migrate, never overwritten. See [library.md](library.md#original-source-path-write-once-provenance). |
+| `rating` (curation star) | `XMP:Rating` (int 0–5) | **Standard** field, not `pix:*`. Read *and written* by pix (the sole standard-field exception). No `_auto`/override/`Merge*` companion; dedupe consolidates by **max**. Absent = unrated. |
 
 ### Effective value computation
 
@@ -190,6 +201,7 @@ Read at any time the tag value is needed (filename derivation, organize template
    - **No-auto case.** When `pix:DateAuto` is absent (un-dated file) but `pix:DateOverride` is present, the effective date is synthesized from the override alone: a **year is required** as the anchor, and any unspecified lower field defaults to its minimum (month/day → `01`, time → `00:00:00`). So an override of `2008-*-*-*:*:*` on an un-dated file yields `2008-01-01 00:00:00`. Without a year, the effective date stays null. The stored override is unchanged — only what the user set is persisted; the defaults are applied at read time. This is how [tag-editing](tag-editing.md) gives a date to a file migrate couldn't date.
 2. **Event.** If `pix:EventOverride` is present, its value is the effective `event`. Otherwise, fall back to `pix:EventAuto`.
 3. **Person, Face.** Derived: set of distinct identities across the file's face regions. Not stored.
+4. **Rating.** The value of `XMP:Rating` (0–5), or unrated when the field is absent. No override layer — the field *is* the effective value.
 
 `*AutoPrevious` fields do not participate in effective value computation; they are informational only (see [Auto-previous fields](#auto-previous-fields-dirty-flagging)).
 
@@ -242,6 +254,8 @@ The rendered placeholder folders are **bracketed sentinels** — `(null)` and `(
 
 ### Single-valued vs multi-valued
 
-A file has exactly one physical location in the library, so `organize` templates can only reference single-valued tags (`date` and its derived components, `event`). Multi-valued tags (`person`, `face`) are usable in `checkout` and `export`, which materialize hard links — one per (file, tag-value) pair.
+A file has exactly one physical location in the library, so `organize` templates can only reference single-valued tags (`date` and its derived components, `event`, `rating`). Multi-valued tags (`person`, `face`) are usable in `checkout` and `export`, which materialize hard links — one per (file, tag-value) pair.
+
+`rating` is single-valued, so it works everywhere a folder level is allowed: `{rating}` enumerates one folder per star value (0–5), and `{rating:3,4,5}` / `{rating:5}` / `{rating:null}` filter. In [export](export.md) the *filter* on rating is normally set separately from the output *template* (config `filter:` vs `template:`) so a distribution can select `rating:5` without materializing a `5/` folder in the output — see [export.md](export.md#distributions-named-config).
 
 `{time}` is technically permitted in folder templates but useless as a folder level (per-second folders).

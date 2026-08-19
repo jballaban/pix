@@ -27,10 +27,46 @@ requirement below is **export-scoped**.
 Design TBD. Sketch of what it needs:
 
 - **Read-only.** Export never edits the library or the source files' metadata. Failure to write an export entry never affects library state.
-- **Copy vs link.** Default to hard links when `<out-path>` is on the same volume; copy when cross-volume. User-overridable per invocation.
+- **Copy only — no hard links.** An export is always a real byte copy, even when the target is on the library's volume. Hard-linking was considered and rejected: (1) it saves no *upload* (a sync client uploads content, not inodes), only local disk, which is negligible for curated subsets; (2) it welds the delivery copy to a master that pix deliberately mutates (TAG/CONVERT/organize rewrite files via write-temp+rename, which breaks the link); (3) re-encoded video (H.264) is new bytes with nothing to link to anyway. A copy is independent, so the master can change underneath it freely.
 - **Multi-valued tags work.** Each (file, tag-value) pair produces one entry in the output (one hard link or copy). `{person}` or `{face}` in templates produces a folder per identity.
 - **Filter semantics.** Files excluded by an explicit filter just don't appear in the output (no `(filtered)/` folder), unlike [organize](organize.md) and [checkout](tag-editing.md) which must account for every file. See [tags.md](tags.md#folder-categories-per-operation).
 - **Template grammar** is shared with organize/checkout; see [tags.md](tags.md#template-grammar).
+
+## Distributions: named config
+
+A distribution is a **standing, named** delivery target that gets re-provisioned regularly (not a one-off invocation). They live under an `exports:` section in the library's [`pix.yaml`](library.md), each a `(path, filter, template)` triple:
+
+```yaml
+exports:
+  general:
+    path: 'D:\SynologyDrive\Photos-General'
+    filter: 'rating:3,4,5'
+    template: '{year}/{event}'
+  top:
+    path: 'D:\SynologyDrive\Photos-Top'
+    filter: 'rating:5'
+    template: '{year}/{event}'
+```
+
+- **`pix export <name>`** reconciles that one distribution; **bare `pix export`** reconciles them all (the "reprovision everything after a curation session" gesture).
+- **`filter` is separate from `template`.** `filter` selects *which* files (a template-grammar filter expression, typically over `rating` — see [tags.md](tags.md#single-valued-vs-multi-valued)); `template` shapes the *output folders*. Keeping them separate is what lets `filter: rating:5` select the top tier **without** materializing a `5/` folder in the output. Files failing the filter simply don't appear (no `(filtered)/` folder — see the folder-category table in [tags.md](tags.md#folder-categories-per-operation)).
+- **Curation drives it.** The `rating` tag ([tags.md](tags.md#rating-curation-standard-field)) is the selection signal; tiers nest for free (`rating:5` ⊂ `rating:3,4,5`). A photo rated in pix (folder-shuffle checkout) or in an external tool (Windows/Lightroom/Synology Photos) flows into the next `pix export`.
+- **Overlap is duplicated bytes, by design.** Because tiers nest, a `rating:5` photo physically exists in both the `top` and `general` trees. Accepted (each distribution is an independent, independently-syncable tree); if a drive fills up, add another and point a distribution's `path` at it.
+
+## Provisioning: copy + delta reconcile (never wipe-and-redo)
+
+Re-provisioning is a **reconcile**, not a re-copy. Each run computes the desired set `{target-relpath → source-content-hash}` from the distribution's filter+template, diffs it against what's already provisioned, and touches **only the delta**:
+
+- **new** member → copy in
+- **dropped** member (rating fell below the tier) → delete from target
+- **changed** member (source bytes differ) → replace
+- **unchanged** → *never touched* — this is the whole point: unchanged files never re-upload on the Synology side.
+
+**Path churn is the one unavoidable re-upload.** If a member's effective `event`/`year` changes, its target relpath changes, so reconcile does delete-old + copy-new = one file re-uploaded. Inherent to a template-shaped mirror; rare for curated files, and scoped to that file.
+
+**Diff cheaply via a master-side manifest.** Hashing the (possibly network-backed) target every run is slow, so each distribution keeps a manifest of `target-relpath → source-hash` under the machine-local `.pix/local/` (recomputable state, sync-excluded like the cache/lock). Reconcile diffs desired-vs-manifest in memory using already-cached master hashes, then touches the target only for the delta. Lost manifest → fall back to a full re-provision. This mirrors how pix already treats [`.pix/local/cache.db`](implementation.md#cache-store) as recomputable machine-local state.
+
+**Read-only w.r.t. the master.** Nothing in provisioning reads-modifies-writes a library file; the master is a pure source. Failure to write a target entry never affects library state (the top-of-file read-only invariant). Removals from the target are plain deletes — the export is derived and disposable, so the [conservation invariant](README.md#cross-cutting-invariants) (soft-delete to run folders) applies to the *master*, not to a regenerable delivery mirror. Removals are logged, not staged.
 
 ## BIG TODO — video must ship as H.264 (compatibility rendition)
 
