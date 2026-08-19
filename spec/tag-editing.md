@@ -96,7 +96,7 @@ Hard links (not moves) mean the library is untouched while the user shuffles, an
 
 ### Template scope: single-valued tokens, compound allowed
 
-`checkout` accepts a **compound** template — any arrangement of single-valued tokens (`{year}`, `{month}`, `{day}`, `{event}`) across slash-separated levels (`{year}/{event}`, `{year}/{month}/{event}`, …). **Every level is editable.** Because each file has one value per single-valued token, each file appears exactly **once** in the tree, which is what makes inode identity unambiguous.
+`checkout` accepts a **compound** template — any arrangement of single-valued tokens (`{year}`, `{month}`, `{day}`, `{event}`, `{rating}`) across slash-separated levels (`{year}/{event}`, `{event}/{rating}`, …). **Every level is editable.** (`{rating}` is the natural token for a curation pass: `{event}/{rating}` gives you a per-event view of what's rated — see [Rating writes the standard field directly](#rating-writes-the-standard-field-directly).) Because each file has one value per single-valued token, each file appears exactly **once** in the tree, which is what makes inode identity unambiguous.
 
 Multi-valued tokens (`{person}`, `{face}`) must be the **sole** token in a checkout — a file appears once per value, so the tree carries duplicates of the same inode. The canonical multi-valued flow is the [face-specific checkout](#face-specific-checkout-face) below, which is **deferred** along with migrate-time face detection.
 
@@ -166,6 +166,17 @@ If patching leaves the override all-`*`, the `pix:DateOverride` field is **remov
 **Clear-when-equals-auto.** When a move sets a token to the value its `_auto` already yields, commit **clears** that override field (reverts to auto) rather than storing a redundant override — so "override present" stays meaningful and future `_auto` improvements keep showing through. (Same for `{event}`: moving a link back onto its auto-derived event name drops `EventOverride` entirely.) Commit determines the `_auto` value by re-reading the changed file's current `pix:*` fields (valid under the freeze).
 
 **Un-dated files.** Setting date components on a file with no `pix:DateAuto` works via the no-auto synthesis rule (a year anchors it; missing parts default to their minimum) — see [tags.md → Effective value computation](tags.md#effective-value-computation). Setting only a sub-year component (e.g. `{month}`) on an un-dated file records the override but leaves the effective date null until a year is also set.
+
+### Rating writes the standard field directly
+
+`rating` is the one editable token with **no `_auto` and no override** (see [tags.md → Rating](tags.md#rating-curation-standard-field)), so checkout treats it as a special case:
+
+- **Assign = write the standard field.** Dragging a link into the `5/` folder of a `{rating}` level writes `XMP:Rating = 5` **directly** — not a `RatingOverride` (there is no such field). Because it's the standard field, the value is also visible to Windows/Lightroom/Synology Photos.
+- **No clear-when-equals-auto.** That rule exists to avoid storing a redundant override against an `_auto` baseline; rating has no baseline, so the field is always written to exactly the folder's value.
+- **`0/` = unrated.** Since `0` (or absent) means unrated ([tags.md](tags.md#rating-curation-standard-field)), dragging into `0/` sets the file back to unrated — so a rating can be *cleared* through the ordinary assign gesture, without depending on the deferred blank/`(null)`-drag path. (A `(null)/` drag, once the blanking build lands, removes the field entirely — equivalent to `0`.)
+- **`*AutoPrevious` reconciliation does not apply** (rating has no `_auto`, so there's nothing to dirty-flag).
+
+This is the natural rating workflow now that the master isn't organized by `{rating}`: open `pix tag checkout <path> "{event}/{rating}"`, drop files into star folders, commit — the master's on-disk layout (and its Synology sync) is untouched; only `XMP:Rating` is written.
 
 ### Cleaning up `*AutoPrevious` on override changes
 
