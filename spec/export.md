@@ -2,6 +2,28 @@
 
 `pix export <template> <out-path>` produces a read-only, derived view of the library at a separate location — copies or hard links, shaped by a template. Used to ship a curated subset (e.g. `{year:2023}/{event}/`) to an external location without disturbing the canonical library.
 
+## Why export is a separate tier — master vs delivery
+
+pix's library is the **master** tier: organized, deduped, tagged, and kept at the
+best fidelity that's practical (fidelity-first video is remux-only; images are
+JPG-normalized). It is **not** a raw archive — first migrate lossily normalizes
+images (HEIC/PNG/DNG → JPG) and soft-deletes originals to prunable run folders —
+and it is deliberately **not** a universally-compatible delivery copy either
+(library video is codec-mixed: legacy HEVC + native H.264/MPEG-2).
+
+**Export is the delivery tier.** It is where the two things the master
+intentionally *doesn't* do happen: **curation** (a hand-picked subset, e.g. by
+rating) and **compatibility** (lossy renditions like H.264 that would be wrong to
+force onto the master). Lossy transforms are legitimate here precisely because an
+export is derived and disposable — it never touches master bytes.
+
+Consequence, decided with the owner: the master is consumed as the organized
+best-fidelity copy; anything shared or viewed on compatibility-sensitive
+clients (Synology Photos, phones, TVs) goes through an export. This is why
+**library-wide H.264 is rejected** (it would collapse delivery concerns into the
+master, reversing [video-redesign.md §0](video-redesign.md)) and why the H.264
+requirement below is **export-scoped**.
+
 Design TBD. Sketch of what it needs:
 
 - **Read-only.** Export never edits the library or the source files' metadata. Failure to write an export entry never affects library state.
