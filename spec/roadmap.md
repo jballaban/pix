@@ -73,6 +73,16 @@ Materialize a filtered/derived view of the library (multi-valued tokens like
 `{person}`/`{face}`, format/size variants) without disturbing the canonical
 tree. Sketched only — see [export.md](export.md).
 
+**BIG TODO within export: H.264 compatibility rendition for video.** Library
+video is remux-only (mixed codecs — legacy HEVC + native H.264/MPEG-2), so an
+export can contain HEVC that Synology Photos / shared clients can't play without
+NAS-side transcoding. Exports must ship **H.264-in-MP4** (universal playback).
+This is **export-scoped only** — converting the *library* to H.264 is rejected
+(it reverses the remux-only fidelity decision in
+[video-redesign.md §0](video-redesign.md) and doubles storage). It re-introduces
+a scoped, isolated transcode path that video-redesign otherwise retired. Full
+requirement + design points in [export.md](export.md#big-todo--video-must-ship-as-h264-compatibility-rendition).
+
 ## Stable collision suffixes (kill ordinal `_NNN` churn)
 
 When two files share a canonical name (same effective second), `plan.py`'s
