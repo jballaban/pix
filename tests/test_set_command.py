@@ -122,6 +122,90 @@ def test_set_clear_writes_when_override_present(
     assert seen[0].lines[0].pix_writes == {PIX_EVENT_OVERRIDE: ""}  # clear
 
 
+def test_set_rating_writes_standard_field(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pix.rating import XMP_RATING
+
+    root = _lib(tmp_path)
+    f = root / "x.jpg"
+    f.write_bytes(b"x")
+    seen: list[Plan] = []
+    _patch_apply(monkeypatch, seen, 1)
+    monkeypatch.setattr(set_mod, "read_metadata_batched", _no_metas)
+
+    set_override(tag="rating", value="5", paths=[f], no_prompt=True)
+    assert len(seen) == 1
+    assert seen[0].lines[0].pix_writes == {XMP_RATING: "5"}
+
+
+def test_set_rating_noop_when_already_rated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """XMP:Rating is stored as an int — the no-op check must use the effective
+    value, not get_str (which returns None for a non-str)."""
+    from pix.rating import XMP_RATING
+
+    root = _lib(tmp_path)
+    f = root / "x.jpg"
+    f.write_bytes(b"x")
+    seen: list[Plan] = []
+    _patch_apply(monkeypatch, seen, 0)
+    monkeypatch.setattr(
+        set_mod, "read_metadata_batched",
+        _metas(**{str(f): FileMetadata(
+            path=f, raw={"SourceFile": str(f), XMP_RATING: 5})}),
+    )
+
+    set_override(tag="rating", value="5", paths=[f], no_prompt=True)
+    assert seen == []  # already 5 → no apply
+
+
+def test_clear_rating_removes_field(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pix.rating import XMP_RATING
+
+    root = _lib(tmp_path)
+    f = root / "x.jpg"
+    f.write_bytes(b"x")
+    seen: list[Plan] = []
+    _patch_apply(monkeypatch, seen, 1)
+    monkeypatch.setattr(
+        set_mod, "read_metadata_batched",
+        _metas(**{str(f): FileMetadata(
+            path=f, raw={"SourceFile": str(f), XMP_RATING: 4})}),
+    )
+
+    set_override(tag="rating", value="", paths=[f], no_prompt=True, clear=True)
+    assert len(seen) == 1
+    assert seen[0].lines[0].pix_writes == {XMP_RATING: ""}  # removes the field
+
+
+def test_clear_rating_noop_when_unrated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _lib(tmp_path)
+    f = root / "x.jpg"
+    f.write_bytes(b"x")
+    seen: list[Plan] = []
+    _patch_apply(monkeypatch, seen, 0)
+    monkeypatch.setattr(set_mod, "read_metadata_batched", _no_metas)
+
+    set_override(tag="rating", value="", paths=[f], no_prompt=True, clear=True)
+    assert seen == []
+
+
+def test_set_rating_rejects_out_of_range(tmp_path: Path) -> None:
+    with pytest.raises(typer.Exit):
+        set_override(tag="rating", value="9", paths=[tmp_path / "f"], no_prompt=True)
+
+
+def test_set_rating_rejects_non_numeric(tmp_path: Path) -> None:
+    with pytest.raises(typer.Exit):
+        set_override(tag="rating", value="good", paths=[tmp_path / "f"], no_prompt=True)
+
+
 def test_set_rejects_unknown_tag(tmp_path: Path) -> None:
     with pytest.raises(typer.Exit):
         set_override(tag="bogus", value="x", paths=[tmp_path / "f"], no_prompt=True)

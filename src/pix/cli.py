@@ -160,15 +160,15 @@ def organize(
 def set_(
     tag: Annotated[
         str,
-        typer.Argument(help="Tag to override: 'event' or 'date'."),
+        typer.Argument(help="Tag to set: 'event', 'date', or 'rating'."),
     ],
     value: Annotated[
         str,
         typer.Argument(
             help=(
-                'Override value. Empty string "" clears the override. For '
-                "date: a YYYY-MM-DD-HH:MM:SS pattern with `*` for any "
-                "unpinned part, e.g. 2022-*-*-*:*:*"
+                'Value to set. For date: a YYYY-MM-DD-HH:MM:SS pattern with '
+                "`*` for any unpinned part, e.g. 2022-*-*-*:*:*. For rating: "
+                "an integer 0-5 (0 = unrated)."
             ),
         ),
     ],
@@ -194,7 +194,7 @@ def set_(
 def clear_(
     tag: Annotated[
         str,
-        typer.Argument(help="Tag to clear: 'event' or 'date'."),
+        typer.Argument(help="Tag to clear: 'event', 'date', or 'rating'."),
     ],
     paths: Annotated[
         list[Path],
@@ -210,7 +210,7 @@ def clear_(
     ] = False,
 ) -> None:
     """Clear a tag: blank the event (forces 'no event', even if auto-derived),
-    or revert a date override to the auto date. Run `pix organize` after."""
+    revert a date override to the auto date, or remove a rating (→ unrated)."""
     set_override(tag=tag, value="", paths=paths, no_prompt=no_prompt, clear=True)
 
 

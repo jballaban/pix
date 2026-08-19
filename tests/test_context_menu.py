@@ -144,7 +144,7 @@ def test_info_leaf_is_files_only(fake_reg: _FakeWinreg) -> None:
     files_root, folders_root = cm._root_keys()
     launcher = str(cm._launcher_path())
 
-    for vi, (key, label, op) in enumerate(cm._FILE_VERBS, start=len(cm._TAGS) + 2):
+    for vi, (key, label, op) in enumerate(cm._FILE_VERBS, start=len(cm._TAGS) + 3):
         verb_key = f"{files_root}\\shell\\{vi:02d}_{key}"
         assert fake_reg.keys[verb_key]["MUIVerb"] == label
         assert fake_reg.keys[verb_key]["MultiSelectModel"] == "Player"
@@ -159,12 +159,38 @@ def test_info_leaf_is_files_only(fake_reg: _FakeWinreg) -> None:
         assert f"{folders_root}\\shell\\{vi:02d}_{key}" not in fake_reg.keys
 
 
+def test_rating_submenu(fake_reg: _FakeWinreg) -> None:
+    """A Rating cascade with star leaves (1-5) + Clear exists on both roots.
+    Star leaves call `-Op set -Tag rating -Val <n>`; Clear calls
+    `-Op clear -Tag rating`."""
+    cm.context_menu(action="install")
+    launcher = str(cm._launcher_path())
+    rating_n = len(cm._TAGS) + 1
+    for root in cm._root_keys():
+        rating_key = f"{root}\\shell\\{rating_n:02d}_rating"
+        assert fake_reg.keys[rating_key]["MUIVerb"] == cm._RATING_LABEL
+        assert "SubCommands" in fake_reg.keys[rating_key]
+        for si, (stars, label) in enumerate(cm._RATINGS, start=1):
+            verb = f"{rating_key}\\shell\\{si:02d}_star{stars}"
+            assert fake_reg.keys[verb]["MUIVerb"] == label
+            command = fake_reg.keys[verb + r"\command"][""]
+            assert launcher in command
+            assert "-Op set" in command
+            assert "-Tag rating" in command
+            assert f"-Val {stars}" in command
+        clear = f"{rating_key}\\shell\\{len(cm._RATINGS) + 1:02d}_clear"
+        assert fake_reg.keys[clear]["MUIVerb"] == "Clear"
+        clear_cmd = fake_reg.keys[clear + r"\command"][""]
+        assert "-Op clear" in clear_cmd
+        assert "-Tag rating" in clear_cmd
+
+
 def test_rotate_submenu(fake_reg: _FakeWinreg) -> None:
     """A Rotate cascade with right/left leaves exists on both roots; each leaf
     calls `-Op rotate -Deg <clockwise>` with no -Tag."""
     cm.context_menu(action="install")
     launcher = str(cm._launcher_path())
-    rot_n = len(cm._TAGS) + 1
+    rot_n = len(cm._TAGS) + 2
     for root in cm._root_keys():
         rot_key = f"{root}\\shell\\{rot_n:02d}_rotate"
         assert fake_reg.keys[rot_key]["MUIVerb"] == cm._ROTATE_LABEL

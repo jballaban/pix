@@ -7,10 +7,13 @@
   Registered by `pix context-menu install` as a cascading menu:
 
       Pix  >  Event | Date  >  Set value... | Clear
-                                Info   (files only)
+              Rating         >  ★ .. ★★★★★ | Clear   (preset -Val, no prompt)
+              Rotate         >  Rotate right | left
+              Info   (files only)
 
-  The menu leaf encodes the tag (-Tag event|date) and operation
-  (-Op set|clear|meta). A classic registry verb is invoked once per selected
+  The menu leaf encodes the tag (-Tag event|date|rating), operation
+  (-Op set|clear|meta|rotate), and a preset value (-Deg for rotate, -Val for a
+  rating star). A classic registry verb is invoked once per selected
   item, and only up to a hard Windows limit (100 for a legacy verb) — so
   rather than try to receive every path via %1, the script runs in two stages:
 
@@ -38,12 +41,14 @@ param(
     # RUN mode: path to the snapshot list file produced by the COLLATE leader.
     [Parameter(ParameterSetName = 'Run', Mandatory = $true)]
     [string] $Run,
-    # Common to both stages: which tag, operation, and (for rotate) degrees.
-    [ValidateSet('event', 'date')]
+    # Common to both stages: which tag, operation, (for rotate) degrees, and
+    # (for a preset rating star) the value.
+    [ValidateSet('event', 'date', 'rating')]
     [string] $Tag = 'event',
     [ValidateSet('set', 'clear', 'meta', 'rotate')]
     [string] $Op = 'set',
-    [string] $Deg = ''
+    [string] $Deg = '',
+    [string] $Val = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -261,7 +266,7 @@ function Invoke-Organize {
 # RUN mode - the interactive, visible stage.
 # ---------------------------------------------------------------------------
 if ($Run) {
-    Write-PixLog "RUN start Op=$Op Tag=$Tag Deg=$Deg list=$Run"
+    Write-PixLog "RUN start Op=$Op Tag=$Tag Deg=$Deg Val=$Val list=$Run"
     $items = @()
     if (Test-Path -LiteralPath $Run) {
         $items = @(Get-Content -LiteralPath $Run -Encoding UTF8 | Where-Object { $_ -ne '' })
@@ -317,6 +322,12 @@ if ($Run) {
     if ($Op -eq 'clear') {
         & pix tag clear $Tag @items
     }
+    elseif ($Tag -eq 'rating') {
+        # Rating is a preset star value (1-5) chosen from the menu — set it
+        # directly, no prompt (like Rotate).
+        Write-Host "Setting rating $Val ..." -ForegroundColor Cyan
+        & pix tag set rating $Val --no-prompt @items
+    }
     else {
         if ($Tag -eq 'date') {
             Write-Host 'Date override pattern: YYYY-MM-DD-HH:MM:SS with * for any unpinned part.'
@@ -348,7 +359,9 @@ if ($Run) {
     }
 
     # Tag write succeeded → organize the affected folder so the files move now.
-    if ($LASTEXITCODE -eq 0) {
+    # Rating is metadata, not location (the default library template has no
+    # {rating} level), so it skips the reshape — like rotate.
+    if ($LASTEXITCODE -eq 0 -and $Tag -ne 'rating') {
         Invoke-Organize -Items $items
     }
 
@@ -385,7 +398,7 @@ finally {
 }
 
 if (-not $iAmLeader) { return }   # sibling invocation from the same selection
-Write-PixLog "COLLATE leader Op=$Op Tag=$Tag Deg=$Deg clicked=$clicked"
+Write-PixLog "COLLATE leader Op=$Op Tag=$Tag Deg=$Deg Val=$Val clicked=$clicked"
 
 $items = @(Get-ExplorerSelection -Clicked $clicked | Where-Object { $_ -ne '' })
 Write-PixLog "selection read: $($items.Count) item(s)"
@@ -411,5 +424,6 @@ $runArgs = @(
     '-File', $PSCommandPath, '-Run', $itemsFile, '-Tag', $Tag, '-Op', $Op
 )
 if ($Deg) { $runArgs += @('-Deg', $Deg) }
+if ($Val) { $runArgs += @('-Val', $Val) }
 Start-Process -FilePath $psExe -ArgumentList $runArgs
 Write-PixLog "RUN window spawned"

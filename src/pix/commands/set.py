@@ -1,7 +1,9 @@
-"""Implementation of `pix tag set` — write a tag override onto specific files.
+"""Implementation of `pix tag set` — write a tag value onto specific files.
 
 `pix tag set <tag> <value> <path>...` writes `pix:EventOverride` /
-`pix:DateOverride` to each named path. `pix tag clear` is the inverse: for
+`pix:DateOverride` (or, for `rating`, the standard `XMP:Rating` field directly —
+no override, since rating has no `_auto` baseline) to each named path.
+`pix tag clear` is the inverse: for
 **date** it removes the override (reverting to the auto date); for **event**
 it blanks the *effective* value — writing an `EVENT_NULL` force-null
 override when an auto event would otherwise show, so "Clear" means "no
@@ -51,13 +53,19 @@ from pix.plan import (
     lookup_policy,
     valid_date_override,
 )
+from pix.rating import XMP_RATING, effective_rating
 from pix.root import NoLibraryRoot, resolve as resolve_root
 from pix.scan import walk_source_files
 
+# Tag → the metadata field `set`/`clear` writes. `event`/`date` write pix:*
+# override fields; `rating` writes the standard `XMP:Rating` directly (no
+# override — see spec/tags.md → Rating), the one non-override entry here.
 _OVERRIDE_FIELD: dict[str, str] = {
     "event": PIX_EVENT_OVERRIDE,
     "date": PIX_DATE_OVERRIDE,
+    "rating": XMP_RATING,
 }
+_VALID_RATINGS: frozenset[str] = frozenset({"0", "1", "2", "3", "4", "5"})
 
 
 def _fail(msg: str) -> None:
@@ -97,8 +105,14 @@ def _plan_clear(
       otherwise show, write the `EVENT_NULL` force-null sentinel to beat it;
       if the event came only from an override (no auto), just drop the
       override. Already-eventless files are a no-op.
+    - **Rating**: remove the `XMP:Rating` field (revert to unrated). `current`
+      here is the effective rating; already-unrated files are a no-op.
     - **Other tags (date)**: remove the override, reverting to the auto.
     """
+    if field == XMP_RATING:
+        if current is None:
+            return None  # already unrated
+        return ("", f"rating {current}→(cleared)")
     if field == PIX_EVENT_OVERRIDE:
         auto = meta.get_str(PIX_EVENT_AUTO)
         effective = None if current == EVENT_NULL else (current or auto)
@@ -171,6 +185,9 @@ def set_override(
             f"with `*` for any unpinned part, e.g. 2022-*-*-*:*:* (pin year) "
             f"or 2022-08-15-*:*:* (pin the day)."
         )
+        return
+    if tag.lower() == "rating" and not clearing and value not in _VALID_RATINGS:
+        _fail(f"invalid rating {value!r}; expected an integer 0-5 (0 = unrated).")
         return
 
     if not paths:
@@ -267,9 +284,12 @@ def _apply_overrides(
 
     lines: list[PlanLine] = []
     noop = 0
+    is_rating = field == XMP_RATING
     for p in resolved:
         meta = metas.get(p) or FileMetadata(path=p, raw={"SourceFile": str(p)})
-        current = meta.get_str(field)
+        # Rating stores an int in `XMP:Rating`, so `get_str` returns None even
+        # when rated — compute the effective value for the no-op/clear check.
+        current = effective_rating(meta) if is_rating else meta.get_str(field)
         if clearing:
             decision = _plan_clear(field, current, meta, tag)
             if decision is None:
@@ -280,7 +300,8 @@ def _apply_overrides(
             if current == value:
                 noop += 1
                 continue
-            write_value, details = value, f"{tag}_override {current or 'null'}→{value}"
+            label = tag if is_rating else f"{tag}_override"
+            write_value, details = value, f"{label} {current or 'null'}→{value}"
         ln = PlanLine(
             line_id=f"L{len(lines) + 1:03d}",
             action=Action.TAG,
@@ -297,10 +318,11 @@ def _apply_overrides(
         return
 
     plan_path = runs_dir / "plan.txt"
+    noun = "" if field == XMP_RATING else " override"
     action_desc = (
-        f"clear {tag} override"
+        f"clear {tag}{noun}"
         if clearing
-        else f"set {tag} override → {value!r}"
+        else f"set {tag}{noun} → {value!r}"
     )
     plan_path.write_text(
         f"# pix tag set: {action_desc}\n"
@@ -366,6 +388,9 @@ def _apply_overrides(
                 f"{root / '.pix' / 'errors'}.",
                 err=True,
             )
-        typer.echo("Run `pix organize` to reshape the library to match.")
+        # Rating is metadata, not location (the default library template has no
+        # {rating} level), so it doesn't call for a reshape — unlike event/date.
+        if not is_rating:
+            typer.echo("Run `pix organize` to reshape the library to match.")
     finally:
         typer.echo(f"Log: {apply_log_path}")

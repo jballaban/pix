@@ -4,6 +4,9 @@
 removes a cascading "Pix" right-click menu:
 
     Pix  >  Event | Date  >  Set value... | Clear
+            Rating         >  ★ .. ★★★★★ | Clear   (preset, no prompt)
+            Rotate         >  Rotate right | left
+            Info           (files only)
 
 It writes per-user (`HKCU`) registry keys — no admin needed — for both files
 (`*`) and folders (`Directory`). The cascade uses the registry-only nesting
@@ -39,6 +42,18 @@ _ROOT_KEY = "Pix"
 _MULTISELECT_MODEL = "Player"
 _TAGS: tuple[tuple[str, str], ...] = (("event", "Event"), ("date", "Date"))
 _OPS: tuple[tuple[str, str], ...] = (("set", "Set value..."), ("clear", "Clear"))
+# Rating submenu: discrete star values (1-5) that set XMP:Rating directly, plus
+# a Clear (remove the rating → unrated). Like Rotate, these are preset values —
+# each leaf calls pix straight away, no "Set value..." prompt. See spec/tags.md
+# → Rating and spec/tag-editing.md.
+_RATING_LABEL = "Rating"
+_RATINGS: tuple[tuple[int, str], ...] = (
+    (1, "★"),
+    (2, "★★"),
+    (3, "★★★"),
+    (4, "★★★★"),
+    (5, "★★★★★"),
+)
 # Rotate submenu: clockwise degrees per direction (run twice for 180).
 _ROTATE_LABEL = "Rotate"
 _ROTATIONS: tuple[tuple[int, str], ...] = ((90, "Rotate right"), (270, "Rotate left"))
@@ -78,16 +93,23 @@ def _powershell_exe() -> str:
     return str(candidate) if candidate.is_file() else "powershell.exe"
 
 
-def _command_string(op: str, tag: str | None = None, deg: int | None = None) -> str:
+def _command_string(
+    op: str,
+    tag: str | None = None,
+    deg: int | None = None,
+    val: int | None = None,
+) -> str:
     """The registry `command` for one leaf: launch the hidden collate stage.
 
-    `tag`/`deg` are included only when relevant (`-Tag` for set/clear, `-Deg`
-    for rotate); `meta` needs neither."""
+    `tag`/`deg`/`val` are included only when relevant (`-Tag` for set/clear,
+    `-Deg` for rotate, `-Val` for a preset rating star); `meta` needs none."""
     extra = ""
     if tag is not None:
         extra += f"-Tag {tag} "
     if deg is not None:
         extra += f"-Deg {deg} "
+    if val is not None:
+        extra += f"-Val {val} "
     return (
         f'"{_powershell_exe()}" -NoProfile -ExecutionPolicy Bypass '
         f'-WindowStyle Hidden -File "{_launcher_path()}" '
@@ -203,18 +225,28 @@ def _install() -> None:
             for oi, (op, op_label) in enumerate(_OPS, start=1):
                 leaf = f"{tag_key}\\shell\\{oi:02d}_{op}"
                 _make_verb(leaf, op_label, _command_string(op, tag))
-        # Rotate submenu (right/left), numbered after the tags.
-        rot_n = len(_TAGS) + 1
+        # Rating submenu (star values 1-5 + Clear), numbered right after the
+        # tags. Each star leaf sets XMP:Rating directly (preset -Val, no prompt).
+        rating_n = len(_TAGS) + 1
+        rating_key = f"{root}\\shell\\{rating_n:02d}_rating"
+        _make_cascade(rating_key, _RATING_LABEL)
+        for si, (stars, label) in enumerate(_RATINGS, start=1):
+            leaf = f"{rating_key}\\shell\\{si:02d}_star{stars}"
+            _make_verb(leaf, label, _command_string("set", tag="rating", val=stars))
+        clear_leaf = f"{rating_key}\\shell\\{len(_RATINGS) + 1:02d}_clear"
+        _make_verb(clear_leaf, "Clear", _command_string("clear", tag="rating"))
+        # Rotate submenu (right/left), numbered after the tags + Rating.
+        rot_n = len(_TAGS) + 2
         rot_key = f"{root}\\shell\\{rot_n:02d}_rotate"
         _make_cascade(rot_key, _ROTATE_LABEL)
         for di, (deg, label) in enumerate(_ROTATIONS, start=1):
             leaf = f"{rot_key}\\shell\\{di:02d}_deg{deg}"
             _make_verb(leaf, label, _command_string("rotate", deg=deg))
         # File-only top-level leaves (e.g. read-only `meta`) — folders skip
-        # these. Numbered after the tag submenus + Rotate.
+        # these. Numbered after the tag submenus + Rating + Rotate.
         if root == files_root:
             for vi, (key, label, op) in enumerate(
-                _FILE_VERBS, start=len(_TAGS) + 2
+                _FILE_VERBS, start=len(_TAGS) + 3
             ):
                 leaf = f"{root}\\shell\\{vi:02d}_{key}"
                 _make_verb(leaf, label, _command_string(op))
@@ -222,6 +254,8 @@ def _install() -> None:
     typer.echo(f"Installed the '{_ROOT_LABEL}' menu for files and folders (current user).")
     typer.echo(f"Layout:   {_ROOT_LABEL} > " + " | ".join(t for _t, t in _TAGS)
                + " > " + " | ".join(o for _o, o in _OPS)
+               + f"  |  {_RATING_LABEL} > "
+               + " | ".join(lbl for _s, lbl in _RATINGS) + " | Clear"
                + f"  |  {_ROTATE_LABEL} > " + " | ".join(l for _d, l in _ROTATIONS)
                + "   (+ " + ", ".join(lbl for _k, lbl, _o in _FILE_VERBS)
                + " on files)")
