@@ -134,6 +134,28 @@ per [C1](#validation-results)). Chosen because
 imports have no off-machine backup, which is acceptable: **the phone still holds
 them** (import never deletes), so a lost `.pix/local` just means re-import.
 
+**Sidecars live in a per-folder `.manifest/`, separate from the media — so
+culling media never forgets an import.** Each landing folder gets a `.manifest/`
+child holding one sidecar per media file at the **same leaf name**:
+
+    .pix/local/import/Jamies-iPhone/202605_a/
+    ├─ IMG_7399.HEIC              ← media (cull freely)
+    ├─ IMG_7400.HEIC
+    └─ .manifest/
+       ├─ IMG_7399.HEIC.importinfo
+       └─ IMG_7400.HEIC.importinfo
+
+The **sidecar, not the media, is the durable pending skip-record.** Deleting
+media *files* (everything in the folder except `.manifest/`) leaves the skip
+records intact → those objects are **not** re-downloaded. Deleting the **whole
+folder** — which takes its `.manifest/` too — is the deliberate "re-pull this
+batch" gesture. `.manifest/` is kept **visible** on purpose: its presence is the
+signal that the folder's imports are persisted. (Caveat: a `Ctrl+A → Delete`
+*inside* a folder sweeps `.manifest/` too and causes a re-download — cull by
+selecting the media files, not select-all.) The sibling path is deterministic, so
+ingest finds a media file's sidecar at `<parent>/.manifest/<name>.importinfo`, and
+folder-cleanup must treat a folder that still holds a `.manifest/` as **non-empty**.
+
 **Path safety.** `ORIGINAL_FILE_NAME` from the device is untrusted: sanitize for
 NTFS (strip/replace invalid chars, reserved names `CON`/`AUX`/…, trailing dots and
 spaces), and open all paths `\\?\`-prefixed for length (per
@@ -149,9 +171,10 @@ Accepted: import is a deliberate, user-initiated session, and the lock is what
 keeps a future ingest pre-pass from racing a running import over the same tree.
 
 **Files are pristine** — never modified at import (validation is **read-only**).
-Provenance rides in a **sidecar** per file: `<name>.importinfo` (YAML, matching the
-`.stashinfo` / `.errorinfo` convention), **written when the file reaches
-`VERIFIED`** (see below), recording:
+Provenance rides in a **sidecar** per file, in the folder's `.manifest/` child
+(`.manifest/<name>.importinfo`, YAML, matching the `.stashinfo` / `.errorinfo`
+convention — see [Landing & tracking](#landing--tracking)), **written when the file
+reaches `VERIFIED`** (see below), recording:
 
 - device serial + friendly name
 - stable object id (PUID, or the fallback composite — see below)
@@ -221,11 +244,16 @@ the download we're avoiding):
   `capture-date` is normalised to a canonical ISO-8601 UTC string before it enters
   the key (iOS serves a `YYYY/MM/DD:…` string; Android may differ).
 
-**Manifest = a regenerable cache** (a table in `.pix/local/cache.db`), not
-only-copy state. It's the union of two durable sources and rebuilds from them:
+**Manifest = the union of two on-disk sources**, recomputed each run — there is no
+separate ledger file (an earlier draft named a `.pix/local/cache.db` table; the
+code derives it live instead, and the `.manifest/` split below is what makes the
+pending half durable):
 
 - **committed** — `pix:ImportId` tags on library jpg/mp4 files.
-- **pending** — `.importinfo` sidecars in `.pix/local/import/`.
+- **pending** — `.importinfo` sidecars in the per-folder `.manifest/` subfolders
+  under `.pix/local/import/` (see [Landing & tracking](#landing--tracking)). Because
+  the sidecar isn't in the media you cull, "delete the photos, keep the folder" is a
+  durable "don't re-download."
 
 **Per-object decision (one unified procedure).** For each enumerated device object:
 
@@ -253,10 +281,18 @@ regenerates from library tags; the pending half is re-downloaded from the phone
 optimization; anything that slips through and is re-downloaded gets caught by
 `dedupe`'s content hash after the fact. So the manifest may be best-effort.
 
-**Delete semantics** (consequence of the above): delete a file from the library
-and, while the manifest cache is intact, it is **not** re-imported. Only if the
-cache is lost *and* regenerated does a since-deleted file re-download (rare;
-findable by date).
+**Delete semantics** (consequence of the above):
+
+- Delete **media files** in a landing folder (leaving its `.manifest/` sidecars) →
+  those objects stay skipped, **not** re-downloaded.
+- Delete a **whole landing folder** (taking its `.manifest/` too) → the deliberate
+  **re-pull** gesture; those objects re-download next run.
+- Delete a file **from the library** after it migrated in (so it carried a
+  `pix:ImportId`, and its pending sidecar was already consumed at ingest) → the
+  skip record went with it, so it **re-downloads** next run (dedupe can't backstop
+  what's no longer in the library). This post-migrate case is the one residual gap
+  the `.manifest/` split doesn't cover; a durable committed-side ledger could close
+  it later, but the common cull-before-migrate flow is now safe.
 
 ### Import-seed manifests (transitional, from the deprecated external MTP tool)
 
