@@ -44,8 +44,9 @@ from pix.media_check import media_check
 from pix.progress import LiveProgress
 from pix.root import local_dir
 
-# Non-media companions imported never lands (explicit denylist; everything else,
-# incl. unknown extensions, lands faithfully). `.aae` = Apple edit sidecars.
+# Non-media companions import never lands (everything else, incl. unknown
+# extensions, lands faithfully). Two rules: this explicit extension denylist
+# (`.aae` = Apple edit sidecars) plus bare dotfiles (`_is_bare_dotfile`).
 _SKIP_EXTENSIONS: frozenset[str] = frozenset({".aae"})
 
 # Per-object attempt cap before FAILED (size mismatch, read-back failure, or two
@@ -186,8 +187,20 @@ def _skip_key(obj: wpd.WpdObject) -> tuple[str, int | None]:
     return (ident, obj.size)
 
 
+def _is_bare_dotfile(name: str) -> bool:
+    """True for a leading-dot name with no extension (`.nomedia`,
+    `.database_uuid`, `.DS_Store`). These are device/OS metadata, never user
+    media, so import skips them rather than landing junk that migrate would only
+    have to delete. A dotfile *with* a real extension (`.hidden.jpg`) is not
+    bare — it could be media — and still lands."""
+    return name.startswith(".") and Path(name).suffix == ""
+
+
 def _is_skippable_companion(obj: wpd.WpdObject) -> bool:
-    return Path(obj.filename).suffix.lower() in _SKIP_EXTENSIONS
+    """True for non-media files import never lands: the explicit extension
+    denylist (`.aae`) or a bare dotfile (see `_is_bare_dotfile`)."""
+    name = obj.filename
+    return _is_bare_dotfile(name) or Path(name).suffix.lower() in _SKIP_EXTENSIONS
 
 
 # --- sidecar -----------------------------------------------------------------

@@ -112,13 +112,26 @@ the source; migrate flattens later), so the month-bucket names are harmless.
 **Import lands everything faithfully except an explicit non-media skip-list.**
 Import is a dumb, byte-exact copier with **no format opinions** — it takes every
 object under the camera-roll root as-is, *including unknown extensions* (so it
-never silently drops something it doesn't recognise). The **one** exception is a
-small, explicit denylist of known non-media companions, currently just **`.AAE`**
-(Apple's non-destructive edit-instruction sidecars — 73 in the sample; not media,
-never wanted). Accepted consequence: for a photo edited non-destructively (stored
-as original + `.AAE`), skipping the `.AAE` means the **original** lands, not the
-edited render. A `.__*`-style temp or the sync-client working dirs are not on a
-phone, so nothing else needs filtering. Landed media is additionally run through a
+never silently drops something it doesn't recognise). **Two** narrow exceptions,
+both provably non-media:
+
+1. An explicit extension denylist of known non-media companions, currently just
+   **`.AAE`** (Apple's non-destructive edit-instruction sidecars — 73 in the
+   sample; not media, never wanted). Accepted consequence: for a photo edited
+   non-destructively (stored as original + `.AAE`), skipping the `.AAE` means the
+   **original** lands, not the edited render.
+2. **Bare dotfiles** — a leading-dot name with no extension (`.nomedia`,
+   `.database_uuid`, `.DS_Store`). These are device/OS scanner metadata, never
+   user media, and a camera file is never dot-prefixed, so skipping them can't
+   drop media. Without this they'd land, ingest into `incoming/`, and then **abort
+   migrate** as unknown extensions (migrate has no policy for them) — the whole
+   reason this rule exists. A dotfile *with* a real extension (`.hidden.jpg`) is
+   not bare and still lands. Migrate's `EXTENSION_POLICY` also lists `.nomedia` /
+   `.database_uuid` as `delete`, a backstop for copies that arrive from non-import
+   sources.
+
+A `.__*`-style temp or the sync-client working dirs are not on a phone, so nothing
+else needs filtering. Landed media is additionally run through a
 **read-only validation probe** (a corruption tripwire, not a format gate — see
 [Import loop](#import-loop--download-validate-recover)); it never modifies or blocks
 a file, and formats pix can't parse are exempt (verified on transfer integrity

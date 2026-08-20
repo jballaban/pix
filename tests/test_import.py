@@ -82,6 +82,16 @@ def test_aae_is_skippable() -> None:
     assert not importer._is_skippable_companion(_obj(orig="clip.MOV"))
 
 
+def test_bare_dotfiles_are_skippable() -> None:
+    """Device/OS metadata dotfiles (leading dot, no extension) never land —
+    they'd otherwise abort migrate as unknown extensions."""
+    assert importer._is_skippable_companion(_obj(orig=".nomedia"))
+    assert importer._is_skippable_companion(_obj(orig=".database_uuid"))
+    assert importer._is_skippable_companion(_obj(orig=".DS_Store"))
+    # A dotfile with a real extension could be media — it still lands.
+    assert not importer._is_skippable_companion(_obj(orig=".hidden.jpg"))
+
+
 # --- sidecar round-trip + manifest ------------------------------------------
 def test_sidecar_write_read_and_manifest(tmp_path: Path) -> None:
     landing = tmp_path / "import" / "iPhone"
