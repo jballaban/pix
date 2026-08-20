@@ -38,7 +38,7 @@ from blake3 import blake3
 
 from pix import wpd
 from pix.duration import format_duration_compact
-from pix.ingest import committed_import_ids
+from pix.ingest import MANIFEST_DIRNAME, committed_import_ids
 from pix.markers import IMPORT_TMP_SUFFIX
 from pix.media_check import media_check
 from pix.progress import LiveProgress
@@ -205,7 +205,10 @@ def _is_skippable_companion(obj: wpd.WpdObject) -> bool:
 
 # --- sidecar -----------------------------------------------------------------
 def _sidecar_path(landed: Path) -> Path:
-    return landed.with_name(landed.name + _SIDECAR_EXT)
+    """`.importinfo` in the folder's `.manifest/` child (not beside the media),
+    so culling media never deletes the skip record. See spec/import.md →
+    Landing & tracking."""
+    return landed.parent / MANIFEST_DIRNAME / (landed.name + _SIDECAR_EXT)
 
 
 def _write_sidecar(landed: Path, info: wpd.DeviceInfo, friendly: str,
@@ -229,6 +232,7 @@ def _write_sidecar(landed: Path, info: wpd.DeviceInfo, friendly: str,
         "capture_date": obj.created,
     }
     sidecar = _sidecar_path(landed)
+    sidecar.parent.mkdir(parents=True, exist_ok=True)  # the `.manifest/` child
     tmp = sidecar.with_name(sidecar.name + IMPORT_TMP_SUFFIX)
     tmp.write_text(
         yaml.safe_dump(data, default_flow_style=False, sort_keys=False),
@@ -247,7 +251,9 @@ def _read_sidecar(sidecar: Path) -> dict[str, Any] | None:
 
 # --- media-integrity problem marker (.importissue) ---------------------------
 def _issue_path(landed: Path) -> Path:
-    return landed.with_name(landed.name + _ISSUE_EXT)
+    """`.importissue` in the folder's `.manifest/` child, alongside `.importinfo`
+    (they're mutually exclusive per file)."""
+    return landed.parent / MANIFEST_DIRNAME / (landed.name + _ISSUE_EXT)
 
 
 def _write_issue(landed: Path, info: wpd.DeviceInfo, obj: wpd.WpdObject,
@@ -266,6 +272,7 @@ def _write_issue(landed: Path, info: wpd.DeviceInfo, obj: wpd.WpdObject,
         "size": obj.size,
     }
     issue = _issue_path(landed)
+    issue.parent.mkdir(parents=True, exist_ok=True)  # the `.manifest/` child
     tmp = issue.with_name(issue.name + IMPORT_TMP_SUFFIX)
     tmp.write_text(
         yaml.safe_dump(data, default_flow_style=False, sort_keys=False),

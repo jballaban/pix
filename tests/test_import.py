@@ -8,6 +8,7 @@ manifest regeneration, device selection, and the friendly-name registry.
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Callable
 
@@ -116,6 +117,41 @@ def test_sidecar_write_read_and_manifest(tmp_path: Path) -> None:
 
 def test_scan_manifest_empty_when_no_landing(tmp_path: Path) -> None:
     assert importer._scan_manifest(tmp_path / "nope") == set()
+
+
+def test_sidecar_lands_in_manifest_subfolder_not_beside_media(tmp_path: Path) -> None:
+    """The skip record lives in a per-folder `.manifest/` child, so culling the
+    media file can't delete it. See spec/import.md → Landing & tracking."""
+    landing = tmp_path / "import" / "iPhone"
+    landed = landing / "202605_a" / "IMG_0001.HEIC"
+    landed.parent.mkdir(parents=True)
+    landed.write_bytes(b"pretend-heic")
+
+    importer._write_sidecar(landed, _dev(), "iPhone", _obj(), "Internal Storage/x")
+
+    expected = landed.parent / ".manifest" / "IMG_0001.HEIC.importinfo"
+    assert importer._sidecar_path(landed) == expected
+    assert expected.is_file()
+    assert not (landed.parent / "IMG_0001.HEIC.importinfo").exists()  # not beside
+
+
+def test_manifest_skip_survives_media_cull(tmp_path: Path) -> None:
+    """Delete the media file but keep its `.manifest/` sidecar → the object is
+    still in the pending manifest (won't re-download). Deleting the whole folder
+    (taking `.manifest/` with it) is the re-pull gesture."""
+    landing = tmp_path / "import" / "iPhone"
+    landed = landing / "202605_a" / "IMG_0001.HEIC"
+    landed.parent.mkdir(parents=True)
+    landed.write_bytes(b"pretend-heic")
+    obj = _obj()
+    importer._write_sidecar(landed, _dev(), "iPhone", obj, "Internal Storage/x")
+
+    landed.unlink()  # cull the media, keep the `.manifest/` sidecar
+    assert importer._skip_key(obj) in importer._scan_manifest(landing)
+
+    # Deleting the whole device folder (with its `.manifest/`) forgets it.
+    shutil.rmtree(landed.parent)
+    assert importer._skip_key(obj) not in importer._scan_manifest(landing)
 
 
 def test_sidecar_write_is_atomic_no_temp_left(tmp_path: Path) -> None:

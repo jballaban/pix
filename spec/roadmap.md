@@ -34,14 +34,8 @@ re-downloading), then hand off to migrate. Fully designed in
 against real devices (persistent object IDs, single-session behavior, cheap
 metadata, camera-roll structure, iOS "Keep Originals"/optimized-storage
 behavior). See that spec's "Assumptions to validate" before building. Branch:
-`device-import`.
-
-**Cull-safe sidecars — pending build.** Import sidecars currently sit *beside*
-the media, so deleting a whole landing folder wipes the skip record and the
-objects re-download. Relocate sidecars into a visible per-folder `.manifest/`
-child so culling media (keeping the folder) stays skipped while deleting the
-whole folder re-pulls. Self-contained design + implementation checklist in
-[import.md → Pending build: relocate sidecars to `.manifest/`](import.md#pending-build-relocate-sidecars-to-manifest).
+`device-import`. (Cull-safe `.manifest/` sidecars: **built** v0.1.201 — see
+[import.md → Cull-safe sidecars](import.md#cull-safe-sidecars-built-v01201).)
 
 ## Tag editing — removal, blanking, and override review
 

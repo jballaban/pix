@@ -18,11 +18,12 @@ from pix.ingest import (
 def _verified(friendly_dir: Path, rel: str, data: bytes = b"media",
               *, serial: str = "SER1", puid: str = "{P1}",
               device_name: str = "james", imported_at: str = "20260720") -> Path:
-    """Create a landed VERIFIED file (media + .importinfo sidecar)."""
+    """Create a landed VERIFIED file (media + `.manifest/`-housed .importinfo)."""
     media = friendly_dir / rel
     media.parent.mkdir(parents=True, exist_ok=True)
     media.write_bytes(data)
-    sidecar = media.with_name(media.name + ".importinfo")
+    sidecar = media.parent / ".manifest" / (media.name + ".importinfo")
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
     dev_path = f"Internal Storage/{rel}"
     sidecar.write_text(
         f"serial: {serial}\npuid: '{puid}'\ndevice_name: {device_name}\n"

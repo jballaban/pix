@@ -34,6 +34,11 @@ from pix.timeout import safe_move
 INCOMING_DIRNAME: str = "incoming"
 _SIDECAR_EXT: str = ".importinfo"
 _ISSUE_EXT: str = ".importissue"
+# Landing sidecars live in a per-device-folder `.manifest/` child (not beside the
+# media) so culling media files never deletes the skip record — see spec/import.md
+# → Landing & tracking. This applies to the `.pix/local/import` **landing** only;
+# `incoming/` keeps sidecars beside the media, where plan.py reads them.
+MANIFEST_DIRNAME: str = ".manifest"
 # Durable, synced record of ImportIds now in the library — the import manifest's
 # "committed half". Recorded here (at ingest, when a file enters the tree) so a
 # later `pix import` skips it even after its `.importinfo` sidecar is dropped.
@@ -134,7 +139,13 @@ def _reap_empty_dirs(top: Path) -> int:
 
 
 def _sidecar_of(media: Path) -> Path:
+    """Sidecar beside the media — the `incoming/` layout plan.py expects."""
     return media.with_name(media.name + _SIDECAR_EXT)
+
+
+def _landing_sidecar_of(media: Path) -> Path:
+    """Sidecar in the landing's per-folder `.manifest/` child (cull-safe)."""
+    return media.parent / MANIFEST_DIRNAME / (media.name + _SIDECAR_EXT)
 
 
 def _is_marker(p: Path) -> bool:
@@ -218,7 +229,7 @@ def run_ingest(root: Path, folder: Path, runs_dir: Path) -> IngestSummary:
         # unprobed stragglers, and .importissue files).
         media = sorted(
             p for p in friendly_dir.rglob("*")
-            if p.is_file() and not _is_marker(p) and _sidecar_of(p).is_file()
+            if p.is_file() and not _is_marker(p) and _landing_sidecar_of(p).is_file()
         )
         # Image stems per source folder, computed BEFORE any move, so a Live
         # Photo's image (moved first) doesn't hide its clip's pairing.
@@ -228,7 +239,7 @@ def run_ingest(root: Path, folder: Path, runs_dir: Path) -> IngestSummary:
             if p.suffix.lower() in _LIVE_PHOTO_IMAGE_EXTS
         }
         for src in media:
-            sidecar = _sidecar_of(src)
+            sidecar = _landing_sidecar_of(src)  # read from the landing `.manifest/`
             if _is_live_photo_mov(src, image_stems):
                 dropped_dir.mkdir(parents=True, exist_ok=True)
                 safe_move(src, _collision_free(dropped_dir, src.name, set()))
