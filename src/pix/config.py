@@ -65,6 +65,10 @@ EXTENSION_POLICY: dict[str, ExtensionAction] = {
     "gif": "delete",  # web-format throwaways
     "webp": "delete",
     "jwt": "delete",  # MSAL broker manifests OneDrive syncs in
+    # Device/scanner metadata dotfiles that ride along on a phone/SD import
+    # (matched by full name via lookup_policy — bare dotfiles have no suffix).
+    "nomedia": "delete",  # Android media-scanner "ignore this folder" marker
+    "database_uuid": "delete",  # Android/device library DB marker
 }
 
 

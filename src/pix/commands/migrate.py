@@ -593,7 +593,9 @@ def _validate_extensions(
     unknown: dict[str, Path] = {}
     for path in source_files:
         if lookup_policy(path.name, config.extensions) is None:
-            key = path.suffix.lower().lstrip(".") or path.name.lower()
+            # Fall back to the (dot-stripped) full name for bare dotfiles like
+            # `.foo`, whose suffix is empty — so the report reads `.foo`, not `..foo`.
+            key = path.suffix.lower().lstrip(".") or path.name.lower().lstrip(".")
             unknown.setdefault(key, path)
 
     if not unknown:

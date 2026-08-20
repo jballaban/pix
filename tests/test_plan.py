@@ -54,6 +54,15 @@ def test_lookup_policy_unknown_returns_none() -> None:
     assert lookup_policy("weird.xyz", cfg.extensions) is None
 
 
+def test_device_junk_dotfiles_are_deleted_by_default_policy() -> None:
+    """Bare device-metadata dotfiles that ride along on a phone/SD import must
+    resolve to `delete` (not abort migrate) via the full-name lookup path."""
+    from pix.config import EXTENSION_POLICY
+
+    assert lookup_policy(".nomedia", EXTENSION_POLICY) == "delete"
+    assert lookup_policy(".database_uuid", EXTENSION_POLICY) == "delete"
+
+
 # --- effective_date ---
 
 
