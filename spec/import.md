@@ -135,8 +135,11 @@ imports have no off-machine backup, which is acceptable: **the phone still holds
 them** (import never deletes), so a lost `.pix/local` just means re-import.
 
 **Sidecars live in a per-folder `.manifest/`, separate from the media — so
-culling media never forgets an import.** Each landing folder gets a `.manifest/`
-child holding one sidecar per media file at the **same leaf name**:
+culling media never forgets an import.** *(Designed 2026-08-19, **not yet built** —
+current code writes `<name>.importinfo` beside the media; see [Pending build:
+sidecar relocation](#pending-build-relocate-sidecars-to-manifest) for the change
+to make.)* Each landing folder gets a `.manifest/` child holding one sidecar per
+media file at the **same leaf name**:
 
     .pix/local/import/Jamies-iPhone/202605_a/
     ├─ IMG_7399.HEIC              ← media (cull freely)
@@ -293,6 +296,49 @@ optimization; anything that slips through and is re-downloaded gets caught by
   what's no longer in the library). This post-migrate case is the one residual gap
   the `.manifest/` split doesn't cover; a durable committed-side ledger could close
   it later, but the common cull-before-migrate flow is now safe.
+
+### Pending build: relocate sidecars to `.manifest/`
+
+**Status:** designed 2026-08-19, **not yet built**. The download half currently
+writes `<name>.importinfo` **beside** the media, so deleting a whole landing folder
+removes the sidecars with it and those objects re-download. The fix moves the
+sidecar into a per-folder `.manifest/` child (see [Landing &
+tracking](#landing--tracking)) so the skip record survives media culling.
+
+**Decisions (settled with owner):**
+
+- `.manifest/` is a **visible** child of each device-path folder — its presence is
+  the "these imports are persisted" signal. Accepted caveat: a `Ctrl+A → Delete`
+  *inside* a folder removes it too (cull by selecting media files, not select-all).
+- The sidecar keeps its current YAML format and leaf name; only its folder changes
+  to `<parent>/.manifest/<name>.importinfo`.
+- The sibling path is deterministic, so ingest resolves a media file's sidecar with
+  no separate mapping.
+
+**Implementation checklist:**
+
+- [ ] **importer.py** — write the sidecar to `<parent>/.manifest/<name>.importinfo`
+  (mkdir the `.manifest/` child; keep the temp-then-rename write). Decide whether
+  the `.importissue` marker moves too — lean **yes** so a folder cull is uniform.
+- [ ] **skip check (step 2 / straggler step 4)** — the "`.importinfo` /
+  `.importissue` present at its path" tests must look in `<parent>/.manifest/`, not
+  beside the media.
+- [ ] **`_scan_manifest`** — already a recursive `rglob("*.importinfo")`; confirm it
+  still finds them (no change expected).
+- [ ] **folder-cleanup** — treat a landing folder holding only a `.manifest/` as
+  **non-empty** (don't sweep it); remove a `.manifest/` only when its parent folder
+  is deliberately deleted.
+- [ ] **ingest handoff** — resolve each media file's sidecar at the sibling
+  `.manifest/` path; reconcile the crash-matrix rows that assume a beside-the-media
+  sidecar.
+- [ ] **tests (`test_import.py`)** — update sidecar-location expectations; add
+  "delete media, keep `.manifest/` → skipped" and "delete whole folder →
+  re-download" cases.
+
+**Residual gap (out of scope for this change):** a file deleted from the library
+*after* migrate re-downloads — its sidecar was consumed at ingest and the
+`pix:ImportId` left with the file. Closing that needs a durable committed-side
+ledger; separate, later.
 
 ### Import-seed manifests (transitional, from the deprecated external MTP tool)
 

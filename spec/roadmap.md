@@ -36,6 +36,13 @@ metadata, camera-roll structure, iOS "Keep Originals"/optimized-storage
 behavior). See that spec's "Assumptions to validate" before building. Branch:
 `device-import`.
 
+**Cull-safe sidecars — pending build.** Import sidecars currently sit *beside*
+the media, so deleting a whole landing folder wipes the skip record and the
+objects re-download. Relocate sidecars into a visible per-folder `.manifest/`
+child so culling media (keeping the folder) stays skipped while deleting the
+whole folder re-pulls. Self-contained design + implementation checklist in
+[import.md → Pending build: relocate sidecars to `.manifest/`](import.md#pending-build-relocate-sidecars-to-manifest).
+
 ## Tag editing — removal, blanking, and override review
 
 `pix tag checkout` currently supports **assigning** a tag (drag a file into a value
