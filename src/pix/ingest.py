@@ -148,6 +148,18 @@ def _landing_sidecar_of(media: Path) -> Path:
     return media.parent / MANIFEST_DIRNAME / (media.name + _SIDECAR_EXT)
 
 
+def _resolve_landing_sidecar(media: Path) -> Path | None:
+    """The media's landing sidecar, or None. Prefers the `.manifest/` location;
+    falls back to a legacy beside-the-media sidecar from before the `.manifest/`
+    split, so a landing written by an older build (e.g. an import in flight during
+    the upgrade) still ingests instead of stranding."""
+    manifest = _landing_sidecar_of(media)
+    if manifest.is_file():
+        return manifest
+    beside = _sidecar_of(media)
+    return beside if beside.is_file() else None
+
+
 def _is_marker(p: Path) -> bool:
     return p.name.endswith(_SIDECAR_EXT) or p.name.endswith(_ISSUE_EXT)
 
@@ -229,7 +241,8 @@ def run_ingest(root: Path, folder: Path, runs_dir: Path) -> IngestSummary:
         # unprobed stragglers, and .importissue files).
         media = sorted(
             p for p in friendly_dir.rglob("*")
-            if p.is_file() and not _is_marker(p) and _landing_sidecar_of(p).is_file()
+            if p.is_file() and not _is_marker(p)
+            and _resolve_landing_sidecar(p) is not None
         )
         # Image stems per source folder, computed BEFORE any move, so a Live
         # Photo's image (moved first) doesn't hide its clip's pairing.
@@ -239,7 +252,9 @@ def run_ingest(root: Path, folder: Path, runs_dir: Path) -> IngestSummary:
             if p.suffix.lower() in _LIVE_PHOTO_IMAGE_EXTS
         }
         for src in media:
-            sidecar = _landing_sidecar_of(src)  # read from the landing `.manifest/`
+            sidecar = _resolve_landing_sidecar(src)  # `.manifest/`, else legacy beside
+            if sidecar is None:
+                continue  # vanished between scan and move (race); skip
             if _is_live_photo_mov(src, image_stems):
                 dropped_dir.mkdir(parents=True, exist_ok=True)
                 safe_move(src, _collision_free(dropped_dir, src.name, set()))

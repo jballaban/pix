@@ -323,6 +323,12 @@ migrate staging, not culled, and `plan.py` reads the sidecar beside the media.
 Empty `.manifest/` folders reap with their drained parent; a `.manifest/` that
 still holds culled entries keeps the folder alive as the skip record.
 
+**Transitional fallback:** ingest's `_resolve_landing_sidecar` prefers the
+`.manifest/` sidecar but falls back to a legacy beside-the-media one, so a landing
+written by a pre-`.manifest/` build (e.g. an import in flight during the upgrade)
+still ingests instead of stranding. Skip lookups already tolerate both by scanning
+recursively.
+
 **Residual gap (still open):** a file deleted from the library *after* migrate
 re-downloads — its sidecar was consumed at ingest and the `pix:ImportId` left with
 the file. Closing that needs a durable committed-side ledger; separate, later.

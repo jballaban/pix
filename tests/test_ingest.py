@@ -69,6 +69,29 @@ def test_run_ingest_flattens_into_incoming(tmp_path: Path) -> None:
     assert (inc / "IMG_1.HEIC.importinfo").is_file()
 
 
+def test_run_ingest_legacy_beside_media_sidecar_still_ingests(
+    tmp_path: Path,
+) -> None:
+    """Transitional: a landing written by a pre-`.manifest/` build (sidecar beside
+    the media) still ingests instead of stranding."""
+    fdir = _import_dir(tmp_path)
+    media = fdir / "202605_a" / "IMG_9.HEIC"
+    media.parent.mkdir(parents=True, exist_ok=True)
+    media.write_bytes(b"media")
+    (media.parent / (media.name + ".importinfo")).write_text(  # beside, legacy
+        "serial: SER1\npuid: '{P9}'\ndevice_name: james\n"
+        "imported_at: '20260720'\ndevice_path: Internal Storage/202605_a/IMG_9.HEIC\n",
+        encoding="utf-8",
+    )
+    runs = tmp_path / ".pix" / "runs" / "r1"; runs.mkdir(parents=True)
+
+    summary = run_ingest(tmp_path, tmp_path, runs)
+    assert summary.ingested == 1
+    inc = incoming_dir(tmp_path)
+    assert (inc / "IMG_9.HEIC").is_file()
+    assert (inc / "IMG_9.HEIC.importinfo").is_file()  # rides along beside media
+
+
 def test_run_ingest_skips_unverified_and_issue_files(tmp_path: Path) -> None:
     fdir = _import_dir(tmp_path)
     _verified(fdir, "IMG_OK.JPG")
