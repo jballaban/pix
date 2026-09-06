@@ -234,9 +234,30 @@ Used by `organize`, `checkout`, and `export` (see [organize.md](organize.md), [t
 - `{tag}` — enumerate; produce one folder per distinct value.
 - `{tag:val1,val2}` — filter to listed values; produce one folder per listed value.
 - `null` — special value meaning "no value set."
-- `!` — negation prefix. `{year:!null}` = everything tagged; `{year:null,2020}` = untagged + 2020.
+- `!` — negation prefix. `{year:!null}` = everything tagged; `{year:null,2020}` = untagged + 2020. **Not implemented** — every list is an inclusion list for now; `!` parses to a pointed error. Deferred, not dropped.
 
 No range filters and no operators beyond list/`null`/`!`.
+
+### Two spellings, one grammar
+
+The same filter appears in two places, and both parse through `pix.tag_filter`
+so they can't drift:
+
+| Spelling | Where | Effect |
+|---|---|---|
+| `{rating:3,4,5}` (braced) | inside a template | filters **and** produces a folder level; excluded files render `(filtered)` |
+| `rating:3,4,5` (bare) | [export](export.md) distribution `filter:` | filters only; excluded files just don't appear |
+
+A bare expression ANDs its clauses, separated by `;` — `rating:4,5; event:beach trip`.
+Semicolon rather than whitespace, so event names may contain spaces; values still
+can't contain `,` or `;`. Braces in a bare expression are an error (braces mean
+"make a folder"). Values compare case-insensitively; whitespace around them is
+trimmed. An empty/absent filter matches everything.
+
+**Implementation status:** the grammar and organize's `(filtered)` rendering are
+built. **checkout rejects filtered templates** — commit reverses folder names
+back into tag values and has no reading for `(filtered)` — so the `checkout`
+column below is design intent, not current behavior.
 
 ### Date components as tokens
 

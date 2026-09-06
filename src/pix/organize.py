@@ -52,7 +52,13 @@ from pix.plan import (
     effective_date,
 )
 from pix.progress import LiveProgress
-from pix.special_folders import NULL_FOLDER
+from pix.special_folders import FILTERED_FOLDER, NULL_FOLDER
+from pix.tag_filter import (
+    ALLOWED_TOKENS,
+    FilterError,
+    accepts as filter_accepts,
+    parse_values,
+)
 from pix.telemetry import LineRecord, write_summary
 
 
@@ -102,15 +108,21 @@ class OrganizeApplyError(Exception):
 # --- Template parsing --------------------------------------------------------
 
 
-ALLOWED_TOKENS: frozenset[str] = frozenset(
-    {"year", "month", "day", "event", "rating"}
-)
-_TOKEN_RE = re.compile(r"\{([a-zA-Z]+)\}")
+# `ALLOWED_TOKENS` now lives with the grammar in `pix.tag_filter` — templates
+# and export's bare `filter:` share one vocabulary — and is imported above, so
+# `pix.organize.ALLOWED_TOKENS` still resolves for existing callers.
+
+# `{tag}` (enumerate) or `{tag:v1,v2}` (filter — see pix.tag_filter). The
+# value list runs to the closing brace; `/` can't appear because levels are
+# split on it first.
+_TOKEN_RE = re.compile(r"\{([a-zA-Z]+)(?::([^{}]*))?\}")
 
 
 @dataclass(frozen=True)
 class Token:
     name: str  # one of ALLOWED_TOKENS
+    # Inclusion list from a `{tag:v1,v2}` filter; None = enumerate all.
+    values: frozenset[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -136,8 +148,12 @@ class Template:
 def parse_template(template_str: str) -> Template:
     """Parse `{year}/{month}/{event}`-style strings into a Template.
 
+    Levels may carry a filter — `{rating:3,4,5}` — parsed by the shared
+    grammar in `pix.tag_filter`; non-matching files render to `(filtered)`.
+
     Rejects empty templates, empty levels (leading/trailing/consecutive
-    `/`), `{time}` (per-second is a foot-gun), and unknown tokens.
+    `/`), `{time}` (per-second is a foot-gun), unknown tokens, and
+    malformed filters.
     """
     if not template_str.strip():
         raise OrganizeError("template is empty")
@@ -171,7 +187,16 @@ def parse_template(template_str: str) -> Template:
                     f"unknown token {{{token_name}}}; valid tokens: "
                     f"{sorted(ALLOWED_TOKENS)}"
                 )
-            segments.append(Token(name=token_name))
+            value_spec = m.group(2)
+            try:
+                values = (
+                    parse_values(token_name, value_spec)
+                    if value_spec is not None
+                    else None
+                )
+            except FilterError as exc:
+                raise OrganizeError(str(exc)) from exc
+            segments.append(Token(name=token_name, values=values))
             pos = m.end()
         if pos < len(level_str):
             segments.append(Literal(text=level_str[pos:]))
@@ -234,17 +259,28 @@ def render_target_folder(
 ) -> str:
     """Render the template into a forward-slash-joined relative path.
 
-    Per-level null rule: any null token in a level renders the entire
-    level as the `(null)` sentinel (see `pix.special_folders`). Trailing
-    `(null)/(null)/...` chains collapse to a single `(null)/` (so an
-    all-null file lands at `(null)/foo.jpg`, not `(null)/(null)/foo.jpg`).
+    Per-level sentinel rules (see `pix.special_folders`):
+
+    - any token in the level excluded by a `{tag:v1,v2}` filter renders the
+      whole level as `(filtered)`;
+    - otherwise any null token renders the whole level as `(null)`.
+
+    Filtered wins over null, so a file the filter rejects never hides in
+    `(null)`. A filter that *lists* `null` accepts untagged files, which
+    then render `(null)` as usual (`{year:null,2020}`). Trailing chains of
+    the same sentinel collapse to one (so an all-null file lands at
+    `(null)/foo.jpg`, not `(null)/(null)/foo.jpg`).
     """
     rendered_levels: list[str] = []
     for level in template.levels:
+        tokens = [s for s in level.segments if isinstance(s, Token)]
         if any(
-            isinstance(s, Token) and values.get(s.name) is None
-            for s in level.segments
+            t.values is not None and not filter_accepts(t.values, values.get(t.name))
+            for t in tokens
         ):
+            rendered_levels.append(FILTERED_FOLDER)
+            continue
+        if any(values.get(t.name) is None for t in tokens):
             rendered_levels.append(NULL_FOLDER)
             continue
         parts: list[str] = []
@@ -257,15 +293,33 @@ def render_target_folder(
                 parts.append(seg.text)
         rendered_levels.append("".join(parts))
 
-    # Collapse trailing null chains.
+    # Collapse trailing runs of the same sentinel.
     while (
         len(rendered_levels) > 1
-        and rendered_levels[-1] == NULL_FOLDER
-        and rendered_levels[-2] == NULL_FOLDER
+        and rendered_levels[-1] in (NULL_FOLDER, FILTERED_FOLDER)
+        and rendered_levels[-1] == rendered_levels[-2]
     ):
         rendered_levels.pop()
 
     return "/".join(rendered_levels)
+
+
+def template_filters_out(
+    template: Template, values: dict[str, str | None]
+) -> bool:
+    """Is this file excluded by one of the template's `{tag:v1,v2}` filters?
+
+    organize and checkout must account for every file, so they render the
+    exclusion as a `(filtered)` folder. [export](../../spec/export.md) drops
+    excluded files instead — it asks this first and skips the file.
+    """
+    return any(
+        seg.values is not None
+        and not filter_accepts(seg.values, values.get(seg.name))
+        for level in template.levels
+        for seg in level.segments
+        if isinstance(seg, Token)
+    )
 
 
 # --- CWD constraint ----------------------------------------------------------

@@ -9,6 +9,7 @@ import pytest
 from pix.metadata import FileMetadata
 from pix.organize import (
     CwdInsideLibraryError,
+    Token,
     MissingHashesError,
     OrganizeError,
     UnmigratedFilesError,
@@ -19,6 +20,7 @@ from pix.organize import (
     generate_plan,
     parse_template,
     render_target_folder,
+    template_filters_out,
     sanitize_folder_name,
 )
 from pix.plan import (
@@ -87,6 +89,7 @@ def _values(
     day: str | None = "15",
     event: str | None = "Hawaii",
     date: str | None = "2023-08-15-14:32:05",
+    rating: str | None = "5",
 ) -> dict[str, str | None]:
     return {
         "year": year,
@@ -94,6 +97,7 @@ def _values(
         "day": day,
         "date": date,
         "event": event,
+        "rating": rating,
     }
 
 
@@ -765,3 +769,72 @@ def test_compute_values_with_no_date_or_event() -> None:
     v = compute_values(meta)
     assert v["year"] is None
     assert v["event"] is None
+
+
+# --- Template filters (`{tag:v1,v2}`) ----------------------------------------
+#
+# The value-list grammar itself is covered in test_tag_filter.py; these
+# pin the template-side parse and the `(filtered)` rendering.
+
+
+def test_parse_template_accepts_a_filter() -> None:
+    t = parse_template("{year}/{rating:4,5}")
+    seg = t.levels[1].segments[0]
+    assert isinstance(seg, Token)
+    assert seg.values == frozenset({"4", "5"})
+
+
+def test_parse_template_bare_token_has_no_filter() -> None:
+    seg = parse_template("{year}").levels[0].segments[0]
+    assert isinstance(seg, Token)
+    assert seg.values is None
+
+
+def test_parse_template_rejects_malformed_filter() -> None:
+    with pytest.raises(OrganizeError, match="lists no values"):
+        parse_template("{year}/{rating:}")
+
+
+def test_parse_template_rejects_filter_on_unknown_token() -> None:
+    with pytest.raises(OrganizeError, match="unknown token"):
+        parse_template("{quarter:1}")
+
+
+def test_render_filtered_level() -> None:
+    t = parse_template("{year}/{rating:4,5}")
+    assert render_target_folder(t, _values(rating="5")) == "2023/5"
+    assert render_target_folder(t, _values(rating="2")) == "2023/(filtered)"
+
+
+def test_render_filter_is_case_insensitive() -> None:
+    t = parse_template("{event:hawaii}")
+    assert render_target_folder(t, _values(event="Hawaii")) == "Hawaii"
+
+
+def test_render_filtered_beats_null() -> None:
+    # Untagged and not listed → filtered, not null: an excluded file must
+    # never hide in (null).
+    t = parse_template("{rating:4,5}")
+    assert render_target_folder(t, _values(rating=None)) == "(filtered)"
+
+
+def test_render_filter_listing_null_accepts_untagged() -> None:
+    t = parse_template("{year:null,2020}")
+    assert render_target_folder(t, _values(year=None)) == "(null)"
+    assert render_target_folder(t, _values(year="2020")) == "2020"
+    assert render_target_folder(t, _values(year="2023")) == "(filtered)"
+
+
+def test_render_collapses_trailing_filtered_chain() -> None:
+    t = parse_template("{year:2023}/{rating:5}/{event:hawaii}")
+    assert (
+        render_target_folder(t, _values(rating="1", event="Maui"))
+        == "2023/(filtered)"
+    )
+
+
+def test_template_filters_out() -> None:
+    t = parse_template("{year}/{rating:4,5}")
+    assert not template_filters_out(t, _values(rating="4"))
+    assert template_filters_out(t, _values(rating="1"))
+    assert not template_filters_out(parse_template("{year}"), _values())

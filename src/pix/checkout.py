@@ -282,6 +282,17 @@ def validate_checkout_template(template: Template) -> None:
                 "literal text (e.g. `{year}/{event}`). Multi-tag or literal-"
                 "bearing levels aren't supported in checkout."
             )
+        token = level.segments[0]
+        if token.values is not None:
+            # The grammar parses `{tag:v1,v2}` everywhere, but checkout's
+            # commit reverses folder names back into tag values and has no
+            # reading for a `(filtered)` folder. Reject rather than silently
+            # ignore the filter. See spec/tag-editing.md.
+            raise CheckoutError(
+                f"filters aren't supported in checkout templates yet "
+                f"(`{{{token.name}:...}}`); check out the full set and use "
+                f"the filter on organize or an export instead."
+            )
 
 
 def _level_token_names(template: Template) -> list[str]:

@@ -19,8 +19,10 @@ from __future__ import annotations
 # Untagged: a level whose tag resolved to no value.
 NULL_FOLDER: str = "(null)"
 
-# Excluded: a file dropped by an explicit `{tag:...}` filter (organize /
-# checkout / export filter rendering; not yet implemented in code).
+# Excluded: a file dropped by an explicit `{tag:...}` filter. Rendered by
+# organize (`pix.organize.render_target_folder`); export drops excluded
+# files instead of materializing this folder, and checkout rejects filtered
+# templates for now (commit can't reverse `(filtered)` into a tag value).
 FILTERED_FOLDER: str = "(filtered)"
 
 # Checkout delete-staging area (checkout removal flow; deferred — see
