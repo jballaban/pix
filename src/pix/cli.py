@@ -47,7 +47,7 @@ tag_app: typer.Typer = typer.Typer(
 )
 info_app: typer.Typer = typer.Typer(
     name="info",
-    help="Read-only inspection: meta / events.",
+    help="Read-only inspection: config / events / meta.",
     no_args_is_help=True,
 )
 
@@ -345,19 +345,6 @@ def context_menu_(
     context_menu(action=action)
 
 
-@info_app.command("meta")
-def meta(
-    path: Annotated[
-        Path,
-        typer.Argument(
-            help="File to inspect (read-only; shows date sources + tags)."
-        ),
-    ],
-) -> None:
-    """Show pix's date candidates and notable tags for one file."""
-    meta_file(path)
-
-
 @info_app.command("config")
 def config(
     path: Annotated[
@@ -388,6 +375,19 @@ def events(
 ) -> None:
     """List the library's unique event names, one per line (read-only)."""
     list_events(path)
+
+
+@info_app.command("meta")
+def meta(
+    path: Annotated[
+        Path,
+        typer.Argument(
+            help="File to inspect (read-only; shows date sources + tags)."
+        ),
+    ],
+) -> None:
+    """Show pix's date candidates and notable tags for one file."""
+    meta_file(path)
 
 
 @tag_app.command("checkout")
