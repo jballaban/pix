@@ -9,6 +9,7 @@ from typing import Annotated
 import typer
 
 from pix.commands.checkout import run_checkout
+from pix.commands.config import show_config
 from pix.commands.context_menu import context_menu
 from pix.commands.dedupe import dedupe_library
 from pix.commands.events import list_events
@@ -355,6 +356,22 @@ def meta(
 ) -> None:
     """Show pix's date candidates and notable tags for one file."""
     meta_file(path)
+
+
+@info_app.command("config")
+def config(
+    path: Annotated[
+        Path | None,
+        typer.Argument(
+            help=(
+                "A file/folder inside the library (resolves the root). "
+                "Defaults to CWD / PIX_ROOT."
+            )
+        ),
+    ] = None,
+) -> None:
+    """Show the library's resolved pix.yaml settings and export distributions."""
+    show_config(path)
 
 
 @info_app.command("events")

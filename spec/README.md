@@ -23,6 +23,7 @@ Ten top-level operations. `init`, `migrate`, `hash`, `dedupe`, `organize`, and `
 | `organize [<template>]` | Physically rearrange files per a template (bare = re-apply the stored default). Single-valued tags only. | [organize.md](organize.md) | **v1 implemented** |
 | `sync <path> [<template>]` | Run migrate → hash → dedupe → organize back-to-back, non-interactively (auto-apply, stop on first error). | [sync.md](sync.md) | **v1 implemented** |
 | `tag checkout <path> <template>` / `tag checkout --commit` / `tag checkout --reset` | Tag editing via folder-shuffle, scoped to `<path>` (like migrate). Compound single-valued templates; commit writes tags only. | [tag-editing.md](tag-editing.md) | **Designed (pending build)** |
+| `info config` | Show the library's resolved `pix.yaml` — effective settings (with defaults marked), each export distribution, template validity, and provisioning state. Read-only. | [export.md](export.md) | **v1 implemented** |
 | `export [<name>]` | Reconcile named delivery **distributions** (rating-filtered subsets) to separate paths — copy-only, delta sync. Read-only w.r.t. the library. | [export.md](export.md) | **v1 implemented** (H.264 rendition pending) |
 
 The plan-applying ops (`migrate`, `hash`, `dedupe`, `organize`) share a `--no-prompt` flag that skips the `Apply?` / `Proceed?` confirmation and applies the generated plan directly — the plan is still written to the run folder. `sync` is the composition of all four under `--no-prompt`.
