@@ -166,8 +166,11 @@ batch" gesture. `.manifest/` is kept **visible** on purpose: its presence is the
 signal that the folder's imports are persisted. (Caveat: a `Ctrl+A → Delete`
 *inside* a folder sweeps `.manifest/` too and causes a re-download — cull by
 selecting the media files, not select-all.) The sibling path is deterministic, so
-ingest finds a media file's sidecar at `<parent>/.manifest/<name>.importinfo`, and
-folder-cleanup must treat a folder that still holds a `.manifest/` as **non-empty**.
+ingest finds a media file's sidecar at `<parent>/.manifest/<name>.importinfo`.
+A culled sidecar pins its folder only until the next migrate: ingest **retires**
+it into the durable committed ledger and deletes it (see
+[Retiring culled sidecars](#retiring-culled-sidecars)), so the skip record
+outlives the folder rather than the other way round.
 
 **Path safety.** `ORIGINAL_FILE_NAME` from the device is untrusted: sanitize for
 NTFS (strip/replace invalid chars, reserved names `CON`/`AUX`/…, trailing dots and
@@ -297,7 +300,9 @@ optimization; anything that slips through and is re-downloaded gets caught by
 **Delete semantics** (consequence of the above):
 
 - Delete **media files** in a landing folder (leaving its `.manifest/` sidecars) →
-  those objects stay skipped, **not** re-downloaded.
+  those objects stay skipped, **not** re-downloaded. The next migrate retires the
+  now-orphan sidecars into the committed ledger and reaps the folder — the skip
+  survives, the empty tree does not.
 - Delete a **whole landing folder** (taking its `.manifest/` too) → the deliberate
   **re-pull** gesture; those objects re-download next run.
 - Delete a file **from the library** after it migrated in (so it carried a
@@ -320,8 +325,35 @@ them unchanged. `ingest.run_ingest` reads the landing sidecar from `.manifest/`
 (`_landing_sidecar_of`) and, when draining a media file into `incoming/`, places
 its sidecar **beside** the media there (`_sidecar_of`) — `incoming/` is transient
 migrate staging, not culled, and `plan.py` reads the sidecar beside the media.
-Empty `.manifest/` folders reap with their drained parent; a `.manifest/` that
-still holds culled entries keeps the folder alive as the skip record.
+Empty `.manifest/` folders reap with their drained parent.
+
+#### Retiring culled sidecars
+
+A culled entry — sidecar in `.manifest/`, media deleted — has nothing left to
+ingest, so on its own it would pin its `.manifest/`, its device folder, and every
+parent up to `<friendly>/` alive through every future migrate: the landing tree
+never empties. Ingest therefore **retires** it (`_promote_culled_sidecars`, run
+*after* the drain so a just-moved sidecar can't be misread as culled): the
+sidecar's `<serial>:<puid>` goes into the durable, synced
+`.pix/import-committed.json` ledger — which `act()` already checks alongside the
+pending manifest — and the sidecar is deleted, leaving the folder reapable. The
+skip record moves from fragile to durable; the folder goes away.
+
+Two carve-outs:
+
+- A sidecar with **no usable `<serial>:<puid>`** (device served no PUID, so the
+  entry rides the fallback composite key) can't be expressed in the ledger. It is
+  **left in place** — it's the only skip record, and dropping it would silently
+  re-pull the object. Its folder stays.
+- Orphan **`.importissue`** markers are untouched. A terminal `failed` is the
+  operator's record, cleared by deleting the marker; retiring it would hide the
+  problem.
+
+**Accepted narrowing:** the ledger is keyed on `<serial>:<puid>` with **no size**,
+so a retired entry loses the `+ size` optimized-storage guard the pending manifest
+carries — if the phone later serves a full-res original where it once served a
+proxy, a *culled* object stays skipped instead of re-importing. Same trade the
+committed half already makes for ingested files.
 
 **Transitional fallback:** ingest's `_resolve_landing_sidecar` prefers the
 `.manifest/` sidecar but falls back to a legacy beside-the-media one, so a landing

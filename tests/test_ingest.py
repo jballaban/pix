@@ -225,3 +225,83 @@ def test_standalone_mov_kept(
     summary = run_ingest(tmp_path, tmp_path, runs)
 
     assert summary.ingested == 1 and summary.live_photos_dropped == 0
+
+
+# --- culled landing entries (media deleted, sidecar kept) ---------------------
+def test_run_ingest_retires_culled_sidecar_and_reaps_folder(tmp_path: Path) -> None:
+    """A culled entry's skip record moves to the durable ledger and its folder
+    stops being pinned alive (spec/import.md → Delete semantics)."""
+    fdir = _import_dir(tmp_path)
+    media = _verified(fdir, "202605_a/IMG_1.HEIC", puid="{P1}")
+    media.unlink()  # the user culls the photo, keeping .manifest/
+    runs = tmp_path / ".pix" / "runs" / "r1"; runs.mkdir(parents=True)
+
+    summary = run_ingest(tmp_path, tmp_path, runs)
+
+    assert summary.ingested == 0
+    assert summary.culled_recorded == 1
+    assert committed_import_ids(tmp_path) == {"SER1:{P1}"}
+    assert not (fdir / "202605_a").exists()
+    assert not fdir.exists()
+
+
+def test_run_ingest_retires_culled_beside_media_sidecar(tmp_path: Path) -> None:
+    """Legacy pre-`.manifest/` layout: an orphan sidecar beside the (deleted)
+    media retires the same way."""
+    fdir = _import_dir(tmp_path)
+    (fdir / "202605_a").mkdir(parents=True)
+    (fdir / "202605_a" / "IMG_1.HEIC.importinfo").write_text(
+        "serial: SER1\npuid: '{P9}'\n", encoding="utf-8"
+    )
+    runs = tmp_path / ".pix" / "runs" / "r1"; runs.mkdir(parents=True)
+
+    summary = run_ingest(tmp_path, tmp_path, runs)
+
+    assert summary.culled_recorded == 1
+    assert committed_import_ids(tmp_path) == {"SER1:{P9}"}
+    assert not fdir.exists()
+
+
+def test_run_ingest_keeps_culled_sidecar_without_import_id(tmp_path: Path) -> None:
+    """No `<serial>:<puid>` → the sidecar is the only skip record, so it stays
+    (and keeps its folder) rather than silently re-pulling the object."""
+    fdir = _import_dir(tmp_path)
+    media = _verified(fdir, "202605_a/IMG_1.HEIC", puid="")
+    media.unlink()
+    runs = tmp_path / ".pix" / "runs" / "r1"; runs.mkdir(parents=True)
+
+    summary = run_ingest(tmp_path, tmp_path, runs)
+
+    assert summary.culled_recorded == 0
+    assert (fdir / "202605_a" / ".manifest" / "IMG_1.HEIC.importinfo").is_file()
+    assert committed_import_ids(tmp_path) == set()
+
+
+def test_run_ingest_does_not_retire_ingested_files_sidecars(tmp_path: Path) -> None:
+    """A sidecar that just rode its media into incoming/ is gone from the landing,
+    so it is never miscounted as culled."""
+    fdir = _import_dir(tmp_path)
+    _verified(fdir, "202605_a/IMG_1.HEIC", puid="{P1}")
+    runs = tmp_path / ".pix" / "runs" / "r1"; runs.mkdir(parents=True)
+
+    summary = run_ingest(tmp_path, tmp_path, runs)
+
+    assert summary.ingested == 1
+    assert summary.culled_recorded == 0
+    assert committed_import_ids(tmp_path) == {"SER1:{P1}"}
+
+
+def test_run_ingest_leaves_orphan_importissue_alone(tmp_path: Path) -> None:
+    """An `.importissue` with no media is the operator's terminal record — it is
+    not retired, and it still keeps its folder."""
+    fdir = _import_dir(tmp_path)
+    (fdir / "202605_a" / ".manifest").mkdir(parents=True)
+    issue = fdir / "202605_a" / ".manifest" / "IMG_BAD.JPG.importissue"
+    issue.write_text("state: failed\nserial: SER1\npuid: '{PB}'\n", encoding="utf-8")
+    runs = tmp_path / ".pix" / "runs" / "r1"; runs.mkdir(parents=True)
+
+    summary = run_ingest(tmp_path, tmp_path, runs)
+
+    assert summary.culled_recorded == 0
+    assert issue.is_file()
+    assert (fdir / "202605_a").is_dir()

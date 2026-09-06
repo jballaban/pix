@@ -302,6 +302,11 @@ def _run_migrate(
             f"Ingested {ingest_summary.ingested} imported file(s) into "
             f"incoming/{dropped}."
         )
+    if ingest_summary.culled_recorded:
+        typer.echo(
+            f"Retired {ingest_summary.culled_recorded} culled import record(s) "
+            "to .pix/import-committed.json (still skipped on re-import)."
+        )
 
     # Walk is sub-second on the libraries we care about (scandir-based
     # since v0.1.62), so no console ticker — the next phase's progress

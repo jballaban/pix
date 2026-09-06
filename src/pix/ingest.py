@@ -13,6 +13,11 @@ are **dropped** (soft-moved to the run folder, recoverable; the phone still hold
 them). Only `VERIFIED` files ingest; `.importissue` (needs-session/failed) and
 unprobed files stay in `.pix/local/import/`.
 
+A **culled** landing entry — its `.importinfo` sidecar still in `.manifest/` but
+its media file deleted by the user — has its ImportId promoted into the durable
+`.pix/import-committed.json` ledger and the orphan sidecar removed, so the "don't
+re-download" record survives while the drained folder can finally be reaped.
+
 See spec/import.md → Ingestion (migrate pre-pass).
 """
 
@@ -39,9 +44,11 @@ _ISSUE_EXT: str = ".importissue"
 # → Landing & tracking. This applies to the `.pix/local/import` **landing** only;
 # `incoming/` keeps sidecars beside the media, where plan.py reads them.
 MANIFEST_DIRNAME: str = ".manifest"
-# Durable, synced record of ImportIds now in the library — the import manifest's
-# "committed half". Recorded here (at ingest, when a file enters the tree) so a
-# later `pix import` skips it even after its `.importinfo` sidecar is dropped.
+# Durable, synced record of ImportIds pix is done with — the import manifest's
+# "committed half". Two ways in: a file entering the tree at ingest, and a
+# **culled** landing entry (media deleted, sidecar left) whose orphan sidecar
+# ingest promotes here before removing it. Either way a later `pix import` skips
+# the object without needing its `.importinfo` sidecar to still exist.
 # Survives a `.pix/local` cache wipe; may drift if a library file is later
 # deleted (accepted — see spec/import.md delete semantics; a full rescan is the
 # authoritative rebuild, deferred).
@@ -60,6 +67,7 @@ _FFPROBE_TIMEOUT: float = 30.0
 class IngestSummary:
     ingested: int = 0
     live_photos_dropped: int = 0
+    culled_recorded: int = 0
     folders_reaped: int = 0
     notes: list[str] = field(default_factory=lambda: [])
 
@@ -162,6 +170,55 @@ def _resolve_landing_sidecar(media: Path) -> Path | None:
 
 def _is_marker(p: Path) -> bool:
     return p.name.endswith(_SIDECAR_EXT) or p.name.endswith(_ISSUE_EXT)
+
+
+def _media_of_landing_sidecar(sidecar: Path) -> Path:
+    """The media file a landing `.importinfo` describes. Handles both layouts:
+    `<dir>/.manifest/<name>.importinfo` → `<dir>/<name>`, and the legacy
+    beside-the-media `<dir>/<name>.importinfo` → `<dir>/<name>`."""
+    name = sidecar.name[: -len(_SIDECAR_EXT)]
+    parent = sidecar.parent
+    if parent.name == MANIFEST_DIRNAME:
+        parent = parent.parent
+    return parent / name
+
+
+def _promote_culled_sidecars(imp: Path) -> tuple[set[str], int]:
+    """Consume `.importinfo` sidecars whose media the user culled.
+
+    A culled entry (media deleted, sidecar deliberately left behind — see
+    spec/import.md → Delete semantics) is a "don't re-download" record with
+    nothing left to ingest, so on its own it pins its `.manifest/` folder — and
+    every parent up to `<friendly>/` — alive forever, surviving every later
+    migrate. Instead: lift its ImportId into the durable
+    `.pix/import-committed.json` ledger (which `pix import` already consults) and
+    delete the sidecar, leaving the folder reapable.
+
+    A sidecar without a usable `<serial>:<puid>` ImportId can't be represented in
+    that ledger, so it is **left in place** — dropping it would silently re-pull
+    the object. Orphan `.importissue` markers are untouched: a terminal `failed`
+    record is the operator's, cleared by deleting the marker.
+
+    Returns `(import_ids, consumed_count)`.
+    """
+    ids: set[str] = set()
+    consumed = 0
+    for sidecar in sorted(imp.rglob(f"*{_SIDECAR_EXT}")):
+        if not sidecar.is_file():
+            continue
+        media = _media_of_landing_sidecar(sidecar)
+        if media.exists():
+            continue  # not culled — ingest handles (or already handled) it
+        import_id = _import_id_from_sidecar(sidecar)
+        if import_id is None:
+            continue  # no durable key — keeping the sidecar is the only skip record
+        ids.add(import_id)
+        try:
+            sidecar.unlink()
+        except OSError:
+            continue  # held open — retry next run
+        consumed += 1
+    return ids, consumed
 
 
 def _duration_seconds(path: Path) -> float | None:
@@ -269,18 +326,25 @@ def run_ingest(root: Path, folder: Path, runs_dir: Path) -> IngestSummary:
             if import_id:
                 new_committed.add(import_id)
 
-    _record_committed(root, new_committed)
+    # Culled entries (sidecar left, media deleted) become durable ledger rows so
+    # their folders stop being pinned. Runs after the drain, so a sidecar whose
+    # media just moved into incoming/ is already gone and can't be misread as
+    # culled.
+    culled_ids, summary.culled_recorded = _promote_culled_sidecars(imp)
+    _record_committed(root, new_committed | culled_ids)
 
     # Reap the now-empty drained device folders under .pix/local/import/ (the
     # organize empty-folder sweep skips the .pix subtree, so incoming/ is reaped
     # there but the import source folders are ours to clean).
     summary.folders_reaped = _reap_empty_dirs(imp)
 
-    if summary.ingested or summary.live_photos_dropped:
+    if summary.ingested or summary.live_photos_dropped or summary.culled_recorded:
         summary.notes.append(
             f"ingest: {summary.ingested} file(s) → {inc}"
             + (f", {summary.live_photos_dropped} Live Photo clip(s) dropped"
                if summary.live_photos_dropped else "")
+            + (f", {summary.culled_recorded} culled import record(s) retired"
+               if summary.culled_recorded else "")
             + (f", {summary.folders_reaped} empty import folder(s) reaped"
                if summary.folders_reaped else "")
         )
