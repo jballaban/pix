@@ -243,3 +243,110 @@ def test_discard(tmp_path: Path) -> None:
     export_manifest.save(tmp_path, _manifest())
     assert export_manifest.discard(tmp_path, "general") is True
     assert export_manifest.discard(tmp_path, "general") is False
+
+
+# --- extensions allowlist ----------------------------------------------------
+
+
+def test_extensions_default_excludes_360_footage(tmp_path: Path) -> None:
+    # `.insv` has no meaningful delivery rendition, so the default
+    # allowlist must not ship it.
+    path = _write(
+        tmp_path,
+        "exports:\n  all:\n    path: 'D:\\All'\n    template: '{year}'\n",
+    )
+    exts = Config.load(path).exports["all"].extensions
+    assert exts == frozenset({"jpg", "mp4"})
+    assert "insv" not in exts
+
+
+def test_extensions_photos_only(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        "exports:\n"
+        "  photos:\n"
+        "    path: 'D:\\P'\n"
+        "    extensions: 'jpg'\n"
+        "    template: '{year}'\n",
+    )
+    assert Config.load(path).exports["photos"].extensions == frozenset({"jpg"})
+
+
+def test_extensions_normalizes_dots_and_case(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        "exports:\n"
+        "  mixed:\n"
+        "    path: 'D:\\M'\n"
+        "    extensions: '.JPG, MP4 '\n"
+        "    template: '{year}'\n",
+    )
+    assert Config.load(path).exports["mixed"].extensions == frozenset(
+        {"jpg", "mp4"}
+    )
+
+
+def test_extensions_accepts_a_yaml_list(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        "exports:\n"
+        "  vids:\n"
+        "    path: 'D:\\V'\n"
+        "    extensions:\n"
+        "      - mp4\n"
+        "      - insv\n"
+        "    template: '{year}'\n",
+    )
+    assert Config.load(path).exports["vids"].extensions == frozenset(
+        {"mp4", "insv"}
+    )
+
+
+def test_unknown_extension_is_rejected(tmp_path: Path) -> None:
+    # A typo would otherwise ship nothing at all — silently.
+    path = _write(
+        tmp_path,
+        "exports:\n"
+        "  typo:\n"
+        "    path: 'D:\\T'\n"
+        "    extensions: 'jpg,mpeg4'\n"
+        "    template: '{year}'\n",
+    )
+    with pytest.raises(ValueError, match="unknown extension"):
+        Config.load(path)
+
+
+def test_junk_extension_is_rejected(tmp_path: Path) -> None:
+    # `txt` is in the policy but as a delete action — never shippable.
+    path = _write(
+        tmp_path,
+        "exports:\n"
+        "  junk:\n"
+        "    path: 'D:\\J'\n"
+        "    extensions: 'txt'\n"
+        "    template: '{year}'\n",
+    )
+    with pytest.raises(ValueError, match="unknown extension"):
+        Config.load(path)
+
+
+def test_extensions_survive_an_organize_rewrite(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        "exports:\n"
+        "  photos:\n"
+        "    path: 'D:\\P'\n"
+        "    extensions: 'jpg'\n"
+        "    template: '{year}'\n",
+    )
+    set_organize_template(path, "{year}")
+    assert Config.load(path).exports["photos"].extensions == frozenset({"jpg"})
+
+
+def test_default_extensions_are_not_written_back(tmp_path: Path) -> None:
+    path = _write(
+        tmp_path,
+        "exports:\n  all:\n    path: 'D:\\All'\n    template: '{year}'\n",
+    )
+    set_organize_template(path, "{year}")
+    assert "extensions" not in path.read_text(encoding="utf-8")

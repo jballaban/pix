@@ -226,14 +226,21 @@ def desired_members(
 ) -> dict[str, Source]:
     """Compute `{target relpath -> source}` for one distribution.
 
-    Selection is the distribution's `filter` *and* any filters inside its
-    template; excluded files simply don't appear (no `(filtered)` folder —
-    that's organize's rule, not export's). Raises `MissingHashesError` if a
-    selected file has no cached hash.
+    Selection is the distribution's `extensions` allowlist, then its
+    `filter`, then any filters inside its template; excluded files simply
+    don't appear (no `(filtered)` folder — that's organize's rule, not
+    export's). Raises `MissingHashesError` if a selected file has no cached
+    hash.
+
+    The extension gate comes first and is cheap: it's what keeps `.insv`
+    360° footage — which has no meaningful delivery rendition — out of a
+    tree meant to be played by ordinary clients.
     """
     selected: list[tuple[str, Source]] = []
     missing: list[Path] = []
     for path in library_files:
+        if path.suffix.lstrip(".").lower() not in distribution.extensions:
+            continue
         meta = cache.get(path)
         if meta is None:
             continue

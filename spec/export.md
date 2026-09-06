@@ -50,6 +50,12 @@ exports:
   general:
     path: 'D:\SynologyDrive\Photos-General'
     filter: 'rating:3,4,5'
+    extensions: 'jpg,mp4'      # optional; this is the default
+    template: '{year}/{event}'
+  photos:
+    path: 'D:\SynologyDrive\Photos-Only'
+    filter: 'rating:4,5'
+    extensions: 'jpg'          # a photos-only tier
     template: '{year}/{event}'
   top:
     path: 'D:\SynologyDrive\Photos-Top'
@@ -59,6 +65,8 @@ exports:
 
 - **`pix export <name>`** reconciles that one distribution; **bare `pix export`** reconciles them all (the "reprovision everything after a curation session" gesture).
 - **`filter` is separate from `template`.** `filter` selects *which* files (a template-grammar filter expression, typically over `rating` — see [tags.md](tags.md#single-valued-vs-multi-valued)); `template` shapes the *output folders*. Keeping them separate is what lets `filter: rating:5` select the top tier **without** materializing a `5/` folder in the output. Files failing the filter simply don't appear (no `(filtered)/` folder — see the folder-category table in [tags.md](tags.md#folder-categories-per-operation)).
+- **`extensions` is an allowlist**, defaulting to `jpg,mp4`. It decides *what kinds of file* a distribution ships, independently of `filter` (which selects *which* files) and `template` (which shapes folders) — so a photos-only tier is `extensions: 'jpg'`, and a video tier is `'mp4'`. An allowlist rather than a blocklist so a format pix starts keeping later can never silently leak into a delivery tree. Unknown extensions are rejected at load: a typo would otherwise ship nothing, silently.
+  - **`.insv`/`.insp` are excluded by default, deliberately.** Insta360 360° footage has no meaningful delivery rendition — a plain transcode yields dual-fisheye that no ordinary client displays usefully, and real output needs Insta360 Studio's stitch/reframe. It's a Studio workflow asset, not a delivery asset. (In the live library that's 601 files but **1.55 TB — two-thirds of all bytes** — so this default also keeps delivery trees sane.)
 - **Curation drives it.** The `rating` tag ([tags.md](tags.md#rating-curation-standard-field)) is the selection signal; tiers nest for free (`rating:5` ⊂ `rating:3,4,5`). A photo rated in pix (folder-shuffle checkout) or in an external tool (Windows/Lightroom/Synology Photos) flows into the next `pix export`.
 - **Overlap is duplicated bytes, by design.** Because tiers nest, a `rating:5` photo physically exists in both the `top` and `general` trees. Accepted (each distribution is an independent, independently-syncable tree); if a drive fills up, add another and point a distribution's `path` at it.
 

@@ -84,13 +84,25 @@ _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 # Keys a single `exports:` entry may carry. Unknown keys are an error, not
 # a silent drop: `filters:` for `filter:` would export the whole library to
 # the delivery target, which is exactly the mistake worth catching at load.
-_DISTRIBUTION_KEYS: frozenset[str] = frozenset({"path", "template", "filter"})
+_DISTRIBUTION_KEYS: frozenset[str] = frozenset(
+    {"path", "template", "filter", "extensions"}
+)
+
+# What a distribution ships when `extensions:` is omitted. An **allowlist**,
+# so a format pix starts keeping later can never silently leak into a
+# delivery tree. Defaults to the two universally-playable canonical formats;
+# notably this excludes `insv`/`insp` (Insta360 360° footage), which has no
+# meaningful delivery rendition — a plain transcode is dual-fisheye that
+# nothing plays usefully. Set `extensions:` explicitly to override.
+DEFAULT_EXPORT_EXTENSIONS: frozenset[str] = frozenset({"jpg", "mp4"})
 
 
 @dataclass(frozen=True)
 class Distribution:
     """One named delivery target from `exports:` (see spec/export.md).
 
+    `extensions` is the allowlist of file types this distribution ships
+    (`extensions: 'jpg'` for a photos-only tier, `'jpg,mp4'` for both).
     `filter` is parsed here so a typo fails at load, naming the offending
     distribution. `template` stays a raw string: parsing it needs
     `pix.organize`, which imports `pix.plan`, which imports this module —
@@ -102,6 +114,7 @@ class Distribution:
     path: str
     template: str
     filter: Filter
+    extensions: frozenset[str] = DEFAULT_EXPORT_EXTENSIONS
 
 
 @dataclass(frozen=True)
@@ -266,16 +279,7 @@ def _write_settings(
     # silent, expensive loss (next `pix export` re-provisions from nothing).
     if exports:
         data["exports"] = {
-            name: (
-                {"path": d.path, "template": d.template}
-                if not d.filter.clauses
-                else {
-                    "path": d.path,
-                    "filter": d.filter.raw,
-                    "template": d.template,
-                }
-            )
-            for name, d in exports.items()
+            name: _distribution_to_yaml(d) for name, d in exports.items()
         }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -374,7 +378,11 @@ def _parse_exports(
             raise ValueError(f"{path}: export {name!r} filter: {exc}") from exc
 
         out[name] = Distribution(
-            name=name, path=target, template=template, filter=parsed
+            name=name,
+            path=target,
+            template=template,
+            filter=parsed,
+            extensions=_parse_extensions(path, name, fields.get("extensions")),
         )
     return out
 
@@ -390,3 +398,68 @@ def _require_str(
             f"{path}: export {name!r} '{key}' must be a non-empty string"
         )
     return value
+
+
+def _parse_extensions(
+    path: Path, name: str, raw: object | None
+) -> frozenset[str]:
+    """Parse a distribution's `extensions:` allowlist.
+
+    Accepts `'jpg,mp4'` or a YAML list; leading dots and case are
+    normalized away. Unknown extensions are rejected — a typo (`jpeg2`,
+    `mp$`) would otherwise silently ship nothing, which is the worst kind
+    of quiet failure for a delivery tier.
+    """
+    if raw is None:
+        return DEFAULT_EXPORT_EXTENSIONS
+
+    if isinstance(raw, str):
+        items = raw.split(",")
+    elif isinstance(raw, list):
+        items = [str(item) for item in cast("list[object]", raw)]
+    else:
+        raise ValueError(
+            f"{path}: export {name!r} 'extensions' must be a string like "
+            f"'jpg,mp4' or a list, got {type(raw).__name__}"
+        )
+
+    out: set[str] = set()
+    for item in items:
+        ext = item.strip().lstrip(".").lower()
+        if not ext:
+            raise ValueError(
+                f"{path}: export {name!r} has an empty entry in "
+                f"'extensions' — check for a doubled or trailing ','"
+            )
+        action = EXTENSION_POLICY.get(ext)
+        if action is None or action == "delete":
+            shippable = sorted(
+                e for e, a in EXTENSION_POLICY.items() if a != "delete"
+            )
+            raise ValueError(
+                f"{path}: export {name!r} lists unknown extension {ext!r} "
+                f"in 'extensions'; known media extensions: {shippable}"
+            )
+        out.add(ext)
+
+    if not out:
+        raise ValueError(
+            f"{path}: export {name!r} 'extensions' is empty — omit the key "
+            f"to use the default ({sorted(DEFAULT_EXPORT_EXTENSIONS)})"
+        )
+    return frozenset(out)
+
+
+def _distribution_to_yaml(d: Distribution) -> dict[str, object]:
+    """Round-trip one distribution back to its `pix.yaml` mapping.
+
+    Only non-default, non-empty settings are written, so a hand-written
+    file stays as small as the author left it.
+    """
+    data: dict[str, object] = {"path": d.path}
+    if d.filter.clauses:
+        data["filter"] = d.filter.raw
+    if d.extensions != DEFAULT_EXPORT_EXTENSIONS:
+        data["extensions"] = ",".join(sorted(d.extensions))
+    data["template"] = d.template
+    return data

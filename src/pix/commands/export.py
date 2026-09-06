@@ -150,6 +150,11 @@ def _run_one(
     """Reconcile one distribution. Returns a non-zero count on failure."""
     typer.echo("")
     typer.echo(f"=== export: {dist.name} -> {dist.path}")
+    typer.echo(
+        f"    filter: {dist.filter.raw or '(everything)'}   "
+        f"extensions: {','.join(sorted(dist.extensions))}   "
+        f"template: {dist.template}"
+    )
 
     target = Path(dist.path)
     desired = _desired(root, dist, template)

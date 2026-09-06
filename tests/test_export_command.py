@@ -260,3 +260,39 @@ def test_event_rename_moves_rather_than_recopies(tmp_path: Path) -> None:
     manifest = export_manifest.load(root, "general")
     assert manifest is not None
     assert set(manifest.members) == {"2023/Maui/a.jpg"}
+
+
+def test_insv_is_excluded_by_default(tmp_path: Path) -> None:
+    # 360° footage has no meaningful delivery rendition, so the default
+    # allowlist leaves it in the library.
+    delivery = tmp_path / "delivery"
+    root = _library(tmp_path, delivery)
+    _seed(root, "a.jpg")
+    _seed(root, "b.mp4", content=b"video")
+    _seed(root, "c.insv", content=b"threesixty")
+
+    export_library(path=root, no_prompt=True)
+
+    shipped = {p.name for p in delivery.rglob("*") if p.is_file()}
+    assert shipped == {"a.jpg", "b.mp4"}
+
+
+def test_photos_only_distribution(tmp_path: Path) -> None:
+    delivery = tmp_path / "delivery"
+    root = tmp_path / "lib"
+    (root / ".pix").mkdir(parents=True)
+    (root / ".pix" / "pix.yaml").write_text(
+        "exports:\n"
+        "  photos:\n"
+        f"    path: '{delivery.as_posix()}'\n"
+        "    extensions: 'jpg'\n"
+        "    template: '{year}'\n",
+        encoding="utf-8",
+    )
+    _seed(root, "a.jpg")
+    _seed(root, "b.mp4", content=b"video")
+
+    export_library(path=root, no_prompt=True)
+
+    shipped = {p.name for p in delivery.rglob("*") if p.is_file()}
+    assert shipped == {"a.jpg"}

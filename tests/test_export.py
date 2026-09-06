@@ -329,3 +329,55 @@ def test_plan_text_is_editor_parseable() -> None:
 def test_plan_bytes_to_write_counts_copies_only() -> None:
     plan = _plan({"2023/a.jpg": _src()}, {"2023/b.jpg": Member("hb", 1, 2)})
     assert plan.bytes_to_write() == 100
+
+
+# --- Extension allowlist -----------------------------------------------------
+
+
+def _dist_ext(exts: set[str]) -> Distribution:
+    return Distribution(
+        name="general",
+        path="D:/Delivery",
+        template="{year}",
+        filter=parse_filter(""),
+        extensions=frozenset(exts),
+    )
+
+
+def test_desired_members_ships_only_allowed_extensions() -> None:
+    photo, video, insv = LIB / "a.jpg", LIB / "b.mp4", LIB / "c.insv"
+    metas = {p: _meta(p) for p in (photo, video, insv)}
+    files, cache, hashes, sizes = _inputs(
+        metas, {photo: "hp", video: "hv", insv: "hi"}
+    )
+
+    both = desired_members(
+        files, cache, hashes, sizes, _dist_ext({"jpg", "mp4"}),
+        parse_template("{year}"),
+    )
+    assert set(both) == {"2023/a.jpg", "2023/b.mp4"}
+
+    photos_only = desired_members(
+        files, cache, hashes, sizes, _dist_ext({"jpg"}),
+        parse_template("{year}"),
+    )
+    assert set(photos_only) == {"2023/a.jpg"}
+
+
+def test_extension_gate_is_case_insensitive() -> None:
+    upper = LIB / "A.JPG"
+    files, cache, hashes, sizes = _inputs({upper: _meta(upper)}, {upper: "h"})
+    desired = desired_members(
+        files, cache, hashes, sizes, _dist_ext({"jpg"}), parse_template("{year}")
+    )
+    assert set(desired) == {"2023/A.JPG"}
+
+
+def test_excluded_extension_never_needs_a_hash() -> None:
+    # The extension gate runs first, so an unhashed .insv can't block an
+    # export that wasn't going to ship it anyway.
+    insv = LIB / "c.insv"
+    files, cache, hashes, sizes = _inputs({insv: _meta(insv)}, {insv: None})
+    assert desired_members(
+        files, cache, hashes, sizes, _dist_ext({"jpg"}), parse_template("{year}")
+    ) == {}
