@@ -137,17 +137,24 @@ def test_install_builds_cascade(fake_reg: _FakeWinreg) -> None:
                 assert command.endswith('"%1"')
 
 
-def test_info_leaf_is_files_only(fake_reg: _FakeWinreg) -> None:
-    """The read-only `meta`/Info leaf is added to the files root only, with no
-    -Tag, and never to the folders root."""
+def test_info_verb_is_a_files_only_root(fake_reg: _FakeWinreg) -> None:
+    """The read-only `meta`/Info verb is a top-level root of its own beside the
+    cascade (Explorer's node budget is per root), on files only and with no
+    -Tag."""
     cm.context_menu(action="install")
-    files_root, folders_root = cm._root_keys()
+    files_parent, folders_parent = (p for p, _scope in cm._SHELL_PARENTS)
     launcher = str(cm._launcher_path())
 
-    for vi, (key, label, op) in enumerate(cm._FILE_VERBS, start=len(cm._TAGS) + 3):
-        verb_key = f"{files_root}\\shell\\{vi:02d}_{key}"
+    for verb_key, label, op in cm._file_verb_keys():
+        # A sibling of the Pix cascade, not a node inside it.
+        assert verb_key.startswith(f"{files_parent}\\")
+        assert not verb_key.startswith(f"{files_parent}\\{cm._ROOT_KEY}\\")
+        assert label.startswith(cm._ROOT_LABEL + " ")
+
         assert fake_reg.keys[verb_key]["MUIVerb"] == label
         assert fake_reg.keys[verb_key]["MultiSelectModel"] == "Player"
+        # A leaf, never a cascade.
+        assert "SubCommands" not in fake_reg.keys[verb_key]
 
         command = fake_reg.keys[verb_key + r"\command"][""]
         assert launcher in command
@@ -155,8 +162,28 @@ def test_info_leaf_is_files_only(fake_reg: _FakeWinreg) -> None:
         assert "-Tag " not in command
         assert command.endswith('"%1"')
 
-        # Folders never get this leaf.
-        assert f"{folders_root}\\shell\\{vi:02d}_{key}" not in fake_reg.keys
+        # Folders never get it.
+        assert not any(
+            k.startswith(f"{folders_parent}\\{cm._ROOT_KEY}{'Info'}")
+            for k in fake_reg.keys
+        )
+
+
+def test_cascade_fits_explorer_node_budget() -> None:
+    """Explorer renders at most 16 nodes per cascade root and drops the rest
+    silently, so the built tree must stay inside that budget."""
+    assert cm._cascade_node_count() <= cm._MENU_NODE_BUDGET
+
+
+def test_install_refuses_an_over_budget_cascade(
+    fake_reg: _FakeWinreg, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An added submenu that overflows the budget fails loudly rather than
+    quietly truncating the menu."""
+    monkeypatch.setattr(cm, "_MENU_NODE_BUDGET", cm._cascade_node_count() - 1)
+    with pytest.raises(typer.Exit):
+        cm.context_menu(action="install")
+    assert not fake_reg.keys
 
 
 def test_rating_submenu(fake_reg: _FakeWinreg) -> None:
@@ -213,9 +240,9 @@ def test_install_status_uninstall_round_trip(
     assert "installed for files, folders" in capsys.readouterr().out
 
     cm.context_menu(action="uninstall")
-    # The whole cascade tree is gone (no key path starts with a Pix root).
+    # Every key we own is gone — the cascade tree and the standalone verbs.
     assert all(
-        not k.startswith(root) for k in fake_reg.keys for root in cm._root_keys()
+        not k.startswith(root) for k in fake_reg.keys for root in cm._all_root_keys()
     )
 
     cm.context_menu(action="status")

@@ -6,7 +6,7 @@ removes a cascading "Pix" right-click menu:
     Pix  >  Event | Date  >  Set value... | Clear
             Rating         >  ★ .. ★★★★★ | Clear   (preset, no prompt)
             Rotate         >  Rotate right | left
-            Info           (files only)
+    Pix Info                                    (files only, own root)
 
 It writes per-user (`HKCU`) registry keys — no admin needed — for both files
 (`*`) and folders (`Directory`). The cascade uses the registry-only nesting
@@ -15,6 +15,13 @@ Explorer render its `shell` subkey as a submenu, repeated to nest. Each leaf's
 `command` points at the packaged launcher `pix/resources/pixtag.ps1` with the
 chosen `-Tag`/`-Op`; the launcher (a collation shim) aggregates a multi-select
 and calls `pix tag set` / `pix tag clear` (see the script header).
+
+Explorer renders at most `_MENU_NODE_BUDGET` nodes per cascade root, counting
+submenu headers as well as every nested leaf; node 17 and beyond are dropped
+with no error and nothing for `status` to notice. That budget is per root, so
+standalone verbs (`Pix Info`) get their own — which is why they sit beside the
+cascade rather than inside it. `_install` asserts the budget up front so an
+added submenu fails loudly instead of silently truncating the menu.
 
 Windows-only: the registry + Explorer integration has no meaning elsewhere, so
 the command refuses up front on other platforms. `winreg` is imported lazily,
@@ -57,9 +64,16 @@ _RATINGS: tuple[tuple[int, str], ...] = (
 # Rotate submenu: clockwise degrees per direction (run twice for 180).
 _ROTATE_LABEL = "Rotate"
 _ROTATIONS: tuple[tuple[int, str], ...] = ((90, "Rotate right"), (270, "Rotate left"))
-# Top-level leaves shown only on files (not folders), as (key, label, op).
-# `meta` is the read-only single-file inspector (`pix info meta`).
+# Standalone top-level verbs shown only on files (not folders), as
+# (key, label, op). Each gets its own `...\shell\Pix<Key>` root rather than a
+# slot in the cascade: the cascade is already at its 16-node budget, and the
+# budget is per root. `meta` is the read-only single-file inspector
+# (`pix info meta`).
 _FILE_VERBS: tuple[tuple[str, str, str], ...] = (("info", "Info", "meta"),)
+# Explorer's hard ceiling on a static-verb cascade: 16 nodes per root, counting
+# submenu headers and every nested leaf at any depth. Overflow is dropped
+# silently, so `_install` checks the built tree against this.
+_MENU_NODE_BUDGET = 16
 
 # Parents under which the "Pix" cascade lives (files `*` and folders).
 _SHELL_PARENTS: tuple[tuple[str, str], ...] = (
@@ -122,6 +136,47 @@ def _root_keys() -> list[str]:
     return [f"{parent}\\{_ROOT_KEY}" for parent, _scope in _SHELL_PARENTS]
 
 
+def _file_verb_keys() -> list[tuple[str, str, str]]:
+    """The standalone files-only verb roots, as (key_path, label, op).
+
+    Siblings of the cascade under `*\\shell`, not children of it — see the
+    node-budget note in the module docstring."""
+    files_parent = _SHELL_PARENTS[0][0]
+    return [
+        (
+            f"{files_parent}\\{_ROOT_KEY}{key.capitalize()}",
+            f"{_ROOT_LABEL} {label}",
+            op,
+        )
+        for key, label, op in _FILE_VERBS
+    ]
+
+
+def _all_root_keys() -> list[str]:
+    """Every top-level key this command owns — swept on install, removed on
+    uninstall."""
+    return _root_keys() + [key for key, _label, _op in _file_verb_keys()]
+
+
+def _key_exists(key_path: str) -> bool:
+    import winreg
+
+    try:
+        winreg.CloseKey(winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path))
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _cascade_node_count() -> int:
+    """Nodes in one cascade root, counted the way Explorer counts them against
+    `_MENU_NODE_BUDGET`: every submenu header plus every nested leaf."""
+    tags = len(_TAGS) * (1 + len(_OPS))
+    rating = 1 + len(_RATINGS) + 1  # header + stars + Clear
+    rotate = 1 + len(_ROTATIONS)
+    return tags + rating + rotate
+
+
 def _first_leaf_command_key() -> str:
     """A deterministic leaf `command` path, used by status to check drift."""
     parent = _SHELL_PARENTS[0][0]
@@ -165,13 +220,17 @@ def _make_cascade(key_path: str, label: str, icon: str | None = None) -> None:
             winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, icon)
 
 
-def _make_verb(key_path: str, label: str, command: str) -> None:
+def _make_verb(
+    key_path: str, label: str, command: str, icon: str | None = None
+) -> None:
     """A leaf menu item: MUIVerb label + a `command` subkey to run."""
     import winreg
 
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path) as key:
         winreg.SetValueEx(key, "MUIVerb", 0, winreg.REG_SZ, label)
         winreg.SetValueEx(key, "MultiSelectModel", 0, winreg.REG_SZ, _MULTISELECT_MODEL)
+        if icon is not None:
+            winreg.SetValueEx(key, "Icon", 0, winreg.REG_SZ, icon)
     with winreg.CreateKey(
         winreg.HKEY_CURRENT_USER, key_path + r"\command"
     ) as cmd_key:
@@ -208,15 +267,27 @@ def _install() -> None:
         _fail(f"launcher not found at {launcher}; reinstall pix and try again.")
         return
 
+    # Explorer truncates a cascade past its node budget without a word, so
+    # catch an over-budget layout here rather than shipping a menu whose tail
+    # items just never appear.
+    nodes = _cascade_node_count()
+    if nodes > _MENU_NODE_BUDGET:
+        _fail(
+            f"the '{_ROOT_LABEL}' cascade needs {nodes} menu nodes but Explorer "
+            f"renders only {_MENU_NODE_BUDGET} per root, so the last "
+            f"{nodes - _MENU_NODE_BUDGET} would silently vanish. Drop a submenu "
+            "or move an entry to its own root (see _FILE_VERBS)."
+        )
+        return
+
     icon = _powershell_exe()
     # Clean slate so a structural change (or an old flat-verb install) never
     # leaves stale leaves behind.
-    for key in _root_keys():
+    for key in _all_root_keys():
         _delete_tree(key)
     for legacy in _LEGACY_KEYS:
         _delete_tree(legacy)
 
-    files_root = _root_keys()[0]
     for root in _root_keys():
         _make_cascade(root, _ROOT_LABEL, icon=icon)
         for ti, (tag, tag_label) in enumerate(_TAGS, start=1):
@@ -242,14 +313,11 @@ def _install() -> None:
         for di, (deg, label) in enumerate(_ROTATIONS, start=1):
             leaf = f"{rot_key}\\shell\\{di:02d}_deg{deg}"
             _make_verb(leaf, label, _command_string("rotate", deg=deg))
-        # File-only top-level leaves (e.g. read-only `meta`) — folders skip
-        # these. Numbered after the tag submenus + Rating + Rotate.
-        if root == files_root:
-            for vi, (key, label, op) in enumerate(
-                _FILE_VERBS, start=len(_TAGS) + 3
-            ):
-                leaf = f"{root}\\shell\\{vi:02d}_{key}"
-                _make_verb(leaf, label, _command_string(op))
+    # Files-only standalone verbs (e.g. read-only `meta`), each its own root
+    # beside the cascade — the cascade has no node budget left, and a fresh
+    # root starts with a full one. Folders skip these.
+    for key, label, op in _file_verb_keys():
+        _make_verb(key, label, _command_string(op), icon=icon)
 
     typer.echo(f"Installed the '{_ROOT_LABEL}' menu for files and folders (current user).")
     typer.echo(f"Layout:   {_ROOT_LABEL} > " + " | ".join(t for _t, t in _TAGS)
@@ -257,8 +325,9 @@ def _install() -> None:
                + f"  |  {_RATING_LABEL} > "
                + " | ".join(lbl for _s, lbl in _RATINGS) + " | Clear"
                + f"  |  {_ROTATE_LABEL} > " + " | ".join(l for _d, l in _ROTATIONS)
-               + "   (+ " + ", ".join(lbl for _k, lbl, _o in _FILE_VERBS)
-               + " on files)")
+               + f"   [{nodes}/{_MENU_NODE_BUDGET} menu nodes]")
+    typer.echo("Also:     " + ", ".join(lbl for _k, lbl, _o in _file_verb_keys())
+               + " (files only, top level)")
     typer.echo(f"Launcher: {launcher}")
     typer.echo(
         "Right-click media files/folders in a pix library to use it. On Windows "
@@ -269,7 +338,7 @@ def _install() -> None:
 
 def _uninstall() -> None:
     removed = False
-    for key in _root_keys():
+    for key in _all_root_keys():
         if _delete_tree(key):
             removed = True
     for legacy in _LEGACY_KEYS:
@@ -285,13 +354,11 @@ def _uninstall() -> None:
 def _status() -> None:
     import winreg
 
-    scopes: list[str] = []
-    for root, (_parent, scope) in zip(_root_keys(), _SHELL_PARENTS):
-        try:
-            winreg.CloseKey(winreg.OpenKey(winreg.HKEY_CURRENT_USER, root))
-            scopes.append(scope)
-        except FileNotFoundError:
-            pass
+    scopes = [
+        scope
+        for root, (_parent, scope) in zip(_root_keys(), _SHELL_PARENTS)
+        if _key_exists(root)
+    ]
 
     if not scopes:
         typer.echo("Context menu: not installed.")
@@ -301,6 +368,17 @@ def _status() -> None:
         return
 
     typer.echo("Context menu: installed for " + ", ".join(scopes) + ".")
+    # The standalone files-only verbs live outside the cascade, so a partial
+    # install (or a sweep by an older pix) leaves them missing on their own.
+    missing = [
+        label for key, label, _op in _file_verb_keys() if not _key_exists(key)
+    ]
+    if missing:
+        typer.echo(
+            "Warning: " + ", ".join(missing) + " is not registered. Run "
+            "`pix context-menu install` to add it.",
+            err=True,
+        )
     launcher = _launcher_path()
     typer.echo(f"Launcher: {launcher}")
 
