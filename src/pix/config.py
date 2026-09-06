@@ -3,20 +3,25 @@
 The format policy (which action each extension gets) is **not** per-library
 — it's a property of this pix build, so it lives in the `EXTENSION_POLICY`
 constant below, not in any file. `pix.yaml` holds only genuinely
-library-specific settings: the optional `runs_dir` (relocate run folders)
-and `organize.template` (the library's canonical shape). It's a small,
-hand-editable file; pix preserves the keys it knows and drops anything
-else (unknown keys, comments) when it rewrites the file.
+library-specific settings: the optional `runs_dir` (relocate run folders),
+`organize.template` (the library's canonical shape), and the `exports:`
+delivery distributions. It's a small, hand-editable file; pix preserves the
+keys it knows and drops anything else (unknown keys, comments) when it
+rewrites the file.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Literal, cast
 
 import yaml
+
+from pix.tag_filter import Filter, FilterError
+from pix.tag_filter import parse as parse_filter
 
 ExtensionAction = Literal[
     "keep", "convert_to_jpg", "convert_to_mp4", "delete", "stash"
@@ -72,6 +77,33 @@ EXTENSION_POLICY: dict[str, ExtensionAction] = {
 }
 
 
+# A distribution name has to survive being a CLI argument and a manifest
+# filename, so it's restricted to a safe, unambiguous charset.
+_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+
+# Keys a single `exports:` entry may carry. Unknown keys are an error, not
+# a silent drop: `filters:` for `filter:` would export the whole library to
+# the delivery target, which is exactly the mistake worth catching at load.
+_DISTRIBUTION_KEYS: frozenset[str] = frozenset({"path", "template", "filter"})
+
+
+@dataclass(frozen=True)
+class Distribution:
+    """One named delivery target from `exports:` (see spec/export.md).
+
+    `filter` is parsed here so a typo fails at load, naming the offending
+    distribution. `template` stays a raw string: parsing it needs
+    `pix.organize`, which imports `pix.plan`, which imports this module —
+    so `pix.export` parses templates up front instead, before it does any
+    work. Both spellings therefore fail before a single byte is copied.
+    """
+
+    name: str
+    path: str
+    template: str
+    filter: Filter
+
+
 @dataclass(frozen=True)
 class Config:
     """A library's settings.
@@ -86,6 +118,7 @@ class Config:
     )
     organize_template: str | None = None
     runs_dir: str | None = None
+    exports: dict[str, Distribution] = field(default_factory=lambda: {})
 
     def runs_base(self, root: Path) -> Path:
         """Directory that holds per-run folders (`<base>/<run-id>/`).
@@ -124,6 +157,7 @@ class Config:
                 path, data.get("organize")
             ),
             runs_dir=_parse_runs_dir(path, data.get("runs_dir")),
+            exports=_parse_exports(path, data.get("exports")),
         )
 
 
@@ -207,17 +241,42 @@ def set_organize_template(path: Path, template: str) -> None:
     dropped (the file is pix-managed, hand-editable for the known keys).
     """
     existing = Config.load(path)
-    _write_settings(path, runs_dir=existing.runs_dir, organize_template=template)
+    _write_settings(
+        path,
+        runs_dir=existing.runs_dir,
+        organize_template=template,
+        exports=existing.exports,
+    )
 
 
 def _write_settings(
-    path: Path, *, runs_dir: str | None, organize_template: str | None
+    path: Path,
+    *,
+    runs_dir: str | None,
+    organize_template: str | None,
+    exports: dict[str, Distribution] | None = None,
 ) -> None:
     data: dict[str, object] = {}
     if runs_dir:
         data["runs_dir"] = runs_dir
     if organize_template:
         data["organize"] = {"template": organize_template}
+    # Round-trip `exports:` — a rewrite happens after every successful
+    # organize, and dropping the delivery distributions there would be a
+    # silent, expensive loss (next `pix export` re-provisions from nothing).
+    if exports:
+        data["exports"] = {
+            name: (
+                {"path": d.path, "template": d.template}
+                if not d.filter.clauses
+                else {
+                    "path": d.path,
+                    "filter": d.filter.raw,
+                    "template": d.template,
+                }
+            )
+            for name, d in exports.items()
+        }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         yaml.safe_dump(data, default_flow_style=False, sort_keys=False)
@@ -255,3 +314,79 @@ def _parse_organize_template(path: Path, raw: object | None) -> str | None:
             f"got {type(template).__name__}"
         )
     return template
+
+
+def _parse_exports(
+    path: Path, raw: object | None
+) -> dict[str, Distribution]:
+    """Parse the `exports:` section into named distributions.
+
+    Strict on purpose (see spec/export.md → Distributions): every entry
+    needs `path` and `template`, `filter` is optional (absent = every
+    file), and an unknown key is an error rather than a silent drop.
+    """
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError(
+            f"{path}: 'exports' must be a mapping of name -> distribution, "
+            f"got {type(raw).__name__}"
+        )
+
+    out: dict[str, Distribution] = {}
+    for key, entry in cast("dict[object, object]", raw).items():
+        name = str(key)
+        if not _NAME_RE.match(name):
+            raise ValueError(
+                f"{path}: export name {name!r} must start with a letter or "
+                f"digit and contain only letters, digits, '-' and '_' "
+                f"(it names a CLI argument and a manifest file)"
+            )
+        if not isinstance(entry, dict):
+            raise ValueError(
+                f"{path}: export {name!r} must be a mapping with 'path', "
+                f"'template' and an optional 'filter', got "
+                f"{type(entry).__name__}"
+            )
+        fields = cast("dict[object, object]", entry)
+        unknown = sorted(str(k) for k in fields if str(k) not in _DISTRIBUTION_KEYS)
+        if unknown:
+            raise ValueError(
+                f"{path}: export {name!r} has unknown key(s) {unknown}; "
+                f"valid keys: {sorted(_DISTRIBUTION_KEYS)}"
+            )
+
+        target = _require_str(path, name, fields.get("path"), "path")
+        template = _require_str(path, name, fields.get("template"), "template")
+        filter_raw = fields.get("filter")
+        if filter_raw is None:
+            filter_expr = ""
+        elif isinstance(filter_raw, str):
+            filter_expr = filter_raw
+        else:
+            raise ValueError(
+                f"{path}: export {name!r} 'filter' must be a string, "
+                f"got {type(filter_raw).__name__}"
+            )
+        try:
+            parsed = parse_filter(filter_expr)
+        except FilterError as exc:
+            raise ValueError(f"{path}: export {name!r} filter: {exc}") from exc
+
+        out[name] = Distribution(
+            name=name, path=target, template=template, filter=parsed
+        )
+    return out
+
+
+def _require_str(
+    path: Path, name: str, value: object | None, key: str
+) -> str:
+    """A distribution's required non-empty string field."""
+    if value is None:
+        raise ValueError(f"{path}: export {name!r} is missing '{key}'")
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(
+            f"{path}: export {name!r} '{key}' must be a non-empty string"
+        )
+    return value
