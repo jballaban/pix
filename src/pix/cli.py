@@ -12,6 +12,7 @@ from pix.commands.checkout import run_checkout
 from pix.commands.context_menu import context_menu
 from pix.commands.dedupe import dedupe_library
 from pix.commands.events import list_events
+from pix.commands.export import export_library
 from pix.commands.hash import hash_library
 from pix.commands.import_ import import_library
 from pix.commands.init import init_library
@@ -190,6 +191,34 @@ def organize(
 ) -> None:
     """Re-shape the library to match a folder template (library-wide MOVE)."""
     organize_library(path=path, template_str=template, no_prompt=no_prompt)
+
+
+@app.command("export")
+def export(
+    path: Annotated[
+        Path,
+        typer.Argument(
+            help=(
+                "Path inside (or at) the library root. The library is "
+                "resolved by walking up from this path. `.` for CWD."
+            ),
+        ),
+    ],
+    name: Annotated[
+        str | None,
+        typer.Argument(
+            help=(
+                "Distribution to reconcile, as named under `exports:` in "
+                "pix.yaml. Omit to reconcile every distribution."
+            ),
+        ),
+    ] = None,
+    no_prompt: Annotated[
+        bool, typer.Option("--no-prompt", help=_NO_PROMPT_HELP)
+    ] = False,
+) -> None:
+    """Reconcile a delivery distribution (curated, filtered copy of the library)."""
+    export_library(path=path, name=name, no_prompt=no_prompt)
 
 
 @tag_app.command("set")

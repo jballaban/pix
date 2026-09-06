@@ -30,7 +30,9 @@ are still picked up, because they change the desired set.
 from __future__ import annotations
 
 import os
+import shutil
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -39,6 +41,7 @@ from pathlib import Path
 from pix.config import Distribution
 from pix.content_hash import compute_content_hash
 from pix.export_manifest import Manifest, Member
+from pix.markers import EXPORT_TMP_SUFFIX
 from pix.metadata import FileMetadata
 from pix.organize import (
     Template,
@@ -551,3 +554,139 @@ def _pair_moves(
         del copies[to_rel]
         removes.remove(from_rel)
     return paired
+
+
+# --- Apply -------------------------------------------------------------------
+
+
+@dataclass
+class ApplyResult:
+    """Outcome of applying an export plan."""
+
+    completed: int = 0
+    failed: int = 0
+    pruned_folders: int = 0
+    members: dict[str, Member] = field(default_factory=lambda: {})
+
+
+def apply_plan(
+    plan: ExportPlan,
+    kept_line_ids: set[str],
+    members: dict[str, Member],
+    log: Callable[[str], None],
+    on_progress: Callable[[int], None] | None = None,
+) -> ApplyResult:
+    """Execute an export plan against the delivery target.
+
+    `members` is the manifest's member map; it's updated in place as each
+    line lands, so the caller can persist it even after a failure — anything
+    we copied but didn't record would look foreign (and stop) next run.
+
+    A failed line is logged and the run continues: a network blip on one
+    file shouldn't strand the other 500. The count comes back in
+    `ApplyResult.failed` for the caller to surface and exit non-zero.
+
+    Copies land on a `.__export__` temp first and are then renamed into
+    place, so an interrupted copy never leaves a plausible-looking partial
+    in the delivery tree — and because the name carries pix's marker infix,
+    a sync client excluding `*.__*` won't upload the partial either.
+    """
+    result = ApplyResult(members=members)
+    emptied: set[Path] = set()
+
+    for line in plan.lines:
+        if line.line_id not in kept_line_ids:
+            continue
+        dest = plan.target / line.rel_path
+        try:
+            if line.action is ExportAction.REMOVE:
+                _remove(dest)
+                members.pop(line.rel_path, None)
+                emptied.add(dest.parent)
+            elif line.action is ExportAction.MOVE:
+                assert line.from_rel_path is not None
+                origin = plan.target / line.from_rel_path
+                _move_within_target(origin, dest, line.source_path)
+                members.pop(line.from_rel_path, None)
+                members[line.rel_path] = _member_for(dest, line)
+                emptied.add(origin.parent)
+            else:  # COPY / REPLACE
+                assert line.source_path is not None
+                _copy_into(line.source_path, dest)
+                members[line.rel_path] = _member_for(dest, line)
+            result.completed += 1
+            log(f"{line.line_id} {line.action.value} {line.rel_path}")
+        except OSError as exc:
+            result.failed += 1
+            log(f"{line.line_id} FAILED {line.action.value} {line.rel_path}: {exc}")
+        if on_progress is not None:
+            on_progress(1)
+
+    result.pruned_folders = _prune_empty(emptied, plan.target)
+    return result
+
+
+def _member_for(dest: Path, line: ExportLine) -> Member:
+    """Record what we just wrote, as written (size + mtime_ns)."""
+    st = dest.stat()
+    return Member(
+        source_hash=line.content_hash or "",
+        size=st.st_size,
+        mtime_ns=st.st_mtime_ns,
+    )
+
+
+def _copy_into(source: Path, dest: Path) -> None:
+    """Copy `source` to `dest` via a marker-named temp, then rename."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + EXPORT_TMP_SUFFIX)
+    try:
+        shutil.copy2(source, tmp)
+        os.replace(tmp, dest)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+
+def _move_within_target(
+    origin: Path, dest: Path, source: Path | None
+) -> None:
+    """Relocate a member inside the target; re-copy if it isn't there."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.replace(origin, dest)
+    except OSError:
+        if source is None:
+            raise
+        _copy_into(source, dest)
+
+
+def _remove(dest: Path) -> None:
+    """Delete a member from the target. Already gone is success.
+
+    A plain delete, not a soft-delete: the conservation invariant protects
+    the *master*, and a delivery mirror is regenerable by construction
+    (spec/export.md → Provisioning).
+    """
+    try:
+        dest.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _prune_empty(folders: set[Path], target: Path) -> int:
+    """Remove folders emptied by removals/moves, walking up to the target."""
+    pruned = 0
+    for folder in sorted(folders, key=lambda p: len(p.parts), reverse=True):
+        current = folder
+        while current != target and target in current.parents:
+            try:
+                current.rmdir()
+            except OSError:
+                break
+            pruned += 1
+            current = current.parent
+    return pruned

@@ -70,15 +70,14 @@ or `OriginalPath`-lineage detection — related to the near-duplicate work above
 
 ## Export — `pix export`
 
-Materialize a filtered/derived view of the library (multi-valued tokens like
-`{person}`/`{face}`, format/size variants) without disturbing the canonical
-tree. **Core design settled** — the **delivery tier**: named, `rating`-filtered
-**distributions** configured in `pix.yaml` (`exports:` section), copy-only, kept
-current by **delta reconcile** (add/replace/remove only the changed members,
-never wipe-and-redo) against a master-side manifest. `rating` is a plain standard
-`XMP:Rating` tag (see [tags.md](tags.md#rating-curation-standard-field)). See
-[export.md](export.md) for the full design; the multi-valued-token / size-variant
-work below is still open.
+**Built** (v0.1.208): named, `rating`-filtered **distributions** in `pix.yaml`
+(`exports:`), copy-only, kept current by **delta reconcile** against a
+machine-local manifest, with drift detection that stops rather than guesses.
+See [export.md](export.md).
+
+Still open here: **multi-valued tokens** (`{person}`/`{face}` — blocked on face
+detection, which is deferred) and **size variants** (downscaled renditions;
+Synology does its own downscaling, so this has no pull yet).
 
 **BIG TODO within export: H.264 compatibility rendition for video.** Library
 video is remux-only (mixed codecs — legacy HEVC + native H.264/MPEG-2), so an

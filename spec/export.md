@@ -1,6 +1,15 @@
-# Export (sketched)
+# Export
 
-`pix export <template> <out-path>` produces a read-only, derived view of the library at a separate location — copies or hard links, shaped by a template. Used to ship a curated subset (e.g. `{year:2023}/{event}/`) to an external location without disturbing the canonical library.
+**Status: implemented** (v0.1.208) — `pix export [<name>]` reconciles the named
+delivery distributions configured in `pix.yaml`. The one part still outstanding
+is the H.264 compatibility rendition for video (see the BIG TODO below); until
+it lands, video is copied as-is, so an export can contain HEVC that some
+clients won't play.
+
+Code: `pix/export.py` (engine), `pix/export_manifest.py` (manifest),
+`pix/commands/export.py` (command), `exports:` parsing in `pix/config.py`.
+
+`pix export` produces a read-only, derived view of the library at a separate location — real byte copies, shaped by a template. Used to ship a curated subset (e.g. `rating:4,5` into `{year}/{event}/`) to an external location without disturbing the canonical library.
 
 ## Why export is a separate tier — master vs delivery
 
@@ -24,11 +33,11 @@ clients (Synology Photos, phones, TVs) goes through an export. This is why
 master, reversing [video-redesign.md §0](video-redesign.md)) and why the H.264
 requirement below is **export-scoped**.
 
-Design TBD. Sketch of what it needs:
+Invariants:
 
 - **Read-only.** Export never edits the library or the source files' metadata. Failure to write an export entry never affects library state.
 - **Copy only — no hard links.** An export is always a real byte copy, even when the target is on the library's volume. Hard-linking was considered and rejected: (1) it saves no *upload* (a sync client uploads content, not inodes), only local disk, which is negligible for curated subsets; (2) it welds the delivery copy to a master that pix deliberately mutates (TAG/CONVERT/organize rewrite files via write-temp+rename, which breaks the link); (3) re-encoded video (H.264) is new bytes with nothing to link to anyway. A copy is independent, so the master can change underneath it freely.
-- **Multi-valued tags work.** Each (file, tag-value) pair produces one entry in the output (one hard link or copy). `{person}` or `{face}` in templates produces a folder per identity.
+- **Multi-valued tags work** — *designed, not built*. Each (file, tag-value) pair would produce one entry in the output. `{person}`/`{face}` don't exist yet (face detection is deferred), so today every template token is single-valued and one file yields exactly one entry.
 - **Filter semantics.** Files excluded by an explicit filter just don't appear in the output (no `(filtered)/` folder), unlike [organize](organize.md) and [checkout](tag-editing.md) which must account for every file. See [tags.md](tags.md#folder-categories-per-operation).
 - **Template grammar** is shared with organize/checkout; see [tags.md](tags.md#template-grammar).
 
@@ -64,7 +73,37 @@ Re-provisioning is a **reconcile**, not a re-copy. Each run computes the desired
 
 **Path churn is the one unavoidable re-upload.** If a member's effective `event`/`year` changes, its target relpath changes, so reconcile does delete-old + copy-new = one file re-uploaded. Inherent to a template-shaped mirror; rare for curated files, and scoped to that file.
 
-**Diff cheaply via a master-side manifest.** Hashing the (possibly network-backed) target every run is slow, so each distribution keeps a manifest of `target-relpath → source-hash` under the machine-local `.pix/local/` (recomputable state, sync-excluded like the cache/lock). Reconcile diffs desired-vs-manifest in memory using already-cached master hashes, then touches the target only for the delta. Lost manifest → fall back to a full re-provision. This mirrors how pix already treats [`.pix/local/cache.db`](implementation.md#cache-store) as recomputable machine-local state.
+**Diff cheaply via a master-side manifest.** Hashing the (possibly network-backed) target every run is slow, so each distribution keeps a manifest at `.pix/local/exports/<name>.json` (recomputable state, sync-excluded like the cache/lock — mirrors [`.pix/local/cache.db`](implementation.md#cache-store)). Each row is `target-relpath → source content hash + the target's size and mtime_ns as written`. That fingerprint is deliberately the same `(size, mtime_ns)` key the cache uses, which makes verifying the whole target **one `stat` per member** — no bytes read back. The manifest also records the target path, so a repointed distribution is detected rather than trusted.
+
+**Identity is the content hash**, which is metadata-invariant for JPEG/MP4. A tag-only edit in the master therefore does *not* re-ship the file — sync traffic tracks real content change. The cost is that a delivered copy's embedded tags can lag; membership changes (what a re-rating usually causes) still flow through, because they change the desired set.
+
+### Target validation — the rule that makes removal safe
+
+> **Export only ever touches paths its own manifest records.** Everything else in the target is foreign: reported, never modified, never deleted.
+
+Without that, a mistyped `path:` pointed at a real photo folder would be a data-loss event. With it, the worst case is a confusing report. Before planning, one walk of the target plus a stat per member classifies:
+
+| State | Meaning | Response |
+|---|---|---|
+| in sync | stat matches the manifest | untouched — the point of the whole design |
+| missing | ours, gone from the target | re-COPY (additive), reported |
+| modified | ours, changed under us | **drift** |
+| foreign | never ours | **drift** — never touched |
+| stale | ours, no longer in the desired set | REMOVE |
+
+NAS/sync artifacts (`@eaDir`, `#recycle`, `desktop.ini`, …) are skipped, not counted as foreign — they'd otherwise stop every run against a Synology target.
+
+**Three tiers of ceremony:**
+
+1. **Purely additive** (new members, re-copies of missing ones) — normal: prompt interactively, silent under `--no-prompt`.
+2. **Removals / replacements the manifest fully explains** — prompt as usual, with removals broken out in the summary and sorted **first** in `plan.txt`. `--no-prompt` covers these: a curation session produces removals every time, so blocking them would make scripted export useless.
+3. **Unexplained drift** (modified or foreign) — **hard stop**: describe and exit non-zero *even under `--no-prompt`*. pix cannot distinguish a hand-curated target from a half-landed sync from a misconfigured path, and that ambiguity is where the damage lives.
+
+**Path churn renders as `MOVE`, not REMOVE+COPY** — same content hash, new relpath, paired into one line when unambiguous. "Deleted 400, added 400" is exactly the alarming shape a reviewer shouldn't have to decode. (Honest caveat: on a sync client a move within the tree still re-uploads; MOVE saves re-reading the master, not the upload.)
+
+**Lost manifest → adopt by hash, not a full re-provision.** Re-provisioning into a tree we don't own would leave every existing file foreign and land duplicates beside them. Instead pix hashes the target files sitting where desired members belong and adopts the ones that match; anything else stays foreign and surfaces as drift. One-time cost, only on manifest loss or a repointed target.
+
+**Copies land on a `.__export__` temp and are renamed into place**, so an interrupted copy never leaves a plausible-looking partial — and the marker infix means a sync client excluding `*.__*` won't upload the partial either.
 
 **Read-only w.r.t. the master.** Nothing in provisioning reads-modifies-writes a library file; the master is a pure source. Failure to write a target entry never affects library state (the top-of-file read-only invariant). Removals from the target are plain deletes — the export is derived and disposable, so the [conservation invariant](README.md#cross-cutting-invariants) (soft-delete to run folders) applies to the *master*, not to a regenerable delivery mirror. Removals are logged, not staged.
 
