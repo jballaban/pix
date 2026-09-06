@@ -181,3 +181,53 @@ def test_malformed_config_exits_with_the_error(
         show_config(root)
     assert exc.value.exit_code == 1
     assert "quarter" in capsys.readouterr().err
+
+
+# --- teaching the syntax -----------------------------------------------------
+
+
+def test_missing_exports_prints_paste_able_yaml(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A config-driven feature has to teach its own syntax where the gap is
+    # noticed — no "see the spec" pointers.
+    out = _run(_library(tmp_path), capsys)
+    assert "exports:" in out
+    assert "path:" in out and "template:" in out
+    assert "filter:" in out and "extensions:" in out
+    assert "spec/export.md" not in out
+
+
+def test_missing_exports_lists_the_vocabulary(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = _run(_library(tmp_path), capsys)
+    for tag in ("year", "month", "day", "event", "rating"):
+        assert tag in out
+    assert "jpg" in out and "mp4" in out
+    assert "insv" in out  # named, with the reason it isn't shipped
+
+
+def test_missing_exports_names_the_file_and_next_command(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _library(tmp_path)
+    out = _run(root, capsys)
+    assert "pix.yaml" in out
+    assert "pix export" in out
+
+
+def test_unset_template_shows_both_ways_to_set_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = _run(_library(tmp_path), capsys)
+    assert "pix organize" in out
+    assert "organize:" in out
+    assert "template: '{year}/{event}'" in out
+
+
+def test_configured_library_does_not_print_the_snippet(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = _run(_with_exports(tmp_path), capsys)
+    assert "Define one by adding this to" not in out

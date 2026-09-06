@@ -296,3 +296,15 @@ def test_photos_only_distribution(tmp_path: Path) -> None:
 
     shipped = {p.name for p in delivery.rglob("*") if p.is_file()}
     assert shipped == {"a.jpg"}
+
+
+def test_no_exports_error_teaches_the_syntax(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = tmp_path / "lib"
+    (root / ".pix").mkdir(parents=True)
+    with pytest.raises(typer.Exit):
+        export_library(path=root, no_prompt=True)
+    err = capsys.readouterr().err
+    assert "exports:" in err and "template:" in err
+    assert "spec/export.md" not in err

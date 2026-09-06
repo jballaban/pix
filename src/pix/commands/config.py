@@ -30,14 +30,17 @@ import typer
 from pix import banner, export_manifest
 from pix.config import (
     DEFAULT_EXPORT_EXTENSIONS,
+    EXTENSION_POLICY,
     Config,
     Distribution,
     settings_path,
 )
 from pix.organize import OrganizeError, parse_template
+from pix.tag_filter import ALLOWED_TOKENS
 from pix.root import NoLibraryRoot, resolve as resolve_root
 
 _LABEL = 18  # width of the `key:` column (fits `organize.template:`)
+_COMMENT_COL = 50  # where trailing `#` comments start in printed YAML
 
 
 def show_config(path: Path | None = None) -> None:
@@ -73,23 +76,75 @@ def show_config(path: Path | None = None) -> None:
     )
     _echo_setting(
         "organize.template",
-        config.organize_template
-        or "(not set — `pix organize <path> <template>` sets it)",
+        config.organize_template or "(not set)",
         is_default=False,
     )
+    if config.organize_template is None:
+        # Same principle as the exports block below: show the syntax where
+        # the gap is noticed, rather than sending the reader to a spec file.
+        typer.echo(
+            f"{' ' * (_LABEL + 1)}Set by running `pix organize "
+            f"<path> <template>` once, or add to pix.yaml:"
+        )
+        typer.echo(f"{' ' * (_LABEL + 1)}  organize:")
+        typer.echo(f"{' ' * (_LABEL + 1)}    template: '{{year}}/{{event}}'")
 
     typer.echo("")
     if not config.exports:
         typer.echo("exports: none configured.")
-        typer.echo(
-            "  Add an `exports:` section to define a delivery distribution "
-            "(see spec/export.md)."
-        )
+        typer.echo("")
+        typer.echo(exports_snippet(config_path, root))
         return
 
     typer.echo(f"exports: {len(config.exports)} distribution(s)")
     for name in sorted(config.exports):
         _echo_distribution(root, config.exports[name])
+
+
+def exports_snippet(config_path: Path, root: Path) -> str:
+    """A paste-able `exports:` block, with the vocabulary spelled out.
+
+    Shared with `pix export` so the two can't drift. The point is that a
+    config-driven feature has to teach its own syntax at the place you
+    notice it's missing — pointing at a spec file in the repo is no help
+    to someone holding a terminal.
+    """
+    keepable = sorted(
+        ext for ext, action in EXTENSION_POLICY.items() if action == "keep"
+    )
+    def yaml_line(text: str, comment: str = "") -> str:
+        if not comment:
+            return f"    {text}"
+        return f"    {text}".ljust(_COMMENT_COL) + f"# {comment}"
+
+    return "\n".join(
+        [
+            f"  Define one by adding this to {config_path}:",
+            "",
+            yaml_line("exports:"),
+            yaml_line("  general:", "name it whatever you like"),
+            yaml_line(
+                "    path: 'D:\\SynologyDrive\\Photos-General'",
+                "where the delivery copy lives",
+            ),
+            yaml_line(
+                "    filter: 'rating:3,4,5'", "optional; omit to take everything"
+            ),
+            yaml_line(
+                "    extensions: 'jpg,mp4'", "optional; this is the default"
+            ),
+            yaml_line("    template: '{year}/{event}'", "output folder shape"),
+            "",
+            f"  filter tags:  {', '.join(sorted(ALLOWED_TOKENS))}",
+            "                clauses AND with ';' — "
+            "e.g. 'rating:4,5; event:Hawaii'",
+            f"  extensions:   {', '.join(keepable)}  "
+            "(allowlist; .insv/.insp have no delivery rendition)",
+            "  template:     same tokens in braces, e.g. '{year}/{event}'",
+            "",
+            f"  Then run:     pix export {root} general",
+        ]
+    )
 
 
 def _echo_setting(key: str, value: str, *, is_default: bool) -> None:

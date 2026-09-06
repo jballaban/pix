@@ -16,6 +16,7 @@ from pathlib import Path
 import typer
 
 from pix import banner, export_manifest
+from pix.commands.config import exports_snippet
 from pix.config import Config, Distribution, new_run_dir, settings_path
 from pix.duration import format_duration_precise, format_size
 from pix.editor import open_in_editor, parse_kept_line_ids, prompt_apply
@@ -82,17 +83,9 @@ def export_library(
         raise typer.Exit(code=1) from e
 
     if not config.exports:
-        typer.echo(
-            "No distributions configured. Add an `exports:` section to "
-            f"{config_path}:\n"
-            "\n"
-            "  exports:\n"
-            "    general:\n"
-            "      path: 'D:\\SynologyDrive\\Photos-General'\n"
-            "      filter: 'rating:3,4,5'\n"
-            "      template: '{year}/{event}'",
-            err=True,
-        )
+        typer.echo("Error: no export distributions configured.", err=True)
+        typer.echo("", err=True)
+        typer.echo(exports_snippet(config_path, root), err=True)
         raise typer.Exit(code=1)
 
     if name is not None and name not in config.exports:
