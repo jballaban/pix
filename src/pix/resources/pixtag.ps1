@@ -269,105 +269,121 @@ if ($Run) {
     Write-PixLog "RUN start Op=$Op Tag=$Tag Deg=$Deg Val=$Val list=$Run"
     $items = @()
     if (Test-Path -LiteralPath $Run) {
-        $items = @(Get-Content -LiteralPath $Run -Encoding UTF8 | Where-Object { $_ -ne '' })
-        Remove-Item -LiteralPath $Run -Force -ErrorAction SilentlyContinue
+        $items = @(
+            Get-Content -LiteralPath $Run -Encoding UTF8 |
+                Where-Object { $_ -ne '' }
+        )
     }
 
-    if ($items.Count -eq 0) {
-        Write-Host 'pixtag: nothing selected.' -ForegroundColor Yellow
-        Read-Host 'Press Enter to close'
-        return
-    }
-
-    if (-not (Get-Command pix -ErrorAction SilentlyContinue)) {
-        Write-Host 'pixtag: `pix` is not on PATH. Install it (uv tool install) first.' -ForegroundColor Red
-        Read-Host 'Press Enter to close'
-        return
-    }
-
-    # meta is read-only and single-file; run it for each selected item in turn.
-    if ($Op -eq 'meta') {
-        Write-Host ''
-        Write-Host "pix info meta - $($items.Count) item(s):" -ForegroundColor Cyan
-        foreach ($it in $items) {
-            Write-Host ''
-            & pix info meta $it
-        }
-        Write-Host ''
-        Read-Host 'Press Enter to close'
-        return
-    }
-
-    # rotate: lossless, no value prompt, no organize (orientation only).
-    if ($Op -eq 'rotate') {
-        Write-Host ''
-        Write-Host "pix tag rotate $Deg - $($items.Count) item(s):" -ForegroundColor Cyan
-        & pix tag rotate $Deg --no-prompt @items
-        Write-Host ''
-        Read-Host 'Press Enter to close'
-        return
-    }
-
-    Write-Host ''
-    Write-Host "pix tag $Op $Tag - $($items.Count) item(s) selected:" -ForegroundColor Cyan
-    foreach ($i in ($items | Select-Object -First 10)) { Write-Host "  $i" }
-    if ($items.Count -gt 10) { Write-Host "  ... and $($items.Count - 10) more" }
-    Write-Host ''
-
-    # Set's value dialog is its own confirmation, so it applies directly.
-    # Clear instead keeps pix's own "Proceed? [Y/n]" prompt (default Yes): the
-    # launcher can't know the real count when a folder is selected (it expands
-    # to the media inside), but pix does — its prompt shows "clear ... on N
-    # file(s)" and gates the mis-click.
-    if ($Op -eq 'clear') {
-        & pix tag clear $Tag @items
-    }
-    elseif ($Tag -eq 'rating') {
-        # Rating is a preset star value (1-5) chosen from the menu — set it
-        # directly, no prompt (like Rotate).
-        Write-Host "Setting rating $Val ..." -ForegroundColor Cyan
-        & pix tag set rating $Val --no-prompt @items
-    }
-    else {
-        if ($Tag -eq 'date') {
-            Write-Host 'Date override pattern: YYYY-MM-DD-HH:MM:SS with * for any unpinned part.'
-            Write-Host '  e.g. 2022-*-*-*:*:* (pin year)  or  2022-08-15-*:*:* (pin the day)'
-            $value = Read-Host 'Date value'
-        }
-        else {
-            # Offer existing library events (with their date ranges) as
-            # type-ahead suggestions. `pix info events` emits `name<TAB>range`.
-            $names = @()
-            $ranges = @{}
-            try {
-                foreach ($row in (& pix info events $items[0] 2>$null)) {
-                    if (-not $row) { continue }
-                    $parts = $row -split "`t", 2
-                    $names += $parts[0]
-                    if ($parts.Count -gt 1 -and $parts[1]) { $ranges[$parts[0]] = $parts[1] }
-                }
-            }
-            catch {}
-            $value = Get-EventValue -Names $names -Ranges $ranges
-        }
-        if ([string]::IsNullOrWhiteSpace($value)) {
-            Write-Host 'Cancelled - no value entered (use the Clear menu to remove a tag).' -ForegroundColor Yellow
+    # The snapshot file outlives this read: it is also what we hand `pix`,
+    # via `--paths-from`. Windows caps a process command line at 32767
+    # chars, so splatting a large selection onto argv (~660 media paths)
+    # fails with "The filename or extension is too long" before pix even
+    # starts. Every exit below therefore runs through the `finally` that
+    # removes it.
+    try {
+        if ($items.Count -eq 0) {
+            Write-Host 'pixtag: nothing selected.' -ForegroundColor Yellow
             Read-Host 'Press Enter to close'
             return
         }
-        & pix tag set $Tag $value --no-prompt @items
-    }
 
-    # Tag write succeeded → organize the affected folder so the files move now.
-    # Rating is metadata, not location (the default library template has no
-    # {rating} level), so it skips the reshape — like rotate.
-    if ($LASTEXITCODE -eq 0 -and $Tag -ne 'rating') {
-        Invoke-Organize -Items $items
-    }
+        if (-not (Get-Command pix -ErrorAction SilentlyContinue)) {
+            Write-Host 'pixtag: `pix` is not on PATH. Install it (uv tool install) first.' -ForegroundColor Red
+            Read-Host 'Press Enter to close'
+            return
+        }
 
-    Write-Host ''
-    Read-Host 'Press Enter to close'
-    return
+        # meta is read-only and single-file; run it for each item in turn.
+        if ($Op -eq 'meta') {
+            Write-Host ''
+            Write-Host "pix info meta - $($items.Count) item(s):" -ForegroundColor Cyan
+            foreach ($it in $items) {
+                Write-Host ''
+                & pix info meta $it
+            }
+            Write-Host ''
+            Read-Host 'Press Enter to close'
+            return
+        }
+
+        # rotate: lossless, no value prompt, no organize (orientation only).
+        if ($Op -eq 'rotate') {
+            Write-Host ''
+            Write-Host "pix tag rotate $Deg - $($items.Count) item(s):" -ForegroundColor Cyan
+            & pix tag rotate $Deg --no-prompt --paths-from $Run
+            Write-Host ''
+            Read-Host 'Press Enter to close'
+            return
+        }
+
+        Write-Host ''
+        Write-Host "pix tag $Op $Tag - $($items.Count) item(s) selected:" -ForegroundColor Cyan
+        foreach ($i in ($items | Select-Object -First 10)) { Write-Host "  $i" }
+        if ($items.Count -gt 10) { Write-Host "  ... and $($items.Count - 10) more" }
+        Write-Host ''
+
+        # Set's value dialog is its own confirmation, so it applies directly.
+        # Clear instead keeps pix's own "Proceed? [Y/n]" prompt (default Yes):
+        # the launcher can't know the real count when a folder is selected (it
+        # expands to the media inside), but pix does — its prompt shows
+        # "clear ... on N file(s)" and gates the mis-click.
+        if ($Op -eq 'clear') {
+            & pix tag clear $Tag --paths-from $Run
+        }
+        elseif ($Tag -eq 'rating') {
+            # Rating is a preset star value (1-5) chosen from the menu — set
+            # it directly, no prompt (like Rotate).
+            Write-Host "Setting rating $Val ..." -ForegroundColor Cyan
+            & pix tag set rating $Val --no-prompt --paths-from $Run
+        }
+        else {
+            if ($Tag -eq 'date') {
+                Write-Host 'Date override pattern: YYYY-MM-DD-HH:MM:SS with * for any unpinned part.'
+                Write-Host '  e.g. 2022-*-*-*:*:* (pin year)  or  2022-08-15-*:*:* (pin the day)'
+                $value = Read-Host 'Date value'
+            }
+            else {
+                # Offer existing library events (with their date ranges) as
+                # type-ahead suggestions. `pix info events` emits
+                # `name<TAB>range`.
+                $names = @()
+                $ranges = @{}
+                try {
+                    foreach ($row in (& pix info events $items[0] 2>$null)) {
+                        if (-not $row) { continue }
+                        $parts = $row -split "`t", 2
+                        $names += $parts[0]
+                        if ($parts.Count -gt 1 -and $parts[1]) {
+                            $ranges[$parts[0]] = $parts[1]
+                        }
+                    }
+                }
+                catch {}
+                $value = Get-EventValue -Names $names -Ranges $ranges
+            }
+            if ([string]::IsNullOrWhiteSpace($value)) {
+                Write-Host 'Cancelled - no value entered (use the Clear menu to remove a tag).' -ForegroundColor Yellow
+                Read-Host 'Press Enter to close'
+                return
+            }
+            & pix tag set $Tag $value --no-prompt --paths-from $Run
+        }
+
+        # Tag write succeeded → organize the affected folder so the files move
+        # now. Rating is metadata, not location (the default library template
+        # has no {rating} level), so it skips the reshape — like rotate.
+        if ($LASTEXITCODE -eq 0 -and $Tag -ne 'rating') {
+            Invoke-Organize -Items $items
+        }
+
+        Write-Host ''
+        Read-Host 'Press Enter to close'
+        return
+    }
+    finally {
+        Remove-Item -LiteralPath $Run -Force -ErrorAction SilentlyContinue
+    }
 }
 
 # ---------------------------------------------------------------------------

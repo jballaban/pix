@@ -52,6 +52,42 @@ info_app: typer.Typer = typer.Typer(
 app.add_typer(tag_app, name="tag")
 app.add_typer(info_app, name="info")
 
+# Shared help text for the `--paths-from` list-file option.
+_PATHS_FROM_HELP = (
+    "Read paths from a file, one per line (UTF-8; blank lines ignored). "
+    "Combines with any paths given as arguments. For selections too large "
+    "to fit on a command line."
+)
+
+
+def _collect_paths(
+    paths: list[Path] | None, paths_from: Path | None
+) -> list[Path]:
+    """Merge positional paths with the lines of a `--paths-from` list file.
+
+    Windows caps a process command line at 32767 characters, so a large
+    Explorer selection (~660 media paths) cannot be splatted onto argv —
+    `CreateProcess` fails with "The filename or extension is too long"
+    before pix ever starts. The context-menu launcher already snapshots
+    the selection to a temp file, so it hands us that file instead.
+
+    Positional paths come first and the file's lines follow; the commands
+    dedupe downstream, so an overlap is harmless.
+    """
+    out: list[Path] = list(paths or [])
+    if paths_from is not None:
+        try:
+            # utf-8-sig: Windows PowerShell's `Set-Content -Encoding UTF8`
+            # (what the launcher writes with) emits a BOM, which would
+            # otherwise become part of the first path.
+            text = paths_from.read_text(encoding="utf-8-sig")
+        except OSError as e:
+            typer.echo(f"Error: cannot read --paths-from {paths_from}: {e}", err=True)
+            raise typer.Exit(code=1)
+        out.extend(Path(s) for s in (ln.strip() for ln in text.splitlines()) if s)
+    return out
+
+
 
 def _force_utf8_output() -> None:
     """Make stdout/stderr UTF-8 so non-ASCII never crashes a run.
@@ -173,21 +209,29 @@ def set_(
         ),
     ],
     paths: Annotated[
-        list[Path],
+        list[Path] | None,
         typer.Argument(
             help=(
                 "One or more files or folders to set the override on (all "
                 "under one library). A folder expands to the taggable media "
-                "it contains."
+                "it contains. Omit when using --paths-from."
             )
         ),
-    ],
+    ] = None,
     no_prompt: Annotated[
         bool, typer.Option("--no-prompt", help=_NO_PROMPT_HELP)
     ] = False,
+    paths_from: Annotated[
+        Path | None, typer.Option("--paths-from", help=_PATHS_FROM_HELP)
+    ] = None,
 ) -> None:
     """Set a tag override on specific files; run `pix organize` after."""
-    set_override(tag=tag, value=value, paths=paths, no_prompt=no_prompt)
+    set_override(
+        tag=tag,
+        value=value,
+        paths=_collect_paths(paths, paths_from),
+        no_prompt=no_prompt,
+    )
 
 
 @tag_app.command("clear")
@@ -197,21 +241,30 @@ def clear_(
         typer.Argument(help="Tag to clear: 'event', 'date', or 'rating'."),
     ],
     paths: Annotated[
-        list[Path],
+        list[Path] | None,
         typer.Argument(
             help=(
                 "One or more files or folders to clear. A folder expands to "
-                "the taggable media it contains."
+                "the taggable media it contains. Omit when using --paths-from."
             )
         ),
-    ],
+    ] = None,
     no_prompt: Annotated[
         bool, typer.Option("--no-prompt", help=_NO_PROMPT_HELP)
     ] = False,
+    paths_from: Annotated[
+        Path | None, typer.Option("--paths-from", help=_PATHS_FROM_HELP)
+    ] = None,
 ) -> None:
     """Clear a tag: blank the event (forces 'no event', even if auto-derived),
     revert a date override to the auto date, or remove a rating (→ unrated)."""
-    set_override(tag=tag, value="", paths=paths, no_prompt=no_prompt, clear=True)
+    set_override(
+        tag=tag,
+        value="",
+        paths=_collect_paths(paths, paths_from),
+        no_prompt=no_prompt,
+        clear=True,
+    )
 
 
 @tag_app.command("rotate")
@@ -221,20 +274,28 @@ def rotate(
         typer.Argument(help="Clockwise rotation to add: 90, 180, or 270."),
     ],
     paths: Annotated[
-        list[Path],
+        list[Path] | None,
         typer.Argument(
             help=(
                 "Video files or folders to rotate (all under one library). "
-                "Folders expand to the videos inside; non-videos are skipped."
+                "Folders expand to the videos inside; non-videos are skipped. "
+                "Omit when using --paths-from."
             )
         ),
-    ],
+    ] = None,
     no_prompt: Annotated[
         bool, typer.Option("--no-prompt", help=_NO_PROMPT_HELP)
     ] = False,
+    paths_from: Annotated[
+        Path | None, typer.Option("--paths-from", help=_PATHS_FROM_HELP)
+    ] = None,
 ) -> None:
     """Losslessly rotate videos by tagging orientation (no re-encode)."""
-    rotate_videos(degrees=degrees, paths=paths, no_prompt=no_prompt)
+    rotate_videos(
+        degrees=degrees,
+        paths=_collect_paths(paths, paths_from),
+        no_prompt=no_prompt,
+    )
 
 
 @app.command("context-menu")
