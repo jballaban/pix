@@ -57,6 +57,7 @@ construction rather than by machinery. See [§11](#11-what-this-deletes).
 ```
 /pix/master/{device}_{datetime}/{filepath}_{filename}.{ext}       originals — sacred
 /pix/master/{device}_{datetime}/{filepath}_{filename}.{ext}.xmp   metadata — the record
+/pix/master/{device}_{datetime}/.import.jsonl                    download ledger — the skip record
 /pix/render/{device}_{datetime}/{filepath}_{filename}.{ext}.{jpg|mp4}
 /pix/thumb/{device}_{datetime}/{filepath}_{filename}.{ext}.jpg
 /pix/rules.yaml                                                   distribution definitions
@@ -224,31 +225,99 @@ Nested tiers multiply — a 5-star photo in `general`, `photos` and `top` is sto
 three times. Distributions must stay curated subsets; a full-library mirror is
 another ~2.3TB and makes the array tight immediately.
 
-## 8. Ingest — two phases
+## 8. Ingest — the desktop CLI
 
-Ingest is the one part that stays a **CLI on the Windows desktop**, because a
-phone is a USB/MTP device attached to a specific machine.
+Ingest is the one part that stays a CLI on the Windows desktop, because a phone
+is a USB/MTP device attached to a specific machine.
 
-**Phase 1 — import + upload.** Pull new files off the device, let the importer
-cull anything that shouldn't be persisted, name them per [§3](#3-master), upload
-to master. Fast; no conversion.
+**There is no library root and no `.pix/` folder.** Nothing walks up looking for
+scaffolding; `pix init` and per-library config are gone. On the desktop `pix` is a
+**stateless global tool** — every command is a pure function of paths, and the only
+state that exists anywhere is a per-machine config holding two of them.
 
-**Phase 2 — process.** Generate thumbnails for everything and renders for what
-can have one, and upload them. Run whenever convenient.
+| Command | Does |
+|---|---|
+| `pix config` | set the **import folder** and the **master location** (per-machine) |
+| `pix import` | device → import folder |
+| `pix upload` | import folder → master; appends the ledger; clears the import folder |
+| `pix process` | master → renders + thumbnails for anything missing them |
 
-The app operates on the **ready set** and shows the rest as a visible backlog
-("1,247 files awaiting processing"), cleared by running phase 2. **The app never
-transcodes.**
+`import` and `upload` are separate on purpose: "no time, just get it off the phone"
+has to be a complete gesture on its own.
 
-Two properties worth preserving:
+**Transport is SMB, not an app API.** An upload is potentially hundreds of GB, and
+pushing that through a Python app on a 4-core Atom would be far slower than the
+NAS's own Samba. It also keeps ingest working while the app is down or unbuilt —
+which is the *app is optional* property doing real work. An HTTP endpoint for the
+manifest query (one request instead of a few hundred small reads) is a later
+optimization, and the only thing that would make off-LAN ingest possible.
 
-- **The desktop's only unique capability is encoding.** Hashing, duplicate
-  detection, sidecar writes and index maintenance are all fine on the NAS. Phase
-  2 must stay narrowly "find unprocessed files, transcode, upload" — otherwise
-  the desktop quietly becomes load-bearing again.
-- **Master is adoption-based.** Phase 1 is really just "get correctly-named files
-  into a folder", so a manual copy, another machine, or a future Android tool all
-  work without the app knowing about them.
+### Imports accumulate; uploads create folders
+
+The import folder is a plain per-machine working folder — not library-scoped —
+holding one tree per device with the device-relative paths preserved, and a
+per-folder `.manifest/` child exactly as [import.md](import.md#landing--tracking)
+already specifies.
+
+Successive `pix import` runs **append to the same tree**. Nothing is
+re-downloaded, because the skip check consults both the local `.manifest/`
+sidecars and master's `.import.jsonl` ledgers.
+
+`pix upload` then creates **one** master folder per upload —
+`{device}_{datetime}` where the datetime is the **upload** time, not an import
+time. So an import that was interrupted, resumed a day later, and uploaded on the
+third day produces a single folder holding all of it. A master folder means
+"this is what landed on this date," which is the unit you would delete to re-pull.
+
+Resuming an interrupted upload reuses the existing folder, skipping what is
+already there by name and size.
+
+### The ledger
+
+`{device}_{datetime}/.import.jsonl` is appended **during** upload (not written at
+the end, so a crash leaves a consistent partial record). One line per object
+pulled in that batch:
+
+> PUID, device path, name, size, capture date, outcome — `kept` / `culled` / `failed`
+
+This is the **committed half** of the skip manifest, replacing the `pix:ImportId`
+tags that used to carry it — those lived inside library files, and nothing is
+written to master files any more.
+
+It has to record objects *downloaded*, not files *present*, because a culled file
+has no media, no sidecar, and nothing else in master to attach a record to.
+`failed` is recorded as retryable, never as a skip; the existing `needs-session`
+vs terminal `failed` distinction ([import.md](import.md)) carries over unchanged.
+
+Device-side identity stays **`PUID + size`**, with `(filename.lower(), size)` as
+the seed fallback — iPhones recycle `IMG_0001`, so a name alone is not safe across
+years.
+
+**After a successful upload the import folder is cleared** — media *and*
+`.manifest/`. The durable record has moved to the ledger, so nothing needs to stay
+behind pinning the folder, and the import folder never grows without bound.
+
+**Culling is a pre-upload gesture only.** Deleting media from the import folder
+leaves its `.manifest/` sidecar intact, which becomes a `culled` ledger line and a
+permanent "don't re-download." Once files are in master they are sacred; the
+answer to "I don't want this one" after upload is to never deliver it.
+
+### `pix process` runs against master
+
+Not against the local import folder. Running it locally before upload would read
+from local disk instead of over SMB, but it needs two code paths and could never
+touch the existing ~2.3TB backlog or anything uploaded by other means. Against
+master it is a single path that handles every case identically — and the network
+is not the bottleneck anyway, since encoding is slower than gigabit.
+
+It generates thumbnails for everything and renders for what can have one. The app
+operates on the **ready set** and shows the rest as a visible backlog
+("1,247 files awaiting processing"). **The app never transcodes.**
+
+**Master is adoption-based.** `upload` is really just "get correctly-named files
+into a folder," so a manual copy, another machine, or a future Android tool all
+work without the app knowing about them. Such files carry no ledger entry and
+could be re-downloaded later; `dedupe` is the backstop, as it is today.
 
 ## 9. Hardware
 
@@ -304,6 +373,8 @@ to exist:
 - **`organize`** — folder shape is a view, and views are distributions
 - **`tag checkout` / `--commit` / the freeze** — no hard-link workspace, so no
   inode identity to protect; tagging is a direct edit
+- **The library root** — no `.pix/` scaffolding, no root discovery, no `pix init`,
+  no per-library config; the desktop tool is stateless but for two configured paths
 - **The library lock** — one long-lived process owns the archive; concurrency
   becomes an internal queue and DB transactions rather than defence against
   competing CLI invocations
@@ -329,12 +400,8 @@ to exist:
 
 ## 13. Open questions
 
-- **Import-ledger identity.** `pix import` currently avoids re-downloading by
-  reading `pix:OriginalPath` from the file; under this architecture nothing is
-  written to master files. The naming scheme nearly solves it (folder = device,
-  filename = device-side path, so "do I have this?" is a directory listing) —
-  but device counters recycle (`IMG_9999` → `IMG_0001`), so name alone is not a
-  safe key across years. Needs size or capture-date alongside it.
+*(Import-ledger identity — resolved; see [§8](#8-ingest--the-desktop-cli).)*
+
 - **What the distributions actually are** — the only unbounded number in
   [§10](#10-storage-and-backup-budget). Needs a real estimate of what fraction of
   the library gets rated into a tier, and how many tiers.
