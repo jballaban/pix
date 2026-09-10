@@ -50,7 +50,7 @@ One choice is reversible and the other is permanent.
 
 The second reason is that an append-only archive **destroys nothing**, so the
 [conservation invariant](README.md#cross-cutting-invariants) is satisfied by
-construction rather than by machinery. See [§11](#11-what-this-deletes).
+construction rather than by machinery. See [§12](#12-what-this-deletes).
 
 ## 2. Tier layout
 
@@ -180,7 +180,7 @@ A separate tier, one small JPEG per master file, ~20GB for the whole library,
 disposable.
 
 It exists because the app must present a grid of 100k+ items on hardware that
-cannot afford to decode originals on demand (see [§9](#9-hardware)). It is also
+cannot afford to decode originals on demand (see [§10](#10-hardware)). It is also
 what makes `.insv` **taggable without being viewable**: a 360 clip gets a
 thumbnail extracted from its embedded LRV proxy — a single-frame extract, not a
 transcode — appears in the app, can be assigned an event, and is then findable
@@ -200,26 +200,45 @@ to get there.
 
 ## 7. Distributions
 
-### The curation scale
+### `tier` selects; `rating` rates
 
-Curation is four states, carried by the `rating` tag. (XMP `Rating` is 0-5; 2 and
-4 are simply unused, leaving room.)
+Membership is carried by its own tag, **`tier`**, not by `rating`. The two are
+orthogonal — *how good is this photo* and *where should it go* — and conflating
+them makes "a beautiful photo I don't want in the family library" or "a mediocre
+photo that has to be in the book because it is the only one of grandma"
+inexpressible.
 
-| State | Rating | Meaning |
+| State | `tier` | Meaning |
 |---|---|---|
-| uncategorized | unrated | not yet reviewed |
-| not good enough | **1** | reviewed, **kept forever**, never viewed |
-| photo-app worthy | **3** | available to the family |
-| top | **5** | the handful you show when you show a few |
+| uncategorized | *absent* | not yet reviewed |
+| not good enough | `none` | reviewed, **kept forever**, never delivered |
+| photo-app worthy | `photo` | available to the family |
+| top | `top` | the handful you show when you show a few |
+
+Values are **ordered** — `top` implies `photo` — which matches the workflow:
+curate an event down to what is worth showing, then curate that down to the best
+ten.
 
 **Rejection must be a positive mark, not an absence.** If "not good enough" were
-just "left unrated," you could never tell what you had already been through from
+just "left untagged," you could never tell what you had already been through from
 what you had not — and on hundreds of photos per event that is the difference
-between finishing a curation pass and repeating it. Rating 1 is distinct from
-[deletion](#3-master), which removes the file entirely.
+between finishing a curation pass and repeating it. `tier: none` is also distinct
+from [deletion](#3-master), which removes the file entirely.
 
-The `{rating:1,2|3,4,5}` bucket syntax exists for exactly this pass: a bucket
-folder *is* the set that will ship, so you curate against what actually goes out.
+**`tier` does not need to be a standard field, and that is the point.** Nothing
+downstream reads it — membership is expressed by which tree a file physically
+sits in, so the tag only drives pix's reconcile. `rating` was carrying this job
+badly precisely because it *is* a standard field with a different meaning.
+
+So **`rating` goes back to being a genuine 0-5 quality mark**: independent,
+entirely optional, and still baked into delivery copies so Synology Photos and
+Lightroom can use the stars. The cost of splitting them is two decisions per
+photo instead of one, which is why `tier` is the primary gesture of a curation
+pass and `rating` is set only when you actually care.
+
+Both spellings work with the existing filter grammar unchanged —
+`filter: tier:photo,top`, and the `{rating:1,2|3,4,5}` bucket syntax for a
+rating pass.
 
 ### The trees
 
@@ -227,8 +246,8 @@ Two standing distributions on the NAS, kept continuously reconciled:
 
 | Tree | Filter | For |
 |---|---|---|
-| `/photo` | `rating:3,5` | Synology Photos — the **primary** way the family views everything |
-| top-10 | `rating:5` | dumb consumers: a TV that plays a folder, a book service that takes an upload |
+| `/photo` | `tier:photo,top` | Synology Photos — the **primary** way the family views everything |
+| top-10 | `tier:top` | dumb consumers: a TV that plays a folder, a book service that takes an upload |
 
 The top tree duplicates a subset of `/photo`, which is fine — it is ~10 per event.
 It exists because its consumers cannot *filter*; anything that can filter should
@@ -266,8 +285,23 @@ Synology Photos, `/tv` to sync to televisions, `/book` for print.
   the copy gets a canonical name. Because a name is assigned when a copy is
   created and never changed afterward, the
   [stable-collision-suffix problem](roadmap.md) never arises.
-- **Distributions are one-way.** Whether Synology Photos' write-back is captured
-  is deliberately out of scope; treat those trees as output.
+- **Distributions are one-way, and that is enforced rather than assumed.** Give
+  the family **read-only** DSM permissions on `/photo` and write access only to
+  the app's account. Synology Photos stays fully usable — albums, favorites,
+  people and its own tags all live in its database, never in the media — but it
+  cannot delete or add files. `@eaDir` thumbnail folders still appear, written by
+  the indexer as system; the reconcile already skips them as NAS artifacts.
+- **Drift reports rather than stops.** `export.md` hard-stops the whole run on
+  unexplained drift, which was right when the target might be a hand-curated
+  folder. Over a regenerable tree with an untouchable master it is too aggressive:
+  a stray file should not stop `/photo` reconciling. Missing gets restored from
+  master, modified gets overwritten, **foreign gets reported and never touched** —
+  a photo someone dropped in exists nowhere else, so deleting it would destroy
+  their only copy.
+- **Path churn breaks Synology Photos albums.** Renaming an event moves the copies
+  within the tree, and any album pointing at the old paths loses those entries.
+  Nothing pix can prevent — worth knowing before renaming an event that albums
+  hang off.
 
 **Update semantics** — all cheap, none requiring a re-transcode:
 
@@ -290,7 +324,41 @@ Nested tiers multiply — a 5-star photo in `general`, `photos` and `top` is sto
 three times. Distributions must stay curated subsets; a full-library mirror is
 another ~2.3TB and makes the array tight immediately.
 
-## 8. Ingest — the desktop CLI
+## 8. The app
+
+Runs in Container Manager on the NAS. It **owns the archive**: the only process
+that writes sidecars, deletes master files, and reconciles distributions. It never
+transcodes ([§10](#10-hardware)).
+
+### Who writes
+
+The family curates, not just the owner — tagging and ranking are the whole point
+of the app. Conflicts are **last-write-wins**, and that is sufficient: one process
+serializes every sidecar write, so two people cannot corrupt an `.xmp`. Multiple
+writers create a policy question, never an integrity one — which is why none of
+the locking, merging or checkout machinery the old architecture needed has a
+successor here.
+
+**No attribution.** That a value was set matters; who set it does not. Nothing in
+the data model carries a user.
+
+### Access
+
+App-managed accounts for the household. Passwords stored **hashed, never
+plaintext** — a credentials file on a share reachable over SMB is exactly how a
+reused password leaks.
+
+**Synology SSO Server** (a DSM 7 package that acts as an OIDC provider) is the
+upgrade path if DSM accounts should become the login. More setup than two users
+justify on day one; revisit if access widens.
+
+### The write queue
+
+Exists for UI latency, not for cost. A `tier` change is a 2KB sidecar write, but
+propagating it into the distribution copies is heavier, so the click returns
+immediately and the reconcile follows behind.
+
+## 9. Ingest — the desktop CLI
 
 Ingest is the one part that stays a CLI on the Windows desktop, because a phone
 is a USB/MTP device attached to a specific machine.
@@ -387,7 +455,7 @@ into a folder," so a manual copy, another machine, or a future Android tool all
 work without the app knowing about them. Such files carry no ledger entry and
 could be re-downloaded later; `dedupe` is the backstop, as it is today.
 
-## 9. Hardware
+## 10. Hardware
 
 | | |
 |---|---|
@@ -408,12 +476,31 @@ preference.
 index maintenance, and all the copying distributions require. Container Manager
 runs on this model; 18GB is far more than a web app plus a SQLite index needs.
 
+### Storage — Btrfs on SHR
+
+The volume is **Btrfs on SHR with data protection**, which settles three things:
+
+- **Checksums plus parity give bitrot detection *and repair*.** For an archive
+  whose premise is that originals can never be regenerated, this is arguably the
+  most valuable property available. Schedule regular scrubs on the master share.
+- **Snapshots are real**, which is what makes deletion-with-an-undo
+  ([§3](#3-master)) more than a hope. Snapshot Replication on the master share,
+  retention set deliberately.
+- **Reflinks exist**, but they only pay if the sequence is right. Copy-then-bake
+  gains nothing, because exiftool writes a temp file and renames, fully allocating
+  the copy. The pattern that works is **bake once into a delivery-ready artifact,
+  then reflink that into each tree** — reflinked files are independent, so a later
+  re-bake plus re-link stays at zero bytes per tree. The absolute saving is modest
+  at ~0.15TB of delivery; the value is that a future tier costs nothing. Probe at
+  runtime regardless: it is a filesystem ioctl through a container bind mount, and
+  [§7](#7-distributions) requires correctness without it.
+
 **This is also why the app is restricted to JPG/MP4.** The constraint was adopted
 for conversion reasons, but it is equally what makes browsing viable: HEIC decode
 and HEVC frame extraction on this CPU would make the UI painful no matter who did
 the converting.
 
-## 10. Storage and backup budget
+## 11. Storage and backup budget
 
 | Tier | Approx | Backed up |
 |---|---|---|
@@ -434,7 +521,7 @@ since it covers everything convertible. It is disposable and unbacked, so it is
 also the cheapest place to spend bytes. The relief valve for everything is the
 two empty bays.
 
-## 11. What this deletes
+## 12. What this deletes
 
 Most of pix's machinery exists to make destruction safe. An archive whose files
 are never rewritten has almost none to make safe — and for the one destructive act
@@ -461,7 +548,7 @@ rather than anything pix builds ([§3](#3-master)):
 - **Sync-client re-upload avoidance** ([implementation.md](implementation.md#sync-client-interaction))
   — the master no longer travels through Synology Drive
 
-## 12. What survives
+## 13. What survives
 
 - **`pix import`** ([import.md](import.md)) — becomes phase 1, and shrinks
 - **Format-aware content hashing** — identity that ignores metadata, so a tag-only
@@ -476,17 +563,26 @@ rather than anything pix builds ([§3](#3-master)):
   — and it stops being contentious: transcoding was only ever risky because it
   destroyed the original, and now the original is preserved forever
 
-## 13. Open questions
+## 14. Open questions
 
-*(Resolved: import-ledger identity — [§8](#8-ingest--the-desktop-cli).
-What the distributions are, and the curation scale — [§7](#7-distributions).)*
+*(Resolved in discussion: import-ledger identity — [§9](#9-ingest--the-desktop-cli);
+distributions and the curation scale — [§7](#7-distributions); multi-user, auth and
+Synology Photos write-back — [§8](#8-the-app) and [§7](#7-distributions); Btrfs —
+[§10](#10-hardware).)*
 
-- **App deployment and authentication** — Container Manager specifics, and how
-  family members sign in.
-- **Synology Photos write-back** — currently declared out of scope; revisit if
-  rating inside Photos turns out to be wanted.
-- **Btrfs vs ext4** on the volume — determines whether reflinks are available as
-  an optimization for distribution copies.
-- **Multi-user editing** — the original motivation for a hosted UI. With no
-  checkout and no freeze this is nearly free, but the write-queue and conflict
-  semantics are unspecified.
+- **Seeding the existing library.** The current ~2.3TB has to become master
+  folders, and it is already normalized rather than pristine
+  ([§3](#3-master)). Whether run-folder originals are worth recovering first, and
+  what `{device}_{datetime}` means for material whose import event is long past,
+  is undesigned.
+- **The app's UI.** Nothing in this document specifies what curation actually
+  looks like — the grid, the event view, how a pass over hundreds of photos is
+  driven from the keyboard.
+- **Ad-hoc `pix export` CLI surface.** The desktop one-off case
+  ([§7](#7-distributions)) needs inline filter and template arguments; that is new
+  CLI surface and unspecified.
+- **Face detection** remains deferred, and `{person}` depends on it — which is what
+  the people-grouped ad-hoc distribution would need.
+- **`tier` as a stored XMP property** — namespace and serialization are
+  unspecified, as is whether it is baked into delivery copies (nothing reads it
+  there, but it costs nothing and aids debugging).
