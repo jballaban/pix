@@ -9,7 +9,14 @@ from __future__ import annotations
 
 import pytest
 
-from pix.tag_filter import Clause, FilterError, accepts, parse, parse_values
+from pix.tag_filter import (
+    Clause,
+    FilterError,
+    accepts,
+    parse,
+    parse_buckets,
+    parse_values,
+)
 
 
 # --- parse_values ------------------------------------------------------------
@@ -132,3 +139,62 @@ def test_parse_rejects_trailing_separator() -> None:
 
 def test_parse_keeps_raw_for_round_tripping() -> None:
     assert parse(" rating:5 ").raw == " rating:5 "
+
+
+# --- Value buckets (`a,b|c,d`) -----------------------------------------------
+#
+# The template-side parse and the checkout semantics live in
+# test_organize.py / test_checkout.py; these pin the grammar itself.
+
+
+def test_parse_buckets_keeps_order_and_raw_values() -> None:
+    buckets = parse_buckets("event", "Hawaii,Maui|Xmas")
+    assert [b.values for b in buckets] == [("Hawaii", "Maui"), ("Xmas",)]
+    # Raw for writing, folded for comparing.
+    assert buckets[0].folded == frozenset({"hawaii", "maui"})
+
+
+def test_bucket_accepts_is_case_insensitive() -> None:
+    bucket = parse_buckets("event", "Hawaii|Xmas")[0]
+    assert bucket.accepts("HAWAII")
+    assert not bucket.accepts("Xmas")
+
+
+def test_bucket_rejects_untagged() -> None:
+    # `null` can't be listed in a bucket, so no bucket ever claims a
+    # valueless file — it rests at the checkout root instead.
+    assert not parse_buckets("rating", "1,2|3,4,5")[0].accepts(None)
+
+
+def test_parse_buckets_rejects_overlap() -> None:
+    with pytest.raises(FilterError, match="two buckets"):
+        parse_buckets("rating", "1,2|2,3")
+
+
+def test_parse_buckets_rejects_empty_group() -> None:
+    for spec in ("1,2|", "|1,2", "1||2"):
+        with pytest.raises(FilterError, match="empty bucket"):
+            parse_buckets("rating", spec)
+
+
+def test_parse_buckets_rejects_null_in_a_group() -> None:
+    with pytest.raises(FilterError, match="can't go in a bucket"):
+        parse_buckets("rating", "null,1,2|3,4,5")
+
+
+def test_parse_buckets_rejects_a_lone_group() -> None:
+    with pytest.raises(FilterError, match="at least two groups"):
+        parse_buckets("rating", "3,4,5")
+
+
+def test_parse_values_rejects_a_bucket_separator() -> None:
+    # Reached when a non-checkout consumer hands a `|` spec to the plain
+    # value-list parser.
+    with pytest.raises(FilterError, match="only supported in"):
+        parse_values("rating", "1,2|3,4,5")
+
+
+def test_parse_rejects_buckets_in_a_bare_filter() -> None:
+    # A filter selects; it has no folders to group into.
+    with pytest.raises(FilterError, match="doesn't group them"):
+        parse("rating:1,2|3,4,5")

@@ -15,7 +15,12 @@ See spec/tag-editing.md for the full design. This module owns the
 - Teardown (`discard`) — remove the workspace (the `--reset` action,
   and the cleanup `--commit` will reuse once it lands).
 
-`--commit` (diff + apply tag writes) is not implemented yet.
+A template level may be **bucketed** — `{rating:1,2|3,4,5}` renders one
+folder per value *group* (`1_2/`, `3_4_5/`) instead of one per value, so a
+coarse pass can see and edit a whole group as a unit. A file already inside
+its group's folder is left alone; one dragged into a group's folder takes
+that group's first value. Values no bucket claims rest in `(filtered)/`,
+which is a drag-*out* source only. See spec/tag-editing.md → Value buckets.
 
 Identity is by inode, not content hash, so checkout — unlike organize
 — needs no `pix hash` prerequisite.
@@ -38,6 +43,7 @@ from pix.metadata import FileMetadata
 from pix.organize import (
     Template,
     Token,
+    bucket_folder_name,
     compute_values,
     sanitize_folder_name,
 )
@@ -53,6 +59,8 @@ from pix.plan import (
 )
 from pix.rating import XMP_RATING, effective_rating
 from pix.root import local_dir
+from pix.special_folders import FILTERED_FOLDER
+from pix.tag_filter import Bucket
 
 CHECKOUT_DIRNAME: str = "checkout"
 SNAPSHOT_FILENAME: str = "snapshot.json"
@@ -283,26 +291,49 @@ def validate_checkout_template(template: Template) -> None:
                 "bearing levels aren't supported in checkout."
             )
         token = level.segments[0]
-        if token.values is not None:
-            # The grammar parses `{tag:v1,v2}` everywhere, but checkout's
-            # commit reverses folder names back into tag values and has no
-            # reading for a `(filtered)` folder. Reject rather than silently
-            # ignore the filter. See spec/tag-editing.md.
+        if token.values is not None and token.buckets is None:
+            # A plain `{tag:v1,v2}` filter renders one folder per matching
+            # value plus a `(filtered)` pile, and commit has no reading for
+            # a file the user drags *into* `(filtered)`. The bucketed
+            # spelling does (`|` groups reverse to their first value), so
+            # only that form is accepted. See spec/tag-editing.md.
             raise CheckoutError(
-                f"filters aren't supported in checkout templates yet "
-                f"(`{{{token.name}:...}}`); check out the full set and use "
-                f"the filter on organize or an export instead."
+                f"plain filters aren't supported in checkout templates "
+                f"(`{{{token.name}:...}}`). Either check out the full set "
+                f"(`{{{token.name}}}`) or group the values into buckets "
+                f"(`{{{token.name}:a,b|c,d}}`)."
             )
 
 
-def _level_token_names(template: Template) -> list[str]:
-    """One token name per level, in order (assumes a validated template)."""
+def _level_tokens(template: Template) -> list[Token]:
+    """One token per level, in order (assumes a validated template)."""
     return [
-        seg.name
+        seg
         for level in template.levels
         for seg in level.segments
         if isinstance(seg, Token)
     ]
+
+
+def _level_token_names(template: Template) -> list[str]:
+    """One token name per level, in order (assumes a validated template)."""
+    return [t.name for t in _level_tokens(template)]
+
+
+def _bucket_for_value(token: Token, value: str | None) -> Bucket | None:
+    """The token's bucket that claims `value`, or None if none does."""
+    if token.buckets is None:
+        return None
+    return next((b for b in token.buckets if b.accepts(value)), None)
+
+
+def _bucket_for_folder(token: Token, folder: str) -> Bucket | None:
+    """The token's bucket that renders `folder`, or None if none does."""
+    if token.buckets is None:
+        return None
+    return next(
+        (b for b in token.buckets if bucket_folder_name(b) == folder), None
+    )
 
 
 def render_checkout_path(
@@ -317,12 +348,25 @@ def render_checkout_path(
     Because we stop at the first gap, a later level's folder never appears
     where it could be mistaken for an earlier token. See spec/tag-editing.md
     → Workspace layout.
+
+    A **bucketed** level (`{rating:1,2|3,4,5}`) renders the claiming
+    bucket's folder (`1_2`) instead of the bare value. A value no bucket
+    claims renders `(filtered)` and stops descent for the same reason a
+    gap does: nothing below it is expressed, so nothing below it can be
+    read back.
     """
     parts: list[str] = []
-    for name in _level_token_names(template):
-        val = values.get(name)
+    for token in _level_tokens(template):
+        val = values.get(token.name)
         if val is None:
             break
+        if token.buckets is not None:
+            bucket = _bucket_for_value(token, val)
+            if bucket is None:
+                parts.append(FILTERED_FOLDER)
+                break
+            parts.append(bucket_folder_name(bucket))
+            continue
         parts.append(sanitize_folder_name(val))
     return "/".join(parts)
 
@@ -514,9 +558,15 @@ def diff_workspace(
     value-assignments (v1's only edit); classifies everything else as a
     skipped removal (a value cleared — unsupported in v1), a foreign file
     (not part of this checkout), or an ambiguous link (same inode at two
-    paths, or nested too deep).
+    paths, nested too deep, or sitting in a folder pix didn't create).
+
+    On a **bucketed** level the test is group membership rather than value
+    equality, so a file left inside the bucket it started in is unchanged
+    whatever its exact value, and a file moved into another bucket takes
+    that bucket's first value. See spec/tag-editing.md → Value buckets.
     """
     cdir = checkout_dir(library_root)
+    tokens = _level_tokens(template)
     names = _level_token_names(template)
     by_ino = {ln.ino: ln for ln in snapshot.links}
 
@@ -554,21 +604,53 @@ def diff_workspace(
             diff.ambiguous.append(Path(rec.library_path))
             continue
 
-        current = parse_checkout_path(template, folder_parts)
         token_changes: dict[str, str] = {}
         removal = False
-        for name in names:
-            snap_val = rec.values.get(name)
+        unreadable = False
+        for depth, token in enumerate(tokens):
+            snap_val = rec.values.get(token.name)
+            cur_folder = (
+                folder_parts[depth] if depth < len(folder_parts) else None
+            )
+
+            if cur_folder is None:
+                # The link rests shallower than this level. Either it always
+                # did (no value — the gap rule) or the user dragged it out of
+                # a folder, which clears the value. Nothing below an
+                # unexpressed level is expressed either, so stop reading.
+                if snap_val is not None:
+                    removal = True  # value cleared — v1 doesn't support
+                break
+
+            if token.buckets is not None:
+                if cur_folder == FILTERED_FOLDER:
+                    # The unclaimable pile — a drag-out source, never a
+                    # destination. Staying put is a no-op; arriving from a
+                    # bucket means the user wants the value gone.
+                    if _bucket_for_value(token, snap_val) is not None:
+                        removal = True
+                    break
+                bucket = _bucket_for_folder(token, cur_folder)
+                if bucket is None:
+                    unreadable = True  # a folder pix didn't create
+                    break
+                # Membership, not equality: a 5-star file left sitting in
+                # `3_4_5/` keeps its 5. Only a file whose value no longer
+                # belongs to the folder it's in gets written, and it takes
+                # the bucket's first value.
+                if not bucket.accepts(snap_val):
+                    token_changes[token.name] = bucket.values[0]
+                continue
+
             snap_folder = (
                 sanitize_folder_name(snap_val) if snap_val is not None else None
             )
-            cur_folder = current.get(name)
-            if snap_folder == cur_folder:
-                continue
-            if cur_folder is None:
-                removal = True  # value cleared — v1 doesn't support
-            else:
-                token_changes[name] = cur_folder
+            if snap_folder != cur_folder:
+                token_changes[token.name] = cur_folder
+
+        if unreadable:
+            diff.ambiguous.append(Path(rec.library_path))
+            continue
 
         if token_changes:
             diff.assigns.append(

@@ -233,6 +233,7 @@ Used by `organize`, `checkout`, and `export` (see [organize.md](organize.md), [t
 
 - `{tag}` — enumerate; produce one folder per distinct value.
 - `{tag:val1,val2}` — filter to listed values; produce one folder per listed value.
+- `{tag:a,b|c,d}` — **value buckets**: group the values, producing one folder per *group* (`a_b/`, `c_d/`). [checkout](tag-editing.md#value-buckets) only.
 - `null` — special value meaning "no value set."
 - `!` — negation prefix. `{year:!null}` = everything tagged; `{year:null,2020}` = untagged + 2020. **Not implemented** — every list is an inclusion list for now; `!` parses to a pointed error. Deferred, not dropped.
 
@@ -246,18 +247,25 @@ so they can't drift:
 | Spelling | Where | Effect |
 |---|---|---|
 | `{rating:3,4,5}` (braced) | inside a template | filters **and** produces a folder level; excluded files render `(filtered)` |
+| `{rating:1,2\|3,4,5}` (bucketed) | [checkout](tag-editing.md#value-buckets) templates only | groups values; one folder per group, and commit reads *membership* rather than value |
 | `rating:3,4,5` (bare) | [export](export.md) distribution `filter:` | filters only; excluded files just don't appear |
 
 A bare expression ANDs its clauses, separated by `;` — `rating:4,5; event:beach trip`.
 Semicolon rather than whitespace, so event names may contain spaces; values still
-can't contain `,` or `;`. Braces in a bare expression are an error (braces mean
+can't contain `,`, `;` or `|`. Braces in a bare expression are an error (braces mean
 "make a folder"). Values compare case-insensitively; whitespace around them is
 trimmed. An empty/absent filter matches everything.
 
 **Implementation status:** the grammar and organize's `(filtered)` rendering are
-built. **checkout rejects filtered templates** — commit reverses folder names
-back into tag values and has no reading for `(filtered)` — so the `checkout`
-column below is design intent, not current behavior.
+built. **checkout rejects *plain* filtered templates** — commit reverses folder
+names back into tag values and has no reading for a file dragged *into*
+`(filtered)`. The bucketed spelling is accepted (a group reverses to its first
+value), and is the only way `(filtered)` appears in a checkout workspace today.
+
+**Buckets are checkout-only.** organize and export templates reject `|`, and a
+bare `filter:` rejects it too — a filter selects files and has no folders to
+group into. Grouping exists because the folder-shuffle UI needs a *single*
+folder that shows a whole group, which nothing else does.
 
 ### Date components as tokens
 

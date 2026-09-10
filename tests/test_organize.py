@@ -14,6 +14,7 @@ from pix.organize import (
     OrganizeError,
     UnmigratedFilesError,
     apply_plan,
+    bucket_folder_name,
     check_cwd_not_inside,
     cleanup_empty_folders,
     compute_values,
@@ -838,3 +839,54 @@ def test_template_filters_out() -> None:
     assert not template_filters_out(t, _values(rating="4"))
     assert template_filters_out(t, _values(rating="1"))
     assert not template_filters_out(parse_template("{year}"), _values())
+
+
+# --- Value buckets (`{tag:a,b|c,d}`) -----------------------------------------
+#
+# Buckets are a checkout-only spelling; organize/export must refuse them.
+# The bucket semantics themselves live in test_checkout.py.
+
+
+def test_parse_template_rejects_buckets_by_default() -> None:
+    with pytest.raises(OrganizeError, match="only supported in"):
+        parse_template("{year}/{rating:1,2|3,4,5}")
+
+
+def test_parse_template_accepts_buckets_when_allowed() -> None:
+    t = parse_template("{rating:1,2|3,4,5}", allow_buckets=True)
+    seg = t.levels[0].segments[0]
+    assert isinstance(seg, Token)
+    assert seg.buckets is not None
+    assert [bucket_folder_name(b) for b in seg.buckets] == ["1_2", "3_4_5"]
+
+
+def test_bucketed_token_values_are_the_union() -> None:
+    # So the existing filter machinery still answers "does any bucket
+    # claim this file?" without knowing about buckets.
+    seg = parse_template("{rating:1,2|3,4,5}", allow_buckets=True).levels[
+        0
+    ].segments[0]
+    assert isinstance(seg, Token)
+    assert seg.values == frozenset({"1", "2", "3", "4", "5"})
+
+
+def test_bucket_folder_name_sanitizes_each_value() -> None:
+    # `/` can't reach here (levels split on it first), but `:` can.
+    t = parse_template("{event:a:b,c|d}", allow_buckets=True)
+    seg = t.levels[0].segments[0]
+    assert isinstance(seg, Token)
+    assert seg.buckets is not None
+    assert bucket_folder_name(seg.buckets[0]) == "a_b_c"
+
+
+def test_parse_template_rejects_buckets_rendering_one_folder() -> None:
+    # Disjoint values, same folder name once sanitized — the two groups
+    # would silently share a folder.
+    with pytest.raises(OrganizeError, match="both render the folder"):
+        parse_template("{event:a:b|a_b}", allow_buckets=True)
+
+
+def test_parse_template_rejects_an_overlong_bucket_folder_name() -> None:
+    spec = ",".join(f"event{i:03d}" for i in range(30))
+    with pytest.raises(OrganizeError, match="over the 200"):
+        parse_template(f"{{event:{spec}|other}}", allow_buckets=True)

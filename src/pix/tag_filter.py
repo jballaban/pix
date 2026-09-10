@@ -22,7 +22,13 @@ two can never drift. Rules:
 - A bare filter ANDs its clauses, separated by `;`:
   `rating:4,5; event:beach trip`. Semicolon (not whitespace) is the
   separator so event names may contain spaces. Values still can't contain
-  `,` or `;` — same limitation the braced form has always had for `,`.
+  `,`, `;` or `|` — same limitation the braced form has always had for `,`.
+- **Value buckets** — `{rating:1,2|3,4,5}` splits one tag's values into
+  `|`-separated *groups*, each rendering a single folder (`1_2`, `3_4_5`).
+  Buckets are **checkout-only** (see spec/tag-editing.md → Value buckets):
+  they exist so a coarse pass can see and edit one folder per group without
+  flattening the finer values inside it, which only the folder-shuffle UI
+  needs. organize, export templates, and bare filters all reject `|`.
 
 Negation (`!`) is specified in spec/tags.md but **deliberately not
 implemented yet** — every list is an inclusion list. `parse` rejects `!`
@@ -47,6 +53,10 @@ NULL_KEYWORD: str = "null"
 
 # Separates the clauses of a bare filter expression (see module docstring).
 CLAUSE_SEPARATOR: str = ";"
+
+# Separates the value *groups* of a bucketed `{tag:a,b|c,d}` level. Checkout
+# only — every other consumer rejects it.
+BUCKET_SEPARATOR: str = "|"
 
 
 class FilterError(Exception):
@@ -89,12 +99,31 @@ class Filter:
         return all(c.accepts(values.get(c.tag)) for c in self.clauses)
 
 
-def parse_values(tag: str, spec: str) -> frozenset[str]:
-    """Parse the `v1,v2` half of a clause into a case-folded inclusion list.
+@dataclass(frozen=True)
+class Bucket:
+    """One `|`-separated value group of a bucketed `{tag:a,b|c,d}` level.
 
-    Shared by the braced (template) and bare (export `filter:`) spellings,
-    so the two can't drift. Raises `FilterError` on an empty list, an empty
-    item (`3,,4`, a trailing comma), or a `!` negation prefix.
+    Carries the values twice on purpose: `values` keeps them **as typed**
+    and in order, because checkout writes `values[0]` when a file is
+    dragged into this bucket's folder (and writing a case-folded event
+    name would corrupt it); `folded` is the case-insensitive membership
+    set, matching how every other filter compares.
+    """
+
+    values: tuple[str, ...]
+    folded: frozenset[str]
+
+    def accepts(self, value: str | None) -> bool:
+        return accepts(self.folded, value)
+
+
+def _parse_items(tag: str, spec: str) -> tuple[str, ...]:
+    """Split the `v1,v2` half of a clause into trimmed values, in order.
+
+    The shared half of `parse_values` and `parse_buckets`. Raises
+    `FilterError` on an empty list, an empty item (`3,,4`, a trailing
+    comma), a `!` negation prefix, or a stray `|` (buckets are parsed by
+    `parse_buckets`, and every non-checkout consumer rejects them).
     """
     if not spec.strip():
         raise FilterError(
@@ -102,7 +131,7 @@ def parse_values(tag: str, spec: str) -> frozenset[str]:
             f"(or drop the `:` to enumerate every value)"
         )
 
-    values: set[str] = set()
+    items: list[str] = []
     for item in spec.split(","):
         value = item.strip()
         if not value:
@@ -115,8 +144,78 @@ def parse_values(tag: str, spec: str) -> frozenset[str]:
                 f"negation (`{value}`) isn't supported yet — filters are "
                 f"inclusion lists for now. List the values you want."
             )
-        values.add(value.casefold())
-    return frozenset(values)
+        if BUCKET_SEPARATOR in value:
+            raise FilterError(
+                f"value buckets (`{BUCKET_SEPARATOR}`) are only supported in "
+                f"`pix tag checkout` templates — a bucket renders one folder "
+                f"per group, which only the folder-shuffle UI can reverse. "
+                f"Write `{tag}:a,b` here."
+            )
+        items.append(value)
+    return tuple(items)
+
+
+def parse_values(tag: str, spec: str) -> frozenset[str]:
+    """Parse the `v1,v2` half of a clause into a case-folded inclusion list.
+
+    Shared by the braced (template) and bare (export `filter:`) spellings,
+    so the two can't drift. Raises `FilterError` on an empty list, an empty
+    item (`3,,4`, a trailing comma), or a `!` negation prefix.
+    """
+    return frozenset(v.casefold() for v in _parse_items(tag, spec))
+
+
+def parse_buckets(tag: str, spec: str) -> tuple[Bucket, ...]:
+    """Parse a bucketed value spec — `1,2|3,4,5` — into ordered groups.
+
+    Only called for a spec that contains `|`, and only by
+    `organize.parse_template` when the caller allows buckets (checkout).
+    Beyond the per-value rules of `_parse_items`, rejects:
+
+    - an empty group (`1,2|`, `|3`, `1||2`);
+    - `null` inside a group — the workspace root already means "untagged"
+      (checkout's stop-at-the-first-gap rule), and "assign the group's
+      first value" would mean *clear the tag* for a null-leading group,
+      which checkout deliberately can't do yet;
+    - a value claimed by two groups, which would give the file two homes.
+    """
+    groups: list[Bucket] = []
+    claimed: dict[str, int] = {}
+    parts = spec.split(BUCKET_SEPARATOR)
+    for index, part in enumerate(parts):
+        if not part.strip():
+            raise FilterError(
+                f"empty bucket in the filter on {{{tag}}} — check for a "
+                f"doubled, leading, or trailing `{BUCKET_SEPARATOR}` in "
+                f"{spec!r}"
+            )
+        items = _parse_items(tag, part)
+        folded: set[str] = set()
+        for value in items:
+            key = value.casefold()
+            if key == NULL_KEYWORD:
+                raise FilterError(
+                    f"`{NULL_KEYWORD}` can't go in a bucket on {{{tag}}} — "
+                    f"untagged files already rest at the checkout root, and "
+                    f"dropping a file into a bucket assigns its first value, "
+                    f"which can't be `{NULL_KEYWORD}`."
+                )
+            if key in claimed and claimed[key] != index:
+                raise FilterError(
+                    f"value {value!r} appears in two buckets on {{{tag}}} in "
+                    f"{spec!r} — a file with that value would have two "
+                    f"folders to live in. Buckets must not overlap."
+                )
+            claimed[key] = index
+            folded.add(key)
+        groups.append(Bucket(values=items, folded=frozenset(folded)))
+
+    if len(groups) < 2:
+        raise FilterError(
+            f"a bucketed filter on {{{tag}}} needs at least two groups "
+            f"separated by `{BUCKET_SEPARATOR}` (got {spec!r})"
+        )
+    return tuple(groups)
 
 
 def parse_tag(tag_spec: str) -> str:
@@ -147,6 +246,14 @@ def parse(expr: str) -> Filter:
         raise FilterError(
             "filter expressions are unbraced — `{}` is template syntax that "
             f"produces a folder. Write `rating:4,5`, not {raw!r}."
+        )
+
+    if BUCKET_SEPARATOR in raw:
+        raise FilterError(
+            f"a filter selects files, it doesn't group them, so "
+            f"`{BUCKET_SEPARATOR}` has no meaning here. List every value you "
+            f"want (`rating:1,2,3`); value buckets are a "
+            f"`pix tag checkout` template feature."
         )
 
     clauses: list[Clause] = []

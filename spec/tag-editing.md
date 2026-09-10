@@ -32,7 +32,7 @@ The rest of this spec describes the full eventual design (removing/blanking tags
 - **The one edit: drag a file into the folder for the value you want.** That tag becomes that value, written as an override — *unless* the value already equals what `_auto` derives, in which case no override is stored (and an existing one is cleared). You think in values; the auto/override layer is invisible and irrelevant.
 - **You cannot make a tag empty in v1.** No blanking, no removing, no deleting files. So there's no "blankable vs not" distinction, no "force-null" representation, no `(null)` folder you drag *into* — none of it exists yet.
 - **Workspace layout (one uniform rule).** Render each level's value as a folder and **stop at the first level the file has no value for**; the file rests in whatever's built so far — the **root** if the first level is missing. So `{year}/{event}` with no event → `2023/`; `{event}/{year}` with no event → the root (no bucket, no year breakdown). Because we stop at the first gap, a later level's folder never appears where it could be mistaken for an earlier token. These valueless files are drag-*out* sources — you grab them and drop them into a value.
-- **Templates** must be one bare tag per level (`{year}/{event}`, not `{year}-archive/{event}`), since commit reverses folder names back into values.
+- **Templates** must be one bare tag per level (`{year}/{event}`, not `{year}-archive/{event}`), since commit reverses folder names back into values. A level may be **bucketed** — `{rating:1,2|3,4,5}` — see [Value buckets](#value-buckets).
 
 Deferred to a later build (separate design, with the "set to nothing" marker if wanted): removing/emptying a tag, the `pix tag checkout --overrides` review mode, and faces. The detailed folder-shuffle and face sections below describe that fuller design — they are **not** v1.
 
@@ -101,6 +101,49 @@ Hard links (not moves) mean the library is untouched while the user shuffles, an
 Multi-valued tokens (`{person}`, `{face}`) must be the **sole** token in a checkout — a file appears once per value, so the tree carries duplicates of the same inode. The canonical multi-valued flow is the [face-specific checkout](#face-specific-checkout-face) below, which is **deferred** along with migrate-time face detection.
 
 `{time}` and `{date}` are rejected as folder levels (per-second / per-timestamp folders are useless), same as organize.
+
+### Value buckets
+
+A level may **group** its values instead of enumerating them: `{rating:1,2|3,4,5}` renders one folder per `|`-separated group rather than one per value.
+
+```
+pix tag checkout . "{event}/{rating:1,2|3,4,5}"
+
+Hawaii/
+  1_2/            rating 1 or 2
+  3_4_5/          rating 3, 4 or 5
+  (filtered)/     has a rating no bucket claims (an explicit 0)
+  <loose links>   no rating at all
+```
+
+**Why it exists.** With a plain `{rating}` level, "everything the `rating:3,4,5` export will take" is spread across three folders, so it isn't a thing you can look at. Curating against that view means re-deciding files you already decided — promoting a second near-duplicate because you couldn't see the first one was already in. A bucket folder *is* the set, so the decision is made against what will actually ship.
+
+**Placement.** Per level:
+
+| The file's value | Renders |
+|---|---|
+| claimed by a bucket | that bucket's folder (`1_2`) |
+| a value no bucket claims | `(filtered)` — and descent **stops**, exactly as a gap stops it |
+| no value at all | nothing — the file rests at the level above (the [gap rule](#v1-scope-the-first-build)) |
+
+So untagged files rest at the root and `(filtered)` holds only files that *have* a value pix was told nothing about. Both are drag-**out** sources; neither is a destination. A file dragged into `(filtered)` (or back out to the root) reads as *clear the value*, which v1 doesn't support — it's reported as a skipped removal, never written.
+
+**Commit reads membership, not equality.** This is the whole point, and the one place bucket semantics differ from a plain level:
+
+| Gesture | Result |
+|---|---|
+| A 5-star link left sitting in `3_4_5/` | **no write** — 5 is in the group |
+| A 5-star link dragged `3_4_5/` → `1_2/` | rating := `1` (the destination bucket's **first listed** value) |
+| An unrated link dragged root → `3_4_5/` | rating := `3` |
+| A link in a folder pix didn't create | skipped as ambiguous, with a warning |
+
+Two properties fall out: commit is **idempotent** (nothing drifts if you commit without touching anything), and a coarse pass can never **flatten** the finer values inside a group — your 4s and 5s survive a `3_4_5` pass untouched. Dropping into a group is deliberately lossy in one direction only: it assigns the group's first value, so promoting a file into `3_4_5/` makes it a 3, not a 5.
+
+**Rejected at parse time:** overlapping buckets (`1,2|2,3` — the file would have two homes), an empty group (`1,2|`), a lone group (no `|`), `null` inside a group (the root already means untagged, and a group's first value can't be "clear it"), two groups rendering the same folder name once sanitized, and a rendered name over 200 characters.
+
+**Buckets are checkout-only.** organize and export templates reject `|`, and so does a bare `filter:` — see [tags.md → Two spellings, one grammar](tags.md#two-spellings-one-grammar). The parser gates them behind `parse_template(..., allow_buckets=True)`, which only checkout passes, so a new call site can't pick them up by accident.
+
+Bucket definitions live in the template string, which the snapshot already records — so buckets need **no snapshot schema change**.
 
 ## Identity model
 
@@ -176,7 +219,7 @@ If patching leaves the override all-`*`, the `pix:DateOverride` field is **remov
 - **`0/` = unrated.** Since `0` (or absent) means unrated ([tags.md](tags.md#rating-curation-standard-field)), dragging into `0/` sets the file back to unrated — so a rating can be *cleared* through the ordinary assign gesture, without depending on the deferred blank/`(null)`-drag path. (A `(null)/` drag, once the blanking build lands, removes the field entirely — equivalent to `0`.)
 - **`*AutoPrevious` reconciliation does not apply** (rating has no `_auto`, so there's nothing to dirty-flag).
 
-This is the natural rating workflow now that the master isn't organized by `{rating}`: open `pix tag checkout <path> "{event}/{rating}"`, drop files into star folders, commit — the master's on-disk layout (and its Synology sync) is untouched; only `XMP:Rating` is written.
+This is the natural rating workflow now that the master isn't organized by `{rating}`: open `pix tag checkout <path> "{event}/{rating}"`, drop files into star folders, commit — the master's on-disk layout (and its Synology sync) is untouched; only `XMP:Rating` is written. For a coarse in/out pass against an export tier, bucket the level instead — `"{event}/{rating:1,2|3,4,5}"` — see [Value buckets](#value-buckets).
 
 ### Cleaning up `*AutoPrevious` on override changes
 

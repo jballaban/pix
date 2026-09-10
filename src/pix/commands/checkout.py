@@ -181,7 +181,7 @@ def _do_commit() -> None:
         raise typer.Exit(code=1)
 
     try:
-        template = parse_template(snap.template)
+        template = parse_template(snap.template, allow_buckets=True)
         validate_checkout_template(template)
     except (OrganizeError, CheckoutError) as e:
         typer.echo(f"Error: invalid template in snapshot: {e}", err=True)
@@ -435,7 +435,7 @@ def _do_start(path: Path, template_str: str) -> None:
         raise typer.Exit(code=1)
 
     try:
-        template = parse_template(template_str)
+        template = parse_template(template_str, allow_buckets=True)
         validate_checkout_template(template)
     except OrganizeError as e:
         typer.echo(f"Error: {e}", err=True)

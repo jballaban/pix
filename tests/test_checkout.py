@@ -11,10 +11,12 @@ import pytest
 from pix.commands.checkout import _rekey_hashes
 from pix.hash_cache import read_cached_hash, write_cached_hash
 from pix.checkout import (
+    CheckoutError,
     CheckoutOpen,
     CheckoutUnmigratedError,
     Snapshot,
     SnapshotLink,
+    CommitDiff,
     checkout_dir,
     compute_pix_writes,
     create_checkout,
@@ -25,11 +27,13 @@ from pix.checkout import (
     is_open,
     parse_checkout_path,
     read_snapshot,
+    render_checkout_path,
     template_token_names,
+    validate_checkout_template,
     write_snapshot,
 )
 from pix.metadata import FileMetadata
-from pix.organize import parse_template
+from pix.organize import Template, parse_template
 from pix.plan import (
     PIX_DATE_AUTO,
     PIX_DATE_AUTO_PREVIOUS,
@@ -39,6 +43,8 @@ from pix.plan import (
     PIX_EVENT_OVERRIDE,
     PIX_ORIGINAL_PATH,
 )
+from pix.rating import XMP_RATING
+from pix.special_folders import FILTERED_FOLDER
 
 
 def _meta(path: Path, **fields: object) -> FileMetadata:
@@ -572,3 +578,234 @@ def test_writes_date_clear_reconciles_autoprevious() -> None:
     # now-meaningless DateAutoPrevious dirty flag.
     writes, _ = compute_pix_writes({"year": "2023"}, meta)
     assert writes == {PIX_DATE_OVERRIDE: "", PIX_DATE_AUTO_PREVIOUS: ""}
+
+
+# --- value buckets: workspace layout ----------------------------------------
+
+
+def _rated(path: Path, *, rating: object | None) -> FileMetadata:
+    fields: dict[str, object] = {
+        PIX_ORIGINAL_PATH: f"F:/source/{path.name}",
+        PIX_DATE_AUTO: "2023-08-15-14:32:05",
+        PIX_EVENT_AUTO: "Hawaii",
+    }
+    if rating is not None:
+        fields[XMP_RATING] = rating
+    return _meta(path, **fields)
+
+
+def _bucket_template(raw: str = "{rating:1,2|3,4,5}") -> Template:
+    return parse_template(raw, allow_buckets=True)
+
+
+def test_bucket_template_is_accepted() -> None:
+    validate_checkout_template(_bucket_template())
+
+
+def test_plain_filter_template_is_still_rejected() -> None:
+    with pytest.raises(CheckoutError, match="plain filters"):
+        validate_checkout_template(parse_template("{rating:3,4,5}"))
+
+
+def test_render_puts_a_value_in_its_bucket_folder() -> None:
+    t = _bucket_template()
+    assert render_checkout_path(t, {"rating": "5"}) == "3_4_5"
+    assert render_checkout_path(t, {"rating": "2"}) == "1_2"
+
+
+def test_render_rests_untagged_at_the_root() -> None:
+    # `null` can't be bucketed, so an unrated file has no bucket and no
+    # value — the gap rule leaves it at the workspace root.
+    assert render_checkout_path(_bucket_template(), {"rating": None}) == ""
+
+
+def test_render_puts_an_unclaimed_value_in_filtered() -> None:
+    # Explicit 0 is a value, but no bucket lists it.
+    assert (
+        render_checkout_path(_bucket_template(), {"rating": "0"})
+        == FILTERED_FOLDER
+    )
+
+
+def test_render_filtered_stops_descent() -> None:
+    t = _bucket_template("{rating:1,2|3,4,5}/{event}")
+    values: dict[str, str | None] = {"rating": "0", "event": "Hawaii"}
+    assert render_checkout_path(t, values) == FILTERED_FOLDER
+
+
+def test_render_buckets_below_another_level() -> None:
+    t = _bucket_template("{event}/{rating:1,2|3,4,5}")
+    assert (
+        render_checkout_path(t, {"event": "Hawaii", "rating": "4"})
+        == "Hawaii/3_4_5"
+    )
+
+
+def test_create_checkout_materializes_bucket_folders(tmp_path: Path) -> None:
+    root = tmp_path / "lib"
+    (root / ".pix").mkdir(parents=True)
+    keep = (root / "keep.jpg").resolve()
+    cull = (root / "cull.jpg").resolve()
+    unrated = (root / "new.jpg").resolve()
+    zero = (root / "zero.jpg").resolve()
+    for f in (keep, cull, unrated, zero):
+        f.write_bytes(f.name.encode())
+    create_checkout(
+        library_root=root,
+        scope=root,
+        template=_bucket_template(),
+        cache={
+            keep: _rated(keep, rating=5),
+            cull: _rated(cull, rating=1),
+            unrated: _rated(unrated, rating=None),
+            zero: _rated(zero, rating=0),
+        },
+    )
+    cdir = checkout_dir(root)
+    assert len(list((cdir / "3_4_5").iterdir())) == 1
+    assert len(list((cdir / "1_2").iterdir())) == 1
+    assert len(list((cdir / FILTERED_FOLDER).iterdir())) == 1
+    # The unrated file rests at the root, alongside the snapshot.
+    assert len([p for p in cdir.iterdir() if p.is_file()]) == 2
+
+
+# --- value buckets: commit diff ---------------------------------------------
+
+
+def _open_bucket_checkout(
+    tmp_path: Path, *, rating: object | None
+) -> tuple[Path, Path]:
+    """Open a `{rating:1,2|3,4,5}` checkout over one file.
+
+    Returns `(library root, the materialized link)`.
+    """
+    root = tmp_path / "lib"
+    (root / ".pix").mkdir(parents=True)
+    f = (root / "photo.jpg").resolve()
+    f.write_bytes(b"photo")
+    create_checkout(
+        library_root=root,
+        scope=root,
+        template=_bucket_template(),
+        cache={f: _rated(f, rating=rating)},
+    )
+    link = next(iter(checkout_dir(root).rglob("*.jpg")))
+    return root, link
+
+
+def _bucket_diff(root: Path) -> CommitDiff:
+    snap = read_snapshot(root)
+    assert snap is not None
+    return diff_workspace(root, _bucket_template(), snap)
+
+
+def _drag(link: Path, root: Path, folder: str) -> None:
+    """Move a workspace link into `folder` (created if needed)."""
+    dest = checkout_dir(root) / folder if folder else checkout_dir(root)
+    dest.mkdir(parents=True, exist_ok=True)
+    link.rename(dest / link.name)
+
+
+def test_diff_leaves_a_file_alone_inside_its_bucket(tmp_path: Path) -> None:
+    # The whole point: a 5 left sitting in `3_4_5/` is not rewritten to 3.
+    root, link = _open_bucket_checkout(tmp_path, rating=5)
+    assert link.parent.name == "3_4_5"
+    diff = _bucket_diff(root)
+    assert diff.assigns == []
+    assert diff.unchanged == 1
+
+
+def test_diff_assigns_the_first_value_of_the_destination_bucket(
+    tmp_path: Path,
+) -> None:
+    root, link = _open_bucket_checkout(tmp_path, rating=5)
+    _drag(link, root, "1_2")  # demote: 3_4_5 → 1_2
+    diff = _bucket_diff(root)
+    assert len(diff.assigns) == 1
+    assert diff.assigns[0].token_changes == {"rating": "1"}
+
+
+def test_diff_assigns_when_an_unrated_file_enters_a_bucket(
+    tmp_path: Path,
+) -> None:
+    root, link = _open_bucket_checkout(tmp_path, rating=None)
+    assert link.parent == checkout_dir(root)  # rested at the root
+    _drag(link, root, "3_4_5")
+    diff = _bucket_diff(root)
+    assert diff.assigns[0].token_changes == {"rating": "3"}
+
+
+def test_diff_assigns_when_a_filtered_file_enters_a_bucket(
+    tmp_path: Path,
+) -> None:
+    root, link = _open_bucket_checkout(tmp_path, rating=0)
+    assert link.parent.name == FILTERED_FOLDER
+    _drag(link, root, "3_4_5")
+    diff = _bucket_diff(root)
+    assert diff.assigns[0].token_changes == {"rating": "3"}
+
+
+def test_diff_leaves_a_file_alone_in_filtered(tmp_path: Path) -> None:
+    root, _link = _open_bucket_checkout(tmp_path, rating=0)
+    diff = _bucket_diff(root)
+    assert diff.assigns == []
+    assert diff.skipped_removals == []
+    assert diff.unchanged == 1
+
+
+def test_diff_skips_a_drag_from_a_bucket_into_filtered(
+    tmp_path: Path,
+) -> None:
+    # Clearing a value isn't supported yet — report it, don't write it.
+    root, link = _open_bucket_checkout(tmp_path, rating=4)
+    _drag(link, root, FILTERED_FOLDER)
+    diff = _bucket_diff(root)
+    assert diff.assigns == []
+    assert len(diff.skipped_removals) == 1
+
+
+def test_diff_skips_a_drag_from_a_bucket_to_the_root(tmp_path: Path) -> None:
+    root, link = _open_bucket_checkout(tmp_path, rating=4)
+    _drag(link, root, "")
+    diff = _bucket_diff(root)
+    assert diff.assigns == []
+    assert len(diff.skipped_removals) == 1
+
+
+def test_diff_flags_a_folder_pix_did_not_create(tmp_path: Path) -> None:
+    root, link = _open_bucket_checkout(tmp_path, rating=4)
+    _drag(link, root, "maybe")
+    diff = _bucket_diff(root)
+    assert diff.assigns == []
+    assert len(diff.ambiguous) == 1
+
+
+def test_diff_does_not_invent_a_removal_for_a_file_resting_in_a_gap(
+    tmp_path: Path,
+) -> None:
+    # `{event}/{year}` with no event rests at the root; the year below an
+    # unexpressed level was never editable, so it isn't a cleared value.
+    root = tmp_path / "lib"
+    (root / ".pix").mkdir(parents=True)
+    f = (root / "photo.jpg").resolve()
+    f.write_bytes(b"photo")
+    template = parse_template("{event}/{year}")
+    create_checkout(
+        library_root=root,
+        scope=root,
+        template=template,
+        cache={
+            f: _meta(
+                f,
+                **{
+                    PIX_ORIGINAL_PATH: "F:/source/photo.jpg",
+                    PIX_DATE_AUTO: "2023-08-15-14:32:05",
+                },
+            )
+        },
+    )
+    snap = read_snapshot(root)
+    assert snap is not None
+    diff = diff_workspace(root, template, snap)
+    assert diff.skipped_removals == []
+    assert diff.unchanged == 1

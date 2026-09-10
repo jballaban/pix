@@ -55,8 +55,11 @@ from pix.progress import LiveProgress
 from pix.special_folders import FILTERED_FOLDER, NULL_FOLDER
 from pix.tag_filter import (
     ALLOWED_TOKENS,
+    BUCKET_SEPARATOR,
+    Bucket,
     FilterError,
     accepts as filter_accepts,
+    parse_buckets,
     parse_values,
 )
 from pix.telemetry import LineRecord, write_summary
@@ -121,8 +124,15 @@ _TOKEN_RE = re.compile(r"\{([a-zA-Z]+)(?::([^{}]*))?\}")
 @dataclass(frozen=True)
 class Token:
     name: str  # one of ALLOWED_TOKENS
-    # Inclusion list from a `{tag:v1,v2}` filter; None = enumerate all.
+    # Inclusion list from a `{tag:v1,v2}` filter; None = enumerate all. For a
+    # bucketed token this is the *union* of the buckets, so the existing
+    # filter machinery (`render_target_folder`, `template_filters_out`) keeps
+    # answering "does any bucket claim this file?" unchanged.
     values: frozenset[str] | None = None
+    # Ordered value groups from a bucketed `{tag:a,b|c,d}` level — one folder
+    # per group instead of one per value. Checkout-only (see
+    # `parse_template(allow_buckets=...)`); None for every other token.
+    buckets: tuple[Bucket, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -145,11 +155,19 @@ class Template:
     levels: tuple[Level, ...]
 
 
-def parse_template(template_str: str) -> Template:
+def parse_template(
+    template_str: str, *, allow_buckets: bool = False
+) -> Template:
     """Parse `{year}/{month}/{event}`-style strings into a Template.
 
     Levels may carry a filter — `{rating:3,4,5}` — parsed by the shared
     grammar in `pix.tag_filter`; non-matching files render to `(filtered)`.
+
+    `allow_buckets` opts into the bucketed spelling `{rating:1,2|3,4,5}`
+    (one folder per value *group*). Only `pix tag checkout` passes it:
+    buckets are reversible solely through the folder-shuffle UI, so
+    organize, export templates, and bare filters all reject `|`. Default
+    off so a new call site can't acquire them by accident.
 
     Rejects empty templates, empty levels (leading/trailing/consecutive
     `/`), `{time}` (per-second is a foot-gun), unknown tokens, and
@@ -188,15 +206,30 @@ def parse_template(template_str: str) -> Template:
                     f"{sorted(ALLOWED_TOKENS)}"
                 )
             value_spec = m.group(2)
+            buckets: tuple[Bucket, ...] | None = None
+            values: frozenset[str] | None = None
             try:
-                values = (
-                    parse_values(token_name, value_spec)
-                    if value_spec is not None
-                    else None
-                )
+                if value_spec is None:
+                    pass
+                elif BUCKET_SEPARATOR in value_spec:
+                    if not allow_buckets:
+                        raise FilterError(
+                            f"value buckets (`{BUCKET_SEPARATOR}`) are only "
+                            f"supported in `pix tag checkout` templates — a "
+                            f"bucket renders one folder per group, which only "
+                            f"the folder-shuffle UI can reverse. Write "
+                            f"`{{{token_name}:a,b}}` here."
+                        )
+                    buckets = parse_buckets(token_name, value_spec)
+                    values = frozenset(v for b in buckets for v in b.folded)
+                    _check_bucket_folder_names(token_name, buckets)
+                else:
+                    values = parse_values(token_name, value_spec)
             except FilterError as exc:
                 raise OrganizeError(str(exc)) from exc
-            segments.append(Token(name=token_name, values=values))
+            segments.append(
+                Token(name=token_name, values=values, buckets=buckets)
+            )
             pos = m.end()
         if pos < len(level_str):
             segments.append(Literal(text=level_str[pos:]))
@@ -204,6 +237,49 @@ def parse_template(template_str: str) -> Template:
         levels.append(Level(segments=tuple(segments)))
 
     return Template(raw=template_str, levels=tuple(levels))
+
+
+# The longest folder name a bucket may render. NTFS allows 255 per component;
+# stopping well short turns "many values in one bucket" into a parse error the
+# user can act on, rather than an mkdir failure mid-materialization.
+_MAX_BUCKET_FOLDER_NAME: int = 200
+
+
+def bucket_folder_name(bucket: Bucket) -> str:
+    """The single folder a bucket renders — its values joined by `_`.
+
+    `{rating:1,2|3,4,5}` gives `1_2` and `3_4_5`. Each value is sanitized
+    individually (same rules as any other folder level), then joined, so a
+    value carrying an illegal character can't smuggle a separator in.
+    """
+    return "_".join(sanitize_folder_name(v) for v in bucket.values)
+
+
+def _check_bucket_folder_names(
+    token_name: str, buckets: tuple[Bucket, ...]
+) -> None:
+    """Reject buckets whose rendered folder names collide or are too long.
+
+    Overlapping *values* are caught by `parse_buckets`; two disjoint
+    buckets can still render the same name once sanitized (`{event:a:b|a_b}`
+    → `a_b` twice), which would silently merge two groups into one folder.
+    """
+    seen: dict[str, int] = {}
+    for index, bucket in enumerate(buckets):
+        name = bucket_folder_name(bucket)
+        if len(name) > _MAX_BUCKET_FOLDER_NAME:
+            raise FilterError(
+                f"bucket {index + 1} on {{{token_name}}} renders a "
+                f"{len(name)}-character folder name, over the "
+                f"{_MAX_BUCKET_FOLDER_NAME} limit. List fewer values in it."
+            )
+        if name in seen:
+            raise FilterError(
+                f"buckets {seen[name] + 1} and {index + 1} on "
+                f"{{{token_name}}} both render the folder {name!r} — they'd "
+                f"share one folder. Rename or merge them."
+            )
+        seen[name] = index
 
 
 # --- Effective values --------------------------------------------------------
