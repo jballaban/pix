@@ -33,6 +33,7 @@ Active codebase. The implementation lives in `src/pix/`; tests in `tests/`. **Co
 - [`spec/roadmap.md`](spec/roadmap.md) — designed-but-unbuilt features
 - [`spec/perf-backlog.md`](spec/perf-backlog.md) — performance ideas against already-implemented code
 - [`spec/video-redesign.md`](spec/video-redesign.md) — directive: drop video transcode → remux-only (full problem catalog; not yet designed)
+- [`spec/nas-app.md`](spec/nas-app.md) — **directive: NAS-hosted app + sacred originals.** Supersedes the CLI-pipeline architecture above (designed in discussion, nothing built; branch `nas-app`)
 
 ## Environment
 

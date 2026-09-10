@@ -4,6 +4,11 @@ This folder holds the design spec for `pix`. Each file covers one scope; cross-r
 
 ## What we're building
 
+> **A whole-system redesign is on the table.** [`nas-app.md`](nas-app.md) records a
+> decided-but-unbuilt architecture — a Synology-hosted app over an immutable archive of
+> sacred originals — that supersedes most of what this file describes. Everything below
+> still reflects the shipped CLI.
+
 CLI tooling to manage a personal media library (photos + videos) at terabyte scale. The library is currently scattered; the tools aggregate, dedupe, normalize, tag, and reorganize it — without losing data.
 
 The tool is named `pix`. The CLI is invoked as `pix <op> ...`.
