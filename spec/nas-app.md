@@ -92,9 +92,28 @@ its own provenance**: pull one file out of the tree and it still says where it
 came from. The device's original filename is kept as the tail, so nothing is
 lost.
 
-Master is append-only. Files are never deleted, never converted, never renamed
-after landing. Exact byte-duplicates *may* be removed (an identical copy carries
-zero additional information); near-duplicates are recorded, never deleted.
+**"Sacred" is about bytes, not about permanence.** A master file is never
+converted, never tag-written, never renamed after landing — its content is
+immutable. It *may* be deleted, deliberately, by the owner: deletion is the
+explicit "I don't want this tracked" gesture, and it is a different act from a
+tool silently destroying information during normalization, which is what
+[§1](#1-why-sacred-originals-and-not-self-describing-files) was protecting
+against.
+
+Deletion **cascades**: the file's `.xmp` goes with it (lose the file, lose what
+relates to it), and its render, thumbnail and distribution members are swept.
+Reconciliation does this anyway, so orphans clean themselves up.
+
+**The undo is the storage layer, not pix.** Btrfs snapshots and Hyper Backup
+versions are a better safety net than pix's own run folders — more reliable, and
+free. But they **expire**, where run folders persisted until manually pruned. A
+deletion noticed six months later may be past the horizon, so retention wants
+setting deliberately rather than by default.
+
+**Seeded master is not pristine.** The existing ~2.3TB has already been through
+the old pipeline — HEIC converted to JPG, video remuxed, originals soft-deleted
+to run folders. Importing it gives the best copy that still exists, not the
+original. Only imports made *after* this architecture lands are true originals.
 
 ## 4. Metadata — XMP sidecars
 
@@ -147,6 +166,12 @@ already delivery-ready. One per file — no size or quality profiles.
 - `.insv` can never have a meaningful render (a flat transcode yields
   dual-fisheye that nothing displays usefully) and therefore never gets one.
 
+**Renders cover everything convertible, not just what gets delivered.** You
+cannot decide whether a photo is worth keeping without looking at it, and the app
+displays only JPG/MP4 — so a HEIC with no render is invisible at exactly the
+moment you need to judge it. `pix process` renders anything that needs it,
+regardless of whether it will ever reach a distribution.
+
 Renders are disposable and excluded from backup.
 
 ## 6. Thumbnails
@@ -174,6 +199,46 @@ Three independent properties, rather than a file-state enum:
 to get there.
 
 ## 7. Distributions
+
+### The curation scale
+
+Curation is four states, carried by the `rating` tag. (XMP `Rating` is 0-5; 2 and
+4 are simply unused, leaving room.)
+
+| State | Rating | Meaning |
+|---|---|---|
+| uncategorized | unrated | not yet reviewed |
+| not good enough | **1** | reviewed, **kept forever**, never viewed |
+| photo-app worthy | **3** | available to the family |
+| top | **5** | the handful you show when you show a few |
+
+**Rejection must be a positive mark, not an absence.** If "not good enough" were
+just "left unrated," you could never tell what you had already been through from
+what you had not — and on hundreds of photos per event that is the difference
+between finishing a curation pass and repeating it. Rating 1 is distinct from
+[deletion](#3-master), which removes the file entirely.
+
+The `{rating:1,2|3,4,5}` bucket syntax exists for exactly this pass: a bucket
+folder *is* the set that will ship, so you curate against what actually goes out.
+
+### The trees
+
+Two standing distributions on the NAS, kept continuously reconciled:
+
+| Tree | Filter | For |
+|---|---|---|
+| `/photo` | `rating:3,5` | Synology Photos — the **primary** way the family views everything |
+| top-10 | `rating:5` | dumb consumers: a TV that plays a folder, a book service that takes an upload |
+
+The top tree duplicates a subset of `/photo`, which is fine — it is ~10 per event.
+It exists because its consumers cannot *filter*; anything that can filter should
+read `/photo` and use the baked rating.
+
+**Everything else is ad-hoc, from the desktop.** A people-grouped set for LLM
+training, a one-off book export — `pix export` over SMB against master, writing to
+a local target, leaving nothing standing on the NAS. Standing trees need a
+manifest, drift detection and continuous reconciliation; a one-off needs none of
+it. (`{person}` depends on face detection, which is deferred and unbuilt.)
 
 > A distribution contains a **copy** of the master (or of the render, where one
 > exists), with metadata baked in, arranged in the structure the distribution
@@ -297,10 +362,13 @@ years.
 `.manifest/`. The durable record has moved to the ledger, so nothing needs to stay
 behind pinning the folder, and the import folder never grows without bound.
 
-**Culling is a pre-upload gesture only.** Deleting media from the import folder
-leaves its `.manifest/` sidecar intact, which becomes a `culled` ledger line and a
-permanent "don't re-download." Once files are in master they are sacred; the
-answer to "I don't want this one" after upload is to never deliver it.
+**Culling before upload is an optimization, not a decision you have to get
+right.** Deleting media from the import folder leaves its `.manifest/` sidecar
+intact, which becomes a `culled` ledger line and a permanent "don't re-download" —
+saving the bandwidth and the space. But you can equally bulk-upload everything
+without thinking and curate later in the app, because master files
+[can be deleted after the fact](#3-master). The desktop cull is there for when you
+already know; it is not the last chance.
 
 ### `pix process` runs against master
 
@@ -350,18 +418,28 @@ the converting.
 | Tier | Approx | Backed up |
 |---|---|---|
 | master + sidecars | 2.3TB (1.55TB of it `.insv`) | **yes** |
-| renders | delivered subset only; disposable | no |
+| renders | whatever needs conversion; disposable | no |
 | thumbnails | ~20GB | no |
-| distributions | delivered content × tiers | no |
+| `/photo` | ~0.15TB | no |
+| top-10 tree | negligible — ~10 per event | no |
 | **offsite** | **~2.3TB** | |
 
-Master only ever grows — near-duplicates are marked, not deleted. The relief
-valve is the two empty bays.
+Curation is aggressive — hundreds of photos per event down to 20-50 — so the
+delivery tiers are small. That is what keeps this comfortable on 7TB rather than
+tight: the earlier worry about distributions dominating the array assumed a much
+higher keep rate.
+
+The render tier is the one that scales with imports rather than with curation,
+since it covers everything convertible. It is disposable and unbacked, so it is
+also the cheapest place to spend bytes. The relief valve for everything is the
+two empty bays.
 
 ## 11. What this deletes
 
-An immutable archive destroys nothing, so most of pix's machinery has no reason
-to exist:
+Most of pix's machinery exists to make destruction safe. An archive whose files
+are never rewritten has almost none to make safe — and for the one destructive act
+that remains, deliberate deletion, the undo is Btrfs snapshots and Hyper Backup
+rather than anything pix builds ([§3](#3-master)):
 
 - **`migrate`** — no in-place normalization, no tag writes, no format policy
 - **Conservation / soft-delete / `runs/` folders** — nothing is ever replaced
@@ -400,11 +478,9 @@ to exist:
 
 ## 13. Open questions
 
-*(Import-ledger identity — resolved; see [§8](#8-ingest--the-desktop-cli).)*
+*(Resolved: import-ledger identity — [§8](#8-ingest--the-desktop-cli).
+What the distributions are, and the curation scale — [§7](#7-distributions).)*
 
-- **What the distributions actually are** — the only unbounded number in
-  [§10](#10-storage-and-backup-budget). Needs a real estimate of what fraction of
-  the library gets rated into a tier, and how many tiers.
 - **App deployment and authentication** — Container Manager specifics, and how
   family members sign in.
 - **Synology Photos write-back** — currently declared out of scope; revisit if
