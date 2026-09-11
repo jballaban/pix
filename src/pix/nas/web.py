@@ -26,7 +26,9 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from pix.nas import auth
 from pix.nas import index as ix
-from pix.nas.const import INDEX_DB, MASTER_DIR, PREVIEW_DIR, THUMB_DIR
+from pix.nas.const import (
+    INDEX_DB, MASTER_DIR, PREVIEW_DIR, RENDER_DIR, THUMB_DIR,
+)
 
 #: Re-exported so the CLI and tests have one name for it.
 DB_PATH: Path = INDEX_DB
@@ -244,16 +246,20 @@ def media(folder: str, name: str,
     The **only** endpoint that touches master, and strictly read-only — the
     archive is served, never modified.
 
-    There is no separate delivery rendition to serve instead: the seeded library
-    is already MP4 throughout, so master *is* the playable copy. Clips that are
-    HEVC rather than H.264 (the legacy transcode era) will not play in a browser;
-    that is what the deferred H.264 render tier is for, and until it exists those
-    clips show their poster frame and refuse to start.
+    Serves the **render** when one exists and master otherwise. For an HEVC
+    master the render is the only copy a browser can play — 421 of the seeded
+    year's 724 clips — and where both exist they are the same footage.
     """
+    # Prefer the render: for an HEVC master it is the only playable copy, and
+    # where both exist they are the same footage.
+    rendered = (RENDER_DIR / folder / (name + ".mp4")).resolve()
     target = (MASTER_DIR / folder / name).resolve()
-    if MASTER_DIR.resolve() not in target.parents:
+    if (MASTER_DIR.resolve() not in target.parents
+            or RENDER_DIR.resolve() not in rendered.parents):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "bad path")
-    if not target.is_file():
+    if rendered.is_file():
+        target = rendered
+    elif not target.is_file():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "not found")
     return FileResponse(target, headers={"Cache-Control": "private, max-age=3600",
                                          "Accept-Ranges": "bytes"})

@@ -19,11 +19,16 @@ Two derived tiers, both disposable and never backed up:
 of master back over SMB once; the alternative is a second implementation inside
 the app for a job the desktop does faster.
 
-Renders (format conversion) are deliberately **not** here yet. Master is seeded
-from the already-normalised library, so it is JPG and MP4 throughout and almost
-nothing needs converting — the exceptions are legacy HEVC clips needing H.264 for
-delivery, which drag in codec probing and the encode path for nearly no work
-today.
+- **render** — an H.264 copy of any video master cannot play as-is.
+
+**Whether a render is needed is a codec question for video, not an extension
+one** (spec/nas-app.md §5): an `.mp4` containing HEVC still needs one. Measured
+across the seeded year, **421 of 724 clips are HEVC against 303 H.264**, so most
+of the video library is unplayable in a browser until this runs. Images need
+nothing — master is JPG throughout.
+
+Encoding is why `process` is a desktop command: the RS820+'s Atom has no iGPU and
+no AVX, while this machine has NVENC.
 """
 
 from __future__ import annotations
@@ -37,7 +42,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterator
+from typing import Any, Callable, Iterator, cast
 
 from PIL import Image
 
@@ -48,7 +53,7 @@ from pix.markers import EXPORT_TMP_SUFFIX
 from pix.progress import LiveProgress
 from pix.nas import ledger
 from pix.nas.const import (
-    LEDGER_NAME, MASTER_DIR, META_DIR, PREVIEW_DIR, THUMB_DIR,
+    LEDGER_NAME, MASTER_DIR, META_DIR, PREVIEW_DIR, RENDER_DIR, THUMB_DIR,
 )
 
 #: Long-edge pixels. Both are regenerable, but regenerating 62k files is an
@@ -67,6 +72,32 @@ FRAME_AT: float = 0.10
 
 WORKERS: int = 8
 _FFMPEG_TIMEOUT: float = 120.0
+
+#: Encoding is far heavier than a poster frame, and NVENC has a small number of
+#: hardware sessions — running the pool wide against it just queues in the driver.
+RENDER_WORKERS: int = 2
+_ENCODE_TIMEOUT: float = 3600.0
+
+#: Video codecs that play in a browser as-is. Anything else needs a render.
+#: ExifTool reports these as the `CompressorID`.
+_PLAYABLE_CODECS: frozenset[str] = frozenset({"avc1", "avc3", "h264"})
+
+#: 360 footage has no meaningful flat rendition — a plain transcode gives
+#: dual-fisheye that nothing displays usefully (spec/nas-app.md §5).
+_NO_RENDER_EXTS: frozenset[str] = frozenset({".insv", ".insp"})
+
+#: Constant-quality target for NVENC. Measured on a real 30.5MB HEVC clip from
+#: the seeded year, at identical encode time (~4.3s):
+#:
+#:     cq 23 -> 74.7MB (2.45x source)   cq 28 -> 42.7MB (1.40x)
+#:     cq 26 -> 54.2MB (1.78x)          cq 30 -> 33.8MB (1.11x)
+#:
+#: 26 because a render that is 2.45x larger than the original it derives from is
+#: the wrong shape for a disposable tier — and across the 421 HEVC clips that is
+#: ~22GB rather than ~31GB. Quality still sits well above what its consumers need
+#: (a browser grid, Synology Photos, a TV), and the master keeps the original
+#: regardless, so this is recoverable if it ever proves too low.
+_CQ: str = "26"
 
 _IMAGE_EXTS: frozenset[str] = frozenset({
     ".jpg", ".jpeg", ".heic", ".heif", ".png", ".gif",
@@ -151,6 +182,7 @@ class ProcessSummary:
     thumbs: int = 0
     previews: int = 0
     metas: int = 0
+    renders: int = 0
     skipped: int = 0            # already had both
     unsupported: int = 0        # nothing we know how to render a frame from
     cancelled: bool = False
@@ -158,7 +190,7 @@ class ProcessSummary:
 
     @property
     def made(self) -> int:
-        return self.thumbs + self.previews + self.metas
+        return self.thumbs + self.previews + self.metas + self.renders
 
 
 def master_files() -> Iterator[Path]:
@@ -186,6 +218,25 @@ def derived_path(media: Path, root: Path) -> Path:
 def meta_path(media: Path) -> Path:
     """Where `media`'s probed-facts JSON lives, mirroring master's layout."""
     return META_DIR / media.parent.name / (media.name + ".json")
+
+
+def render_path(media: Path) -> Path:
+    """Where `media`'s playable rendition lives, mirroring master's layout."""
+    return RENDER_DIR / media.parent.name / (media.name + ".mp4")
+
+
+def needs_render(media: Path, codec: str | None) -> bool:
+    """True if this video cannot be played as-is and a render is possible.
+
+    `codec` is the probed `CompressorID` — already in the meta tier, so this
+    costs no extra probe.
+    """
+    ext = media.suffix.lower()
+    if ext not in _VIDEO_EXTS or ext in _NO_RENDER_EXTS:
+        return False
+    if codec and codec.lower() in _PLAYABLE_CODECS:
+        return False
+    return not render_path(media).is_file()
 
 
 def needs_work(media: Path) -> tuple[bool, bool, bool]:
@@ -251,6 +302,8 @@ def pending_files(echo: Callable[[str], None] = lambda _: None) -> list[Path]:
                 scanned["n"] += 1
                 continue
 
+            renders = _names_in(RENDER_DIR / folder.name)
+
             for entry in listing:
                 if not entry.is_file():
                     continue
@@ -258,8 +311,17 @@ def pending_files(echo: Callable[[str], None] = lambda _: None) -> list[Path]:
                 if name == LEDGER_NAME or name.lower().endswith(".xmp"):
                     continue
                 derived = name + ".jpg"
-                if (derived not in thumbs or derived not in previews
-                        or name + ".json" not in metas):
+                want = (derived not in thumbs or derived not in previews
+                        or name + ".json" not in metas)
+                # A video may be complete on every image tier and still need a
+                # render — the codec question the extension cannot answer.
+                if not want:
+                    ext = Path(name).suffix.lower()
+                    if (ext in _VIDEO_EXTS and ext not in _NO_RENDER_EXTS
+                            and name + ".mp4" not in renders):
+                        want = needs_render(folder / name,
+                                            video_codec(folder / name))
+                if want:
                     pending.append(folder / name)
                     scanned["found"] += 1
             scanned["n"] += 1
@@ -280,7 +342,7 @@ def sweep_partials() -> int:
     _reap_dead_scratch()
 
     removed = 0
-    for root in (THUMB_DIR, PREVIEW_DIR, META_DIR, _scratch()):
+    for root in (THUMB_DIR, PREVIEW_DIR, META_DIR, RENDER_DIR, _scratch()):
         if not root.is_dir():
             continue
         for tmp in root.rglob(f"*{EXPORT_TMP_SUFFIX}*"):
@@ -385,7 +447,8 @@ def _status(summary: ProcessSummary, total: int, started: float,
     rate = done / elapsed
 
     body = (f"{done}/{total}  {summary.thumbs} thumb, "
-            f"{summary.previews} preview, {summary.metas} meta")
+            f"{summary.previews} preview, {summary.metas} meta, "
+            f"{summary.renders} render")
     if summary.failed:
         body += f", {len(summary.failed)} failed"
     if done and rate > 0:
@@ -421,6 +484,23 @@ def _derive_one(media: Path, summary: ProcessSummary, lock: threading.Lock,
                 with lock:
                     summary.failed.append(
                         f"{media.name}: meta: {type(e).__name__}: {e}")
+
+    # A render is the expensive item, so it goes after the cheap ones: a
+    # cancelled run still leaves the thumbnails and metadata it managed.
+    if not state["cancelling"]:
+        try:
+            if needs_render(media, video_codec(media)):
+                if render_video(media):
+                    with lock:
+                        summary.renders += 1
+                else:
+                    with lock:
+                        summary.failed.append(f"{media.name}: render failed")
+        except Exception as e:                # noqa: BLE001
+            if not state["cancelling"]:
+                with lock:
+                    summary.failed.append(
+                        f"{media.name}: render: {type(e).__name__}: {e}")
 
     if not (want_thumb or want_preview):
         return
@@ -516,6 +596,54 @@ def _resize(source: Path, dest: Path, long_edge: int) -> None:
     tmp.replace(dest)
 
 
+def render_video(media: Path, *, timeout: float = _ENCODE_TIMEOUT) -> bool:
+    """Encode `media` to browser-playable H.264. True if a render was written.
+
+    **NVENC first, libx264 as the fallback.** The GPU is the reason this runs on
+    the desktop rather than the NAS; the CPU path exists so a machine without one
+    still works rather than failing.
+
+    Rotation is *baked in*, not carried: ffmpeg autorotates on decode by default
+    and the re-encode drops the display matrix, so a phone clip shot sideways
+    plays the right way up. The retired GPU pipeline got this wrong
+    (spec/video-redesign.md), which is worth not repeating.
+
+    Audio is copied when it is already AAC and re-encoded when it is not, which
+    is the same rule `convert.convert_to_mp4` uses — the video bitstream is the
+    part worth protecting.
+    """
+    ffmpeg = shutil.which("ffmpeg") or shutil.which("ffmpeg.exe")
+    if ffmpeg is None:
+        return False
+
+    dest = render_path(media)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + EXPORT_TMP_SUFFIX + ".mp4")
+
+    base = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(media)]
+    tail = ["-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart",
+            "-map_metadata", "0", str(tmp)]
+    attempts = [
+        [*base, "-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr",
+         "-cq", _CQ, "-b:v", "0", "-pix_fmt", "yuv420p", *tail],
+        [*base, "-c:v", "libx264", "-preset", "medium", "-crf", _CQ,
+         "-pix_fmt", "yuv420p", *tail],
+    ]
+
+    for cmd in attempts:
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True,
+                                  timeout=timeout)
+        except (OSError, subprocess.TimeoutExpired):
+            tmp.unlink(missing_ok=True)
+            continue
+        if proc.returncode == 0 and tmp.is_file() and tmp.stat().st_size > 0:
+            tmp.replace(dest)
+            return True
+        tmp.unlink(missing_ok=True)
+    return False
+
+
 def _poster_frame(media: Path) -> Path | None:
     """Extract a representative frame to a temp JPEG, or None if we cannot.
 
@@ -547,6 +675,41 @@ def _poster_frame(media: Path) -> Path | None:
         tmp.unlink(missing_ok=True)
         return None
     return tmp
+
+
+def video_codec(media: Path) -> str | None:
+    """The video codec, from the meta tier if it is there and ffprobe if not.
+
+    Preferring the meta tier means the common case costs a small JSON read
+    rather than opening a multi-gigabyte file over SMB.
+    """
+    meta = meta_path(media)
+    if meta.is_file():
+        parsed: object = None
+        try:
+            parsed = json.loads(meta.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            parsed = None
+        rec = cast("dict[str, Any]", parsed) if isinstance(parsed, dict) else {}
+        raw: object = rec.get("exif")
+        if isinstance(raw, dict):
+            exif = cast("dict[str, Any]", raw)
+            for key in ("CompressorID", "VideoCodec"):
+                for full, value in exif.items():
+                    if full.split(":")[-1] == key and value:
+                        return str(value)
+
+    ffprobe = shutil.which("ffprobe") or shutil.which("ffprobe.exe")
+    if ffprobe is None:
+        return None
+    cmd = [ffprobe, "-v", "error", "-select_streams", "v:0",
+           "-show_entries", "stream=codec_name", "-of",
+           "default=nw=1:nk=1", str(media)]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return proc.stdout.strip() or None
 
 
 def _duration(media: Path) -> float | None:
