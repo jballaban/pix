@@ -63,6 +63,28 @@ anything has been uploaded since.
 
 ---
 
+## Developing: run it natively, no container
+
+The app is pure Python and `MASTER_SHARE` already defaults to `\\nas\pix2`,
+which Windows opens directly. So the dev loop is not build-a-tar-upload-recreate;
+it is one command from the repo root:
+
+```
+uv run uvicorn pix.nas.web:app --reload --port 8001
+```
+
+Then `http://127.0.0.1:8001`. `--reload` picks up every save.
+
+It reads the **same** index and the same derived tiers over SMB that the
+container reads, so what you see is what the NAS will serve. Only the path prefix
+differs — `\\nas\pix2` here, `/volume1/pix2` there — and `PIX2_SHARE` is the
+one knob that abstracts it.
+
+Set `PIX2_USERS` in the shell to exercise auth locally; leave it unset to skip
+the login while iterating.
+
+Build an image only when a change is ready to live on the NAS.
+
 ## Shipping a change
 
 Rebuild, save, re-import, recreate the container. A couple of minutes.
