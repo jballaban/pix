@@ -170,16 +170,47 @@ def test_partial_copies_use_a_marker_temp(staged: Path, roots: dict[str, Path],
                                           monkeypatch: pytest.MonkeyPatch) -> None:
     """A killed copy must leave something no name-and-size check would accept."""
     seen: list[str] = []
-    real = up.shutil.copy2
+    real = up._copy_hashing
 
-    def spy(src: object, dst: object, *a: object, **k: object) -> object:
-        seen.append(Path(str(dst)).name)
-        return real(src, dst)  # type: ignore[arg-type]
+    def spy(src: Path, dst: Path) -> str:
+        seen.append(dst.name)
+        return real(src, dst)
 
-    monkeypatch.setattr(up.shutil, "copy2", spy)
+    monkeypatch.setattr(up, "_copy_hashing", spy)
     up.run_upload()
 
     assert seen and all(n.endswith(EXPORT_TMP_SUFFIX) for n in seen)
+
+
+def test_ledger_records_a_hash_for_every_file(staged: Path) -> None:
+    """Size catches truncation; only a hash catches a flipped bit."""
+    [s] = up.run_upload()
+    entries = [e for e in _entries(s.master_folder) if e.get("outcome") == "kept"]
+
+    assert entries
+    for e in entries:
+        assert isinstance(e.get("blake3"), str) and len(str(e["blake3"])) == 64
+
+
+def test_hash_matches_the_source_bytes(staged: Path) -> None:
+    [s] = up.run_upload()
+    entry = next(e for e in _entries(s.master_folder)
+                 if str(e.get("file", "")).endswith("_a_one.jpg"))
+
+    assert entry["blake3"] == up._digest(staged / "a" / "one.jpg")
+
+
+def test_orphan_temps_are_swept(staged: Path, roots: dict[str, Path]) -> None:
+    """A killed run leaves marker temps in master; nothing else removes them."""
+    staging = roots["staging"] / "legacy"
+    target = up._resolve_target(staging, "legacy")
+    target.mkdir(parents=True)
+    orphan = target / ("stale.jpg" + EXPORT_TMP_SUFFIX)
+    orphan.write_bytes(b"partial")
+
+    up.run_upload()
+
+    assert not orphan.exists()
 
 
 def test_nothing_staged_is_not_an_error(roots: dict[str, Path]) -> None:

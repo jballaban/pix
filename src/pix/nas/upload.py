@@ -34,6 +34,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+from blake3 import blake3
+
 from pix.duration import format_duration_compact, format_size
 from pix.ingest import MANIFEST_DIRNAME
 from pix.markers import EXPORT_TMP_SUFFIX
@@ -44,6 +46,10 @@ from pix.nas.const import IMPORT_ROOT, LEDGER_NAME, MASTER_DIR
 #: Concurrency for the SMB copy. 32 is where measured throughput plateaued;
 #: past that the Atom serving the share becomes the limit, not the client.
 WORKERS: int = 32
+
+#: Read/write chunk for the hashing copy. Large enough that SMB round trips
+#: dominate rather than syscall overhead.
+CHUNK: int = 4 * 1024 * 1024
 
 #: Records which master folder an interrupted upload was filling, so a resumed
 #: run continues into it instead of starting a second one (the folder name
@@ -114,6 +120,9 @@ def _upload_one(staging: Path, *, echo: Callable[[str], None]) -> UploadSummary:
     target.mkdir(parents=True, exist_ok=True)
 
     summary = UploadSummary(name=name, master_folder=target)
+    swept = _sweep_target(target)
+    if swept:
+        echo(f"swept {swept} partial copy(s) from an interrupted run")
     items, culled = _collect(staging)
     summary.culled = len(culled)
 
@@ -143,7 +152,7 @@ def _upload_one(staging: Path, *, echo: Callable[[str], None]) -> UploadSummary:
                 progress.advance()
                 return
             try:
-                moved = _copy_one(item, target)
+                moved, digest = _copy_one(item, target)
             except OSError as e:
                 with lock:
                     summary.failed.append(f"{item.rel}: {e}")
@@ -157,7 +166,7 @@ def _upload_one(staging: Path, *, echo: Callable[[str], None]) -> UploadSummary:
                     summary.skipped += 1
                 _append(log, {
                     "rel": item.rel, "root": item.root, "size": item.size,
-                    "file": item.flat, "outcome": "kept",
+                    "file": item.flat, "blake3": digest, "outcome": "kept",
                 })
             progress.advance()
 
@@ -281,19 +290,73 @@ def _unique(flat: str, rel: str, used: dict[str, str]) -> str:
         n += 1
 
 
-def _copy_one(item: _Item, target: Path) -> bool:
-    """Copy one staged file into master. True if bytes moved, False if present.
+def _copy_one(item: _Item, target: Path) -> tuple[bool, str]:
+    """Copy one staged file into master, hashing it on the way through.
 
-    Staged through a marker temp and renamed into place, so a kill mid-copy
-    leaves something that can never be mistaken for a finished file.
+    Returns `(bytes moved, blake3 digest)`. Staged through a marker temp and
+    renamed into place, so a kill mid-copy leaves something that can never be
+    mistaken for a finished file.
+
+    **The hash costs nothing extra.** The bytes are already streaming through
+    this process, so digesting them is free — and it turns the ledger into a
+    permanent integrity record. Size alone catches truncation but not a flipped
+    bit, and for an archive of originals "corrupt but the right length" is the
+    failure that goes unnoticed for years.
     """
     dest = target / item.flat
     if dest.is_file() and dest.stat().st_size == item.size:
-        return False
+        # Present but unrecorded — a run killed between the rename and the
+        # ledger flush. Hash what is there so the record is still complete.
+        return False, _digest(dest)
     tmp = dest.with_name(dest.name + EXPORT_TMP_SUFFIX)
-    shutil.copy2(item.source, tmp)
+    digest = _copy_hashing(item.source, tmp)
     os.replace(tmp, dest)
-    return True
+    return True, digest
+
+
+def _copy_hashing(src: Path, dst: Path) -> str:
+    """Stream `src` to `dst`, returning the blake3 of the bytes written."""
+    h = blake3()
+    with src.open("rb") as fin, dst.open("wb") as fout:
+        while True:
+            chunk = fin.read(CHUNK)
+            if not chunk:
+                break
+            h.update(chunk)
+            fout.write(chunk)
+    shutil.copystat(src, dst)
+    return h.hexdigest()
+
+
+def _digest(path: Path) -> str:
+    """blake3 of a file already on disk."""
+    h = blake3()
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(CHUNK)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _sweep_target(target: Path) -> int:
+    """Delete partial copies left in master by an interrupted run.
+
+    Nothing else removes them: they are marker-named so they can never be
+    mistaken for real files, but without a sweep they accumulate in the archive
+    forever.
+    """
+    if not target.is_dir():
+        return 0
+    removed = 0
+    for tmp in target.glob(f"*{EXPORT_TMP_SUFFIX}*"):
+        try:
+            tmp.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return removed
 
 
 def _verify(items: list[_Item], target: Path) -> bool:
