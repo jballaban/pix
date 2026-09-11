@@ -159,7 +159,29 @@ human decisions about them. Everything derivable lives outside it.
 | render / thumb | derived | no |
 | **index** | all probed EXIF + a projection of the overrides | optional, as convenience |
 
-So a sidecar is four fields — `tier`, `event`, `tags`, and a date override.
+So a sidecar is four fields — `audience`, `event`, `tags`, and a date
+override.
+
+**`audience` is who may see the file**, and it replaced a `tier` of
+`none`/`photo`/`top`. Those were two questions wearing one name — *has this
+been reviewed* and *how good is it* — and neither was the question actually
+being asked, which is **who is this for**. A household has photographs the
+children should not see and photographs that belong on the television; that
+is one axis, not a quality ranking. *The best ones* is simply an audience
+that happens to be small, which also disposes of the nested-tier storage
+problem in [§7](#7-distributions): audiences are flat, so nothing is stored
+three times for being in `top`, `photos` and `general` at once.
+
+An audience is a **name**, and some names happen to have a login. `private`
+has none, so nothing can ever sign in as it — which makes *keep this but
+show it to nobody* an ordinary value rather than a special state. Access can
+be granted to a person or to a role (`family`, `parents`, `tv`) and the check
+cannot tell them apart, which is what stops roles becoming a second
+mechanism. The owner is never in the list: an administrator sees everything
+by definition.
+
+**No audience means undecided**, so review state needs no separate flag and
+the *New* filter is simply *shared with nobody*.
 
 **`tags` are free text, many per file.** They are the axis `event` is not:
 an event is *when and where* and a file has one, a tag is *what about it*
@@ -258,11 +280,11 @@ two as one cascade instead of two vocabularies it has to reconcile.
 |---|---|---|
 | event | `pix:EventOverride` | `Iptc4xmpExt:Event` |
 | tags | — | `dc:subject`, the standard keyword bag |
+| audience | `pix:Audience` | — nothing standard expresses *who may see this* |
 | date override | `pix:DateOverride` | `photoshop:DateCreated`, but only when
   the override pins a whole timestamp — a partial date has no ISO 8601 form,
   and filling the holes to produce one would publish a precision the curator
   explicitly did not claim |
-| tier | `pix:Tier` | — nothing standard means this; `rating` was dropped |
 
 Tags live **only** in `dc:subject`, with no `pix:` twin. It is the industry
 keyword field, every tool round-trips it, and nothing in pix used it before —
@@ -538,8 +560,27 @@ the data model carries a user.
 ### Access
 
 App-managed accounts for the household. Passwords stored **hashed, never
-plaintext** — a credentials file on a share reachable over SMB is exactly how a
-reused password leaks.
+plaintext** — a credentials file on a share reachable over SMB is exactly how
+a reused password leaks.
+
+**Enforced server-side on every route that returns bytes**, not only on the
+listings. A grid that omits a photograph while `/preview/...` still serves it
+is not access control, it is a tidier index — anyone can type a URL. An
+unshared file answers **404**, the same as one that does not exist: 403 would
+confirm there is something there to ask for.
+
+The viewer's scope comes from the credentials and rides on every query. It is
+deliberately **not** one of the URL filters, so a viewer cannot widen their
+own view by editing the address bar — the one thing a URL-shaped filter model
+must not allow. An empty scope is not the same as no scope: somebody granted
+nothing sees nothing, and conflating the two is the classic way an access
+check becomes an access grant.
+
+**With no credentials configured there is no access control at all**, and the
+app says so. Telling people apart is what audience depends on; without it,
+hiding files behind a boundary anyone could walk around by typing a different
+name would be theatre. Open access and access control are not compatible, so
+the app picks the honest one and announces it.
 
 **Synology SSO Server** (a DSM 7 package that acts as an OIDC provider) is the
 upgrade path if DSM accounts should become the login. More setup than two users
@@ -628,7 +669,7 @@ needs.
 | event | existing names |
 | year | calendar years, from the **effective** date |
 | tag | existing tags |
-| status | new (undecided) / keep / top / rejected |
+| shared with | a person, a role, or *new* — shared with nobody |
 | type | photo / video / other |
 | size | small-short / medium / large-long |
 
@@ -660,8 +701,8 @@ The column being set is excluded from its own scope — filtering on
 | Pass | Unit | Gestures |
 |---|---|---|
 | 1 — events | proposed clusters | name / merge / split — hundreds in total |
-| 2 — keep | one event at a time | promote to `photo`; finishing writes the rest to `none` |
-| 3 — top | the promoted 20-50 | pick ~10 |
+| 2 — keep | one event at a time | share the keepers; finish by sending the rest to `private` |
+| 3 — highlights | the shared 20-50 | add the small audience — `tv`, say |
 
 Three cheap passes with clear finish conditions, rather than one infinite browse.
 Explorer failed at this precisely because it was a navigator with no notion of

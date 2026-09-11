@@ -42,11 +42,12 @@ def test_a_live_photo_pair_gets_two_sidecars(media: Path) -> None:
 # --- round trip --------------------------------------------------------------
 
 def test_a_decision_survives_a_round_trip(media: Path) -> None:
-    decisions.write(media, Decision(tier="top", event="Banff Skiing",
+    decisions.write(media, Decision(audience=("family",), event="Banff Skiing",
                                     date_override="2015-03-15-11:52:56"))
 
     assert decisions.read(media) == Decision(
-        tier="top", event="Banff Skiing", date_override="2015-03-15-11:52:56")
+        audience=("family",), event="Banff Skiing",
+        date_override="2015-03-15-11:52:56")
 
 
 def test_no_sidecar_reads_as_no_decision(media: Path) -> None:
@@ -54,18 +55,19 @@ def test_no_sidecar_reads_as_no_decision(media: Path) -> None:
     assert decisions.read(media) is None
 
 
-def test_a_rejection_is_still_a_decision(media: Path) -> None:
-    """`tier: none` must create a sidecar — reviewed-and-rejected is not the
-    same state as never-looked-at."""
-    decisions.write(media, Decision(tier="none"))
+def test_keeping_something_private_is_still_a_decision(media: Path) -> None:
+    """`private` must create a sidecar. Choosing to show a photograph to
+    nobody is a judgement, and it is not the same state as never having
+    looked at it — which is exactly what having no sidecar means."""
+    decisions.write(media, Decision(audience=(decisions.PRIVATE,)))
 
     assert decisions.sidecar_path(media).is_file()
-    assert decisions.read(media) == Decision(tier="none")
+    assert decisions.read(media) == Decision(audience=("private",))
 
 
 def test_clearing_everything_removes_the_sidecar(media: Path) -> None:
     """An empty sidecar would read as reviewed, which is exactly wrong."""
-    decisions.write(media, Decision(tier="top"))
+    decisions.write(media, Decision(audience=("family",)))
     decisions.write(media, Decision())
 
     assert not decisions.sidecar_path(media).exists()
@@ -92,7 +94,7 @@ def test_standard_fields_are_written_alongside(media: Path) -> None:
 
 
 def test_it_is_a_real_xmp_packet(media: Path) -> None:
-    decisions.write(media, Decision(tier="top"))
+    decisions.write(media, Decision(audience=("family",)))
     text = decisions.sidecar_path(media).read_text(encoding="utf-8")
 
     assert text.startswith("<?xpacket begin=")
@@ -105,34 +107,34 @@ def test_the_element_form_is_readable_too(media: Path) -> None:
     decisions.sidecar_path(media).write_text(
         '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
         '<rdf:Description rdf:about="" xmlns:pix="http://pix.local/">'
-        "<pix:Tier>photo</pix:Tier>"
         "<pix:EventOverride>Sicily</pix:EventOverride>"
         "</rdf:Description></rdf:RDF>", encoding="utf-8")
 
-    assert decisions.read(media) == Decision(tier="photo", event="Sicily")
+    assert decisions.read(media) == Decision(event="Sicily")
 
 
 # --- partial updates ---------------------------------------------------------
 
-def test_setting_a_tier_keeps_the_event(media: Path) -> None:
+def test_sharing_keeps_the_event(media: Path) -> None:
     """The regression this exists to prevent: the UI changes one field at a
     time, and a whole-record write would discard the rest."""
     decisions.apply(media, event="Banff Skiing")
-    decisions.apply(media, tier="top")
+    decisions.apply(media, add_audience=["family"])
 
-    assert decisions.read(media) == Decision(tier="top", event="Banff Skiing")
+    assert decisions.read(media) == Decision(audience=("family",),
+                                             event="Banff Skiing")
 
 
 def test_none_clears_where_omission_does_not(media: Path) -> None:
-    decisions.apply(media, tier="top", event="Banff Skiing")
+    decisions.apply(media, audience=["family"], event="Banff Skiing")
 
     decisions.apply(media, event=None)
-    assert decisions.read(media) == Decision(tier="top")
+    assert decisions.read(media) == Decision(audience=("family",))
 
 
 def test_clearing_the_last_field_removes_the_sidecar(media: Path) -> None:
-    decisions.apply(media, tier="top")
-    decisions.apply(media, tier=None)
+    decisions.apply(media, audience=["family"])
+    decisions.apply(media, audience=[])
 
     assert not decisions.sidecar_path(media).exists()
 
@@ -140,17 +142,17 @@ def test_clearing_the_last_field_removes_the_sidecar(media: Path) -> None:
 def test_apply_returns_the_stored_state(media: Path) -> None:
     decisions.apply(media, event="Sicily")
 
-    assert decisions.apply(media, tier="photo") == Decision(
-        tier="photo", event="Sicily")
+    assert decisions.apply(media, add_audience=["kids"]) == Decision(
+        audience=("kids",), event="Sicily")
 
 
 # --- refusals ----------------------------------------------------------------
 
-def test_an_unknown_tier_is_refused(media: Path) -> None:
-    """`tier` is the delivery selector — an unrecognised value would silently
-    drop the file out of every distribution."""
+def test_an_absurd_audience_name_is_refused(media: Path) -> None:
+    """Audience names are free text — anyone may be invented before they have
+    a login — but a value that long is a paste accident, not a person."""
     with pytest.raises(decisions.DecisionError):
-        decisions.write(media, Decision(tier="five-stars"))
+        decisions.write(media, Decision(audience=("x" * 200,)))
 
     assert not decisions.sidecar_path(media).exists()
 
@@ -161,11 +163,11 @@ def test_a_nonsense_date_is_refused(media: Path) -> None:
 
 
 def test_a_refusal_leaves_the_previous_decision_intact(media: Path) -> None:
-    decisions.write(media, Decision(tier="top"))
+    decisions.write(media, Decision(audience=("family",)))
     with pytest.raises(decisions.DecisionError):
-        decisions.apply(media, tier="nonsense")
+        decisions.apply(media, add_audience=["y" * 200])
 
-    assert decisions.read(media) == Decision(tier="top")
+    assert decisions.read(media) == Decision(audience=("family",))
 
 
 # --- damage ------------------------------------------------------------------
@@ -180,7 +182,7 @@ def test_an_unparseable_sidecar_reads_as_no_decision(media: Path) -> None:
 
 
 def test_a_write_leaves_no_temp_behind(media: Path) -> None:
-    decisions.write(media, Decision(tier="top"))
+    decisions.write(media, Decision(audience=("family",)))
 
     assert list(media.parent.glob(f"*{SIDECAR_TMP_SUFFIX}*")) == []
 
@@ -193,7 +195,7 @@ def test_a_failed_write_leaves_no_temp_behind(media: Path,
 
     monkeypatch.setattr(decisions.os, "replace", boom)
     with pytest.raises(OSError):
-        decisions.write(media, Decision(tier="top"))
+        decisions.write(media, Decision(audience=("family",)))
 
     assert list(media.parent.glob(f"*{SIDECAR_TMP_SUFFIX}*")) == []
     assert not decisions.sidecar_path(media).exists()
@@ -246,11 +248,12 @@ def test_removing_a_tag_keeps_the_others(media: Path) -> None:
     assert decisions.read(media) == Decision(tags=("beach", "tv"))
 
 
-def test_adding_a_tag_does_not_disturb_the_tier(media: Path) -> None:
-    decisions.apply(media, tier="top")
+def test_adding_a_tag_does_not_disturb_the_audience(media: Path) -> None:
+    decisions.apply(media, add_audience=["family"])
     decisions.apply(media, add_tags=["beach"])
 
-    assert decisions.read(media) == Decision(tier="top", tags=("beach",))
+    assert decisions.read(media) == Decision(audience=("family",),
+                                             tags=("beach",))
 
 
 def test_removing_the_last_tag_removes_the_sidecar(media: Path) -> None:

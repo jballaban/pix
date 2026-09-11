@@ -48,3 +48,19 @@ def parse_users(raw: str) -> dict[str, str]:
         if sep and name.strip() and digest.strip():
             users[name.strip()] = digest.strip()
     return users
+
+
+def parse_admins(raw: str) -> frozenset[str]:
+    """Parse `name;name2` into the set of administrators.
+
+    Separate from `PIX2_USERS` on purpose. Admin is the security boundary —
+    it sees every file and is the only role that can change who else can — so
+    it should be readable at a glance in the deployment's settings rather than
+    encoded as a field inside a credential string.
+
+    **A typo fails closed.** An unrecognised name simply is not an admin, which
+    costs that person their privileges; the alternative shapes (a positional
+    convention, a flag inside the credential) fail open or silently move admin
+    to whoever sorts first.
+    """
+    return frozenset(n.strip() for n in (raw or "").split(";") if n.strip())

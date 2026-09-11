@@ -1,6 +1,6 @@
 """Curation decisions — the `.xmp` sidecar beside each master file (spec §4).
 
-Four fields: **`tier`, `event`, `tags`, and a date override**. Nothing
+Four fields: **`audience`, `event`, `tags`, and a date override**. Nothing
 recomputable goes here, because master is the one tier backed up forever and
 caching a probed fact in it duplicates recomputable data into permanent
 storage. Everything that is here is a human judgement about the file.
@@ -16,11 +16,24 @@ The sidecar is named **full filename plus `.xmp`** (`IMG_4471.HEIC.xmp`, not
 most common device in the library: an iPhone Live Photo lands as `IMG_4471.HEIC`
 and `IMG_4471.MOV` in the same import.
 
-**No sidecar means unreviewed.** That is the whole review-state model — there is
-no separate "reviewed" flag, and clearing every field deletes the file rather
-than leaving an empty one, so the two states stay distinguishable.
-`tier="none"` is a decision and does create a sidecar: rejection *is* a
-judgement.
+**`audience` is who may see the file**, and it replaced a `tier` of
+`none`/`photo`/`top`. Those were two questions wearing one name — *has this
+been reviewed* and *how good is it* — and neither was the question actually
+being asked, which is **who is this for**. A household has photographs the
+children should not see and photographs that belong on the television, and
+that is one axis, not a quality ranking. "The best ones" is simply an
+audience that happens to be small.
+
+An audience is a **name**, and some names happen to have a login. `private`
+has none, so nothing can ever sign in as it — which is what makes *keep this
+but show it to nobody* a normal value rather than a special state. The owner
+is never in the list: an administrator sees everything by definition.
+
+**No sidecar means undecided.** That is the whole review-state model — there
+is no separate "reviewed" flag, and clearing every field deletes the file
+rather than leaving an empty one, so the two states stay distinguishable.
+Assigning `private` is a decision and does create a sidecar: choosing to keep
+something to yourself *is* a judgement.
 
 ### Serialization
 
@@ -37,9 +50,9 @@ understand:
 |---|---|---|
 | event | `pix:EventOverride` | `Iptc4xmpExt:Event` |
 | tags | — | `dc:subject`, the standard keywords bag |
+| audience | `pix:Audience` | — nothing standard expresses *who may see this* |
 | date override | `pix:DateOverride` | `photoshop:DateCreated`, when the
   override pins a whole timestamp — a partial one has no standard form |
-| tier | `pix:Tier` | — no standard equivalent; rating was dropped |
 
 Tags live **only** in `dc:subject` rather than getting a `pix:` twin. It is
 the industry keyword field, every tool round-trips it, and nothing in pix
@@ -70,10 +83,10 @@ _IPTC_EXT_NS: str = "http://iptc.org/std/Iptc4xmpExt/2008-02-29/"
 _RDF_NS: str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
 _DC_NS: str = "http://purl.org/dc/elements/1.1/"
 
-#: Delivery selector (spec §7). Absent means unreviewed; `none` means reviewed
-#: and rejected. `rating` was deliberately dropped — a 1-5 scale asked people to
-#: grade photos when the only question that matters is where a photo goes.
-TIERS: frozenset[str] = frozenset({"none", "photo", "top"})
+#: The audience for a file nobody else should see. Just a name, like any
+#: other — it has no login, so nothing can sign in as it, which is the whole
+#: trick: *keep but share with no one* needs no special state.
+PRIVATE: str = "private"
 
 
 class Unset:
@@ -96,18 +109,19 @@ class Decision:
     re-write from looking like a change.
     """
 
-    tier: str | None = None
     event: str | None = None
     date_override: str | None = None
     tags: tuple[str, ...] = field(default_factory=tuple)
+    audience: tuple[str, ...] = field(default_factory=tuple)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "tags", normalize_tags(self.tags))
+        object.__setattr__(self, "audience", normalize_tags(self.audience))
 
     def is_empty(self) -> bool:
         """True when nothing has been decided, so no sidecar should exist."""
-        return not (self.tier or self.event or self.date_override
-                    or self.tags)
+        return not (self.event or self.date_override or self.tags
+                    or self.audience)
 
 
 def normalize_tags(values: Iterable[str]) -> tuple[str, ...]:
@@ -169,12 +183,14 @@ def write(media: Path, decision: Decision) -> None:
 
 
 def apply(media: Path, *,
-          tier: str | None | Unset = UNSET,
           event: str | None | Unset = UNSET,
           date_override: str | None | Unset = UNSET,
           tags: Sequence[str] | None | Unset = UNSET,
           add_tags: Sequence[str] = (),
-          remove_tags: Sequence[str] = ()) -> Decision:
+          remove_tags: Sequence[str] = (),
+          audience: Sequence[str] | None | Unset = UNSET,
+          add_audience: Sequence[str] = (),
+          remove_audience: Sequence[str] = ()) -> Decision:
     """Change some fields of `media`'s decision, leaving the rest alone.
 
     Read-modify-write rather than replace, because the UI changes one field at a
@@ -183,38 +199,39 @@ def apply(media: Path, *,
     single process serializes the writes, so concurrency is a policy question
     here, never an integrity one.
 
-    Tags take `add_tags`/`remove_tags` as well as a wholesale `tags`, and the
-    difference matters at scale: tagging a selection of 200 files must add to
-    what each already carries, not flatten them all to one list.
+    Tags and audience take `add_`/`remove_` as well as a wholesale replace,
+    and the difference matters at scale: sharing 200 files with the kids must
+    add to whatever each is already shared with, not flatten them all to one
+    list.
     """
     current = read(media) or Decision()
-    if isinstance(tags, Unset):
-        kept = current.tags
-    else:
-        kept = normalize_tags(tags or ())
-    if add_tags or remove_tags:
-        dropped = set(normalize_tags(remove_tags))
-        kept = normalize_tags(
-            [t for t in [*kept, *normalize_tags(add_tags)] if t not in dropped])
     updated = Decision(
-        tier=current.tier if isinstance(tier, Unset) else tier,
         event=current.event if isinstance(event, Unset) else event,
         date_override=(current.date_override
                        if isinstance(date_override, Unset)
                        else date_override),
-        tags=kept,
+        tags=_merge(current.tags, tags, add_tags, remove_tags),
+        audience=_merge(current.audience, audience,
+                        add_audience, remove_audience),
     )
     write(media, updated)
     return updated
 
 
+def _merge(current: tuple[str, ...], replace: Sequence[str] | None | Unset,
+           add: Sequence[str], remove: Sequence[str]) -> tuple[str, ...]:
+    """Apply a replace-or-add-or-remove edit to one multi-valued field."""
+    kept = current if isinstance(replace, Unset) else normalize_tags(replace or ())
+    if add or remove:
+        dropped = set(normalize_tags(remove))
+        kept = normalize_tags(
+            [v for v in [*kept, *normalize_tags(add)] if v not in dropped])
+    return kept
+
+
 # --- serialization -----------------------------------------------------------
 
 def _validate(decision: Decision) -> None:
-    if decision.tier is not None and decision.tier not in TIERS:
-        raise DecisionError(
-            f"unknown tier {decision.tier!r} — expected one of "
-            f"{', '.join(sorted(TIERS))}")
     if decision.date_override:
         if not datestr.valid(decision.date_override):
             raise DecisionError(
@@ -224,9 +241,9 @@ def _validate(decision: Decision) -> None:
             raise DecisionError(
                 "date override pins nothing — clear it instead of storing "
                 "all-`*`, which would record a decision nobody made")
-    for tag in decision.tags:
-        if len(tag) > 120:
-            raise DecisionError(f"tag {tag[:40]!r}… is too long")
+    for value in (*decision.tags, *decision.audience):
+        if len(value) > 120:
+            raise DecisionError(f"{value[:40]!r}… is too long")
 
 
 _TEMPLATE: str = """<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
@@ -246,8 +263,6 @@ _TEMPLATE: str = """<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
 
 def _to_xml(decision: Decision) -> str:
     props: list[tuple[str, str]] = []
-    if decision.tier:
-        props.append(("pix:Tier", decision.tier))
     if decision.event:
         props.append(("pix:EventOverride", decision.event))
         props.append(("Iptc4xmpExt:Event", decision.event))
@@ -261,18 +276,19 @@ def _to_xml(decision: Decision) -> str:
             props.append(("photoshop:DateCreated", moment.isoformat()))
 
     body = "".join(f"    {key}={quoteattr(value)}\n" for key, value in props)
-    children = _tag_bag(decision.tags)
+    children = (_bag("dc:subject", decision.tags)
+                + _bag("pix:Audience", decision.audience))
     return _TEMPLATE.format(rdf=_RDF_NS, pix=PIX_NS, dc=_DC_NS,
                             photoshop=_PHOTOSHOP_NS, iptc=_IPTC_EXT_NS,
                             props=body, children=children)
 
 
-def _tag_bag(tags: tuple[str, ...]) -> str:
-    """Tags as a `dc:subject` RDF Bag — the shape every XMP reader expects."""
-    if not tags:
+def _bag(prop: str, values: tuple[str, ...]) -> str:
+    """A multi-valued property as an RDF Bag — the shape XMP readers expect."""
+    if not values:
         return ""
-    items = "".join(f"\n     <rdf:li>{escape(t)}</rdf:li>" for t in tags)
-    return (f"\n   <dc:subject>\n    <rdf:Bag>{items}\n    </rdf:Bag>\n   </dc:subject>\n  ")
+    items = "".join(f"\n     <rdf:li>{escape(v)}</rdf:li>" for v in values)
+    return (f"\n   <{prop}>\n    <rdf:Bag>{items}\n    </rdf:Bag>\n   </{prop}>\n  ")
 
 
 def _from_xml(root: ET.Element) -> Decision | None:
@@ -296,26 +312,28 @@ def _from_xml(root: ET.Element) -> Decision | None:
             if text:
                 values[child.tag.rpartition("}")[2]] = text
 
-    decision = Decision(tier=values.get("Tier"),
-                        event=values.get("EventOverride"),
+    decision = Decision(event=values.get("EventOverride"),
                         date_override=values.get("DateOverride"),
-                        tags=_read_tags(description))
+                        tags=_read_bag(description, _DC_NS, "subject"),
+                        audience=_read_bag(description, PIX_NS, "Audience"))
     return None if decision.is_empty() else decision
 
 
-def _read_tags(description: ET.Element) -> tuple[str, ...]:
-    """Keywords from `dc:subject`, whether bagged or written bare.
+def _read_bag(description: ET.Element, namespace: str,
+              local: str) -> tuple[str, ...]:
+    """A multi-valued property, whether bagged or written bare.
 
-    A Bag is what this writes and what Lightroom writes, but a single-keyword
-    `dc:subject` is sometimes written as plain text, and a sidecar edited
-    elsewhere still has to read.
+    A Bag is what this writes and what Lightroom writes, but a single value is
+    sometimes written as plain text, and a sidecar edited elsewhere still has
+    to read.
     """
     found: list[str] = []
-    for subject in description.iter(f"{{{_DC_NS}}}subject"):
-        for item in subject.iter(f"{{{_RDF_NS}}}li"):
-            found.append((item.text or "").strip())
-        if not list(subject.iter(f"{{{_RDF_NS}}}li")):
-            found.append((subject.text or "").strip())
+    for node in description.iter(f"{{{namespace}}}{local}"):
+        items = list(node.iter(f"{{{_RDF_NS}}}li"))
+        if items:
+            found.extend((i.text or "").strip() for i in items)
+        else:
+            found.append((node.text or "").strip())
     return normalize_tags(found)
 
 

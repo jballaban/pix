@@ -66,13 +66,48 @@ def _users() -> dict[str, str]:
     return auth.parse_users(os.environ.get("PIX2_USERS", ""))
 
 
+def _admins() -> frozenset[str]:
+    """Who may see everything and change who else can."""
+    return auth.parse_admins(os.environ.get("PIX2_ADMINS", ""))
+
+
+@dataclass(frozen=True)
+class Principal:
+    """Who is asking, and what that entitles them to.
+
+    `scope` is the name their view is restricted to, or None for an admin who
+    has no restriction. It is derived here, once, from the credentials — never
+    from anything the request can influence.
+    """
+
+    name: str
+    is_admin: bool
+
+    #: Every name this person's access can be granted to — themselves, and the
+    #: roles they belong to. A share names one or the other and the check cannot
+    #: tell them apart, which is what keeps roles from being a second mechanism.
+    grants: frozenset[str] = frozenset()
+
+    @property
+    def scope(self) -> frozenset[str] | None:
+        """What to restrict queries to, or None for an admin (no restriction)."""
+        return None if self.is_admin else (self.grants | {self.name})
+
+
 def require_user(
     credentials: Annotated[HTTPBasicCredentials | None, Depends(_security)],
-) -> str:
-    """Authenticate, unless no users are configured."""
+) -> Principal:
+    """Authenticate, unless no users are configured.
+
+    With `PIX2_USERS` unset there is no authentication and therefore no way to
+    tell people apart — so the only coherent principal is an admin. Access
+    control and open access are not compatible, and pretending otherwise would
+    hide files behind a boundary that anyone could walk around by typing a
+    different name. The landing page says the deployment is open.
+    """
     users = _users()
     if not users:
-        return "anonymous"
+        return Principal("anonymous", is_admin=True)
     if credentials is None or credentials.username not in users:
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED, "not authorised",
@@ -81,7 +116,16 @@ def require_user(
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED, "not authorised",
             headers={"WWW-Authenticate": "Basic"})
-    return credentials.username
+    return Principal(credentials.username,
+                     is_admin=credentials.username in _admins())
+
+
+def require_admin(user: Annotated[Principal, Depends(require_user)]) -> Principal:
+    """Only an administrator may change who can see what."""
+    if not user.is_admin:
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            "only an administrator can change decisions")
+    return user
 
 
 # --- data --------------------------------------------------------------------
@@ -179,18 +223,16 @@ button.primary { background:var(--accent); color:#0d0f12; border-color:var(--acc
 @media (hover: none) { .pick { opacity:.55; } }
 .cell.picked .pick::after { content:"\\2713"; color:#0d0f12; font-weight:700;
                             font-size:13px; line-height:17px; }
-/* Tier is an inset ring so it can coexist with the selection outline — the two
-   answer different questions and a cull needs both at once. */
-.cell[data-tier="photo"] { box-shadow: inset 0 0 0 3px var(--keep); }
-.cell[data-tier="top"]   { box-shadow: inset 0 0 0 3px var(--top); }
-.cell[data-tier="none"]  { opacity:.3; }
-.cell[data-tier="photo"]::after, .cell[data-tier="top"]::after,
-.cell[data-tier="none"]::after {
-  position:absolute; right:4px; top:4px; padding:1px 5px; border-radius:3px;
-  font-size:11px; font-weight:600; color:#0d0f12; }
-.cell[data-tier="photo"]::after { content:"keep"; background:var(--keep); }
-.cell[data-tier="top"]::after   { content:"top";  background:var(--top); }
-.cell[data-tier="none"]::after  { content:"out";  background:var(--dim); }
+/* Shared is the decided state, so it is what reads as finished; a file with no
+   audience is the work still to do and looks untouched. An inset ring, so it
+   can coexist with the selection outline — the two answer different questions
+   and a cull needs both at once. */
+.cell[data-audience]:not([data-audience=""]) {
+  box-shadow: inset 0 0 0 3px var(--keep); }
+.who { position:absolute; right:4px; top:4px; max-width:72%; padding:1px 5px;
+       border-radius:3px; background:var(--keep); color:#0d0f12;
+       font-size:11px; font-weight:600; overflow:hidden;
+       white-space:nowrap; text-overflow:ellipsis; }
 .tags { position:absolute; left:5px; bottom:4px; right:4px; font-size:10px;
         color:#fff; text-shadow:0 1px 3px #000; overflow:hidden;
         white-space:nowrap; text-overflow:ellipsis; }
@@ -254,7 +296,7 @@ def _page(title: str, body: str, *, bar: str = "") -> HTMLResponse:
 
 
 @app.get("/", response_class=HTMLResponse)
-def home(user: Annotated[str, Depends(require_user)]) -> HTMLResponse:
+def home(user: Annotated[Principal, Depends(require_user)]) -> HTMLResponse:
     """The library by year, then by event — the two ways anyone looks for a photo.
 
     Every row is a filter: clicking a year opens that year, clicking an event
@@ -312,10 +354,11 @@ events reviewed</span></h2>
 
 
 def filters(
+    user: Annotated[Principal, Depends(require_user)],
     event: Annotated[str | None, Query()] = None,
     year: Annotated[str | None, Query()] = None,
     tag: Annotated[str | None, Query()] = None,
-    tier: Annotated[str | None, Query()] = None,
+    audience: Annotated[str | None, Query()] = None,
     kind: Annotated[str | None, Query()] = None,
     band: Annotated[str | None, Query()] = None,
 ) -> ix.Filters:
@@ -325,9 +368,13 @@ def filters(
     bookmarkable, and survivable across the reload that a bulk edit sometimes
     wants. It is also what makes the browser's back button mean "the filter I
     had before", which is the only undo a filter needs.
+
+    `viewer` is **not** among them. It comes from the credentials and rides on
+    every query, so a non-admin cannot widen their own view by editing the
+    address bar — the one thing a URL-shaped filter model must not allow.
     """
-    return ix.Filters(event=event, year=year, tag=tag, tier=tier,
-                      kind=kind, band=band)
+    return ix.Filters(event=event, year=year, tag=tag, audience=audience,
+                      kind=kind, band=band, viewer=user.scope)
 
 
 #: How many files one grid renders. Enough to hold the largest seeded event
@@ -342,7 +389,7 @@ def event_grid(event: str) -> RedirectResponse:
 
 
 @app.get("/browse", response_class=HTMLResponse)
-def browse(user: Annotated[str, Depends(require_user)],
+def browse(user: Annotated[Principal, Depends(require_user)],
            view: Annotated[ix.Filters, Depends(filters)]) -> HTMLResponse:
     """The one grid, filtered — select files, then say something about them.
 
@@ -367,45 +414,61 @@ def browse(user: Annotated[str, Depends(require_user)],
   <aside id="rail"></aside>
 </div>
 <div id="menu" hidden></div>
-<script>const VIEW={_js(_view_dict(view))},CHIPS={_js(_CHIPS)},FIXED={_js(_FIXED)};</script>
+<script>const VIEW={_js(_view_dict(view))},CHIPS={_js(_CHIPS)},FIXED={_js(_FIXED)},EXTRA={_js(_EXTRA)},ADMIN={_js(user.is_admin)},USERS={_js(_audience_names())};</script>
 <script>{_BROWSE_JS}</script>""", bar=f"""
 <div class="chips" id="chips"></div>
 <span class="count" id="count">{shown}</span>
 </div>
-<div class="row" id="actions" hidden>
+{_actions(user)}
+<div class="row">
+  <span class="hint"><b>click</b> a circle to select &middot;
+  <b>shift</b> for a range &middot; <b>ctrl</b> to add &middot;
+  <b>S</b> repeat last share &middot; <b>Enter</b> view &middot;
+  <b>I</b> details</span>
+  <button id="selall" style="margin-left:auto">Select all</button>""")
+
+
+def _actions(user: Principal) -> str:
+    """The edit bar — admin only.
+
+    Not merely hidden: the endpoints refuse a non-admin outright. This is so
+    the page does not offer a control that would fail, which reads as
+    brokenness rather than as policy.
+    """
+    if not user.is_admin:
+        return ""
+    return """<div class="row" id="actions" hidden>
   <span class="count" id="selcount" style="margin:0"></span>
+  <button data-act="share">Share with&hellip;</button>
+  <button data-act="unshare">Unshare&hellip;</button>
+  <span class="sep"></span>
   <button data-act="event">Event&hellip;</button>
   <button data-act="tag">Add tag&hellip;</button>
   <button data-act="untag">Remove tag&hellip;</button>
   <button data-act="date">Date&hellip;</button>
   <span class="sep"></span>
-  <button data-tier="photo">Keep</button>
-  <button data-tier="top">Top</button>
-  <button data-tier="none">Reject</button>
-  <button data-tier="">Undo</button>
-  <span class="sep"></span>
   <button id="selnone">Deselect</button>
-</div>
-<div class="row">
-  <span class="hint"><b>click</b> a circle to select &middot;
-  <b>shift</b> for a range &middot; <b>ctrl</b> to add &middot;
-  <b>P</b> keep &middot; <b>T</b> top &middot; <b>X</b> reject &middot;
-  <b>0</b> undo &middot; <b>Enter</b> view &middot; <b>I</b> details</span>
-  <button id="selall" style="margin-left:auto">Select all</button>""")
+</div>"""
 
 
 def _cell(row: sqlite3.Row) -> str:
-    tags = str(row["tags"] or "").split("\n") if row["tags"] else []
+    tags = _split(row["tags"])
+    shared = _split(row["audience"])
+    # Newline-joined, matching what the client splits on. A stray control byte
+    # had crept in here from a shell heredoc, so multiple tags arrived at the
+    # page as one unsplittable blob.
+    nl = chr(10)
     return (
         f'<div class="cell" data-folder="{_h(row["folder"])}" '
         f'data-name="{_h(row["name"])}" data-kind="{_h(row["kind"])}" '
-        f'data-tier="{_h(row["tier"] or "")}" '
-        f'data-tags="{_h("".join(tags))}" '
+        f'data-audience="{_h(nl.join(shared))}" '
+        f'data-tags="{_h(nl.join(tags))}" '
         f'data-date="{_h(str(row["effective_date"] or "no date"))}">'
         f'<img loading="lazy" src="/thumb/{_q(row["folder"])}/{_q(row["name"])}">'
         f'<button class="pick" aria-label="select"></button>'
         + (f'<span class="badge">{_dur(row["duration"])}</span>'
            if row["kind"] == "video" else "")
+        + (f'<span class="who">{_h(" ".join(shared))}</span>' if shared else "")
         + (f'<span class="tags">{_h(" ".join(tags))}</span>' if tags else "")
         + "</div>"
     )
@@ -415,19 +478,35 @@ def _view_dict(view: ix.Filters) -> dict[str, str | None]:
     return {name: getattr(view, name) for name in ix.Filters.NAMES}
 
 
+def _audience_names() -> list[str]:
+    """Audiences worth offering before any file has one.
+
+    The configured logins, plus `private`. Sharing has to be possible on the
+    very first file, and suggestions drawn from existing decisions are empty
+    until somebody has already made one.
+    """
+    return sorted({*_users(), decisions.PRIVATE} - _admins())
+
+
 #: Labels for the filter chips and the fixed vocabularies. Kept server-side so
 #: the tier and band words are defined once, next to the columns they describe.
 _CHIPS: tuple[tuple[str, str], ...] = (
     ("event", "Event"), ("year", "Year"), ("tag", "Tag"),
-    ("tier", "Status"), ("kind", "Type"), ("band", "Size"),
+    ("audience", "Shared with"), ("kind", "Type"), ("band", "Size"),
 )
 
+#: Complete vocabularies — these columns cannot hold anything else.
 _FIXED: dict[str, tuple[tuple[str, str], ...]] = {
-    "tier": (("new", "New — undecided"), ("photo", "Keep"), ("top", "Top"),
-             ("none", "Rejected")),
     "kind": (("image", "Photos"), ("video", "Video"), ("other", "Other")),
     "band": (("small", "Small / short"), ("medium", "Medium"),
              ("large", "Large / long")),
+}
+
+#: Offered *in addition* to whatever already exists. Audience names are free
+#: text, but "nobody yet" is a state rather than a name, and it is the single
+#: most useful thing to filter on — it is the pile of work.
+_EXTRA: dict[str, tuple[tuple[str, str], ...]] = {
+    "audience": ((ix.UNREVIEWED, "New — shared with nobody"),),
 }
 
 _BROWSE_JS = """
@@ -435,6 +514,8 @@ const grid=document.getElementById('grid');
 const menu=document.getElementById('menu');
 const chips=document.getElementById('chips');
 const actions=document.getElementById('actions');
+// Absent entirely for a non-admin: the page must not reach for controls
+// the server would refuse anyway.
 const selcount=document.getElementById('selcount');
 const countEl=document.getElementById('count');
 const note=document.getElementById('note');
@@ -536,6 +617,16 @@ async function openMenu(anchorEl,ctx){
       const res=await fetch('/api/suggest?'+p);
       opts=(await res.json()).map(o=>({...o,label:o.value}));
     }catch(e){opts=[];}
+    // Extras are prepended, not substituted: "shared with nobody" is a state
+    // rather than a name, and the configured logins have to be offerable
+    // before any file carries them.
+    const extra=ctx.mode==='filter'?(EXTRA[ctx.column]||[]):[];
+    const seed=ctx.mode==='set'&&ctx.column==='audience'
+      ? USERS.map(u=>[u,u]) : [];
+    const have=new Set(opts.map(o=>o.value));
+    opts=[...extra,...seed].filter(e=>!have.has(e[0]))
+      .map(e=>({value:e[0],label:e[1],n:null,scope:'all'}))
+      .concat(opts);
   }
   if(menuCtx!==ctx) return;   // a later menu opened while this was loading
 
@@ -634,6 +725,7 @@ function range(a,b){
 function clearPicks(){picked.forEach(c=>c.classList.remove('picked'));
                       picked.clear(); drawSel();}
 function drawSel(){
+  if(!actions) return;
   actions.hidden = picked.size===0;
   selcount.textContent = `${picked.size} selected`;
 }
@@ -651,7 +743,8 @@ cells.forEach((c,n)=>{
 });
 document.getElementById('selall').onclick=()=>{
   cells.forEach((_,n)=>togglePick(n,true)); drawSel();};
-document.getElementById('selnone').onclick=clearPicks;
+const selnone=document.getElementById('selnone');
+if(selnone) selnone.onclick=clearPicks;
 
 // --- viewer ------------------------------------------------------------------
 function load(c){
@@ -801,35 +894,44 @@ function drop(gone){
   drawSel();
 }
 
-// Optimistic: the cell changes now and the write follows, because a cull is a
-// rhythm and waiting on SMB between keystrokes destroys it. A failure puts the
-// old value back rather than leaving the screen claiming something untrue.
-async function setTier(cs,tier){
-  const prev=cs.map(c=>c.dataset.tier||'');
-  cs.forEach(c=>c.dataset.tier=tier);
-  const out=await send(cs,{tier:tier||null});
-  if(out===null) cs.forEach((c,i)=>c.dataset.tier=prev[i]);
-}
+// Which multi-valued field each action edits, and whether it adds or removes.
+const MULTI={tag:['tags','add_tags'], untag:['tags','remove_tags'],
+             share:['audience','add_audience'],
+             unshare:['audience','remove_audience']};
 
-async function applyToSelection(column,value){
+// Optimistic: the cell changes now and the write follows, because a cull is a
+// rhythm and waiting on SMB between gestures destroys it. A failure puts the
+// old value back rather than leaving the screen claiming something untrue.
+async function applyToSelection(act,value){
   const cs=targets();
   if(!cs.length){say('nothing selected');return;}
-  const body = column==='tag' ? {add_tags:[value]}
-             : column==='untag' ? {remove_tags:[value]}
-             : {[column]:value};
+  const multi=MULTI[act];
+  const body = multi ? {[multi[1]]:[value]} : {[act]:value};
+  if(multi&&value===null){say('pick a name');return;}
+  const before=multi?cs.map(c=>c.dataset[multi[0]]||''):null;
+  if(multi) cs.forEach(c=>paint(c,multi[0],value,multi[1].startsWith('add')));
   const out=await send(cs,body);
-  if(out===null) return;
-  if(column==='tag'||column==='untag'){
-    cs.forEach(c=>{
-      const t=new Set(c.dataset.tags?c.dataset.tags.split('\\n'):[]);
-      column==='tag'?t.add(value):t.delete(value);
-      c.dataset.tags=[...t].sort().join('\\n');
-      let el=c.querySelector('.tags');
-      if(!el&&t.size){el=document.createElement('span');el.className='tags';
-                      c.appendChild(el);}
-      if(el) el.textContent=[...t].sort().join(' ');
-    });
-  }
+  if(out===null&&multi) cs.forEach((c,i)=>{
+    c.dataset[multi[0]]=before[i]; repaint(c,multi[0]);
+  });
+  if(out!==null&&act==='share') lastShare=value;
+}
+
+// The grid shows tags and audience, so both have to change the moment the
+// gesture lands rather than when the round trip finishes.
+function paint(c,field,value,add){
+  const set=new Set(c.dataset[field]?c.dataset[field].split('\\n'):[]);
+  add?set.add(value):set.delete(value);
+  c.dataset[field]=[...set].sort().join('\\n');
+  repaint(c,field);
+}
+function repaint(c,field){
+  const cls=field==='tags'?'tags':'who';
+  const list=c.dataset[field]?c.dataset[field].split('\\n'):[];
+  let el=c.querySelector('.'+cls);
+  if(!list.length){if(el) el.remove(); return;}
+  if(!el){el=document.createElement('span');el.className=cls;c.appendChild(el);}
+  el.textContent=list.join(' ');
 }
 
 async function send(cs,body){
@@ -870,18 +972,34 @@ async function send(cs,body){
   return true;
 }
 
-actions.querySelectorAll('[data-act]').forEach(b=>{
+(actions?[...actions.querySelectorAll('[data-act]')]:[]).forEach(b=>{
   b.onclick=e=>{e.stopPropagation();openMenu(b, b.dataset.act==='date'
     ? {mode:'date'}
     : {column:b.dataset.act==='untag'?'tag':b.dataset.act,
        mode:'set', as:b.dataset.act});};
 });
-actions.querySelectorAll('[data-tier]').forEach(b=>{
-  b.onclick=()=>{const cs=targets(); if(cs.length) setTier(cs,b.dataset.tier);};
-});
 
 // --- keyboard ----------------------------------------------------------------
-const KEYS={p:'photo',t:'top',x:'none','0':''};
+// Sharing needs a name, so no single key can express it in general. What a cull
+// actually repeats is the *same* share over and over, so S repeats the last one
+// and only falls back to the menu when there is nothing to repeat.
+let lastShare=null;
+try{lastShare=localStorage.getItem('pix2.share')||null;}catch(e){}
+function repeatShare(){
+  if(!ADMIN) return;
+  if(cur<0&&!picked.size) setCur(0);
+  if(!lastShare){
+    const b=actions&&actions.querySelector('[data-act="share"]');
+    if(b) b.click();
+    return;
+  }
+  const cs=targets();
+  if(!cs.length) return;
+  applyToSelection('share',lastShare);
+  try{localStorage.setItem('pix2.share',lastShare);}catch(e){}
+  if(!picked.size&&cur<cells.length-1) setCur(cur+1);
+}
+
 document.addEventListener('keydown',e=>{
   if(e.target.tagName==='INPUT') return;
   if(e.key==='i'||e.key==='I'){
@@ -898,17 +1016,10 @@ document.addEventListener('keydown',e=>{
   if(e.key==='Enter'){
     viewer.classList.contains('on')?closeViewer():openViewer(); return;
   }
-  const k=e.key.toLowerCase();
-  if(k in KEYS&&!e.ctrlKey&&!e.metaKey){
-    e.preventDefault();
-    if(cur<0&&!picked.size) setCur(0);
-    const cs=targets();
-    if(!cs.length) return;
-    setTier(cs,KEYS[k]);
+  if((e.key==='s'||e.key==='S')&&!e.ctrlKey&&!e.metaKey){
     // Advance only when working one at a time: with a selection the gesture is
     // deliberate and moving the cursor underneath it would be noise.
-    if(!picked.size&&cur<cells.length-1) setCur(cur+1);
-    return;
+    e.preventDefault(); repeatShare(); return;
   }
   const cols=Math.max(1,Math.round(grid?grid.clientWidth/156:1));
   const step={ArrowRight:1,ArrowLeft:-1,ArrowDown:cols,ArrowUp:-cols}[e.key];
@@ -928,19 +1039,43 @@ drawChips(); drawSel();
 
 @app.get("/thumb/{folder}/{name}")
 def thumb(folder: str, name: str,
-          user: Annotated[str, Depends(require_user)]) -> FileResponse:
+          user: Annotated[Principal, Depends(require_user)]) -> FileResponse:
+    _allowed(user, folder, name)
     return _serve(THUMB_DIR, folder, name)
 
 
 @app.get("/preview/{folder}/{name}")
 def preview(folder: str, name: str,
-            user: Annotated[str, Depends(require_user)]) -> FileResponse:
+            user: Annotated[Principal, Depends(require_user)]) -> FileResponse:
+    _allowed(user, folder, name)
     return _serve(PREVIEW_DIR, folder, name)
+
+
+def _allowed(user: Principal, folder: str, name: str) -> None:
+    """Refuse a file this person has not been shared.
+
+    Checked on **every** byte-serving route, not just on the listings. A grid
+    that omits a photograph while `/preview/...` still returns it is not
+    access control; it is a tidier index. Anyone can type a URL.
+
+    An admin has no scope and pays nothing for this.
+    """
+    if user.scope is None:
+        return
+    conn = db()
+    try:
+        if not ix.matching(conn, ix.Filters(viewer=user.scope),
+                           [(folder, name)]):
+            # The same answer as a file that does not exist. Distinguishing
+            # them would confirm that a photograph is there to be asked for.
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "not found")
+    finally:
+        conn.close()
 
 
 @app.get("/media/{folder}/{name}")
 def media(folder: str, name: str,
-          user: Annotated[str, Depends(require_user)]) -> FileResponse:
+          user: Annotated[Principal, Depends(require_user)]) -> FileResponse:
     """Stream the master file itself, for video playback.
 
     The **only** endpoint that touches master, and strictly read-only — the
@@ -950,6 +1085,7 @@ def media(folder: str, name: str,
     master the render is the only copy a browser can play — 421 of the seeded
     year's 724 clips — and where both exist they are the same footage.
     """
+    _allowed(user, folder, name)
     # Prefer the render: for an HEVC master it is the only playable copy, and
     # where both exist they are the same footage.
     rendered = (RENDER_DIR / folder / (name + ".mp4")).resolve()
@@ -983,7 +1119,7 @@ def _serve(root: Path, folder: str, name: str) -> FileResponse:
 # --- api ---------------------------------------------------------------------
 
 @app.get("/api/files")
-def api_files(user: Annotated[str, Depends(require_user)],
+def api_files(user: Annotated[Principal, Depends(require_user)],
               view: Annotated[ix.Filters, Depends(filters)],
               limit: Annotated[int, Query(le=2000)] = 500,
               offset: Annotated[int, Query(ge=0)] = 0) -> JSONResponse:
@@ -992,7 +1128,7 @@ def api_files(user: Annotated[str, Depends(require_user)],
 
 
 @app.get("/api/suggest")
-def api_suggest(user: Annotated[str, Depends(require_user)],
+def api_suggest(user: Annotated[Principal, Depends(require_user)],
                 view: Annotated[ix.Filters, Depends(filters)],
                 column: Annotated[str, Query()]) -> JSONResponse:
     """Existing values for a column, most relevant to the current view first.
@@ -1027,13 +1163,13 @@ _FACTS: tuple[tuple[str, str], ...] = (
 #: in §4, which is what lets the rail show *inherited* apart from *decided*.
 _INHERITED: tuple[tuple[str, str], ...] = (
     ("event", "EventOverride"), ("event_auto", "EventAuto"),
-    ("date_override", "DateOverride"), ("tier", "Tier"),
+    ("date_override", "DateOverride"),
 )
 
 
 @app.get("/api/file/{folder}/{name}")
 def api_file(folder: str, name: str,
-             user: Annotated[str, Depends(require_user)]) -> JSONResponse:
+             user: Annotated[Principal, Depends(require_user)]) -> JSONResponse:
     """Everything known about one file, with fact and judgement kept apart.
 
     The rail's whole job is that separation. `capture_date` is what the camera
@@ -1042,6 +1178,7 @@ def api_file(folder: str, name: str,
     "date" would hide the only interesting question — whether this is what the
     file says or what somebody chose.
     """
+    _allowed(user, folder, name)
     row = ix.one(db(), folder, name)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "not indexed")
@@ -1073,17 +1210,24 @@ def api_file(folder: str, name: str,
         "effective_date": row["effective_date"],
         "year": row["year"],
         "event": row["event"],
-        "tier": row["tier"],
-        "tags": str(row["tags"] or "").split("\n") if row["tags"] else [],
+        "tags": _split(row["tags"]),
+        "audience": _split(row["audience"]),
         "has_sidecar": bool(row["has_sidecar"]),
-        "decided": ({"tier": decision.tier, "event": decision.event,
+        "decided": ({"event": decision.event,
                      "date_override": decision.date_override,
-                     "tags": list(decision.tags)} if decision else None),
+                     "tags": list(decision.tags),
+                     "audience": list(decision.audience)}
+                    if decision else None),
         "inherited": inherited,
         "facts": facts,
         "exif": {k: str(v) for k, v in sorted(exif.items())},
         "has_render": (RENDER_DIR / folder / (name + ".mp4")).is_file(),
     })
+
+
+def _split(value: object) -> list[str]:
+    """A `group_concat` column back into a list."""
+    return str(value).split(chr(10)) if value else []
 
 
 def _under(root: Path, target: Path) -> bool:
@@ -1092,7 +1236,7 @@ def _under(root: Path, target: Path) -> bool:
 
 
 @app.get("/api/events")
-def api_events(user: Annotated[str, Depends(require_user)]) -> JSONResponse:
+def api_events(user: Annotated[Principal, Depends(require_user)]) -> JSONResponse:
     return JSONResponse([dict(r) for r in ix.events(db())])
 
 
@@ -1107,16 +1251,18 @@ class DecideBody(BaseModel):
 
     folder: str
     name: str
-    tier: str | None = None
     event: str | None = None
     date_override: str | None = None
     tags: list[str] | None = None
     add_tags: list[str] = []
     remove_tags: list[str] = []
+    audience: list[str] | None = None
+    add_audience: list[str] = []
+    remove_audience: list[str] = []
 
 
 @app.post("/api/decide")
-def api_decide(user: Annotated[str, Depends(require_user)],
+def api_decide(user: Annotated[Principal, Depends(require_admin)],
                body: Annotated[DecideBody, Body()]) -> JSONResponse:
     """Write a decision to master, then bring its index row up to date.
 
@@ -1129,10 +1275,10 @@ def api_decide(user: Annotated[str, Depends(require_user)],
     return JSONResponse({
         "folder": body.folder,
         "name": body.name,
-        "tier": decision.tier,
         "event": decision.event,
         "date_override": decision.date_override,
         "tags": list(decision.tags),
+        "audience": list(decision.audience),
         "has_sidecar": not decision.is_empty(),
         "indexed": indexed,
     })
@@ -1161,12 +1307,14 @@ class DecideBulkBody(BaseModel):
     """
 
     files: list[Target]
-    tier: str | None = None
     event: str | None = None
     date_override: str | None = None
     tags: list[str] | None = None
     add_tags: list[str] = []
     remove_tags: list[str] = []
+    audience: list[str] | None = None
+    add_audience: list[str] = []
+    remove_audience: list[str] = []
 
 
 #: Bounds one request rather than the whole gesture. Finishing a 1,766-file
@@ -1176,7 +1324,7 @@ BULK_LIMIT: int = 500
 
 
 @app.post("/api/decide/bulk")
-def api_decide_bulk(user: Annotated[str, Depends(require_user)],
+def api_decide_bulk(user: Annotated[Principal, Depends(require_admin)],
                     view: Annotated[ix.Filters, Depends(filters)],
                     body: Annotated[DecideBulkBody, Body()]) -> JSONResponse:
     """Apply one decision to many files, reporting per-file failures.
@@ -1244,12 +1392,14 @@ def api_decide_bulk(user: Annotated[str, Depends(require_user)],
 class _Change:
     """One decision edit, with "leave it alone" distinct from "clear it"."""
 
-    tier: str | None | Unset = decisions.UNSET
     event: str | None | Unset = decisions.UNSET
     date_override: str | None | Unset = decisions.UNSET
     tags: Sequence[str] | None | Unset = decisions.UNSET
     add_tags: Sequence[str] = field(default_factory=tuple)
     remove_tags: Sequence[str] = field(default_factory=tuple)
+    audience: Sequence[str] | None | Unset = decisions.UNSET
+    add_audience: Sequence[str] = field(default_factory=tuple)
+    remove_audience: Sequence[str] = field(default_factory=tuple)
 
 
 def _change(body: DecideBody | DecideBulkBody) -> _Change:
@@ -1263,10 +1413,13 @@ def _change(body: DecideBody | DecideBulkBody) -> _Change:
     sent = body.model_fields_set
     def got(name: str) -> Any:
         return getattr(body, name) if name in sent else decisions.UNSET
-    return _Change(tier=got("tier"), event=got("event"),
+    return _Change(event=got("event"),
                    date_override=got("date_override"), tags=got("tags"),
                    add_tags=tuple(body.add_tags),
-                   remove_tags=tuple(body.remove_tags))
+                   remove_tags=tuple(body.remove_tags),
+                   audience=got("audience"),
+                   add_audience=tuple(body.add_audience),
+                   remove_audience=tuple(body.remove_audience))
 
 
 def _decide(folder: str, name: str, change: _Change,
@@ -1290,9 +1443,12 @@ def _decide(folder: str, name: str, change: _Change,
     with _write_lock:
         try:
             decision = decisions.apply(
-                media, tier=change.tier, event=change.event,
+                media, event=change.event,
                 date_override=change.date_override, tags=change.tags,
-                add_tags=change.add_tags, remove_tags=change.remove_tags)
+                add_tags=change.add_tags, remove_tags=change.remove_tags,
+                audience=change.audience,
+                add_audience=change.add_audience,
+                remove_audience=change.remove_audience)
         except decisions.DecisionError as e:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
         except OSError as e:

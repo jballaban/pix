@@ -48,11 +48,12 @@ from pix.nas.decisions import Decision
 #: Bumped whenever the shape changes. A mismatch drops and rebuilds rather than
 #: migrating: the index is disposable by design, and a migration path is
 #: machinery to maintain for something a `pix2 index` reproduces exactly.
-SCHEMA_VERSION: int = 2
+SCHEMA_VERSION: int = 3
 
-#: `tier` filter value meaning *no decision yet* — the "new" chip in the UI.
-#: A sentinel rather than a separate flag, because unreviewed is a tier state
-#: and modelling it twice invites the two to disagree.
+#: `audience` filter value meaning *nobody yet* — the "New" chip in the UI.
+#: A sentinel rather than a separate reviewed flag: a file with no audience
+#: has had no decision made about it, and modelling that twice invites the
+#: two to disagree.
 UNREVIEWED: str = "new"
 
 #: Stand-ins for a missing value, so the landing page can link to those
@@ -90,7 +91,6 @@ CREATE TABLE IF NOT EXISTS files (
     height         INTEGER,
     duration       REAL,
     event          TEXT,          -- decision, or inherited from embedded tags
-    tier           TEXT,          -- decision: none | photo | top; NULL = unreviewed
     date_override  TEXT,          -- decision, may pin only some components
     effective_date TEXT,          -- capture_date as overridden; pix format
     year           TEXT,          -- first four of effective_date
@@ -99,7 +99,6 @@ CREATE TABLE IF NOT EXISTS files (
     PRIMARY KEY (folder, name)
 );
 CREATE INDEX IF NOT EXISTS files_event ON files(event);
-CREATE INDEX IF NOT EXISTS files_tier  ON files(tier);
 CREATE INDEX IF NOT EXISTS files_year  ON files(year);
 CREATE INDEX IF NOT EXISTS files_eff   ON files(effective_date);
 CREATE INDEX IF NOT EXISTS files_kind  ON files(kind);
@@ -111,6 +110,13 @@ CREATE TABLE IF NOT EXISTS file_tags (
     PRIMARY KEY (folder, name, tag)
 );
 CREATE INDEX IF NOT EXISTS file_tags_tag ON file_tags(tag);
+CREATE TABLE IF NOT EXISTS file_audience (
+    folder TEXT NOT NULL,
+    name   TEXT NOT NULL,
+    who    TEXT NOT NULL,
+    PRIMARY KEY (folder, name, who)
+);
+CREATE INDEX IF NOT EXISTS file_audience_who ON file_audience(who);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 """
 
@@ -148,12 +154,22 @@ class Filters:
     event: str | None = None
     year: str | None = None
     tag: str | None = None
-    tier: str | None = None
+    audience: str | None = None
     kind: str | None = None
     band: str | None = None
 
-    #: Every filterable column, in the order the top bar shows them.
-    NAMES: ClassVar[tuple[str, ...]] = ("event", "year", "tag", "tier",
+    #: Restricts every query to what this person may see. **Not a filter** —
+    #: it is never read from a URL and cannot be cleared from one. A filter is
+    #: a question the viewer asks; this is the answer to a question they are
+    #: not allowed to ask.
+    #: A **set** of names rather than one, because access is granted to a role
+    #: as readily as to a person: someone in `parents` and `family` can see
+    #: anything shared with either, and a share is just a name either way.
+    viewer: frozenset[str] | None = None
+
+    #: Every filterable column, in the order the top bar shows them. `viewer`
+    #: is deliberately absent.
+    NAMES: ClassVar[tuple[str, ...]] = ("event", "year", "tag", "audience",
                                        "kind", "band")
 
     def active(self) -> tuple[str, ...]:
@@ -184,7 +200,9 @@ def connect(db_path: Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     if _stored_version(conn) not in (None, SCHEMA_VERSION):
         conn.executescript(
-            "DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS file_tags;")
+            "DROP TABLE IF EXISTS files;"
+            "DROP TABLE IF EXISTS file_tags;"
+            "DROP TABLE IF EXISTS file_audience;")
     conn.executescript(_SCHEMA)
     conn.execute("INSERT OR REPLACE INTO meta VALUES ('schema', ?)",
                  (str(SCHEMA_VERSION),))
@@ -216,6 +234,7 @@ def open_ro(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True,
                            check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    _require_current(conn)
     return conn
 
 
@@ -232,7 +251,29 @@ def open_rw(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(f"file:{db_path}?mode=rw", uri=True,
                            check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    _require_current(conn)
     return conn
+
+
+class StaleIndex(RuntimeError):
+    """The index on disk predates the code reading it."""
+
+
+def _require_current(conn: sqlite3.Connection) -> None:
+    """Refuse an index this code cannot read, loudly.
+
+    A schema bump drops the old tables the next time anything opens the file
+    for writing, which leaves a **valid, empty** index behind. Readers then
+    answer every question with zero rows, and an archive that reports itself
+    as empty is indistinguishable from one that is gone. Saying so is the
+    difference between a five-second fix and an afternoon.
+    """
+    found = _stored_version(conn)
+    if found == SCHEMA_VERSION:
+        return
+    raise StaleIndex(
+        f"index is schema v{found}, this build reads v{SCHEMA_VERSION} — "
+        "run pix 0.1.251 to rebuild it")
 
 
 def build(db_path: Path, *, echo: Callable[[str], None] = lambda _: None,
@@ -257,6 +298,7 @@ def build(db_path: Path, *, echo: Callable[[str], None] = lambda _: None,
         with conn:
             conn.execute("DELETE FROM files")
             conn.execute("DELETE FROM file_tags")
+            conn.execute("DELETE FROM file_audience")
             for folder, decided in _folders(meta_root, master_root):
                 for record in _records(meta_root / folder):
                     row = _row(folder, record, decided)
@@ -266,8 +308,8 @@ def build(db_path: Path, *, echo: Callable[[str], None] = lambda _: None,
                     conn.execute(_INSERT, row)
                     name = str(row["name"])
                     decision = decided.get(name)
-                    if decision is not None and decision.tags:
-                        _write_tags(conn, folder, name, decision.tags)
+                    if decision is not None:
+                        _write_multi(conn, folder, name, decision)
                         tags_seen.update(decision.tags)
                     stats.files += 1
                     if row["capture_date"]:
@@ -289,10 +331,10 @@ def build(db_path: Path, *, echo: Callable[[str], None] = lambda _: None,
 _INSERT: str = (
     "INSERT OR REPLACE INTO files "
     "(folder, name, size, mtime_ns, kind, capture_date, camera, width, height, "
-    " duration, event, tier, date_override, effective_date, year, band, "
+    " duration, event, date_override, effective_date, year, band, "
     " has_sidecar) "
     "VALUES (:folder, :name, :size, :mtime_ns, :kind, :capture_date, :camera, "
-    " :width, :height, :duration, :event, :tier, :date_override, "
+    " :width, :height, :duration, :event, :date_override, "
     " :effective_date, :year, :band, :has_sidecar)"
 )
 
@@ -329,23 +371,30 @@ def refresh(conn: sqlite3.Connection, folder: str, name: str, *,
     row = _row(folder, record, decided)
     if row is None:
         return False
-    decision = decided.get(name)
     with conn:
         conn.execute(_INSERT, row)
-        _write_tags(conn, folder, name,
-                    decision.tags if decision is not None else ())
+        _write_multi(conn, folder, name, decided.get(name))
     return True
 
 
-def _write_tags(conn: sqlite3.Connection, folder: str, name: str,
-                tags: tuple[str, ...]) -> None:
-    """Replace one file's tag rows. Delete-then-insert, so removal works."""
-    conn.execute("DELETE FROM file_tags WHERE folder = ? AND name = ?",
-                 (folder, name))
-    if tags:
-        conn.executemany(
-            "INSERT OR REPLACE INTO file_tags (folder, name, tag) VALUES (?,?,?)",
-            [(folder, name, tag) for tag in tags])
+def _write_multi(conn: sqlite3.Connection, folder: str, name: str,
+                 decision: Decision | None) -> None:
+    """Replace one file's tag and audience rows.
+
+    Delete-then-insert, or un-sharing a file would silently do nothing — and
+    a share that cannot be taken back is not access control.
+    """
+    for table, column, values in (
+        ("file_tags", "tag", decision.tags if decision else ()),
+        ("file_audience", "who", decision.audience if decision else ()),
+    ):
+        conn.execute(f"DELETE FROM {table} WHERE folder = ? AND name = ?",
+                     (folder, name))
+        if values:
+            conn.executemany(
+                f"INSERT OR REPLACE INTO {table} (folder, name, {column}) "
+                "VALUES (?,?,?)",
+                [(folder, name, v) for v in values])
 
 
 def built_at(conn: sqlite3.Connection) -> float | None:
@@ -458,7 +507,6 @@ def _row(folder: str, record: dict[str, Any],
         "event": ((decision.event if decision else None)
                   or _tag(exif_map, "EventOverride")
                   or _tag(exif_map, "EventAuto")),
-        "tier": (decision.tier if decision else None) or _tag(exif_map, "Tier"),
         "date_override": override,
         "effective_date": datestr.format_pix(effective) if effective else None,
         "year": f"{effective.year:04d}" if effective else None,
@@ -559,16 +607,54 @@ def _clauses(filters: Filters) -> dict[str, tuple[str, dict[str, Any]]]:
             "EXISTS (SELECT 1 FROM file_tags ft WHERE ft.folder = files.folder "
             "AND ft.name = files.name AND ft.tag = :f_tag)",
             {"f_tag": filters.tag})
-    if filters.tier is not None:
-        out["tier"] = (
-            ("files.tier IS NULL" if filters.tier == UNREVIEWED
-             else "files.tier = :f_tier"),
-            {} if filters.tier == UNREVIEWED else {"f_tier": filters.tier})
+    if filters.audience is not None:
+        shared = ("EXISTS (SELECT 1 FROM file_audience fa "
+                  "WHERE fa.folder = files.folder AND fa.name = files.name")
+        out["audience"] = (
+            (f"NOT {shared})" if filters.audience == UNREVIEWED
+             else f"{shared} AND fa.who = :f_audience)"),
+            {} if filters.audience == UNREVIEWED
+            else {"f_audience": filters.audience})
     if filters.kind is not None:
         out["kind"] = ("files.kind = :f_kind", {"f_kind": filters.kind})
     if filters.band is not None:
         out["band"] = ("files.band = :f_band", {"f_band": filters.band})
     return out
+
+
+def _scope(filters: Filters) -> tuple[str, dict[str, Any]]:
+    """The clause restricting a non-admin to what has been shared with them.
+
+    Applied to **every** query rather than folded into `_clauses`, so it
+    cannot be dropped by a caller that forgets it or overridden by a query
+    parameter. An admin has no scope at all: seeing everything is what the
+    role means.
+
+    An **empty** set is not the same as no scope — it is somebody who has been
+    granted nothing, and must see nothing. Treating the two alike is the classic
+    way an access check turns into an access grant.
+    """
+    if filters.viewer is None:
+        return "", {}
+    if not filters.viewer:
+        return "0", {}
+    names = {f"scope{i}": who for i, who in enumerate(sorted(filters.viewer))}
+    holes = ",".join(f":{k}" for k in names)
+    return ("EXISTS (SELECT 1 FROM file_audience fv "
+            "WHERE fv.folder = files.folder AND fv.name = files.name "
+            f"AND fv.who IN ({holes}))", dict(names))
+
+
+def _where(filters: Filters) -> tuple[str, dict[str, Any]]:
+    """Everything a listing must satisfy: the filters, and the viewer scope."""
+    clauses = _clauses(filters)
+    parts = [sql for sql, _ in clauses.values()]
+    params = _bind(clauses)
+    scope, scope_params = _scope(filters)
+    if scope:
+        parts.append(scope)
+        params.update(scope_params)
+    return (" AND ".join(parts), params)
 
 
 def _bind(clauses: dict[str, tuple[str, dict[str, Any]]]) -> dict[str, Any]:
@@ -607,7 +693,9 @@ def events(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         "       COALESCE(event, :none) AS event, COUNT(*) AS n, "
         "       MIN(effective_date) AS first_seen, "
         "       MAX(effective_date) AS last_seen, "
-        "       SUM(CASE WHEN tier IS NULL THEN 1 ELSE 0 END) AS unreviewed "
+        "       SUM(CASE WHEN NOT EXISTS (SELECT 1 FROM file_audience fa "
+        "         WHERE fa.folder = files.folder AND fa.name = files.name) "
+        "       THEN 1 ELSE 0 END) AS unreviewed "
         "FROM files GROUP BY year, event "
         # On the raw column, not the alias: `NULL = '(undated)'` is NULL,
         # and SQLite sorts NULLs first — which put the undated group at the
@@ -624,28 +712,30 @@ def files(conn: sqlite3.Connection, filters: Filters | None = None, *,
     Undated files sort last rather than scattering through the grid: they are a
     work item of their own, not a date that happens to be small.
     """
-    clauses = _clauses(filters or Filters())
-    where = " AND ".join(sql for sql, _ in clauses.values())
-    params: dict[str, Any] = {**_bind(clauses), "limit": limit, "offset": offset}
+    where, bound = _where(filters or Filters())
+    params: dict[str, Any] = {**bound, "limit": limit, "offset": offset}
     return list(conn.execute(
-        "SELECT files.*, ("
-        "  SELECT group_concat(ft.tag, char(10)) FROM file_tags ft "
-        "  WHERE ft.folder = files.folder AND ft.name = files.name"
-        ") AS tags FROM files "
+        "SELECT files.*, " + _TAGS_COL + ", " + _AUDIENCE_COL + " FROM files "
         + (f"WHERE {where} " if where else "")
         + "ORDER BY effective_date IS NULL, effective_date, name "
         "LIMIT :limit OFFSET :offset", params
     ))
 
 
+_TAGS_COL: str = (
+    "(SELECT group_concat(ft.tag, char(10)) FROM file_tags ft "
+    " WHERE ft.folder = files.folder AND ft.name = files.name) AS tags")
+_AUDIENCE_COL: str = (
+    "(SELECT group_concat(fa.who, char(10)) FROM file_audience fa "
+    " WHERE fa.folder = files.folder AND fa.name = files.name) AS audience")
+
+
 def one(conn: sqlite3.Connection, folder: str,
         name: str) -> sqlite3.Row | None:
     """A single row with its tags, or None if the file is not indexed."""
     return conn.execute(
-        "SELECT files.*, ("
-        "  SELECT group_concat(ft.tag, char(10)) FROM file_tags ft "
-        "  WHERE ft.folder = files.folder AND ft.name = files.name"
-        ") AS tags FROM files WHERE folder = ? AND name = ?",
+        "SELECT files.*, " + _TAGS_COL + ", " + _AUDIENCE_COL
+        + " FROM files WHERE folder = ? AND name = ?",
         (folder, name)).fetchone()
 
 
@@ -668,11 +758,10 @@ def tag(exif: dict[str, Any], key: str) -> str | None:
 
 def count(conn: sqlite3.Connection, filters: Filters | None = None) -> int:
     """How many files match, regardless of the page being shown."""
-    clauses = _clauses(filters or Filters())
-    where = " AND ".join(sql for sql, _ in clauses.values())
+    where, bound = _where(filters or Filters())
     row = conn.execute(
         "SELECT COUNT(*) AS n FROM files " + (f"WHERE {where}" if where else ""),
-        _bind(clauses)).fetchone()
+        bound).fetchone()
     return int(row["n"])
 
 
@@ -688,8 +777,7 @@ def matching(conn: sqlite3.Connection, filters: Filters,
     """
     if not targets:
         return set()
-    clauses = _clauses(filters)
-    where = " AND ".join(sql for sql, _ in clauses.values())
+    where, bound = _where(filters)
     # Joined on a newline because neither component can contain one, so the pair
     # round-trips exactly — no separator a filename could forge.
     sep = chr(10)
@@ -700,7 +788,7 @@ def matching(conn: sqlite3.Connection, filters: Filters,
         "SELECT folder, name FROM files WHERE "
         + (f"({where}) AND " if where else "")
         + f"files.folder || char(10) || files.name IN ({holes})",
-        {**_bind(clauses), **keys})
+        {**bound, **keys})
     return {(str(r["folder"]), str(r["name"])) for r in rows}
 
 
@@ -729,10 +817,12 @@ def suggest(conn: sqlite3.Connection, column: str,
     order = ("ORDER BY n_all > 0 DESC, n_any > 0 DESC, n DESC, value "
              "LIMIT :limit")
 
-    if column == "tag":
-        sql = ("SELECT ft.tag AS value, " + tally
-               + "FROM file_tags ft "
-                 "JOIN files ON files.folder = ft.folder AND files.name = ft.name "
+    if column in ("tag", "audience"):
+        table, col = (("file_tags", "tag") if column == "tag"
+                      else ("file_audience", "who"))
+        sql = (f"SELECT m.{col} AS value, " + tally
+               + f"FROM {table} m "
+                 "JOIN files ON files.folder = m.folder AND files.name = m.name "
                  "GROUP BY value " + order)
     elif column == "year":
         # Undated files are offered as a year, because *show me the ones with
@@ -758,7 +848,9 @@ def summary(conn: sqlite3.Connection) -> sqlite3.Row:
     return conn.execute(
         "SELECT COUNT(*) AS files, "
         "       COUNT(DISTINCT event) AS events, "
-        "       SUM(CASE WHEN tier IS NULL THEN 1 ELSE 0 END) AS unreviewed, "
+        "       SUM(CASE WHEN NOT EXISTS (SELECT 1 FROM file_audience fa "
+        "         WHERE fa.folder = files.folder AND fa.name = files.name) "
+        "       THEN 1 ELSE 0 END) AS unreviewed, "
         "       SUM(CASE WHEN effective_date IS NULL THEN 1 ELSE 0 END) AS undated "
         "FROM files"
     ).fetchone()

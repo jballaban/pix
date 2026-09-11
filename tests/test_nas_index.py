@@ -281,56 +281,58 @@ def test_refresh_picks_up_a_new_decision(tree: dict[str, Path]) -> None:
     """The point of it: tiering one photo must not cost a 62k-record rebuild."""
     _record(tree, "init_2026", "a.jpg", {})
     _build(tree)
-    _decide(tree, "init_2026", "a.jpg", Decision(tier="top", event="Sicily"))
+    _decide(tree, "init_2026", "a.jpg", Decision(audience=("family",), event="Sicily"))
 
     conn = ix.connect(tree["db"])
     assert _refresh(tree, conn, "init_2026", "a.jpg") is True
 
-    row = conn.execute("SELECT * FROM files").fetchone()
-    assert (row["tier"], row["event"], row["has_sidecar"]) == ("top", "Sicily", 1)
+    row = ix.one(conn, "init_2026", "a.jpg")
+    assert row is not None
+    assert (row["audience"], row["event"], row["has_sidecar"]) == ("family", "Sicily", 1)
 
 
 def test_refresh_touches_only_its_own_row(tree: dict[str, Path]) -> None:
     _record(tree, "init_2026", "a.jpg", {"XMP:EventAuto": "inherited"})
     _record(tree, "init_2026", "b.jpg", {"XMP:EventAuto": "inherited"})
     _build(tree)
-    _decide(tree, "init_2026", "a.jpg", Decision(tier="top"))
+    _decide(tree, "init_2026", "a.jpg", Decision(audience=("family",)))
 
     conn = ix.connect(tree["db"])
     _refresh(tree, conn, "init_2026", "a.jpg")
 
-    rows = {r["name"]: (r["tier"], r["event"])
-            for r in conn.execute("SELECT * FROM files")}
-    assert rows == {"a.jpg": ("top", "inherited"), "b.jpg": (None, "inherited")}
+    rows = {r["name"]: (r["audience"], r["event"]) for r in ix.files(conn)}
+    assert rows == {"a.jpg": ("family", "inherited"), "b.jpg": (None, "inherited")}
 
 
 def test_refresh_keeps_the_inherited_event_a_decision_is_silent_about(
     tree: dict[str, Path]
 ) -> None:
-    """Read-through is per-field: tiering a photo must not hide the event it
+    """Read-through is per-field: sharing a photo must not hide the event it
     inherited from its embedded legacy tags."""
     _record(tree, "init_2026", "a.jpg", {"XMP:EventAuto": "Italy - Sicily"})
     _build(tree)
-    _decide(tree, "init_2026", "a.jpg", Decision(tier="photo"))
+    _decide(tree, "init_2026", "a.jpg", Decision(audience=("kids",)))
 
     conn = ix.connect(tree["db"])
     _refresh(tree, conn, "init_2026", "a.jpg")
 
-    row = conn.execute("SELECT * FROM files").fetchone()
-    assert (row["tier"], row["event"]) == ("photo", "Italy - Sicily")
+    row = ix.one(conn, "init_2026", "a.jpg")
+    assert row is not None
+    assert (row["audience"], row["event"]) == ("kids", "Italy - Sicily")
 
 
 def test_refresh_clears_a_withdrawn_decision(tree: dict[str, Path]) -> None:
     _record(tree, "init_2026", "a.jpg", {})
-    _decide(tree, "init_2026", "a.jpg", Decision(tier="top"))
+    _decide(tree, "init_2026", "a.jpg", Decision(audience=("family",)))
     _build(tree)
 
     decisions.write(tree["master"] / "init_2026" / "a.jpg", Decision())
     conn = ix.connect(tree["db"])
     _refresh(tree, conn, "init_2026", "a.jpg")
 
-    row = conn.execute("SELECT * FROM files").fetchone()
-    assert (row["tier"], row["has_sidecar"]) == (None, 0)
+    row = ix.one(conn, "init_2026", "a.jpg")
+    assert row is not None
+    assert (row["audience"], row["has_sidecar"]) == (None, 0)
 
 
 def test_refresh_keeps_the_probed_facts(tree: dict[str, Path]) -> None:
@@ -339,7 +341,7 @@ def test_refresh_keeps_the_probed_facts(tree: dict[str, Path]) -> None:
             {"EXIF:DateTimeOriginal": "2026:01:04 14:51:34",
              "EXIF:Model": "iPhone 17 Pro"})
     _build(tree)
-    _decide(tree, "init_2026", "a.jpg", Decision(tier="top"))
+    _decide(tree, "init_2026", "a.jpg", Decision(audience=("family",)))
 
     conn = ix.connect(tree["db"])
     _refresh(tree, conn, "init_2026", "a.jpg")
@@ -354,7 +356,7 @@ def test_refresh_reports_a_file_with_no_probed_facts(tree: dict[str, Path]) -> N
     catch up, and inventing one would put a file in the index that the next
     rebuild removes."""
     _build(tree)
-    _decide(tree, "init_2026", "ghost.jpg", Decision(tier="top"))
+    _decide(tree, "init_2026", "ghost.jpg", Decision(audience=("family",)))
 
     conn = ix.connect(tree["db"])
     assert _refresh(tree, conn, "init_2026", "ghost.jpg") is False
@@ -366,7 +368,7 @@ def test_refresh_never_adds_or_removes_rows(tree: dict[str, Path]) -> None:
     _record(tree, "init_2026", "a.jpg", {})
     _record(tree, "init_2026", "b.jpg", {})
     _build(tree)
-    _decide(tree, "init_2026", "a.jpg", Decision(tier="top"))
+    _decide(tree, "init_2026", "a.jpg", Decision(audience=("family",)))
 
     conn = ix.connect(tree["db"])
     _refresh(tree, conn, "init_2026", "a.jpg")
@@ -380,7 +382,7 @@ def test_a_rebuild_agrees_with_a_refresh(tree: dict[str, Path]) -> None:
     _record(tree, "init_2026", "a.jpg", {"XMP:EventAuto": "inherited"})
     _build(tree)
     _decide(tree, "init_2026", "a.jpg",
-            Decision(tier="top", date_override="2015-03-15-11:52:56"))
+            Decision(audience=("family",), date_override="2015-03-15-11:52:56"))
 
     conn = ix.connect(tree["db"])
     _refresh(tree, conn, "init_2026", "a.jpg")
@@ -525,11 +527,11 @@ def test_filters_combine_with_and(tree: dict[str, Path]) -> None:
 def test_the_new_filter_finds_undecided_files(tree: dict[str, Path]) -> None:
     _record(tree, "init_2026", "a.jpg", {})
     _record(tree, "init_2026", "b.jpg", {})
-    _decide(tree, "init_2026", "a.jpg", Decision(tier="none"))
+    _decide(tree, "init_2026", "a.jpg", Decision(audience=("private",)))
     _build(tree)
 
     conn = ix.connect(tree["db"])
-    hits = ix.files(conn, ix.Filters(tier=ix.UNREVIEWED))
+    hits = ix.files(conn, ix.Filters(audience=ix.UNREVIEWED))
     assert [r["name"] for r in hits] == ["b.jpg"]
 
 
