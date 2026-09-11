@@ -28,7 +28,7 @@ import os
 import shutil
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -74,6 +74,7 @@ class UploadSummary:
     bytes_copied: int = 0
     verified: bool = False
     staging_cleared: bool = False
+    cancelled: bool = False     # Ctrl+C: queue dropped, in-flight drained
     failed: list[str] = field(default_factory=lambda: [])
 
 
@@ -116,8 +117,17 @@ def run_upload(*, echo: Callable[[str], None] = lambda _: None) -> list[UploadSu
     if not folders:
         echo("nothing staged")
         return []
+    summaries: list[UploadSummary] = []
     with UploadLock(IMPORT_ROOT):
-        return [_upload_one(f, echo=echo) for f in folders]
+        for folder in folders:
+            summary = _upload_one(folder, echo=echo)
+            summaries.append(summary)
+            if summary.cancelled:
+                remaining = len(folders) - len(summaries)
+                if remaining:
+                    echo(f"cancelled: {remaining} staging folder(s) not started")
+                break
+    return summaries
 
 
 def _upload_one(staging: Path, *, echo: Callable[[str], None]) -> UploadSummary:
@@ -145,14 +155,28 @@ def _upload_one(staging: Path, *, echo: Callable[[str], None]) -> UploadSummary:
     total_bytes = sum(i.size for i in items)
     started = time.monotonic()
     digests: dict[str, str] = {}
+    # Mutable so the progress thread can read it without the lock. `inflight`
+    # is what makes a cancel legible: the operator sees copies closing out
+    # rather than a terminal that appears to have hung.
+    state: dict[str, int] = {"inflight": 0, "cancelling": 0}
 
     with ledger_path.open("a", encoding="utf-8") as log:
         progress = LiveProgress(
             total=len(items),
-            status_provider=lambda: _status(summary, len(items), total_bytes, started),
+            status_provider=lambda: _status(summary, len(items), total_bytes,
+                                            started, state),
         )
 
         def handle(item: _Item) -> None:
+            if state["cancelling"]:
+                return
+            state["inflight"] += 1
+            try:
+                _handle_one(item)
+            finally:
+                state["inflight"] -= 1
+
+        def _handle_one(item: _Item) -> None:
             if item.flat in already:
                 with lock:
                     summary.skipped += 1
@@ -180,8 +204,22 @@ def _upload_one(staging: Path, *, echo: Callable[[str], None]) -> UploadSummary:
 
         with progress:
             progress.begin(f"upload {name}")
-            with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-                list(pool.map(handle, items))
+            pool = ThreadPoolExecutor(max_workers=WORKERS)
+            futures = [pool.submit(handle, item) for item in items]
+            try:
+                for future in as_completed(futures):
+                    future.result()
+            except KeyboardInterrupt:
+                # Drop everything still queued, then let the copies already in
+                # progress finish — killing them mid-write would leave marker
+                # temps for no gain, and they are nearly done by definition.
+                state["cancelling"] = 1
+                dropped = sum(1 for f in futures if f.cancel())
+                summary.cancelled = True
+                echo(f"\ncancelling {name}: {dropped} queued dropped, "
+                     f"draining {state['inflight']} in flight")
+            finally:
+                pool.shutdown(wait=True)
 
         with lock:
             for rel, root, size in culled:
@@ -190,7 +228,9 @@ def _upload_one(staging: Path, *, echo: Callable[[str], None]) -> UploadSummary:
                 _append(log, {"rel": rel, "root": root, "size": size,
                               "outcome": "culled"})
 
-    if summary.failed:
+    if summary.cancelled or summary.failed:
+        # Never verify a partial batch: it would fail on files that were simply
+        # never attempted, and verification is what gates deleting staging.
         summary.verified = False
     else:
         echo(f"{name}: verifying {len(items)} file(s) against master")
@@ -202,7 +242,7 @@ def _upload_one(staging: Path, *, echo: Callable[[str], None]) -> UploadSummary:
 
 
 def _status(summary: "UploadSummary", total_files: int, total_bytes: int,
-            started: float) -> str:
+            started: float, state: dict[str, int] | None = None) -> str:
     """The live body: done, transferred, rate, and an ETA.
 
     Read **without the lock**, deliberately. It is called from the progress
@@ -218,6 +258,9 @@ def _status(summary: "UploadSummary", total_files: int, total_bytes: int,
     sent = summary.bytes_copied
     elapsed = max(time.monotonic() - started, 0.001)
     rate = sent / elapsed
+
+    if state is not None and state["cancelling"]:
+        return f"CANCELLING - {state['inflight']} copy(s) closing out"
 
     body = f"{done}/{total_files}  {format_size(sent)} of {format_size(total_bytes)}"
     if rate > 0 and sent > 0:

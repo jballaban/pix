@@ -88,9 +88,16 @@ def upload() -> None:
         raise typer.Exit(code=1) from e
 
     failed = 0
+    cancelled = False
     for s in summaries:
         gb = s.bytes_copied / (1024 ** 3)
-        state = "cleared" if s.staging_cleared else "KEPT (unverified)"
+        if s.cancelled:
+            cancelled = True
+            state = "KEPT (cancelled)"
+        elif s.staging_cleared:
+            state = "cleared"
+        else:
+            state = "KEPT (unverified)"
         typer.echo(
             f"{s.name}: {s.copied} copied ({gb:.1f} GB), {s.skipped} already there, "
             f"{s.culled} culled -> {s.master_folder.name}; staging {state}"
@@ -101,6 +108,13 @@ def upload() -> None:
             typer.echo(f"  ... and {len(s.failed) - 10} more", err=True)
         failed += len(s.failed)
 
+    if cancelled:
+        typer.echo("")
+        typer.echo(
+            "Cancelled. Staging is intact and nothing was deleted - "
+            "re-run `pix2 upload` to continue into the same master folder."
+        )
+        raise typer.Exit(code=130)
     if failed:
         raise typer.Exit(code=1)
 
