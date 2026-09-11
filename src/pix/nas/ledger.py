@@ -18,6 +18,7 @@ still.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator, cast
@@ -120,19 +121,43 @@ def iter_entries(ledger: Path) -> Iterator[dict[str, Any]]:
         return
 
 
-def committed_folder_keys(name: str) -> set[tuple[str, int]]:
-    """Every `(rel, size)` already uploaded under `name`.
+def _norm_root(raw: str) -> str:
+    """Normalise a source-root string for comparison.
 
-    **Scoped by name, deliberately.** A folder source has no PUID, so its key is
-    `(relative path, size)` — and two different SD cards can both hold
-    `DCIM/100MSDCF/DSC00001.JPG` at an identical size. Scoping to the name the
-    user gave (which is also the master folder's prefix) keeps those namespaces
-    apart, so one card's photos can never mask another's.
+    Raw string equality is too brittle for a check whose failure mode is
+    silently skipping files: separators, trailing slashes and (on Windows) case
+    all vary without meaning anything.
+    """
+    norm = str(Path(raw))
+    return norm.casefold() if os.name == "nt" else norm
+
+
+def committed_folder_keys(name: str, source_root: Path) -> set[tuple[str, int]]:
+    """Every `(rel, size)` already uploaded under `name` *from this source root*.
+
+    **Scoped by both, and both are load-bearing.** A folder source has no PUID,
+    so its key is `(relative path, size)`, which is only unique *within one
+    source tree*:
+
+    - **Name** keeps separate sources apart. Two SD cards can each hold
+      `DCIM/100MSDCF/DSC00001.JPG` at an identical size; without the name, one
+      card's photos would mask the other's.
+    - **Source root** keeps separate batches of the *same* source apart. Importing
+      `G:\\pix\\2015` then `G:\\pix\\2016` under one name yields `a/x.jpg` for
+      both, so year two would silently skip year one's files. Canonical
+      date-stamped filenames make a real collision unlikely, but "unlikely to
+      silently drop photos" is not a standard worth holding.
+
+    This is why the ledger header records `source_root` — the year lives there,
+    as provenance, rather than being smuggled into the folder name.
     """
     require_share()
+    root = _norm_root(str(source_root))
     keys: set[tuple[str, int]] = set()
     for header in iter_headers():
         if header.name != name or header.source != "folder":
+            continue
+        if header.source_root is not None and _norm_root(header.source_root) != root:
             continue
         for entry in iter_entries(header.folder / LEDGER_NAME):
             rel = entry.get("rel")

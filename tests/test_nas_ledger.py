@@ -46,7 +46,7 @@ def test_unreachable_share_is_an_error(tmp_path: Path,
 
 def test_empty_master_is_reachable_and_empty(master: Path) -> None:
     """The share existing with nothing uploaded yet is not an error."""
-    assert ledger.committed_folder_keys("legacy_2015") == set()
+    assert ledger.committed_folder_keys("legacy_2015", Path(r"G:\pix\2015")) == set()
 
 
 def test_committed_keys_are_read_from_ledgers(master: Path) -> None:
@@ -56,7 +56,7 @@ def test_committed_keys_are_read_from_ledgers(master: Path) -> None:
         [{"rel": "a/one.jpg", "size": 3, "outcome": "kept"},
          {"rel": "b.heic", "size": 3, "outcome": "kept"}],
     )
-    keys = ledger.committed_folder_keys("legacy_2015")
+    keys = ledger.committed_folder_keys("legacy_2015", Path(r"G:\pix\2015"))
     assert keys == {st.skip_key("a/one.jpg", 3), st.skip_key("b.heic", 3)}
 
 
@@ -71,12 +71,12 @@ def test_keys_are_scoped_by_name(master: Path) -> None:
         {"rel": "DCIM/100MSDCF/DSC00001.JPG", "size": 1024, "outcome": "kept"}
     ]
     _write_ledger(master / "card_a_2026-09-11T02-00",
-                  {"name": "card_a", "source": "folder"}, shared)
+                  {"name": "card_a", "source": "folder", "source_root": str(Path("/cards/a"))}, shared)
 
-    assert ledger.committed_folder_keys("card_a") == {
+    assert ledger.committed_folder_keys("card_a", Path("/cards/a")) == {
         st.skip_key("DCIM/100MSDCF/DSC00001.JPG", 1024)
     }
-    assert ledger.committed_folder_keys("card_b") == set()
+    assert ledger.committed_folder_keys("card_b", Path("/cards/b")) == set()
 
 
 def test_device_ledgers_are_ignored_for_folder_keys(master: Path) -> None:
@@ -86,7 +86,7 @@ def test_device_ledgers_are_ignored_for_folder_keys(master: Path) -> None:
         {"name": "Jamies-iPhone", "source": "device", "serial": "ABC123"},
         [{"puid": "p1", "path": "100APPLE/IMG_4471.HEIC", "size": 10}],
     )
-    assert ledger.committed_folder_keys("Jamies-iPhone") == set()
+    assert ledger.committed_folder_keys("Jamies-iPhone", Path("/x")) == set()
 
 
 def test_known_devices_are_derived_not_stored(master: Path) -> None:
@@ -104,10 +104,11 @@ def test_malformed_ledger_is_skipped_not_fatal(master: Path) -> None:
     (master / "broken_2026").mkdir()
     (master / "broken_2026" / ".import.jsonl").write_text("{not json\n", encoding="utf-8")
     _write_ledger(master / "legacy_2015_2026-09-11T02-00",
-                  {"name": "legacy_2015", "source": "folder"},
+                  {"name": "legacy_2015", "source": "folder",
+                   "source_root": r"G:\pix\2015"},
                   [{"rel": "a.jpg", "size": 1}])
 
-    assert ledger.committed_folder_keys("legacy_2015") == {st.skip_key("a.jpg", 1)}
+    assert ledger.committed_folder_keys("legacy_2015", Path(r"G:\pix\2015")) == {st.skip_key("a.jpg", 1)}
 
 
 # --- integration with the folder import --------------------------------------
@@ -122,7 +123,8 @@ def test_import_skips_already_uploaded_files(master: Path, tmp_path: Path,
     monkeypatch.setattr(fi, "IMPORT_ROOT", tmp_path / "staging")
 
     _write_ledger(master / "legacy_2015_2026-09-11T02-00",
-                  {"name": "legacy_2015", "source": "folder"},
+                  {"name": "legacy_2015", "source": "folder",
+                   "source_root": str(src.resolve())},
                   [{"rel": "one.jpg", "size": 3, "outcome": "kept"}])
 
     s = fi.run_folder_import(src, "legacy_2015")
@@ -160,7 +162,8 @@ def test_culled_then_uploaded_stays_skipped(master: Path, tmp_path: Path,
     fi.run_folder_import(src, "legacy_2015")
     # Simulate upload: ledger written, staging cleared.
     _write_ledger(master / "legacy_2015_2026-09-11T02-00",
-                  {"name": "legacy_2015", "source": "folder"},
+                  {"name": "legacy_2015", "source": "folder",
+                   "source_root": str(src.resolve())},
                   [{"rel": "one.jpg", "size": 3, "outcome": "kept"}])
     import shutil
     shutil.rmtree(tmp_path / "staging" / "legacy_2015")

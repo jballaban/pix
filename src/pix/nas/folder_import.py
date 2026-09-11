@@ -79,7 +79,7 @@ def run_folder_import(
 
     # The committed half first: reaching the NAS is a precondition, and failing
     # here costs nothing, where failing later would leave a half-staged tree.
-    committed = ledger.committed_folder_keys(name)
+    committed = ledger.committed_folder_keys(name, source)
 
     staging = staging_for(name)
     if staging.exists() and not staging.is_dir():
@@ -94,7 +94,7 @@ def run_folder_import(
     if manifest:
         echo(f"{len(manifest)} file(s) already staged for '{name}'")
     if committed:
-        echo(f"{len(committed)} file(s) already uploaded under '{name}'")
+        echo(f"{len(committed)} file(s) already uploaded from {source}")
     manifest |= committed
 
     summary = FolderImportSummary(name=name, source=source, staging=staging)
