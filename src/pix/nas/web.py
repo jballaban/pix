@@ -516,7 +516,8 @@ def browse(user: Annotated[Principal, Depends(require_user)],
 </div>
 <div id="menu" hidden></div>""",
         tools=('<div class="chips" id="chips"></div>'
-               '<button id="selall">Select all</button>'),
+               '<button id="selall">Select all</button>'
+               '<button id="selnone">Deselect</button>'),
         rows=_actions(user),
         script=(
             f"<script>const VIEW={_js(_view_dict(view))},"
@@ -549,8 +550,6 @@ def _actions(user: Principal) -> str:
   <span class="sep"></span>
   <button data-act="event">Event&hellip;</button>
   <button data-act="date">Date&hellip;</button>
-  <span class="sep"></span>
-  <button id="selnone">Deselect</button>
 </div>"""
 
 
@@ -579,6 +578,7 @@ def _cell(row: sqlite3.Row) -> str:
         f'<div class="cell" data-folder="{_h(row["folder"])}" '
         f'data-name="{_h(row["name"])}" data-kind="{_h(row["kind"])}" '
         f'data-audience="{_h(nl.join(shared))}" '
+        f'data-event="{_h(row["event"] or "")}" '
         f'data-tags="{_h(nl.join(tags))}" '
         f'data-date="{_h(str(row["effective_date"] or "no date"))}">'
         f'<img loading="lazy" src="/thumb/{_q(row["folder"])}/{_q(row["name"])}">'
@@ -781,13 +781,23 @@ async function openMenu(anchorEl,ctx){
   // A checklist, not a list of commands. `some` clears first and then
   // adds: taking access away is the safer direction, so it is the one that
   // costs a single click.
+  // The field each action edits. `event` holds one value where tags and
+  // access hold many, but the question the menu asks is the same one —
+  // *do these files say this?* — so it is one control either way.
+  const FIELD=MULTI[ctx.as]?MULTI[ctx.as][0]:(ctx.as==='event'?'event':null);
+
   async function toggle(value,row){
     const cs=targets();
     if(!cs.length){say('nothing selected');return;}
-    const field=MULTI[ctx.as][0];
-    const add=shareState(cs,field,value)==='none';
-    await applyToSelection(ctx.as,value,add);
-    mark(row,shareState(targets(),field,value));
+    const state=shareState(cs,FIELD,value);
+    if(FIELD==='event'){
+      // Ticking the event they already have clears it; anything else sets
+      // it. One value, so there is nothing to add to.
+      await applyToSelection('event',state==='all'?null:value,true);
+    }else{
+      await applyToSelection(ctx.as,value,state==='none');
+    }
+    mark(row,shareState(targets(),FIELD,value));
   }
   function mark(row,state){
     row.dataset.state=state;
@@ -796,7 +806,7 @@ async function openMenu(anchorEl,ctx){
   }
   function render(text){
     const t=(text||'').toLowerCase();
-    const checkable=ctx.mode==='set'&&!!MULTI[ctx.as];
+    const checkable=ctx.mode==='set'&&!!FIELD;
     const hits=opts.filter(o=>o.label.toLowerCase().includes(t));
     const list=document.createElement('div');
     list.id='menulist';
@@ -817,13 +827,27 @@ async function openMenu(anchorEl,ctx){
     if(ctx.mode==='set'&&!checkable){
       list.appendChild(opt({label:'Clear',n:null},()=>choose(null)));
     }
-    // Three bands, most relevant first: values already used by what you are
-    // looking at, then by anything one filter away, then the rest.
+    // What these files already say comes first, ticked, so the menu opens
+    // showing the answer instead of asking a question whose answer is on
+    // the screen behind it.
+    const present=checkable?currentValues(targets(),FIELD):[];
+    if(present.length){
+      const shown=present.filter(v=>v.toLowerCase().includes(t));
+      if(shown.length){
+        const h=document.createElement('div');
+        h.className='band'; h.textContent='On these files';
+        list.appendChild(h);
+        shown.forEach(v=>list.appendChild(opt(
+          {value:v,label:v,n:null},()=>choose(v),true)));
+      }
+    }
+    // Then three bands, most relevant first: values already used by what you
+    // are looking at, then by anything one filter away, then the rest.
     for(const [scope,title] of [['all','In this view'],['any','Related'],
                                 ['other','Elsewhere']]){
-      const band=hits.filter(o=>o.scope===scope);
+      const band=hits.filter(o=>o.scope===scope&&!present.includes(o.value));
       if(!band.length) continue;
-      if(hits.some(o=>o.scope!==scope)){
+      if(hits.some(o=>o.scope!==scope)||present.length){
         const h=document.createElement('div');
         h.className='band'; h.textContent=title; list.appendChild(h);
       }
@@ -842,7 +866,7 @@ async function openMenu(anchorEl,ctx){
                +`<span>${esc(o.label)}</span>`
                +(o.n!==null&&o.n!==undefined?`<span class="n">${o.n}</span>`:'');
     if(checkable){
-      mark(d,shareState(targets(),MULTI[ctx.as][0],o.value));
+      mark(d,shareState(targets(),FIELD,o.value));
       d.onclick=e=>{e.stopPropagation();toggle(o.value,d);};
     }else{
       d.onclick=fn;
@@ -853,25 +877,45 @@ async function openMenu(anchorEl,ctx){
 }
 
 function drawDate(){
+  // The **effective** date: what the file actually has, after any override.
+  // Opening on the current answer is the difference between editing a date
+  // and guessing at one.
+  const cs=targets();
+  const parts=n=>[...new Set(cs.map(c=>{
+    const d=c.dataset.date||'';
+    return /^\\d{4}-\\d{2}-\\d{2}/.test(d)?d.split('-')[n]:'';
+  }))];
+  const one=n=>{const v=parts(n); return v.length===1?v[0]:'';};
+  const dates=[...new Set(cs.map(c=>(c.dataset.date||'').slice(0,10)))];
+  const now=!cs.length ? 'nothing selected'
+          : dates.length===1 ? dates[0]
+          : `${dates.length} different dates`;
+
   // Year alone is a complete answer — that is the whole point of a partial
   // date, so month and day stay optional rather than being required to submit.
   menu.innerHTML=`<div class="form">
-    <label>Year <input id="dy" maxlength="4" placeholder="1987"></label>
-    <label>Month <input id="dm" maxlength="2" placeholder="*"></label>
-    <label>Day <input id="dd" maxlength="2" placeholder="*"></label>
+    <div class="hint" style="width:100%">Now: <b>${esc(now)}</b></div>
+    <label>Year <input id="dy" maxlength="4" placeholder="${esc(one(0)||'*')}"
+      value="${esc(one(0))}"></label>
+    <label>Month <input id="dm" maxlength="2" placeholder="${esc(one(1)||'*')}"
+      value="${esc(one(1))}"></label>
+    <label>Day <input id="dd" maxlength="2" placeholder="${esc(one(2)||'*')}"
+      value="${esc(one(2))}"></label>
     <button class="primary" id="dok">Apply</button>
     <button id="dclr">Clear</button>
-    <div class="hint">Leave a box empty to keep what the file already says.</div>
+    <div class="hint">Empty keeps what the file already says.</div>
   </div>`;
   const pad=(v,n)=>v.trim()?v.trim().padStart(n,'0'):'*';
   menu.querySelector('#dok').onclick=()=>{
+    const dy=menu.querySelector('#dy'), dm=menu.querySelector('#dm'),
+          dd=menu.querySelector('#dd');
     const y=pad(dy.value,4), m=pad(dm.value,2), d=pad(dd.value,2);
     if(y==='*'&&m==='*'&&d==='*'){closeMenu();return;}
     closeMenu();
-    applyToSelection('date_override',`${y}-${m}-${d}-*:*:*`);
+    applyToSelection('date_override',`${y}-${m}-${d}-*:*:*`,true);
   };
   menu.querySelector('#dclr').onclick=()=>{
-    closeMenu(); applyToSelection('date_override',null);
+    closeMenu(); applyToSelection('date_override',null,true);
   };
   setTimeout(()=>menu.querySelector('#dy').focus(),0);
 }
@@ -887,6 +931,8 @@ function setCur(n){
 }
 function togglePick(n,on){
   const c=cells[n]; if(!c) return;
+  // A changed selection is a fresh one; the old edits were to other files.
+  touched=false;
   if(on===undefined) on=!picked.has(c);
   on?picked.add(c):picked.delete(c);
   c.classList.toggle('picked',on);
@@ -896,11 +942,20 @@ function range(a,b){
   for(let n=lo;n<=hi;n++) togglePick(n,true);
 }
 function clearPicks(){picked.forEach(c=>c.classList.remove('picked'));
-                      picked.clear(); drawSel();}
+                      picked.clear(); touched=false; drawSel();}
+// Whether this selection has been edited yet. The button says *Deselect*
+// while nothing has happened and *Done* once something has, because a
+// selection that survives its own edit looks like an edit that did not take.
+let touched=false;
 function drawSel(){
+  const done=document.getElementById('selnone');
+  if(done){
+    done.textContent = touched&&picked.size ? 'Done' : 'Deselect';
+    done.classList.toggle('primary', touched&&picked.size>0);
+  }
   if(!actions) return;
   actions.hidden = picked.size===0;
-  selcount.textContent = `${picked.size} selected`;
+  if(selcount) selcount.textContent = `${picked.size} selected`;
 }
 cells.forEach((c,n)=>{
   c.querySelector('.pick').addEventListener('click',e=>{
@@ -1103,8 +1158,21 @@ function valuesOf(c,field){
 // selection is not one thing, and pretending otherwise means every bulk
 // edit silently overwrites what you could not see.
 function shareState(cs,field,value){
-  const n=cs.filter(c=>valuesOf(c,field).includes(value)).length;
+  const has=c=>field==='event' ? (c.dataset.event||'')===value
+                               : valuesOf(c,field).includes(value);
+  const n=cs.filter(has).length;
   return n===0?'none':(n===cs.length?'all':'some');
+}
+
+// What the selection already says, so a menu opens showing the answer
+// rather than asking a question whose answer is on screen behind it.
+function currentValues(cs,field){
+  const seen=new Set();
+  cs.forEach(c=>{
+    if(field==='event'){ if(c.dataset.event) seen.add(c.dataset.event); }
+    else valuesOf(c,field).forEach(v=>seen.add(v));
+  });
+  return [...seen].sort();
 }
 
 // Optimistic: the cell changes now and the write follows, because a cull is a
@@ -1118,6 +1186,7 @@ async function applyToSelection(act,value,add){
   const body = multi ? {[add?multi[1]:multi[2]]:[value]} : {[act]:value};
   const before=multi?cs.map(c=>c.dataset[multi[0]]||''):null;
   if(multi) cs.forEach(c=>paint(c,multi[0],value,add));
+  else if(act==='event') cs.forEach(c=>{c.dataset.event=value||'';});
   const out=await send(cs,body);
   if(out===null&&multi) cs.forEach((c,i)=>{
     c.dataset[multi[0]]=before[i]; repaint(c,multi[0]);
@@ -1175,6 +1244,7 @@ async function send(cs,body){
     if(cs.length>CHUNK) say(`writing… ${done} of ${cs.length}`);
   }
   busy=false;
+  touched=true; drawSel();
   cs.forEach(c=>details.delete(c.dataset.folder+'\\n'+c.dataset.name));
   if(viewer.classList.contains('on')&&cells[cur]) fill(cells[cur]);
   drop(gone);

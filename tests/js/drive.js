@@ -152,6 +152,32 @@ const tick = () => new Promise(r => setImmediate(r));
   check('clicking beside the picture closes it',
         !document.byId.viewer.classList.contains('on'));
 
+  // The date menu opens on what the files actually say.
+  cells[0].querySelector('.pick').click();
+  const date = actions.children.find(b => b.dataset.act === 'date');
+  date.click();
+  await tick();
+  const dy = document.byId.dy;
+  check('the date menu prefills the year', dy && dy.attrs.value === '2026',
+        dy ? String(dy.attrs.value) : 'no year box');
+  check('the date menu says what is there now',
+        menu.innerHTML.includes('2026-01-01'), menu.innerHTML.slice(0, 120));
+
+  // The clear button acts on the selection rather than throwing.
+  const clr = document.byId.dclr;
+  if (clr) {
+    const n = calls.length;
+    clr.click();
+    await tick(); await tick();
+    check('clearing the date sends a write',
+          calls.slice(n).some(c => c.url.startsWith('/api/decide')));
+  }
+
+  // Once something has been changed, the button offers to finish.
+  const doneBtn = document.byId.selnone;
+  check('the button offers Done after an edit',
+        doneBtn.textContent === 'Done', doneBtn.textContent);
+
   if (failures.length) {
     failures.forEach(f => console.log('FAIL ' + f));
     process.exit(1);

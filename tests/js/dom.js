@@ -117,11 +117,16 @@ class El {
 function parseInto(html) {
   const out = [];
   let m;
-  const idRe = /<([a-z]+)[^>]*? id="([^"]+)"/g;
+  const idRe = /<([a-z]+)([^>]*? id="([^"]+)"[^>]*)>/g;
   while ((m = idRe.exec(html))) {
     const e = new El(m[1]);
-    e.id = m[2];
-    document.byId[m[2]] = e;
+    e.id = m[3];
+    // Keep the attributes, so a test can see what the page prefilled.
+    const attrRe = /(\w+)="([^"]*)"/g;
+    let a;
+    while ((a = attrRe.exec(m[2]))) e.attrs[a[1]] = a[2];
+    if (e.attrs.value !== undefined) e.value = e.attrs.value;
+    document.byId[m[3]] = e;
     out.push(e);
   }
   const spanRe = /<span class="([^"]*)"[^>]*>([^<]*)<\/span>/g;
