@@ -183,19 +183,37 @@ a cache you *may* back up and a record you *must*.
 **In the steady state most files have no sidecar at all** — one exists only once a
 human has decided something.
 
-**The seeded library is the exception**, and for a reason worth understanding.
-Legacy events live in `EventAuto`, derived from the old source folder structure.
-Once those folders are flattened into master filenames
-([§14](#14-seeding-the-existing-library)) **the derivation source is gone** —
-nothing can recompute them. So every event must be captured as an `event`
-decision at seed time, or curation work already done across the whole library is
-discarded. Seeding therefore writes ~62k sidecars, not ~100.
+**The seeded library is not an exception**, because legacy decisions are already
+*inside* the files:
 
-That breaks no principle: `event` genuinely *is* a decision, it just arrives
-inherited rather than freshly made. (Many of those events are poor — the old
+```
+[XMP]  DateAuto      : 2015-03-15-11:52:56
+[XMP]  EventAuto     : a
+[XMP]  OriginalPath  : G:\pix\raw\...
+```
+
+So **the index reads the `.xmp` if present and falls back to embedded `pix:*` tags
+if not.** It is already opening those files to probe capture date, dimensions and
+codec, so reading the legacy tags costs nothing. The first time a value is changed,
+a sidecar is written and takes precedence from then on.
+
+That deletes a migration step: [seeding](#14-seeding-the-existing-library) writes
+no `.xmp` at all, and inherited events simply appear. (Many are poor — the old
 `EventAuto` took them from device folder names, giving values like `a` — but
-carrying them is still right, since curation can fix them and discarding them
-cannot be undone.)
+carrying them is right, since curation can fix them and discarding them cannot be
+undone.)
+
+**Two unrelated things are called "sidecar" in this design.** They share nothing
+but the word:
+
+| | written by | holds | lives |
+|---|---|---|---|
+| `.manifest/*.importinfo` | `import` ([§9](#9-ingest--the-desktop-cli)) | PUID, serial, device path, verify state | staging only; retired at upload |
+| `.xmp` | **the app** | `tier`, `event`, date override | master, permanently |
+
+Neither `import`, `upload` nor `process` ever writes an `.xmp`. A freshly imported
+photo has no decisions attached to it, so it has no sidecar until someone makes
+one.
 
 It also makes review state fall out for free: **no sidecar means unreviewed**,
 which is exactly what "`tier` absent = uncategorized"
@@ -960,9 +978,11 @@ it. After step 2 there is room for both.
 **The sync is never cut.** Uploading creates a separate tree and touches nothing
 in the synced folder, so Synology Drive sees no events at all until step 5.
 
-**Sidecars are written by the seed**, one per file carrying the inherited `event`
-(and a date override where one exists) — see
-[§4](#4-metadata--xmp-sidecars) for why events cannot simply be re-derived later.
+**The seed writes no `.xmp` sidecars.** Legacy `EventAuto` / `DateAuto` /
+`OriginalPath` values are embedded in the library files themselves, and the index
+reads through to them when no sidecar exists
+([§4](#4-metadata--xmp-sidecars)) — so inherited events appear without a migration
+step, and a sidecar is created only when a value is first changed.
 
 **Legacy folders get an `.import.jsonl` like any other.** An earlier draft
 special-cased them as having none; using the real upload path means one gets
