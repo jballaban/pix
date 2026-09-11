@@ -8,6 +8,7 @@ there is a second machine or a second NAS; there is neither.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 # --- local (desktop) ---------------------------------------------------------
@@ -39,7 +40,15 @@ IMPORT_ROOT: Path = LOCAL_ROOT
 #: routing master through a sync client would make it a *synced* folder again
 #: and drag back every problem this architecture dropped (re-upload on rename,
 #: conflict copies, working-directory noise).
-MASTER_SHARE: Path = Path(r"\\nas\pix2")
+#:
+#: **`PIX2_SHARE` overrides it, and the app container must set it.** The default
+#: is a Windows UNC path, which on Linux is not a network path at all — it is a
+#: *relative* filename that happens to contain backslashes, so every derived
+#: path inside the container silently resolved to nonsense. The container sees
+#: the same share as a bind mount at `/volume1/pix2`, so it is told that
+#: directly. This is not configuration creeping back in: it is one deployment
+#: telling the code where its own filesystem is.
+MASTER_SHARE: Path = Path(os.environ.get("PIX2_SHARE") or r"\\nas\pix2")
 
 #: Sacred originals plus their `.xmp` decision sidecars. Backed up.
 MASTER_DIR: Path = MASTER_SHARE / "master"

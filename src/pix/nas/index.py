@@ -88,6 +88,21 @@ def connect(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
+def open_ro(db_path: Path) -> sqlite3.Connection:
+    """Open the index **read-only**, without creating or migrating anything.
+
+    The app is a reader: only `pix2 index` builds. `connect` writes schema and a
+    version row, which fails outright on a read-only mount and — worse, where
+    the mount is writable — would let the app quietly mutate a cache it does not
+    own. Read-only is the honest shape, and it makes the mistake impossible
+    rather than merely unlikely.
+    """
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True,
+                           check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
 def build(db_path: Path, *, echo: Callable[[str], None] = lambda _: None,
           meta_dir: Path | None = None,
           master_dir: Path | None = None) -> IndexStats:

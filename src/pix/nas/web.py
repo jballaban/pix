@@ -73,7 +73,7 @@ def db() -> sqlite3.Connection:
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             f"index not built — run `pix2 index` (expected at {DB_PATH})")
-    return ix.connect(DB_PATH)
+    return ix.open_ro(DB_PATH)
 
 
 # --- pages -------------------------------------------------------------------

@@ -217,3 +217,29 @@ def test_summary_counts_the_work(tree: dict[str, Path]) -> None:
 
 def test_empty_meta_tier_builds_an_empty_index(tree: dict[str, Path]) -> None:
     assert _build(tree).files == 0
+
+
+def test_open_ro_cannot_write(tree: dict[str, Path]) -> None:
+    """The app is a reader; only `pix2 index` builds.
+
+    `connect` creates schema and a version row, which fails on a read-only mount
+    and — where the mount is writable — would let the app quietly mutate a cache
+    it does not own.
+    """
+    import sqlite3
+
+    _record(tree, "init_2026", "a.jpg", {})
+    _build(tree)
+
+    conn = ix.open_ro(tree["db"])
+    assert conn.execute("SELECT COUNT(*) FROM files").fetchone()[0] == 1
+    with pytest.raises(sqlite3.OperationalError):
+        conn.execute("DELETE FROM files")
+
+
+def test_open_ro_does_not_create_a_missing_database(tmp_path: Path) -> None:
+    """Opening read-only must not conjure an empty index that reads as valid."""
+    import sqlite3
+
+    with pytest.raises(sqlite3.OperationalError):
+        ix.open_ro(tmp_path / "nope.db").execute("SELECT 1 FROM files")

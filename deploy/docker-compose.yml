@@ -24,6 +24,10 @@ services:
       - /volume1/pix2:/volume1/pix2
 
     environment:
+      # Where the bind mount below appears inside the container. The default in
+      # const.py is a Windows UNC path, meaningless on Linux.
+      PIX2_SHARE: /volume1/pix2
+
       # Hashed credentials, never plaintext: `name:salt$$hash;name2:salt$$hash`.
       # Generate with: pix2 passwd <name>
       # (`$` is doubled because compose interpolates a single one.)

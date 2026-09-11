@@ -18,7 +18,11 @@ RUN pip install --no-cache-dir \
     && rm -rf /root/.cache
 
 # The bind-mounted source lands here; `pix` is imported from it.
-ENV PYTHONPATH=/app/src \
+# `PIX2_SHARE` is not optional here. The default in `const.py` is a Windows UNC
+# path, which on Linux is a relative filename rather than a network path — the
+# container sees the same share as a bind mount, so it is told so directly.
+ENV PIX2_SHARE=/volume1/pix2 \
+    PYTHONPATH=/app/src \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
