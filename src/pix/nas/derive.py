@@ -36,6 +36,7 @@ from PIL import Image
 from pix import convert  # noqa: F401  # pyright: ignore[reportUnusedImport]
 from pix.duration import format_duration_compact
 from pix.markers import EXPORT_TMP_SUFFIX
+from pix.progress import LiveProgress
 from pix.nas import ledger
 from pix.nas.const import LEDGER_NAME, MASTER_DIR, PREVIEW_DIR, THUMB_DIR
 
@@ -114,14 +115,42 @@ def needs_work(media: Path) -> tuple[bool, bool]:
             not derived_path(media, PREVIEW_DIR).is_file())
 
 
+def sweep_partials() -> int:
+    """Delete marker temps left in the derived tiers by an interrupted run.
+
+    Derived images are written temp-then-rename, so a kill can never leave a
+    truncated JPEG that `needs_work` would accept as done — but without a sweep
+    the temps accumulate in the tiers forever. Poster frames go to local scratch
+    and are cleaned there too.
+    """
+    removed = 0
+    for root in (THUMB_DIR, PREVIEW_DIR, _scratch()):
+        if not root.is_dir():
+            continue
+        for tmp in root.rglob(f"*{EXPORT_TMP_SUFFIX}*"):
+            try:
+                tmp.unlink()
+                removed += 1
+            except OSError:
+                pass
+    return removed
+
+
 def run_process(*, echo: Callable[[str], None] = lambda _: None) -> ProcessSummary:
     """Generate every missing thumbnail and preview.
 
-    Resumable by construction: it makes what is missing, and missing is
-    recomputed every run, so there is no state to corrupt or resume from.
+    **Cancel and restart freely.** Resumable by construction: it makes what is
+    missing, and missing is recomputed every run, so there is no state to
+    corrupt and nothing to resume *from*. A Ctrl+C drops the queue, drains the
+    files already in flight where the operator can watch the count fall, and
+    leaves the tiers in a state the next run simply continues.
     """
     ledger.require_share()
     summary = ProcessSummary()
+
+    swept = sweep_partials()
+    if swept:
+        echo(f"swept {swept} partial(s) from an interrupted run")
 
     pending = [p for p in master_files() if any(needs_work(p))]
     if not pending:
@@ -143,23 +172,65 @@ def run_process(*, echo: Callable[[str], None] = lambda _: None) -> ProcessSumma
             state["inflight"] -= 1
             state["done"] += 1
 
-    pool = ThreadPoolExecutor(max_workers=WORKERS)
-    futures = [pool.submit(handle, p) for p in pending]
-    try:
-        for future in as_completed(futures):
-            future.result()
-    except KeyboardInterrupt:
-        state["cancelling"] = 1
-        dropped = sum(1 for f in futures if f.cancel())
-        summary.cancelled = True
-        echo(f"\ncancelling: {dropped} queued dropped, "
-             f"draining {state['inflight']} in flight")
-    finally:
-        pool.shutdown(wait=True)
+    progress = LiveProgress(
+        total=len(pending),
+        status_provider=lambda: _status(summary, len(pending), started, state),
+    )
+
+    def tracked(media: Path) -> None:
+        handle(media)
+        progress.advance()
+
+    with progress:
+        progress.begin("process")
+        pool = ThreadPoolExecutor(max_workers=WORKERS)
+        futures = [pool.submit(tracked, p) for p in pending]
+        try:
+            for future in as_completed(futures):
+                future.result()
+        except KeyboardInterrupt:
+            state["cancelling"] = 1
+            dropped = sum(1 for f in futures if f.cancel())
+            summary.cancelled = True
+            echo(f"\ncancelling: {dropped} queued dropped, "
+                 f"draining {state['inflight']} in flight")
+        finally:
+            pool.shutdown(wait=True)
 
     elapsed = time.monotonic() - started
     echo(f"done in {format_duration_compact(elapsed)}")
     return summary
+
+
+def _status(summary: ProcessSummary, total: int, started: float,
+            state: dict[str, int]) -> str:
+    """The live body: files resolved, what was made, rate and an ETA.
+
+    Read **without the lock**, deliberately — it is called from the progress
+    thread once a second as well as from workers, so taking it could deadlock a
+    worker mid-update, and a line one file stale costs nothing.
+
+    Counted in **files rather than bytes**: decode cost varies enormously
+    between a 3MB JPEG and a keyframe seek into a 2.6GB clip, so bytes-per-second
+    would be a number that jumps around without meaning anything.
+    """
+    if state["cancelling"]:
+        return f"CANCELLING - {state['inflight']} file(s) closing out"
+
+    done = state["done"]
+    elapsed = max(time.monotonic() - started, 0.001)
+    rate = done / elapsed
+
+    body = (f"{done}/{total}  {summary.thumbs} thumb, "
+            f"{summary.previews} preview")
+    if summary.failed:
+        body += f", {len(summary.failed)} failed"
+    if done and rate > 0:
+        body += f"  {rate:.1f}/s"
+        remaining = total - done
+        if remaining > 0:
+            body += f"  ETA {format_duration_compact(remaining / rate)}"
+    return body
 
 
 def _derive_one(media: Path, summary: ProcessSummary, lock: threading.Lock) -> None:
