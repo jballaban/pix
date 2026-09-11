@@ -82,6 +82,68 @@ class ProcessError(Exception):
     """Processing could not start."""
 
 
+class _ExifPool:
+    """A serialised, self-healing ExifTool session.
+
+    `ExifToolSession.execute` **kills the process on timeout**, so a single slow
+    file leaves the session dead — and every read after it fails, first with
+    `RuntimeError: subprocess exited unexpectedly`, then `OSError EINVAL` writing
+    to a closed pipe. Observed in the wild: one bad file cost the metadata for
+    every file that followed it.
+
+    A Ctrl+C reaches the same state by a different route, because the child
+    shares the console's process group and dies with it.
+
+    So the session is treated as disposable: any session-level failure discards
+    it, and the next file gets a fresh one. One bad file then costs exactly one
+    file.
+
+    Serialised by a lock because ExifTool's `-stay_open` pipe is a single
+    conversation — two workers interleaving commands on it would each read the
+    other's answer.
+    """
+
+    def __init__(self) -> None:
+        self._session: ExifToolSession | None = None
+        self._lock = threading.Lock()
+        self.restarts: int = 0
+
+    def read(self, media: Path) -> dict[str, object] | None:
+        """Probe `media`, recreating the session if it has died."""
+        with self._lock:
+            for last_attempt in (False, True):
+                try:
+                    return self._ensure().read_metadata(media)
+                except ExifToolTimeout:
+                    # execute() already killed it. This file is genuinely slow;
+                    # skip it rather than spending the timeout again.
+                    self._discard()
+                    return None
+                except (RuntimeError, OSError, ValueError):
+                    self._discard()
+                    if last_attempt:
+                        raise
+        return None
+
+    def close(self) -> None:
+        with self._lock:
+            self._discard()
+
+    def _ensure(self) -> ExifToolSession:
+        if self._session is None:
+            self._session = ExifToolSession()
+            self.restarts += 1
+        return self._session
+
+    def _discard(self) -> None:
+        session, self._session = self._session, None
+        if session is not None:
+            try:
+                session.close()
+            except Exception:                 # noqa: BLE001 - already failing
+                pass
+
+
 @dataclass
 class ProcessSummary:
     """What one `process` run did."""
@@ -180,18 +242,16 @@ def run_process(*, echo: Callable[[str], None] = lambda _: None) -> ProcessSumma
     started = time.monotonic()
     state: dict[str, int] = {"done": 0, "inflight": 0, "cancelling": 0}
 
-    # One persistent ExifTool process for the whole run — spawning one per file
-    # would cost more than the reads. It is not thread-safe, so it is guarded by
-    # its own lock rather than the summary's.
-    exif = ExifToolSession()
-    exif_lock = threading.Lock()
+    # One ExifTool process for the whole run — spawning one per file would cost
+    # more than the reads — but replaced whenever it dies. See `_ExifPool`.
+    exif = _ExifPool()
 
     def handle(media: Path) -> None:
         if state["cancelling"]:
             return
         state["inflight"] += 1
         try:
-            _derive_one(media, summary, lock, exif, exif_lock)
+            _derive_one(media, summary, lock, exif, state)
         finally:
             state["inflight"] -= 1
             state["done"] += 1
@@ -221,6 +281,8 @@ def run_process(*, echo: Callable[[str], None] = lambda _: None) -> ProcessSumma
         finally:
             pool.shutdown(wait=True)
             exif.close()
+            if exif.restarts > 1:
+                echo(f"exiftool was restarted {exif.restarts - 1} time(s)")
 
     elapsed = time.monotonic() - started
     echo(f"done in {format_duration_compact(elapsed)}")
@@ -259,7 +321,7 @@ def _status(summary: ProcessSummary, total: int, started: float,
 
 
 def _derive_one(media: Path, summary: ProcessSummary, lock: threading.Lock,
-                exif: ExifToolSession, exif_lock: threading.Lock) -> None:
+                exif: "_ExifPool", state: dict[str, int]) -> None:
     """Make whatever `media` is missing."""
     want_thumb, want_preview, want_meta = needs_work(media)
     if not (want_thumb or want_preview or want_meta):
@@ -272,12 +334,17 @@ def _derive_one(media: Path, summary: ProcessSummary, lock: threading.Lock,
     # extension is not a reason to know nothing about it.
     if want_meta:
         try:
-            if _write_meta(media, exif, exif_lock):
+            if _write_meta(media, exif):
                 with lock:
                     summary.metas += 1
         except Exception as e:                # noqa: BLE001
-            with lock:
-                summary.failed.append(f"{media.name}: meta: {type(e).__name__}: {e}")
+            # A failure while shutting down is an artefact of the interrupt, not
+            # a fact about the file — and the next run redoes it anyway. Listing
+            # it would bury any real failure under a wall of noise.
+            if not state["cancelling"]:
+                with lock:
+                    summary.failed.append(
+                        f"{media.name}: meta: {type(e).__name__}: {e}")
 
     if not (want_thumb or want_preview):
         return
@@ -316,8 +383,7 @@ def _derive_one(media: Path, summary: ProcessSummary, lock: threading.Lock,
             summary.failed.append(f"{media.name}: {type(e).__name__}: {e}")
 
 
-def _write_meta(media: Path, exif: ExifToolSession,
-                exif_lock: threading.Lock) -> bool:
+def _write_meta(media: Path, exif: "_ExifPool") -> bool:
     """Write `media`'s probed facts as JSON. True if one was written.
 
     **Facts, not interpretations** (spec/nas-app.md §4). This records what
@@ -330,11 +396,7 @@ def _write_meta(media: Path, exif: ExifToolSession,
     Also records the file's size and mtime, so the index can tell a stale entry
     from a current one with a `stat` rather than a re-read.
     """
-    with exif_lock:                          # ExifTool session is not thread-safe
-        try:
-            data = exif.read_metadata(media)
-        except ExifToolTimeout:
-            return False
+    data = exif.read(media)
     if data is None:
         return False
 
