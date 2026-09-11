@@ -146,63 +146,76 @@ it") at folder granularity.
 
 A rating change is therefore a 2KB write, not a multi-gigabyte file rewrite.
 
-### The sidecars are the database
+### Nothing rebuildable lives in master
 
-A sidecar holds **everything needed to index the file**, not just the human
-decisions — so the app never has to open a media file to build its view.
+**Master holds only what cannot be recomputed**: the original bytes, and the
+human decisions about them. Everything derivable lives outside it.
 
-| | |
-|---|---|
-| **probed facts** | capture date, dimensions, duration, codec, camera, GPS, size, content hash |
-| **decisions** | `tier`, `rating`, event override, date override |
-| **provenance** | `OriginalPath` |
-| **never stored** | *effective* values — computed live from facts + decisions |
+| Tier | Holds | Backed up |
+|---|---|---|
+| **master** | original bytes + an **overrides-only** sidecar | yes — none of it is recomputable |
+| render / thumb | derived | no |
+| **index** | all probed EXIF + a projection of the overrides | optional, as convenience |
 
-The alternative (store decisions only, re-probe for the rest) was rejected on
-cost: rebuilding an index that way means re-opening all ~62k media files with
-exiftool, on spinning disks behind an Atom, and MP4 is the bad case because the
-`moov` atom can sit at the end of the file — a 2.6GB `.insv` costs a seek to EOF
-just to read a date. Reading ~120MB of XMP in the same directories is minutes
-instead of hours.
+So a sidecar is four fields — `tier`, `rating`, event override, date override.
+Provenance needs no sidecar: `OriginalPath` is already embedded in the legacy
+files, and new imports carry it in
+[`.import.jsonl`](#9-ingest--the-desktop-cli).
 
-**Facts, not interpretations.** The sidecar stores the raw reading
-(`EXIF:DateTimeOriginal`), never the effective date after pix's heuristics ran.
-They go stale differently:
+An earlier draft had sidecars also cache the probed facts (capture date,
+dimensions, duration, codec, hash) so the index could be rebuilt without opening
+media files. **Rejected**: those facts are *already in the media file*, so
+caching them in a sidecar duplicates recomputable data into the one tier that is
+backed up forever. The "a copied folder is self-describing" property does not need
+them — the EXIF travels inside the files themselves.
 
-- **Facts can never go stale**, because master files are immutable — nothing can
-  change underneath a cached reading. This caching would be unsafe in the old
-  architecture, where migrate rewrote files. It is [§1](#1-why-sacred-originals-and-not-self-describing-files)
-  paying off again.
-- **Interpretations go stale whenever the logic changes.** Persisting them means
-  improving a date heuristic invalidates every file and forces a re-probe — the
-  `_auto` re-derivation treadmill the old design had. Computing them live costs
-  nothing and is always current.
+The cost of that rejection is that a full index rebuild must re-probe ~62k media
+files, which on spinning disks behind an Atom is hours (MP4 is the bad case: the
+`moov` atom can sit at the end of the file, so a 2.6GB `.insv` costs a seek to EOF
+for a date). That is acceptable because full rebuilds are rare — corruption, a
+schema change, moving the app — and because **the index can simply be backed up
+too**, as a convenience rather than a dependency. ~62k rows is small; restoring it
+turns hours of re-probing into copying a file back. That is the difference between
+a cache you *may* back up and a record you *must*.
 
-Standard XMP fields stay standard, so Lightroom and Bridge read `rating` and the
-dates; the pix-namespace properties they simply ignore.
+**Most files therefore have no sidecar at all.** One exists only once a human has
+decided something — today roughly 100 files out of 61,846
+([§14](#14-seeding-the-existing-library)), growing only as curation proceeds.
+
+It also makes review state fall out for free: **no sidecar means unreviewed**,
+which is exactly what "`tier` absent = uncategorized"
+([§7](#7-distributions)) already says. `tier: none` creates a sidecar, because
+rejection *is* a decision.
+
+**Facts, not interpretations** still holds, now as a rule for the index: it caches
+the raw reading (`EXIF:DateTimeOriginal`), never the effective date after pix's
+heuristics ran. Facts cannot go stale, because master files are immutable —
+[§1](#1-why-sacred-originals-and-not-self-describing-files) paying off again.
+Interpretations go stale whenever the logic changes, and persisting them would
+resurrect the `_auto` re-derivation treadmill the old design had. Effective values
+are computed live from facts plus decisions.
+
+Standard XMP fields stay standard, so Lightroom and Bridge read `rating` and any
+date override; the pix-namespace properties they simply ignore.
 
 ### The index
 
-The app still needs a queryable index — you cannot scan 62k XMP files for every
-UI filter. It is **SQLite, disposable, and never authoritative**: an aggregation
-cache over the sidecars.
+The app needs a queryable index — you cannot scan master for every UI filter. It
+is **SQLite, disposable, and never authoritative**: an aggregation over the probed
+facts and the sidecars.
 
-Storing everything centrally *instead* of in sidecars is the option to reject. It
-recreates the single database this architecture exists to avoid, and breaks "lose
-a folder, lose only that folder."
+Storing the overrides centrally *instead* of in sidecars is the option to reject.
+It recreates the single database this architecture exists to avoid, and breaks
+"lose a folder, lose only that folder."
 
 - **Authority order: sidecar first, index follows.** Write the sidecar; only on
   success update the index. Drift then only ever means "the index is behind,"
-  which a rescan fixes — it can never mean "the record is wrong."
+  which a rescan fixes — never "the record is wrong."
 - **Staleness detection is the existing `(size, mtime_ns)` stat comparison**, the
-  same key `cache.db` already uses. ~62k stats, under a minute.
-- **A full rebuild is minutes**, because the input is ~120MB of XMP rather than
-  2.5TB of media. That is what makes the cache cheap to own: you never protect,
-  back up, or carefully recover it — nuke and rebuild is a normal operation.
+  same key `cache.db` already uses.
 
-This replaces `cache.db` entirely. Its job was caching probe results keyed on
-`(size, mtime_ns)`; the sidecar now does that, co-located with the file it
-describes, travelling with it when a folder is copied elsewhere.
+This replaces `cache.db`, which was the same idea without a home: an aggregation
+of probe results that the library had to be rescanned to rebuild.
 
 ## 5. Renders
 
@@ -598,8 +611,9 @@ rather than anything pix builds ([§3](#3-master)):
   inode identity to protect; tagging is a direct edit
 - **The library root** — no `.pix/` scaffolding, no root discovery, no `pix init`,
   no per-library config; the desktop tool is stateless but for two configured paths
-- **`cache.db`** — superseded by sidecars, which cache the same probe results
-  co-located with the files they describe ([§4](#4-metadata--xmp-sidecars))
+- **`cache.db`** — its role passes to the app's index, which is the same
+  aggregation with a permanent home rather than one rebuilt per run
+  ([§4](#4-metadata--xmp-sidecars))
 - **The library lock** — one long-lived process owns the archive; concurrency
   becomes an internal queue and DB transactions rather than defence against
   competing CLI invocations
@@ -727,6 +741,9 @@ the sidecar/index model — [§4](#4-metadata--xmp-sidecars); seeding — [§14]
 - **`tier` and the probed facts as stored XMP** — namespace and serialization are
   unspecified, as is whether `tier` is baked into delivery copies (nothing reads
   it there, but it costs nothing and aids debugging).
+- **Where dedupe judgments live.** "These two are the same shot" is a human
+  decision, so by the rule above it belongs in master — but it is inherently about
+  a *pair*, and a per-file sidecar is an awkward home for it.
 - **Face detection** remains deferred, and `{person}` depends on it — which is what
   the people-grouped ad-hoc distribution would need.
 - **Reclaiming space on the NAS.** Emptying `#recycle` did not return space;
