@@ -41,6 +41,7 @@ from pix.ingest import MANIFEST_DIRNAME
 from pix.markers import EXPORT_TMP_SUFFIX
 from pix.progress import LiveProgress
 from pix.nas import ledger, staging as st
+from pix.nas.lock import UploadLock
 from pix.nas.const import IMPORT_ROOT, LEDGER_NAME, MASTER_DIR
 
 #: Concurrency for the SMB copy. 32 is where measured throughput plateaued;
@@ -105,13 +106,18 @@ def flatten(rel: str) -> str:
 
 
 def run_upload(*, echo: Callable[[str], None] = lambda _: None) -> list[UploadSummary]:
-    """Upload every pending staging folder. Returns one summary per folder."""
+    """Upload every pending staging folder. Returns one summary per folder.
+
+    Takes a single-writer lock: two uploads appending to one ledger interleave
+    their writes and tear lines (see `lock.py`).
+    """
     ledger.require_share()
     folders = pending_folders()
     if not folders:
         echo("nothing staged")
         return []
-    return [_upload_one(f, echo=echo) for f in folders]
+    with UploadLock(IMPORT_ROOT):
+        return [_upload_one(f, echo=echo) for f in folders]
 
 
 def _upload_one(staging: Path, *, echo: Callable[[str], None]) -> UploadSummary:
@@ -138,6 +144,7 @@ def _upload_one(staging: Path, *, echo: Callable[[str], None]) -> UploadSummary:
     lock = threading.Lock()
     total_bytes = sum(i.size for i in items)
     started = time.monotonic()
+    digests: dict[str, str] = {}
 
     with ledger_path.open("a", encoding="utf-8") as log:
         progress = LiveProgress(
@@ -164,6 +171,7 @@ def _upload_one(staging: Path, *, echo: Callable[[str], None]) -> UploadSummary:
                     summary.bytes_copied += item.size
                 else:
                     summary.skipped += 1
+                digests[item.flat] = digest
                 _append(log, {
                     "rel": item.rel, "root": item.root, "size": item.size,
                     "file": item.flat, "blake3": digest, "outcome": "kept",
@@ -182,7 +190,11 @@ def _upload_one(staging: Path, *, echo: Callable[[str], None]) -> UploadSummary:
                 _append(log, {"rel": rel, "root": root, "size": size,
                               "outcome": "culled"})
 
-    summary.verified = not summary.failed and _verify(items, target)
+    if summary.failed:
+        summary.verified = False
+    else:
+        echo(f"{name}: verifying {len(items)} file(s) against master")
+        summary.verified = _verify(items, target, digests)
     if summary.verified:
         _clear(staging)
         summary.staging_cleared = True
@@ -228,7 +240,14 @@ def _resolve_target(staging: Path, name: str) -> Path:
         recorded = marker.read_text(encoding="utf-8").strip()
         if recorded:
             return MASTER_DIR / recorded
-    folder = f"{name}_{datetime.now().strftime('%Y-%m-%dT%H-%M-%S')}"
+    stamp = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    folder = f"{name}_{stamp}"
+    # Two uploads in the same second would otherwise merge into one folder,
+    # silently joining two batches that have nothing to do with each other.
+    n = 2
+    while (MASTER_DIR / folder).exists():
+        folder = f"{name}_{stamp}_{n}"
+        n += 1
     marker.write_text(folder, encoding="utf-8")
     return MASTER_DIR / folder
 
@@ -359,14 +378,29 @@ def _sweep_target(target: Path) -> int:
     return removed
 
 
-def _verify(items: list[_Item], target: Path) -> bool:
-    """Every uploaded file present at master at its expected size."""
+def _verify(items: list[_Item], target: Path,
+            digests: dict[str, str]) -> bool:
+    """Every uploaded file present at master, at size, and byte-identical.
+
+    **Reads the files back off the NAS and hashes them.** Size alone catches a
+    truncated or interrupted copy but not a flipped bit in transit, and this
+    check is what gates clearing staging — the one destructive step in the
+    pipeline. An unverified "probably fine" is not worth the staging it deletes.
+
+    The read-back roughly adds a third to a batch's wall time (writes run near
+    30 MB/s, reads near 100, and recently-written files often come back out of
+    the NAS's own cache). For a one-time seed of originals that cannot be
+    regenerated, that is a good trade.
+    """
     for item in items:
         dest = target / item.flat
         try:
             if not dest.is_file() or dest.stat().st_size != item.size:
                 return False
         except OSError:
+            return False
+        expected = digests.get(item.flat)
+        if expected is not None and _digest(dest) != expected:
             return False
     return True
 

@@ -39,6 +39,9 @@ class LedgerHeader:
     name: str
     source: str              # "device" | "folder"
     serial: str | None = None
+    #: Advisory provenance only — written once at ledger creation, so it goes
+    #: stale if the batch is later extended. Never filter on it; see
+    #: `committed_folder_keys`.
     source_roots: tuple[str, ...] = ()
 
 
@@ -163,12 +166,12 @@ def committed_folder_keys(name: str, source_root: Path) -> set[tuple[str, int]]:
     for header in iter_headers():
         if header.name != name or header.source != "folder":
             continue
-        # Header roots are a cheap pre-filter: skip a whole folder without
-        # opening its body. A batch that never saw this root cannot hold it.
-        if header.source_roots and root not in {
-            _norm_root(r) for r in header.source_roots
-        }:
-            continue
+        # The header's `source_roots` is **advisory only** and must not be used
+        # to filter. It is written once, when the ledger is created, so a batch
+        # that was cancelled and then extended by a later import carries a stale
+        # list — and filtering on it would make those files invisible to this
+        # lookup, so they would be re-imported and re-uploaded as duplicates.
+        # The per-entry `root` is the authoritative one.
         for entry in iter_entries(header.folder / LEDGER_NAME):
             rel = entry.get("rel")
             size = entry.get("size")

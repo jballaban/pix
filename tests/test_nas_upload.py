@@ -78,7 +78,8 @@ def test_staging_is_cleared_only_after_verification(staged: Path,
 def test_staging_survives_a_failed_verification(staged: Path, roots: dict[str, Path],
                                                 monkeypatch: pytest.MonkeyPatch) -> None:
     """If master does not hold what we sent, staging must not be destroyed."""
-    monkeypatch.setattr(up, "_verify", lambda items, target: False)
+    monkeypatch.setattr(up, "_verify",
+                        lambda items, target, digests: False)
 
     [s] = up.run_upload()
 
