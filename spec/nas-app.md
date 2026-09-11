@@ -632,6 +632,30 @@ third day produces a single folder holding all of it. A master folder means
 Resuming an interrupted upload reuses the existing folder, skipping what is
 already there by name and size.
 
+### Cancel and resume
+
+**Every command is cancel-and-resume safe**, which matters because a long import is
+routinely stopped and continued another day.
+
+- **`import` already handles it.** [import.md](import.md)'s per-object ladder treats
+  a landed file with no marker as a straggler from a cancelled run: a cheap size
+  pre-check against the source decides re-download (the object changed on the
+  device — an edit, or optimized-storage rehydration) versus re-probe locally (it
+  did not). Sidecars are written temp-then-rename, so a kill mid-write cannot leave
+  a corrupt sidecar that reads as `VERIFIED`.
+- **`upload` needs two things.** Copy to a **marker-named temp and rename into
+  place** — the `*.__*` convention [`export`](#7-distributions) already uses — because
+  otherwise a truncated file at master looks real to a name-and-size check, and the
+  marker pattern is already sync-excluded. And **read the existing ledger on
+  resume**, skipping objects already recorded, so `.import.jsonl` gains no duplicate
+  lines.
+- **`process` is resumable by construction**: it generates what is missing, and
+  missing is recomputed every run, so there is no state to corrupt.
+
+A cancelled *folder* import costs almost nothing to redo, since staging is
+hardlinks. It is `upload` where resumability earns its keep — that is the
+multi-hour one.
+
 ### The ledger
 
 `{device}_{datetime}/.import.jsonl` is appended **during** upload (not written at
