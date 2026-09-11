@@ -15,6 +15,7 @@ import typer
 from pix import banner
 from pix.nas.const import IMPORT_ROOT, MASTER_DIR
 from pix.nas.folder_import import FolderImportError, run_folder_import
+from pix.nas.derive import run_process
 from pix.nas.ledger import NasUnreachable
 from pix.nas.upload import run_upload
 
@@ -116,6 +117,37 @@ def upload() -> None:
         )
         raise typer.Exit(code=130)
     if failed:
+        raise typer.Exit(code=1)
+
+
+@app.command("process")
+def process() -> None:
+    """Generate missing thumbnails and previews from master.
+
+    Resumable by construction: it makes what is missing, and missing is
+    recomputed every run.
+    """
+    banner()
+    try:
+        summary = run_process(echo=typer.echo)
+    except NasUnreachable as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+
+    typer.echo(
+        f"{summary.thumbs} thumbnail(s), {summary.previews} preview(s), "
+        f"{summary.skipped} already done, {summary.unsupported} unsupported"
+    )
+    for line in summary.failed[:10]:
+        typer.echo(f"  {line}", err=True)
+    if len(summary.failed) > 10:
+        typer.echo(f"  ... and {len(summary.failed) - 10} more", err=True)
+
+    if summary.cancelled:
+        typer.echo("")
+        typer.echo("Cancelled. Re-run `pix2 process` to continue where it left off.")
+        raise typer.Exit(code=130)
+    if summary.failed:
         raise typer.Exit(code=1)
 
 

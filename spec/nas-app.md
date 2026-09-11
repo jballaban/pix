@@ -297,8 +297,30 @@ material it cannot display.
 for grids; you cannot tell sharp from soft at 200px, and judging is the entire
 point of [curation](#8-the-app). Serving the full render instead means pushing
 several MB per photo off an Atom while someone pages through hundreds. So a
-preview tier — roughly 1600px, a few hundred KB, ~20GB for the library — sits
-between them. Same rules: derived, disposable, never backed up.
+preview tier sits between them. Same rules: derived, disposable, never backed up.
+
+Built as `pix process` (`nas/derive.py`):
+
+| | |
+|---|---|
+| thumb | 400px long edge, JPEG q82, ~20GB for the library |
+| preview | 1600px long edge, JPEG q82, ~20GB |
+| video poster | one frame at **10% of duration** |
+
+The frame offset matters: first frames are routinely black or motion-blurred, and
+a little way in is almost always representative. `ffmpeg -ss` is placed *before*
+`-i` so it seeks by keyframe rather than decoding up to the offset — the
+difference between minutes and milliseconds on a long clip.
+
+**EXIF orientation is applied, not carried.** A derived JPEG has nowhere to carry
+it, and a sideways thumbnail is worse than useless in a grid being scanned for one
+photo.
+
+**Renders are deliberately not built yet.** Master is seeded from the
+already-normalised library ([§14](#14-seeding-the-existing-library)), so it is JPG
+and MP4 throughout and almost nothing needs converting. The exceptions — legacy
+HEVC clips needing H.264 for delivery — drag in codec probing and the encode path
+for nearly no work today, so they wait until there is something to look at.
 
 Three independent properties, rather than a file-state enum:
 
