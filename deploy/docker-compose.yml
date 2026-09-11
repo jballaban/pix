@@ -36,7 +36,6 @@ services:
       # (`$` is doubled because compose interpolates a single one.)
       # Leaving this unset means no auth at all — only appropriate on a LAN
       # with no reverse proxy in front.
-      PIX2_USERS: ""
       TZ: America/Toronto
 
     ports:

@@ -69,6 +69,12 @@ META_DIR: Path = MASTER_SHARE / "meta"
 #: pay that for a `docker pull`.
 INDEX_DB: Path = MASTER_SHARE / "index" / "index.db"
 
+#: Accounts and roles for the app. Configuration, not archive: losing it costs
+#: the logins and not one photograph or one decision about one, which is why it
+#: may be a file where metadata may not. On the share so it survives an image
+#: swap.
+ACCOUNTS_FILE: Path = MASTER_SHARE / "app" / "users.json"
+
 #: Per-folder download ledger, written during upload. Its first line is a
 #: header describing the source, which is what makes the known-device registry
 #: derivable instead of stored.

@@ -42,9 +42,7 @@ Container Manager → **Container** → **Create** → `pix2-app:latest`.
   Read/write because curation will write `.xmp` decisions into master. It is the
   only writer there besides `upload`.
 
-- **Environment** (optional): `PIX2_USERS` — see below. Leave it unset and the
-  app runs with **no authentication at all**; the landing page says so, which is
-  fine on a LAN with nothing exposed outward and not fine otherwise.
+- **Environment**: nothing required. Accounts are managed in the app.
 
 Start it. The app is on `http://<nas>:8800`.
 
@@ -80,8 +78,9 @@ container reads, so what you see is what the NAS will serve. Only the path prefi
 differs — `\\nas\pix2` here, `/volume1/pix2` there — and `PIX2_SHARE` is the
 one knob that abstracts it.
 
-Set `PIX2_USERS` in the shell to exercise auth locally; leave it unset to skip
-the login while iterating.
+Sign in as `admin` / `admin` the first time, the same as on the NAS. The
+accounts file it reads is the one on the share, so the household you see
+locally is the real one.
 
 Build an image only when a change is ready to live on the NAS.
 
@@ -100,19 +99,26 @@ Then deploying is copying `.py` files and hitting **Restart** — seconds, no
 rebuild. `PYTHONPATH` puts `/app/src` ahead of the baked copy, so the mount wins
 whenever it is present.
 
-## Credentials
+## Accounts
 
-```
-pix2 passwd james
-```
+Nothing to configure. The app ships with a built-in **`admin`** account whose
+initial password is `admin`; sign in with it, then **Accounts** in the header to
+change that password and add everyone else.
 
-prints `james:<salt>$<hash>` — paste that into `PIX2_USERS`. Several users are
-separated by `;`. Passwords are scrypt-hashed and never stored in the clear: a
-credentials file on a share reachable over SMB is exactly how a reused password
-leaks.
+`admin` is hard-coded, so there is no way to lock yourself out by editing a file
+and no way to delete the only account that can grant access. It is also never
+something to share *with* — an administrator sees everything by definition.
 
-> Setting it in `docker-compose.yml` rather than the GUI? Double the `$`
-> (`salt$$hash`) — compose interpolates a single one.
+People and roles live in `/volume1/pix2/app/users.json`. That is configuration,
+not archive: lose it and you lose the logins, not a photograph or a single
+decision about one, which is why it may be a file where metadata may not.
+
+**Roles** (`family`, `parents`, `tv`) are granted access exactly like people are
+— a share names one or the other and the check cannot tell them apart. So a photo
+shared with `family` reaches everyone holding that role.
+
+Passwords are scrypt-hashed and never stored in the clear: a credentials file on
+a share reachable over SMB is exactly how a reused password leaks.
 
 ## Exposing it beyond the LAN
 
@@ -120,9 +126,14 @@ DSM → Control Panel → Login Portal → Advanced → **Reverse Proxy**, point
 hostname at `localhost:8800`. You do **not** need Web Station; that is for
 hosting PHP and static sites.
 
-**Set `PIX2_USERS` first.** The reverse proxy terminates TLS and routes — it does
-not authenticate — so the app's own auth is the only thing in front of your
-photos.
+**Change the admin password first**, and give everyone their own account. The
+reverse proxy terminates TLS and routes — it does not authenticate — so the
+app's own login is the only thing in front of your photographs.
+
+The session cookie is not marked `secure`, because the app is served over
+plain HTTP on the LAN and a cookie marked secure would simply never be sent —
+which reads as *login silently does nothing*. Behind a TLS-terminating proxy
+that is worth revisiting.
 
 ## Health
 

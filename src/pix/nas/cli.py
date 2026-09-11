@@ -238,7 +238,12 @@ def _reindex(*, quiet: bool) -> None:
 
 @app.command("passwd")
 def passwd(name: str) -> None:
-    """Print a hashed credential pair for the app's PIX2_USERS setting."""
+    """Print a hashed credential pair for hand-editing `app/users.json`.
+
+    Accounts are normally managed in the app, under **Accounts**. This is
+    the way back in if that is not reachable — a forgotten admin password
+    with the container unable to serve the page it would be changed on.
+    """
     banner()
     from pix.nas.auth import hash_password
 

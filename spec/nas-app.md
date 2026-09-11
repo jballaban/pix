@@ -576,11 +576,31 @@ must not allow. An empty scope is not the same as no scope: somebody granted
 nothing sees nothing, and conflating the two is the classic way an access
 check becomes an access grant.
 
-**With no credentials configured there is no access control at all**, and the
-app says so. Telling people apart is what audience depends on; without it,
-hiding files behind a boundary anyone could walk around by typing a different
-name would be theatre. Open access and access control are not compatible, so
-the app picks the honest one and announces it.
+**Sessions, not HTTP Basic.** Basic cannot log out — browsers cache the
+credentials and offer no way to clear them — which makes *switch to the
+admin account and back* impossible, and that switch is the normal way this
+app is used. So there is a login form and a signed cookie. Basic is still
+*accepted* for scripting but never *challenged* for: with no
+`WWW-Authenticate` header a browser never starts caching one.
+
+**`admin` is built in and hard-coded**, so there is no way to lock yourself
+out by editing a file and no way to delete the only account that can grant
+access. It is never an audience: an administrator sees everything already.
+Its password ships as a hash of a known initial value rather than as
+plaintext — the repository has a remote, and a password committed to one is
+a published password — and the app says so until it is changed.
+
+**People and roles are managed in the app**, in `app/users.json` on the
+share. Adding a person is a household event, not a deployment: it should not
+need a shell, a text editor and a container restart. That file is
+configuration and not archive — lose it and you lose the logins, not a
+photograph or a decision about one — which is why it may be a file where
+[§4](#4-metadata--xmp-sidecars)'s metadata may not.
+
+Deleting an account **leaves the grants alone**. A share is a decision
+recorded in master, and removing a login is not a statement about the
+photographs; recreating the name restores the access and nothing had to be
+rewritten across the archive.
 
 **Synology SSO Server** (a DSM 7 package that acts as an OIDC provider) is the
 upgrade path if DSM accounts should become the login. More setup than two users

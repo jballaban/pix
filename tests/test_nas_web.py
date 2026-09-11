@@ -15,6 +15,7 @@ from typing import cast
 import pytest
 from fastapi.testclient import TestClient
 
+from pix.nas import accounts
 from pix.nas import auth
 from pix.nas import decisions
 from pix.nas import index as ix
@@ -53,7 +54,9 @@ def app_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
     monkeypatch.setattr(web, "DB_PATH", db)
     monkeypatch.setattr(web, "THUMB_DIR", thumb)
     monkeypatch.setattr(web, "PREVIEW_DIR", preview)
-    monkeypatch.delenv("PIX2_USERS", raising=False)
+    # Accounts live in the sandbox; the autouse NAS guard already keeps
+    # ACCOUNTS_FILE off the real share, and this pins it per test.
+    monkeypatch.setattr(accounts, "ACCOUNTS_FILE", tmp_path / "users.json")
     return {"share": share, "thumb": thumb, "db": db}
 
 
@@ -67,9 +70,31 @@ def master(app_env: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> Path:
     return m
 
 
+def sign_in(name: str, password: str) -> TestClient:
+    """A client holding a real session cookie for `name`.
+
+    Through the form rather than by forging a cookie, so the tests exercise
+    the path a browser actually takes.
+    """
+    client = TestClient(web.app)
+    r = client.post("/login", data={"name": name, "password": password},
+                    follow_redirects=False)
+    assert r.status_code == 303, r.text[:200]
+    return client
+
+
+def add_user(name: str, password: str, roles: tuple[str, ...] = ()) -> None:
+    book = accounts.load()
+    book.users[name] = accounts.Account(
+        name, auth.hash_password(password), roles)
+    book.roles = sorted({*book.roles, *roles})
+    accounts.save(book)
+
+
 @pytest.fixture
 def client(app_env: dict[str, Path]) -> TestClient:
-    return TestClient(web.app)
+    """Signed in as the built-in admin, which is what curating is done as."""
+    return sign_in(accounts.ADMIN, "admin")
 
 
 # --- browse ------------------------------------------------------------------
@@ -81,9 +106,13 @@ def test_home_lists_events(client: TestClient) -> None:
     assert "2 files" in r.text
 
 
-def test_home_warns_when_no_auth_is_configured(client: TestClient) -> None:
-    """Running open is a deployment choice, not something to discover later."""
-    assert "no auth configured" in client.get("/").text
+def test_home_names_who_you_are_signed_in_as(client: TestClient) -> None:
+    """This app is used as two different people — the owner curating and the
+    admin granting access — and acting as the wrong one is invisible until
+    something is shared with the wrong household."""
+    html = client.get("/").text
+    assert "admin" in html
+    assert "Sign out" in html
 
 
 def test_event_grid_shows_thumbnails(client: TestClient) -> None:
@@ -190,41 +219,173 @@ def test_api_files_filters_by_event(client: TestClient) -> None:
 def test_healthz_needs_no_auth(app_env: dict[str, Path],
                                monkeypatch: pytest.MonkeyPatch) -> None:
     """Container Manager's probe cannot log in."""
-    monkeypatch.setenv("PIX2_USERS", f"jim:{auth.hash_password('x')}")
     assert TestClient(web.app).get("/healthz").status_code == 200
 
 
-# --- auth --------------------------------------------------------------------
+# --- signing in --------------------------------------------------------------
 
-def test_requests_are_refused_without_credentials(
-    app_env: dict[str, Path], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("PIX2_USERS", f"jim:{auth.hash_password('secret')}")
-    r = TestClient(web.app).get("/")
+def test_a_browser_is_sent_to_the_form(app_env: dict[str, Path]) -> None:
+    """And **not** challenged with Basic: a `WWW-Authenticate` header makes the
+    browser cache credentials it can never be asked to forget, which is the
+    whole reason the cookie exists."""
+    r = TestClient(web.app).get("/", headers={"accept": "text/html"},
+                                follow_redirects=False)
+
+    assert r.status_code == 303
+    assert r.headers["location"].startswith("/login")
+    assert "www-authenticate" not in r.headers
+
+
+def test_an_api_call_gets_json_not_a_redirect(app_env: dict[str, Path]) -> None:
+    r = TestClient(web.app).get("/api/files")
+
     assert r.status_code == 401
-    assert "Basic" in r.headers.get("www-authenticate", "")
+    assert "www-authenticate" not in r.headers
 
 
-def test_correct_credentials_are_accepted(
-    app_env: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+def test_the_admin_account_is_built_in(app_env: dict[str, Path]) -> None:
+    """Hard-coded, so there is no way to lock yourself out by editing a file —
+    and no way to delete the only account that can grant access."""
+    assert sign_in(accounts.ADMIN, "admin").get("/").status_code == 200
+
+
+def test_a_wrong_password_does_not_sign_in(app_env: dict[str, Path]) -> None:
+    client = TestClient(web.app)
+    r = client.post("/login", data={"name": "admin", "password": "wrong"},
+                    follow_redirects=False)
+
+    assert r.status_code == 303
+    assert "bad=1" in r.headers["location"]
+    assert client.get("/api/files").status_code == 401
+
+
+def test_the_form_does_not_say_which_half_was_wrong(
+    app_env: dict[str, Path]
 ) -> None:
-    monkeypatch.setenv("PIX2_USERS", f"jim:{auth.hash_password('secret')}")
-    r = TestClient(web.app).get("/", auth=("jim", "secret"))
-    assert r.status_code == 200
+    """Otherwise it becomes a way to ask whether an account exists."""
+    client = TestClient(web.app)
+    client.post("/login", data={"name": "zzunknownzz", "password": "x"})
+    text = client.get("/login?bad=1").text
+
+    assert "did not match" in text
+    assert "zzunknownzz" not in text
+    assert "no such" not in text.lower()
 
 
-def test_a_wrong_password_is_refused(
-    app_env: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+def test_signing_out_forgets_the_session(app_env: dict[str, Path]) -> None:
+    """The thing HTTP Basic cannot do, and the reason this exists."""
+    client = sign_in(accounts.ADMIN, "admin")
+    assert client.get("/api/files").status_code == 200
+
+    client.post("/logout")
+    assert client.get("/api/files").status_code == 401
+
+
+def test_a_tampered_cookie_is_not_a_session(app_env: dict[str, Path]) -> None:
+    client = sign_in(accounts.ADMIN, "admin")
+    token = client.cookies[accounts.COOKIE]
+    client.cookies.set(accounts.COOKIE, token.replace("admin", "kid", 1))
+
+    assert client.get("/api/files").status_code == 401
+
+
+def test_an_account_is_created_and_can_sign_in(app_env: dict[str, Path]) -> None:
+    admin = sign_in(accounts.ADMIN, "admin")
+    admin.post("/accounts/save",
+               data={"name": "kid", "password": "pw", "roles": "family"})
+
+    assert sign_in("kid", "pw").get("/api/files").status_code == 200
+
+
+def test_a_removed_account_stops_working(app_env: dict[str, Path]) -> None:
+    """Read per request, not cached — a stale cache here means a removed
+    account still works, the one staleness an access system cannot have."""
+    admin = sign_in(accounts.ADMIN, "admin")
+    admin.post("/accounts/save", data={"name": "kid", "password": "pw"})
+    kid = sign_in("kid", "pw")
+    assert kid.get("/api/files").status_code == 200
+
+    admin.post("/accounts/delete", data={"name": "kid"})
+    assert kid.get("/api/files").status_code == 401
+
+
+def test_the_admin_account_cannot_be_removed(app_env: dict[str, Path]) -> None:
+    admin = sign_in(accounts.ADMIN, "admin")
+    admin.post("/accounts/delete", data={"name": accounts.ADMIN})
+
+    assert sign_in(accounts.ADMIN, "admin").get("/").status_code == 200
+
+
+def test_changing_the_admin_password_takes_effect(
+    app_env: dict[str, Path]
 ) -> None:
-    monkeypatch.setenv("PIX2_USERS", f"jim:{auth.hash_password('secret')}")
-    assert TestClient(web.app).get("/", auth=("jim", "wrong")).status_code == 401
+    admin = sign_in(accounts.ADMIN, "admin")
+    admin.post("/accounts/save",
+               data={"name": accounts.ADMIN, "password": "better"})
+
+    assert sign_in(accounts.ADMIN, "better").get("/").status_code == 200
+    bad = TestClient(web.app).post(
+        "/login", data={"name": "admin", "password": "admin"},
+        follow_redirects=False)
+    assert "bad=1" in bad.headers["location"]
 
 
-def test_an_unknown_user_is_refused(
-    app_env: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+def test_the_shipped_admin_password_is_called_out(
+    app_env: dict[str, Path]
 ) -> None:
-    monkeypatch.setenv("PIX2_USERS", f"jim:{auth.hash_password('secret')}")
-    assert TestClient(web.app).get("/", auth=("eve", "secret")).status_code == 401
+    """A default password nobody is told about is a default password nobody
+    changes."""
+    admin = sign_in(accounts.ADMIN, "admin")
+    assert "shipped password" in admin.get("/").text
+
+    admin.post("/accounts/save",
+               data={"name": accounts.ADMIN, "password": "better"})
+    assert "shipped password" not in sign_in(
+        accounts.ADMIN, "better").get("/").text
+
+
+def test_only_an_admin_manages_accounts(app_env: dict[str, Path]) -> None:
+    add_user("kid", "pw")
+    kid = sign_in("kid", "pw")
+
+    assert kid.get("/accounts").status_code == 403
+    assert kid.post("/accounts/save",
+                    data={"name": "eve", "password": "x"}).status_code == 403
+
+
+def test_a_role_reaches_what_was_shared_with_it(app_env: dict[str, Path],
+                                                writable: Path) -> None:
+    """A grant names a person or a role and the check cannot tell them apart."""
+    add_user("kid", "pw", ("family",))
+    admin = sign_in(accounts.ADMIN, "admin")
+    admin.post("/api/decide", json={"folder": "init_2026", "name": "a.jpg",
+                                    "add_audience": ["family"]})
+
+    rows = sign_in("kid", "pw").get("/api/files").json()
+    assert [r["name"] for r in rows] == ["a.jpg"]
+
+
+def test_losing_a_role_loses_the_access(app_env: dict[str, Path],
+                                        writable: Path) -> None:
+    add_user("kid", "pw", ("family",))
+    admin = sign_in(accounts.ADMIN, "admin")
+    admin.post("/api/decide", json={"folder": "init_2026", "name": "a.jpg",
+                                    "add_audience": ["family"]})
+    admin.post("/accounts/save", data={"name": "kid", "roles": ""})
+
+    assert sign_in("kid", "pw").get("/api/files").json() == []
+
+
+def test_the_login_page_never_leaves_the_app(app_env: dict[str, Path]) -> None:
+    """An open redirect turns the form into a way to send somebody elsewhere
+    wearing this app's address."""
+    client = TestClient(web.app)
+    r = client.post("/login",
+                    data={"name": "admin", "password": "admin",
+                          "next": "//evil.example/"},
+                    follow_redirects=False)
+
+    assert r.headers["location"] == "/"
 
 
 # --- index not built ---------------------------------------------------------
@@ -233,9 +394,9 @@ def test_a_missing_index_says_what_to_run(tmp_path: Path,
                                           monkeypatch: pytest.MonkeyPatch) -> None:
     """'503' is useless on its own; the fix is one command."""
     monkeypatch.setattr(web, "DB_PATH", tmp_path / "nope.db")
-    monkeypatch.delenv("PIX2_USERS", raising=False)
+    monkeypatch.setattr(accounts, "ACCOUNTS_FILE", tmp_path / "users.json")
 
-    r = TestClient(web.app).get("/")
+    r = sign_in(accounts.ADMIN, "admin").get("/")
 
     assert r.status_code == 503
     assert "pix2 index" in r.text
@@ -248,7 +409,7 @@ def test_master_video_is_streamable(master: Path, app_env: dict[str, Path]) -> N
 
     The seeded library is MP4 throughout, so master *is* the playable copy.
     """
-    r = TestClient(web.app).get("/media/init_2026/b.mp4")
+    r = sign_in(accounts.ADMIN, "admin").get("/media/init_2026/b.mp4")
 
     assert r.status_code == 200
     assert r.content.startswith(bytes([0, 0, 0, 0x18]) + b"ftyp")
@@ -257,12 +418,12 @@ def test_master_video_is_streamable(master: Path, app_env: dict[str, Path]) -> N
 def test_media_advertises_range_support(master: Path,
                                         app_env: dict[str, Path]) -> None:
     """Without ranges a browser cannot seek, only play from the start."""
-    r = TestClient(web.app).get("/media/init_2026/b.mp4")
+    r = sign_in(accounts.ADMIN, "admin").get("/media/init_2026/b.mp4")
     assert r.headers.get("accept-ranges") == "bytes"
 
 
 def test_media_serves_a_byte_range(master: Path, app_env: dict[str, Path]) -> None:
-    r = TestClient(web.app).get("/media/init_2026/b.mp4",
+    r = sign_in(accounts.ADMIN, "admin").get("/media/init_2026/b.mp4",
                                 headers={"Range": "bytes=8-15"})
     assert r.status_code == 206
     assert len(r.content) == 8
@@ -278,7 +439,7 @@ def test_media_refuses_traversal(master: Path, app_env: dict[str, Path]) -> None
 
 def test_media_is_missing_for_an_unknown_file(master: Path,
                                               app_env: dict[str, Path]) -> None:
-    assert TestClient(web.app).get("/media/init_2026/nope.mp4").status_code == 404
+    assert sign_in(accounts.ADMIN, "admin").get("/media/init_2026/nope.mp4").status_code == 404
 
 
 def test_grid_marks_which_cells_are_video(client: TestClient) -> None:
@@ -439,7 +600,6 @@ def test_deciding_needs_the_same_auth_as_browsing(
     app_env: dict[str, Path], writable: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The write endpoint must not be the hole in the auth wall."""
-    monkeypatch.setenv("PIX2_USERS", f"james:{auth.hash_password('pw')}")
     client = TestClient(web.app)
 
     r = client.post("/api/decide", json={
@@ -578,7 +738,6 @@ def test_bulk_cannot_escape_the_tier(client: TestClient, writable: Path,
 def test_bulk_needs_the_same_auth_as_browsing(
     app_env: dict[str, Path], writable: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("PIX2_USERS", f"james:{auth.hash_password('pw')}")
     client = TestClient(web.app)
 
     r = client.post("/api/decide/bulk", json={"tier": "none",
@@ -653,7 +812,6 @@ def test_an_unsuggestable_column_is_refused(client: TestClient) -> None:
 
 def test_suggestions_need_auth(app_env: dict[str, Path],
                                monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("PIX2_USERS", f"james:{auth.hash_password('pw')}")
     assert TestClient(web.app).get(
         "/api/suggest?column=event").status_code == 401
 
@@ -789,30 +947,17 @@ def test_an_empty_batch_reports_nothing_dropped(client: TestClient,
     assert r.json()["dropped"] == []
 
 
-def _as(name: str) -> TestClient:
-    """A client signed in as . Basic auth, so the header is the session."""
-    import base64
-    token = base64.b64encode(f"{name}:pw".encode()).decode()
-    client = TestClient(web.app)
-    client.headers["Authorization"] = f"Basic {token}"
-    return client
-
-
 # --- access ------------------------------------------------------------------
 
 @pytest.fixture
-def household(app_env: dict[str, Path], writable: Path,
-              monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
-    """One shared photo and one that is not, with an admin and a plain viewer."""
+def household(app_env: dict[str, Path], writable: Path) -> dict[str, object]:
+    """One shared photo and one that is not, with an admin and a viewer."""
     (writable / "b.mp4").write_bytes(b"fake")
-    monkeypatch.setenv("PIX2_USERS",
-                       f"boss:{auth.hash_password('pw')};"
-                       f"kid:{auth.hash_password('pw')}")
-    monkeypatch.setenv("PIX2_ADMINS", "boss")
-    admin = _as("boss")
+    add_user("kid", "pw")
+    admin = sign_in(accounts.ADMIN, "admin")
     admin.post("/api/decide", json={
         "folder": "init_2026", "name": "a.jpg", "add_audience": ["kid"]})
-    return {"admin": admin, "kid": _as("kid")}
+    return {"admin": admin, "kid": sign_in("kid", "pw")}
 
 
 def test_a_viewer_sees_only_what_was_shared(
@@ -869,7 +1014,7 @@ def test_a_viewer_cannot_widen_their_own_view(
     one thing a URL-shaped filter model must not allow."""
     kid = cast(TestClient, household["kid"])
 
-    for query in ("?audience=boss", "?audience=new", "?viewer=boss",
+    for query in ("?audience=admin", "?audience=new", "?viewer=admin",
                   "?audience="):
         rows = kid.get("/api/files" + query).json()
         assert all(r["name"] == "a.jpg" for r in rows), query
@@ -907,27 +1052,6 @@ def test_the_admin_keeps_the_edit_controls(household: dict[str, object]) -> None
     assert '<button data-act="share"' in html
 
 
-def test_a_role_grants_access_the_same_way_a_name_does(
-    app_env: dict[str, Path], writable: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A share names a person or a role and the check cannot tell them apart,
-    which is what keeps roles from becoming a second mechanism."""
-    monkeypatch.setenv("PIX2_USERS", f"kid:{auth.hash_password('pw')}")
-    monkeypatch.setenv("PIX2_ADMINS", "")
-    decisions.write(writable / "a.jpg", Decision(audience=("family",)))
-    conn = ix.open_rw(app_env["db"])
-    ix.refresh(conn, "init_2026", "a.jpg",
-               meta_dir=app_env["share"] / "meta",
-               master_dir=app_env["share"] / "master")
-    conn.close()
-
-    scoped = ix.Filters(viewer=frozenset({"kid", "family"}))
-    plain = ix.Filters(viewer=frozenset({"kid"}))
-    ro = ix.open_ro(app_env["db"])
-    assert [r["name"] for r in ix.files(ro, scoped)] == ["a.jpg"]
-    assert ix.files(ro, plain) == []
-
-
 def test_granted_nothing_sees_nothing(app_env: dict[str, Path]) -> None:
     """An empty grant set is not the same as no restriction. Treating the two
     alike is the classic way an access check turns into an access grant."""
@@ -938,16 +1062,3 @@ def test_granted_nothing_sees_nothing(app_env: dict[str, Path]) -> None:
     assert len(ix.files(conn, ix.Filters())) == 2
 
 
-def test_with_no_credentials_configured_everyone_is_admin(
-    app_env: dict[str, Path], writable: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Access control and open access are not compatible. With PIX2_USERS unset
-    there is no way to tell people apart, so hiding files behind a boundary
-    anyone could walk around by typing a different name would be theatre."""
-    monkeypatch.delenv("PIX2_USERS", raising=False)
-    client = TestClient(web.app)
-
-    assert len(client.get("/api/files").json()) == 2
-    assert client.post("/api/decide", json={
-        "folder": "init_2026", "name": "a.jpg",
-        "add_audience": ["kid"]}).status_code == 200

@@ -19,21 +19,24 @@ the request of anyone holding the URL.
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 import threading
 import time
+from urllib.parse import parse_qs, quote
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Sequence, cast
 
-from fastapi import Body, Depends, FastAPI, HTTPException, Query, status
+from fastapi import (
+    Body, Depends, FastAPI, HTTPException, Query, Request, status,
+)
 from fastapi.responses import (
-    FileResponse, HTMLResponse, JSONResponse, RedirectResponse,
+    FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response,
 )
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
 
+from pix.nas import accounts
 from pix.nas import auth
 from pix.nas import decisions
 from pix.nas import index as ix
@@ -46,6 +49,22 @@ from pix.nas.decisions import Decision, Unset
 DB_PATH: Path = INDEX_DB
 
 app: FastAPI = FastAPI(title="pix2", docs_url=None, redoc_url=None)
+
+
+@app.exception_handler(status.HTTP_401_UNAUTHORIZED)
+async def _unauthenticated(  # pyright: ignore[reportUnusedFunction]
+        request: Request,
+                           exc: Exception) -> Response:
+    """Send a browser to the form; tell a script the truth.
+
+    Deliberately **no** `WWW-Authenticate` header: it would make the browser
+    pop its own credential box and start caching, which is the behaviour the
+    cookie exists to replace.
+    """
+    if "text/html" in request.headers.get("accept", ""):
+        nxt = quote(str(request.url.path or "/"), safe="")
+        return RedirectResponse(f"/login?next={nxt}", status_code=303)
+    return JSONResponse({"detail": "sign in"}, status_code=401)
 _security = HTTPBasic(auto_error=False)
 
 #: Serializes decision writes. Spec §8 makes last-write-wins the conflict policy
@@ -56,35 +75,29 @@ _write_lock: threading.Lock = threading.Lock()
 
 # --- auth --------------------------------------------------------------------
 
-def _users() -> dict[str, str]:
-    """Configured credentials, or empty if none are set.
+def store() -> accounts.Store:
+    """The account store, read per request.
 
-    Unset means **no auth at all**, which is only appropriate on a LAN with no
-    reverse proxy in front. The landing page says so rather than leaving it a
-    silent property of the deployment.
+    Re-read rather than cached because it is small and changes rarely, and a
+    stale cache here means a removed account still works — the one kind of
+    staleness an access system cannot have.
     """
-    return auth.parse_users(os.environ.get("PIX2_USERS", ""))
-
-
-def _admins() -> frozenset[str]:
-    """Who may see everything and change who else can."""
-    return auth.parse_admins(os.environ.get("PIX2_ADMINS", ""))
+    return accounts.load()
 
 
 @dataclass(frozen=True)
 class Principal:
     """Who is asking, and what that entitles them to.
 
-    `scope` is the name their view is restricted to, or None for an admin who
-    has no restriction. It is derived here, once, from the credentials — never
-    from anything the request can influence.
+    `scope` is derived here, once, from the credentials — never from anything
+    the request can influence.
     """
 
     name: str
     is_admin: bool
 
     #: Every name this person's access can be granted to — themselves, and the
-    #: roles they belong to. A share names one or the other and the check cannot
+    #: roles they hold. A share names one or the other and the check cannot
     #: tell them apart, which is what keeps roles from being a second mechanism.
     grants: frozenset[str] = frozenset()
 
@@ -94,30 +107,41 @@ class Principal:
         return None if self.is_admin else (self.grants | {self.name})
 
 
-def require_user(
-    credentials: Annotated[HTTPBasicCredentials | None, Depends(_security)],
-) -> Principal:
-    """Authenticate, unless no users are configured.
+def _principal(book: accounts.Store, name: str) -> Principal:
+    return Principal(name, is_admin=(name == accounts.ADMIN),
+                     grants=book.grants(name))
 
-    With `PIX2_USERS` unset there is no authentication and therefore no way to
-    tell people apart — so the only coherent principal is an admin. Access
-    control and open access are not compatible, and pretending otherwise would
-    hide files behind a boundary that anyone could walk around by typing a
-    different name. The landing page says the deployment is open.
+
+def signed_in(
+    request: Request,
+    credentials: Annotated[HTTPBasicCredentials | None, Depends(_security)],
+) -> Principal | None:
+    """Who this request is, or None.
+
+    Two ways in. The **cookie** is what a browser uses, because HTTP Basic
+    cannot log out — browsers cache the credentials and offer no way to clear
+    them, which makes *switch to admin and back* impossible. **Basic** is still
+    accepted for scripting, but never challenged for: with no
+    `WWW-Authenticate` header a browser will not start caching one, so the
+    cookie stays the only thing it holds.
     """
-    users = _users()
-    if not users:
-        return Principal("anonymous", is_admin=True)
-    if credentials is None or credentials.username not in users:
-        raise HTTPException(
-            status.HTTP_401_UNAUTHORIZED, "not authorised",
-            headers={"WWW-Authenticate": "Basic"})
-    if not auth.verify(users[credentials.username], credentials.password):
-        raise HTTPException(
-            status.HTTP_401_UNAUTHORIZED, "not authorised",
-            headers={"WWW-Authenticate": "Basic"})
-    return Principal(credentials.username,
-                     is_admin=credentials.username in _admins())
+    book = store()
+    name = accounts.identify(book, request.cookies.get(accounts.COOKIE))
+    if name and (name == accounts.ADMIN or name in book.users):
+        return _principal(book, name)
+    if credentials and accounts.check(book, credentials.username,
+                                      credentials.password):
+        return _principal(book, credentials.username)
+    return None
+
+
+def require_user(
+    user: Annotated[Principal | None, Depends(signed_in)],
+) -> Principal:
+    """Refuse anyone who is not signed in."""
+    if user is None:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "sign in")
+    return user
 
 
 def require_admin(user: Annotated[Principal, Depends(require_user)]) -> Principal:
@@ -248,6 +272,11 @@ h2.year { font-size:15px; margin:26px 0 8px; display:flex; gap:12px;
 h2.year:first-of-type { margin-top:12px; }
 h2.year span { font-size:13px; font-weight:400; }
 .note { color:#ffb4a2; margin:8px 0 0; }
+.warn { color:#e3b341; }
+.who-link { margin-left:10px; display:inline-flex; align-items:center; }
+.who-link button { padding:3px 9px; margin:0; }
+.admin-badge { background:var(--top); color:#0d0f12; border-radius:3px;
+               padding:0 5px; font-size:11px; font-weight:600; }
 .empty { color:var(--dim); padding:40px 0; }
 
 #viewer { position:fixed; inset:0; background:#000e; display:none; z-index:30; }
@@ -286,13 +315,32 @@ h2.year span { font-size:13px; font-weight:400; }
 """
 
 
-def _page(title: str, body: str, *, bar: str = "") -> HTMLResponse:
+def _page(title: str, body: str, *, bar: str = "",
+          user: Principal | None = None) -> HTMLResponse:
     """One shell. `bar` is extra rows inside the sticky header."""
     return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title}</title><style>{_STYLE}</style></head><body>
-<div class="topbar"><div class="row"><a class="brand" href="/">pix2</a>{bar}</div>
+<div class="topbar"><div class="row"><a class="brand" href="/">pix2</a>{bar}
+{_whoami(user)}</div>
 </div><main>{body}</main></body></html>""")
+
+
+def _whoami(user: Principal | None) -> str:
+    """Who you are signed in as, and the way out.
+
+    Always visible because this app is used as two different people — the
+    owner curating, and the admin granting access — and acting as the wrong
+    one is invisible until something is shared with the wrong household.
+    """
+    if user is None:
+        return '<a class="who-link" href="/login">Sign in</a>'
+    badge = ' <span class="admin-badge">admin</span>' if user.is_admin else ""
+    manage = ('<a class="who-link" href="/accounts">Accounts</a>'
+              if user.is_admin else "")
+    return (f'<span class="who-link dim">{_h(user.name)}{badge}</span>{manage}'
+            '<form method="post" action="/logout" class="who-link">'
+            '<button>Sign out</button></form>')
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -307,14 +355,16 @@ def home(user: Annotated[Principal, Depends(require_user)]) -> HTMLResponse:
     s = ix.summary(conn)
     rows = ix.events(conn)
 
-    open_note = ("" if _users() else
-                 '<span class="dim">&middot; no auth configured</span>')
+    open_note = ("" if not accounts.admin_password_is_initial(store()) else
+                 '<span class="warn">&middot; admin still has its shipped '
+                 'password</span>')
     head = (f'{s["files"]:,} files &middot; {s["unreviewed"]:,} undecided '
             f'&middot; {s["undated"]:,} undated '
             f'&middot; indexed {_age(ix.built_at(conn))} {open_note}')
 
     if not rows:
-        return _page("pix2", '<p class="empty">Nothing indexed yet.</p>')
+        return _page("pix2", '<p class="empty">Nothing indexed yet.</p>',
+                     user=user)
 
     years: dict[str, list[sqlite3.Row]] = {}
     for row in rows:
@@ -323,7 +373,7 @@ def home(user: Annotated[Principal, Depends(require_user)]) -> HTMLResponse:
     sections = "".join(_year_section(year, group)
                        for year, group in years.items())
     return _page("pix2", f"""<p class="dim">{head}</p>
-<p><a href="/browse">Browse everything &rarr;</a></p>{sections}""")
+<p><a href="/browse">Browse everything &rarr;</a></p>{sections}""", user=user)
 
 
 def _year_section(year: str, group: list[sqlite3.Row]) -> str:
@@ -425,7 +475,8 @@ def browse(user: Annotated[Principal, Depends(require_user)],
   <b>shift</b> for a range &middot; <b>ctrl</b> to add &middot;
   <b>S</b> repeat last share &middot; <b>Enter</b> view &middot;
   <b>I</b> details</span>
-  <button id="selall" style="margin-left:auto">Select all</button>""")
+  <button id="selall" style="margin-left:auto">Select all</button>""",
+        user=user)
 
 
 def _actions(user: Principal) -> str:
@@ -481,11 +532,11 @@ def _view_dict(view: ix.Filters) -> dict[str, str | None]:
 def _audience_names() -> list[str]:
     """Audiences worth offering before any file has one.
 
-    The configured logins, plus `private`. Sharing has to be possible on the
+    Every account and role, plus `private`. Sharing has to be possible on the
     very first file, and suggestions drawn from existing decisions are empty
     until somebody has already made one.
     """
-    return sorted({*_users(), decisions.PRIVATE} - _admins())
+    return sorted({*store().audiences(), decisions.PRIVATE})
 
 
 #: Labels for the filter chips and the fixed vocabularies. Kept server-side so
@@ -1519,8 +1570,6 @@ def _js(value: object) -> str:
 
 
 def _q(text: object) -> str:
-    from urllib.parse import quote
-
     return quote(str(text), safe="")
 
 
@@ -1551,3 +1600,243 @@ def _dur(seconds: object) -> str:
     except (TypeError, ValueError):
         return "video"
     return f"{total // 60}:{total % 60:02d}"
+
+
+# --- signing in ---------------------------------------------------------------
+
+_LOGIN_CSS = """
+.gate { max-width:320px; margin:14vh auto; }
+.gate h2 { font-size:16px; margin:0 0 14px; }
+.gate label { display:block; color:var(--dim); font-size:12px; margin:10px 0 3px; }
+.gate input { width:100%; background:#14161a; color:var(--fg);
+              border:1px solid var(--line); border-radius:4px; padding:7px 9px;
+              font:inherit; }
+.gate button { width:100%; margin:16px 0 0; padding:8px; }
+"""
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_form(request: Request,
+               user: Annotated[Principal | None, Depends(signed_in)],
+               next: Annotated[str, Query()] = "/",
+               bad: Annotated[int, Query()] = 0) -> Response:
+    """The form. Already signed in? Then there is nothing to ask."""
+    if user is not None and not bad:
+        return RedirectResponse(_safe_next(next), status_code=303)
+    warn = ('<p class="note">That did not match.</p>' if bad else "")
+    hint = ("" if not accounts.admin_password_is_initial(store()) else
+            '<p class="dim" style="margin-top:14px">First run: sign in as '
+            '<b>admin</b> with the password <b>admin</b>, then change it.</p>')
+    return _page("Sign in", f"""<div class="gate">
+<h2>Sign in</h2>{warn}
+<form method="post" action="/login">
+<input type="hidden" name="next" value="{_h(_safe_next(next))}">
+<label>Name</label><input name="name" autofocus autocomplete="username">
+<label>Password</label>
+<input name="password" type="password" autocomplete="current-password">
+<button class="primary">Sign in</button>
+</form>{hint}</div>""" + f"<style>{_LOGIN_CSS}</style>")
+
+
+async def _form(request: Request) -> dict[str, str]:
+    """A urlencoded form body, as plain strings.
+
+    Parsed here rather than through FastAPI's `Form()` or Starlette's
+    `request.form()`, both of which require `python-multipart` even for a body
+    that needs no multipart parsing at all. The app ships without Pillow and
+    without ffmpeg on purpose; a dependency for reading two fields off a login
+    form does not earn its place either.
+    """
+    raw = (await request.body()).decode("utf-8", "replace")
+    return {k: v[-1] for k, v in parse_qs(raw, keep_blank_values=True).items()}
+
+
+@app.post("/login")
+async def login(request: Request) -> Response:
+    """Check the credentials and hand out a session cookie."""
+    form = await _form(request)
+    name, password = form.get("name", ""), form.get("password", "")
+    next = form.get("next", "/")
+    book = store()
+    if not accounts.check(book, name, password):
+        # No detail about which half was wrong: it would turn the form into a
+        # way to ask whether an account exists.
+        return RedirectResponse(
+            f"/login?bad=1&next={_q(_safe_next(next))}", status_code=303)
+
+    response = RedirectResponse(_safe_next(next), status_code=303)
+    response.set_cookie(
+        accounts.COOKIE, accounts.mint(book, name),
+        max_age=accounts.SESSION_DAYS * 86400,
+        # HttpOnly so page scripts cannot read it, Lax so following a link into
+        # the app still arrives signed in. Not `secure`: this is served over
+        # plain HTTP on a LAN, and a cookie marked secure would simply never be
+        # sent, which reads as "login silently does nothing".
+        httponly=True, samesite="lax", path="/")
+    return response
+
+
+@app.post("/logout")
+def logout() -> Response:
+    """Forget the session. The reason the cookie exists at all."""
+    response = RedirectResponse("/login", status_code=303)
+    response.delete_cookie(accounts.COOKIE, path="/")
+    return response
+
+
+def _safe_next(target: str) -> str:
+    """Only ever redirect inside this app.
+
+    An open redirect turns the login form into a way to send somebody to
+    somewhere else entirely, wearing this app's address.
+    """
+    if not target.startswith("/") or target.startswith("//"):
+        return "/"
+    return target
+
+
+# --- accounts -----------------------------------------------------------------
+
+_ACCOUNTS_CSS = """
+.acct td input, .acct td select { background:#14161a; color:var(--fg);
+    border:1px solid var(--line); border-radius:4px; padding:4px 7px;
+    font:inherit; }
+.acct form { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+.acct button { margin:0; }
+"""
+
+
+@app.get("/accounts", response_class=HTMLResponse)
+def accounts_page(user: Annotated[Principal, Depends(require_admin)],
+                  msg: Annotated[str, Query()] = "") -> HTMLResponse:
+    """Who exists, what roles they hold — admin only.
+
+    In the app rather than in environment variables because adding a person is
+    a household event, not a deployment: it should not need a shell, a text
+    editor and a container restart.
+    """
+    book = store()
+    roles = sorted(set(book.roles))
+    rows = "".join(
+        f'<tr><td>{_h(a.name)}</td>'
+        f'<td class="dim">{_h(", ".join(a.roles)) or "&mdash;"}</td>'
+        f'<td><form method="post" action="/accounts/save">'
+        f'<input type="hidden" name="name" value="{_h(a.name)}">'
+        f'<input name="roles" value="{_h(", ".join(a.roles))}" '
+        f'placeholder="roles, comma separated" size="22">'
+        f'<input name="password" type="password" placeholder="new password" '
+        f'size="14" autocomplete="new-password">'
+        f'<button>Save</button></form></td>'
+        f'<td><form method="post" action="/accounts/delete" '
+        f'onsubmit="return confirm(\'Remove {_h(a.name)}?\')">'
+        f'<input type="hidden" name="name" value="{_h(a.name)}">'
+        f'<button>Remove</button></form></td></tr>'
+        for a in sorted(book.users.values(), key=lambda a: a.name))
+
+    note = f'<p class="note">{_h(msg)}</p>' if msg else ""
+    warn = ("" if not accounts.admin_password_is_initial(book) else
+            '<p class="note">The admin account still has its shipped password. '
+            'Change it below.</p>')
+    return _page("Accounts", f"""{note}{warn}
+<h2 class="year">People</h2>
+<table class="acct"><thead><tr><th>Name</th><th>Roles</th>
+<th>Change</th><th></th></tr></thead><tbody>{rows}</tbody></table>
+
+<h2 class="year">Add someone</h2>
+<form method="post" action="/accounts/save" class="acct">
+<input name="name" placeholder="name" size="14" autocomplete="off">
+<input name="roles" placeholder="roles, comma separated" size="22">
+<input name="password" type="password" placeholder="password" size="14"
+       autocomplete="new-password">
+<button class="primary">Add</button></form>
+
+<h2 class="year">Roles</h2>
+<p class="dim">A grant names a person or a role and access cannot tell them
+apart. {_h(", ".join(roles)) or "None yet."}</p>
+<form method="post" action="/accounts/roles" class="acct">
+<input name="roles" value="{_h(", ".join(roles))}" size="40"
+       placeholder="family, parents, tv">
+<button>Save roles</button></form>
+
+<h2 class="year">The admin account</h2>
+<p class="dim">Built in, cannot be removed, sees everything, and is never
+something to share with.</p>
+<form method="post" action="/accounts/save" class="acct">
+<input type="hidden" name="name" value="{accounts.ADMIN}">
+<input name="password" type="password" placeholder="new admin password"
+       size="20" autocomplete="new-password">
+<button>Change</button></form>
+<style>{_ACCOUNTS_CSS}</style>""", user=user)
+
+
+@app.post("/accounts/save")
+async def accounts_save(request: Request,
+                        user: Annotated[Principal,
+                                        Depends(require_admin)]) -> Response:
+    """Create or update one account."""
+    form = await _form(request)
+    name = form.get("name", "")
+    password = form.get("password", "")
+    book = store()
+    who = name.strip()
+    if not who:
+        return _back("a name is required")
+
+    existing = book.users.get(who)
+    if existing is None and not password:
+        return _back(f"{who} needs a password to sign in with")
+
+    hashed = auth.hash_password(password) if password else (
+        existing.password if existing else "")
+    # Absent and empty are different: the admin form submits no roles field at
+    # all and must not clear them, while an empty box on the people form is how
+    # you take somebody out of every role.
+    kept = (tuple(r.strip() for r in form["roles"].split(",") if r.strip())
+            if "roles" in form else (existing.roles if existing else ()))
+    book.users[who] = accounts.Account(who, hashed, kept)
+    # A role used here should exist without having to be declared twice.
+    book.roles = sorted({*book.roles, *kept})
+    accounts.save(book)
+    return _back(f"saved {who}")
+
+
+@app.post("/accounts/delete")
+async def accounts_delete(
+    request: Request,
+    user: Annotated[Principal, Depends(require_admin)],
+) -> Response:
+    """Remove an account. Files shared with them keep the grant.
+
+    Deliberately: the share is a decision recorded in master, and deleting a
+    login is not a statement about the photographs. Recreating the name
+    restores the access, and nothing had to be rewritten across the archive.
+    """
+    name = (await _form(request)).get("name", "")
+    book = store()
+    if name == accounts.ADMIN:
+        return _back("the admin account is built in")
+    book.users.pop(name, None)
+    accounts.save(book)
+    return _back(f"removed {name}")
+
+
+@app.post("/accounts/roles")
+async def accounts_roles(
+    request: Request,
+    user: Annotated[Principal, Depends(require_admin)],
+) -> Response:
+    """Set the list of roles that exist.
+
+    Kept explicitly so a role can exist before anyone holds it — otherwise
+    creating `tv` would be impossible until something had already been shared
+    with it.
+    """
+    roles = (await _form(request)).get("roles", "")
+    book = store()
+    book.roles = sorted({r.strip() for r in roles.split(",") if r.strip()})
+    accounts.save(book)
+    return _back("saved roles")
+
+
+def _back(message: str) -> Response:
+    return RedirectResponse(f"/accounts?msg={_q(message)}", status_code=303)

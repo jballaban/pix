@@ -68,9 +68,24 @@ def _isolate_nas_paths(  # pyright: ignore[reportUnusedFunction]
     keep up, any module attribute pointing under a real root is redirected to a
     per-test sandbox. Tests that patch explicitly still win; they simply no
     longer *have* to.
+
+    **Every module in `pix.nas` is scanned**, discovered rather than listed.
+    A hard-coded list is the same trap one level up: `ACCOUNTS_FILE` arrived in
+    a module the list did not name, and would have written the household's
+    logins onto the live share on the next test run.
     """
-    from pix.nas import const
-    from pix.nas import derive, device_import, folder_import, ledger, upload
+    import importlib
+    import pkgutil
+
+    import pix.nas
+    from pix.nas import const, derive
+
+    modules = [const]
+    for info in pkgutil.iter_modules(pix.nas.__path__):
+        try:
+            modules.append(importlib.import_module(f"pix.nas.{info.name}"))
+        except Exception:                        # noqa: BLE001
+            continue                             # optional deps, not our problem
 
     real_roots = (const.MASTER_SHARE, const.LOCAL_ROOT)
     sandbox = tmp_path / "_nas_sandbox"
@@ -89,7 +104,7 @@ def _isolate_nas_paths(  # pyright: ignore[reportUnusedFunction]
     # directory deleted a live run's temps mid-read.
     monkeypatch.setattr(derive, "_scratch", lambda: sandbox / "scratch")
 
-    for module in (const, derive, device_import, folder_import, ledger, upload):
+    for module in modules:
         for name, value in list(vars(module).items()):
             if isinstance(value, Path) and under_real_root(value):
                 monkeypatch.setattr(module, name, sandbox / name.lower(),

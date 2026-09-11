@@ -1,8 +1,8 @@
 """Credential hashing for the app (spec/nas-app.md §8).
 
-Separate from `web.py` so the CLI can generate credentials without importing the
-web stack — `pix2 passwd` should work in an environment that has never heard of
-FastAPI.
+Just the hashing. Who exists and what they may see lives in `accounts`; this
+is separate so `pix2 passwd` can mint a hash without importing the web stack,
+in an environment that has never heard of FastAPI.
 
 **Hashed, never plaintext.** A credentials file on a share reachable over SMB is
 exactly how a reused password leaks. `scrypt` comes from the standard library,
@@ -34,33 +34,3 @@ def verify(stored: str, password: str) -> bool:
     if not sep:
         return False
     return hmac.compare_digest(stored, hash_password(password, salt))
-
-
-def parse_users(raw: str) -> dict[str, str]:
-    """Parse `name:salt$hash;name2:salt$hash` into a mapping.
-
-    Malformed entries are dropped rather than raising: a typo in an environment
-    variable should cost that one login, not stop the app from starting.
-    """
-    users: dict[str, str] = {}
-    for pair in (raw or "").split(";"):
-        name, sep, digest = pair.partition(":")
-        if sep and name.strip() and digest.strip():
-            users[name.strip()] = digest.strip()
-    return users
-
-
-def parse_admins(raw: str) -> frozenset[str]:
-    """Parse `name;name2` into the set of administrators.
-
-    Separate from `PIX2_USERS` on purpose. Admin is the security boundary —
-    it sees every file and is the only role that can change who else can — so
-    it should be readable at a glance in the deployment's settings rather than
-    encoded as a field inside a credential string.
-
-    **A typo fails closed.** An unrecognised name simply is not an admin, which
-    costs that person their privileges; the alternative shapes (a positional
-    convention, a flag inside the credential) fail open or silently move admin
-    to whoever sorts first.
-    """
-    return frozenset(n.strip() for n in (raw or "").split(";") if n.strip())
