@@ -159,7 +159,21 @@ human decisions about them. Everything derivable lives outside it.
 | render / thumb | derived | no |
 | **index** | all probed EXIF + a projection of the overrides | optional, as convenience |
 
-So a sidecar is three fields — `tier`, `event`, and a date override.
+So a sidecar is four fields — `tier`, `event`, `tags`, and a date override.
+
+**`tags` are free text, many per file.** They are the axis `event` is not:
+an event is *when and where* and a file has one, a tag is *what about it*
+and a file has as many as anyone cares to add. Trying to serve both from one
+field is what made the old library's event names drift into ad-hoc labels.
+
+**The date override may pin only some components.** It is
+`YYYY-MM-DD-HH:MM:SS` with `*` in any slot, and the effective date is the
+probed capture date with each non-`*` component replaced — the grammar
+[tags.md](tags.md) already defines, now shared by both architectures in
+`pix.datestr`. *This scan is from 1987* is a complete answer, and one that
+does not require inventing a month, a day and a time. Fabricating them is
+not a harmless default: a made-up `1987-01-01 00:00:00` is indistinguishable
+from a real one a year later.
 Provenance needs no sidecar: `OriginalPath` is already embedded in the legacy
 files, and new imports carry it in
 [`.import.jsonl`](#9-ingest--the-desktop-cli).
@@ -243,8 +257,17 @@ two as one cascade instead of two vocabularies it has to reconcile.
 | decision | pix property | also written as |
 |---|---|---|
 | event | `pix:EventOverride` | `Iptc4xmpExt:Event` |
-| date override | `pix:DateOverride` | `photoshop:DateCreated` (ISO 8601) |
+| tags | — | `dc:subject`, the standard keyword bag |
+| date override | `pix:DateOverride` | `photoshop:DateCreated`, but only when
+  the override pins a whole timestamp — a partial date has no ISO 8601 form,
+  and filling the holes to produce one would publish a precision the curator
+  explicitly did not claim |
 | tier | `pix:Tier` | — nothing standard means this; `rating` was dropped |
+
+Tags live **only** in `dc:subject`, with no `pix:` twin. It is the industry
+keyword field, every tool round-trips it, and nothing in pix used it before —
+so there is no legacy vocabulary to reconcile and no second home that could
+come to disagree with the first.
 
 Written temp-then-rename, so a kill mid-write cannot leave a half-written
 packet that parses as a decision nobody made. A sidecar that exists but will
@@ -542,7 +565,10 @@ collapsing an order of magnitude:
   hashing ([roadmap.md](roadmap.md)), still unbuilt; video fingerprinting already
   exists.
 
-**Finishing an event writes `tier: none` for everything unpromoted.** Positive
+**Finishing an event writes `tier: none` for everything unpromoted.** It is
+not a dedicated button: it is *filter to this event and status new, select
+all, reject* — the same outcome through the general mechanism, which is one
+fewer thing that only one page could do. Positive
 selection has one hole — if you never touch the rejects you cannot distinguish
 *reviewed and rejected* from *not yet reviewed*, which is exactly what `tier:
 none` is for ([§7](#7-distributions)). Closing it at the UI layer rather than the
@@ -583,6 +609,51 @@ an event from **time-neighbours** — *these 40 new photos fall between two file
 tagged France Trip; assign them?* Same practical result as a persisted range, as a
 proposal rather than stored state, and it handles what rules cannot: a second
 camera whose clock is off by hours still sits among its neighbours.
+
+#### The surface: filter, select, apply
+
+One grid, and a **persistent top bar** that never scrolls away, because the
+filters are the address of what you are looking at — losing them two thousand
+thumbnails down is losing your place. Picking an event on the landing page is
+that page with `?event=`, so there is one surface to learn rather than a
+browser and a separate editor.
+
+Filters live in the **URL**, which makes a view a link: shareable,
+bookmarkable, and survivable across a reload. It also makes the browser's
+back button mean *the filter I had before*, which is the only undo a filter
+needs.
+
+| filter | values |
+|---|---|
+| event | existing names |
+| year | calendar years, from the **effective** date |
+| tag | existing tags |
+| status | new (undecided) / keep / top / rejected |
+| type | photo / video / other |
+| size | small-short / medium / large-long |
+
+**One size filter, not two.** For a clip the question is length, for a photo
+it is weight, and they are the same question — *is this a throwaway?* A
+3-second fragment and a 50KB image are the same kind of suspect, so making
+the curator pick the right control first would be asking them to know the
+answer before the question. Thresholds are build constants in `nas.index`,
+tuned against the seeded year.
+
+Selection is a **checkbox per thumbnail**, with shift-click for a range and
+ctrl-click to add — the convention every photo tool already uses. The bar
+shows the count and the actions that apply to it.
+
+**Every dropdown is ranked by the current view, in three bands**: values
+already used by files matching *every* other active filter, then by files
+matching *any* of them, then the rest of the library. Looking at
+`year:2026 + tag:tv` and reaching for an event name, the events used in that
+exact slice come first. A library ends up with hundreds of events and tags,
+and an alphabetical list of all of them buries the handful that apply. Each
+dropdown also takes a **new** value typed inline, because the alternative is
+a separate create-then-assign step for what is one decision.
+
+The column being set is excluded from its own scope — filtering on
+`event:X` and reaching for an event, `X` is the one option nobody wants.
 
 #### Three passes
 

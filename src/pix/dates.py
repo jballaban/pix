@@ -16,10 +16,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from pix import debug
+from pix.datestr import PIX_DATETIME_FORMAT
 from pix.metadata import FileMetadata
 
-# Format used in pix:DateAuto, pix:DateOverride, etc. See spec/tags.md.
-PIX_DATETIME_FORMAT: str = "%Y-%m-%d-%H:%M:%S"
+# Re-exported so the many existing importers keep working; it is defined
+# beside the override grammar it describes (pix.datestr).
+__all__ = ["PIX_DATETIME_FORMAT"]
 
 # A media file can't have been created in the future — a date past "now"
 # is garbage (notably HandBrake remuxes and some device firmwares stamp a

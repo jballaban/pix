@@ -85,7 +85,7 @@ def test_home_warns_when_no_auth_is_configured(client: TestClient) -> None:
 
 
 def test_event_grid_shows_thumbnails(client: TestClient) -> None:
-    r = client.get("/event/Italy%20-%20Sicily")
+    r = client.get("/browse?event=Italy%20-%20Sicily")
     assert r.status_code == 200
     assert "/thumb/init_2026/a.jpg" in r.text
     assert "/thumb/init_2026/b.mp4" in r.text
@@ -93,18 +93,25 @@ def test_event_grid_shows_thumbnails(client: TestClient) -> None:
 
 def test_video_cells_are_badged_with_duration(client: TestClient) -> None:
     """A grid of stills gives no hint which are clips."""
-    assert "1:15" in client.get("/event/Italy%20-%20Sicily").text
+    assert "1:15" in client.get("/browse?event=Italy%20-%20Sicily").text
 
 
 def test_event_names_with_spaces_round_trip(client: TestClient) -> None:
     """Real events are 'Italy - Sicily', not slugs."""
-    assert client.get("/event/Italy - Sicily").status_code == 200
+    assert client.get("/browse?event=Italy - Sicily").status_code == 200
 
 
 def test_unknown_event_is_empty_not_an_error(client: TestClient) -> None:
-    r = client.get("/event/Nope")
+    r = client.get("/browse?event=Nope")
     assert r.status_code == 200
-    assert "No files" in r.text
+    assert "Nothing matches" in r.text
+
+
+def test_an_old_event_link_still_lands(client: TestClient) -> None:
+    """An event is a filter now; the old URL shape predates that."""
+    r = client.get("/event/Italy%20-%20Sicily", follow_redirects=False)
+    assert r.status_code == 307
+    assert "event=Italy" in r.headers["location"]
 
 
 # --- media -------------------------------------------------------------------
@@ -248,7 +255,7 @@ def test_media_is_missing_for_an_unknown_file(master: Path,
 
 def test_grid_marks_which_cells_are_video(client: TestClient) -> None:
     """The viewer picks <video> or <img> from this, so it has to be present."""
-    html = client.get("/event/Italy - Sicily").text
+    html = client.get("/browse?event=Italy - Sicily").text
     assert 'data-kind="video"' in html
     assert 'data-kind="image"' in html
 
@@ -432,13 +439,18 @@ def test_the_review_page_carries_the_current_tier(
     client.post("/api/decide", json={
         "folder": "init_2026", "name": "a.jpg", "tier": "top"})
 
-    r = client.get("/event/Italy%20-%20Sicily")
+    r = client.get("/browse?event=Italy%20-%20Sicily")
     assert 'data-tier="top"' in r.text
     assert 'data-tier=""' in r.text
 
 
-def test_the_review_page_offers_finishing(client: TestClient) -> None:
-    assert 'id="finish"' in client.get("/event/Italy%20-%20Sicily").text
+def test_the_grid_offers_the_tier_actions(client: TestClient) -> None:
+    """Finishing an event is now filter to New, Select all, Reject —
+    the same outcome through the general mechanism rather than a button
+    that only one page could have."""
+    html = client.get("/browse?event=Italy%20-%20Sicily").text
+    assert 'data-tier="none"' in html
+    assert 'id="selall"' in html
 
 
 def test_bulk_writes_one_decision_across_a_selection(
@@ -543,3 +555,144 @@ def test_bulk_needs_the_same_auth_as_browsing(
 
     assert r.status_code == 401
     assert not decisions.sidecar_path(writable / "a.jpg").exists()
+
+
+# --- filtering ---------------------------------------------------------------
+
+def test_the_bar_carries_every_filter(client: TestClient) -> None:
+    """Filters are the address of what you are looking at; losing them 2,000
+    thumbnails down is losing your place."""
+    html = client.get("/browse").text
+    for column in ("event", "year", "tag", "tier", "kind", "band"):
+        assert f'"{column}"' in html
+
+
+def test_a_view_is_a_link(client: TestClient) -> None:
+    """In the URL rather than the page's memory, so it is shareable and the back
+    button means the filter you had before."""
+    assert client.get("/browse?kind=video").status_code == 200
+    assert "b.mp4" in client.get("/browse?kind=video").text
+    assert "a.jpg" not in client.get("/browse?kind=video").text
+
+
+def test_filters_combine(client: TestClient) -> None:
+    assert "Nothing matches" in client.get(
+        "/browse?kind=video&event=Nope").text
+
+
+def test_the_new_filter_is_the_unreviewed_ones(client: TestClient,
+                                               writable: Path) -> None:
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "tier": "top"})
+
+    html = client.get("/browse?tier=new").text
+    assert "a.jpg" not in html
+    assert "b.mp4" in html
+
+
+def test_a_video_shows_its_length_not_the_word_video(client: TestClient) -> None:
+    """91 of the seeded year's clips report `0:00:38` rather than `38.0 s`."""
+    assert "1:15" in client.get("/browse").text
+
+
+# --- suggestions -------------------------------------------------------------
+
+def test_suggestions_come_back_ranked(client: TestClient) -> None:
+    got = client.get("/api/suggest?column=event").json()
+
+    assert [s["value"] for s in got] == ["Italy - Sicily"]
+    assert got[0]["scope"] == "all"
+
+
+def test_suggestions_respect_the_current_view(client: TestClient,
+                                              writable: Path) -> None:
+    """Reaching for an event while looking at `tag:tv` should offer the events
+    already used there first."""
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "add_tags": ["tv"]})
+
+    got = client.get("/api/suggest?column=tag&event=Italy%20-%20Sicily").json()
+    assert [(s["value"], s["scope"]) for s in got] == [("tv", "all")]
+
+
+def test_an_unsuggestable_column_is_refused(client: TestClient) -> None:
+    assert client.get("/api/suggest?column=camera").status_code == 400
+    assert client.get("/api/suggest?column=folder").status_code == 400
+
+
+def test_suggestions_need_auth(app_env: dict[str, Path],
+                               monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PIX2_USERS", f"james:{auth.hash_password('pw')}")
+    assert TestClient(web.app).get(
+        "/api/suggest?column=event").status_code == 401
+
+
+# --- tagging -----------------------------------------------------------------
+
+def test_a_tag_is_added_not_replaced(client: TestClient, writable: Path) -> None:
+    """Tagging a selection of 200 files has to add to what each already carries."""
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "add_tags": ["beach"]})
+    r = client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "add_tags": ["kids"]})
+
+    assert r.json()["tags"] == ["beach", "kids"]
+    stored = decisions.read(writable / "a.jpg")
+    assert stored is not None and stored.tags == ("beach", "kids")
+
+
+def test_a_tag_can_be_removed_across_a_selection(client: TestClient,
+                                                 writable: Path) -> None:
+    (writable / "b.mp4").write_bytes(b"fake")
+    client.post("/api/decide/bulk", json={
+        "add_tags": ["beach"], "files": _targets("a.jpg", "b.mp4")})
+    r = client.post("/api/decide/bulk", json={
+        "remove_tags": ["beach"], "files": _targets("a.jpg", "b.mp4")})
+
+    assert r.json()["written"] == 2
+    assert decisions.read(writable / "a.jpg") is None
+
+
+def test_tagging_leaves_the_tier_alone(client: TestClient,
+                                       writable: Path) -> None:
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "tier": "top"})
+    r = client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "add_tags": ["beach"]})
+
+    assert r.json()["tier"] == "top"
+    assert r.json()["tags"] == ["beach"]
+
+
+def test_a_tagged_file_is_findable_by_that_tag(client: TestClient,
+                                               writable: Path) -> None:
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "add_tags": ["beach"]})
+
+    rows = client.get("/api/files?tag=beach").json()
+    assert [r["name"] for r in rows] == ["a.jpg"]
+
+
+# --- partial dates -----------------------------------------------------------
+
+def test_a_year_only_date_moves_only_the_year(client: TestClient,
+                                              writable: Path) -> None:
+    """`1987` is a complete answer; inventing a month and day to store it would
+    publish a precision nobody claimed."""
+    r = client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg",
+        "date_override": "1987-*-*-*:*:*"})
+
+    assert r.json()["date_override"] == "1987-*-*-*:*:*"
+    rows = client.get("/api/files?year=1987").json()
+    assert [row["name"] for row in rows] == ["a.jpg"]
+    assert rows[0]["effective_date"] == "1987-08-30-15:34:55"
+
+
+def test_a_date_that_pins_nothing_is_refused(client: TestClient,
+                                             writable: Path) -> None:
+    r = client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg",
+        "date_override": "*-*-*-*:*:*"})
+
+    assert r.status_code == 400

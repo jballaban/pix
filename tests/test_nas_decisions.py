@@ -197,3 +197,103 @@ def test_a_failed_write_leaves_no_temp_behind(media: Path,
 
     assert list(media.parent.glob(f"*{SIDECAR_TMP_SUFFIX}*")) == []
     assert not decisions.sidecar_path(media).exists()
+
+
+# --- tags --------------------------------------------------------------------
+
+def test_tags_round_trip(media: Path) -> None:
+    decisions.write(media, Decision(tags=("beach", "kids")))
+
+    assert decisions.read(media) == Decision(tags=("beach", "kids"))
+
+
+def test_tags_are_sorted_and_deduplicated(media: Path) -> None:
+    """So the same judgement is the same bytes, and a re-write is not a change."""
+    assert Decision(tags=("tv", "beach", "tv", " beach ")).tags == ("beach", "tv")
+
+
+def test_blank_tags_are_dropped(media: Path) -> None:
+    assert Decision(tags=("", "  ", "real")).tags == ("real",)
+
+
+def test_case_is_preserved_not_folded(media: Path) -> None:
+    """Folding would silently rewrite what someone typed into the permanent
+    record. The fix for `Beach` vs `beach` is the UI offering what exists."""
+    assert Decision(tags=("Beach", "beach")).tags == ("Beach", "beach")
+
+
+def test_tags_are_written_as_the_standard_keyword_bag(media: Path) -> None:
+    """`dc:subject` is what every other tool reads — no `pix:` twin to disagree."""
+    decisions.write(media, Decision(tags=("beach",)))
+    text = decisions.sidecar_path(media).read_text(encoding="utf-8")
+
+    assert "dc:subject" in text
+    assert "<rdf:li>beach</rdf:li>" in text
+
+
+def test_adding_a_tag_keeps_the_others(media: Path) -> None:
+    """The bulk gesture: tagging 200 files adds to what each already carries."""
+    decisions.apply(media, tags=["beach"])
+    decisions.apply(media, add_tags=["kids"])
+
+    assert decisions.read(media) == Decision(tags=("beach", "kids"))
+
+
+def test_removing_a_tag_keeps_the_others(media: Path) -> None:
+    decisions.apply(media, tags=["beach", "kids", "tv"])
+    decisions.apply(media, remove_tags=["kids"])
+
+    assert decisions.read(media) == Decision(tags=("beach", "tv"))
+
+
+def test_adding_a_tag_does_not_disturb_the_tier(media: Path) -> None:
+    decisions.apply(media, tier="top")
+    decisions.apply(media, add_tags=["beach"])
+
+    assert decisions.read(media) == Decision(tier="top", tags=("beach",))
+
+
+def test_removing_the_last_tag_removes_the_sidecar(media: Path) -> None:
+    decisions.apply(media, tags=["beach"])
+    decisions.apply(media, remove_tags=["beach"])
+
+    assert not decisions.sidecar_path(media).exists()
+
+
+def test_awkward_tag_text_survives(media: Path) -> None:
+    decisions.write(media, Decision(tags=('R&D <2015>',)))
+
+    assert decisions.read(media) == Decision(tags=('R&D <2015>',))
+
+
+# --- partial dates -----------------------------------------------------------
+
+def test_a_year_only_override_is_stored(media: Path) -> None:
+    """The whole reason the grammar has holes: a scan known only by year."""
+    decisions.write(media, Decision(date_override="1987-*-*-*:*:*"))
+
+    assert decisions.read(media) == Decision(date_override="1987-*-*-*:*:*")
+
+
+def test_a_partial_date_gets_no_standard_twin(media: Path) -> None:
+    """`photoshop:DateCreated` has no partial form, and filling the holes to
+    produce one would publish a precision the curator did not claim."""
+    decisions.write(media, Decision(date_override="1987-*-*-*:*:*"))
+    text = decisions.sidecar_path(media).read_text(encoding="utf-8")
+
+    assert "photoshop:DateCreated" not in text
+    assert 'pix:DateOverride="1987-*-*-*:*:*"' in text
+
+
+def test_a_full_date_does_get_one(media: Path) -> None:
+    decisions.write(media, Decision(date_override="2015-03-15-11:52:56"))
+    text = decisions.sidecar_path(media).read_text(encoding="utf-8")
+
+    assert 'photoshop:DateCreated="2015-03-15T11:52:56"' in text
+
+
+def test_an_override_that_pins_nothing_is_refused(media: Path) -> None:
+    """All-`*` is the same as no override; storing it records a decision nobody
+    made, and `no sidecar means unreviewed` depends on that not happening."""
+    with pytest.raises(decisions.DecisionError):
+        decisions.write(media, Decision(date_override="*-*-*-*:*:*"))

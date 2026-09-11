@@ -18,15 +18,19 @@ the request of anyone holding the URL.
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import threading
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Sequence
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, status
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import (
+    FileResponse, HTMLResponse, JSONResponse, RedirectResponse,
+)
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
 
@@ -95,70 +99,124 @@ def db() -> sqlite3.Connection:
 
 _STYLE = """
 :root { color-scheme: dark; --bg:#14161a; --fg:#e7e9ee; --dim:#8b93a3;
-        --line:#272b33; --accent:#6aa3ff; --keep:#56c16a; --top:#e3b341; }
+        --line:#272b33; --accent:#6aa3ff; --keep:#56c16a; --top:#e3b341;
+        --panel:#1b1e24; }
 * { box-sizing: border-box; }
 body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5
        system-ui,-apple-system,Segoe UI,sans-serif; }
-header { padding:14px 20px; border-bottom:1px solid var(--line);
-         display:flex; gap:18px; align-items:baseline; flex-wrap:wrap; }
-h1 { font-size:15px; margin:0; letter-spacing:.02em; }
 a { color:var(--accent); text-decoration:none; }
 a:hover { text-decoration:underline; }
 .dim { color:var(--dim); }
-main { padding:20px; }
-table { border-collapse:collapse; width:100%; max-width:900px; }
-th,td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line); }
-th { color:var(--dim); font-weight:500; font-size:12px;
-     text-transform:uppercase; letter-spacing:.06em; }
-td.num { text-align:right; font-variant-numeric:tabular-nums; }
+main { padding:16px 20px 40px; }
+
+/* The bar never leaves: filters are the address of what you are looking at,
+   and losing them 2,000 thumbnails down is losing your place. */
+.topbar { position:sticky; top:0; z-index:5; background:var(--bg);
+          border-bottom:1px solid var(--line); padding:9px 20px; }
+.row { display:flex; gap:9px; align-items:center; flex-wrap:wrap;
+       min-height:30px; }
+.row + .row { margin-top:8px; border-top:1px solid var(--line); padding-top:8px; }
+.brand { font-weight:600; letter-spacing:.02em; color:var(--fg); }
+.count { font-variant-numeric:tabular-nums; color:var(--dim);
+         margin-left:auto; white-space:nowrap; }
+.hint { color:var(--dim); font-size:12px; }
+.hint b { color:var(--fg); font-weight:600; }
+
+button, .chip { background:#222833; color:var(--fg); border:1px solid var(--line);
+        border-radius:4px; padding:4px 10px; font:inherit; cursor:pointer; }
+button:hover:not(:disabled), .chip:hover { border-color:var(--accent); }
+button:disabled { opacity:.4; cursor:default; }
+button.primary { background:var(--accent); color:#0d0f12; border-color:var(--accent);
+                 font-weight:600; }
+.chip.on { border-color:var(--accent); background:#20293a; }
+.chip .val { color:var(--accent); margin-left:5px; }
+.chip .x { color:var(--dim); margin-left:6px; }
+.chip .x:hover { color:var(--fg); }
+.sep { width:1px; height:20px; background:var(--line); }
+
+/* menu */
+#menu { position:absolute; z-index:20; width:300px; max-height:60vh;
+        background:var(--panel); border:1px solid var(--line); border-radius:6px;
+        box-shadow:0 10px 30px #0009; display:flex; flex-direction:column; }
+#menu input { background:#14161a; color:var(--fg); border:0;
+              border-bottom:1px solid var(--line); padding:9px 11px; font:inherit;
+              border-radius:6px 6px 0 0; outline:none; width:100%; }
+#menulist { overflow-y:auto; padding:4px 0; }
+.opt { display:flex; gap:8px; padding:5px 11px; cursor:pointer;
+       align-items:baseline; }
+.opt:hover, .opt.cur { background:#2a3340; }
+.opt .n { margin-left:auto; color:var(--dim); font-variant-numeric:tabular-nums;
+          font-size:12px; }
+.opt.new { color:var(--keep); }
+.band { padding:7px 11px 3px; color:var(--dim); font-size:11px;
+        text-transform:uppercase; letter-spacing:.07em; }
+.band + .band { display:none; }
+#menu .form { padding:10px 11px; display:flex; gap:6px; flex-wrap:wrap;
+              align-items:center; }
+#menu .form input { width:64px; border:1px solid var(--line); border-radius:4px;
+                    padding:4px 6px; }
+#menu .form label { color:var(--dim); font-size:12px; }
+
+/* grid */
 .grid { display:grid; gap:6px;
         grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); }
 .cell { position:relative; aspect-ratio:1; background:#0d0f12; overflow:hidden;
         border-radius:3px; cursor:pointer; }
 .cell img { width:100%; height:100%; object-fit:cover; display:block; }
-.cell.sel { outline:2px solid var(--accent); outline-offset:-2px; z-index:1; }
+.cell.cur { outline:2px solid var(--accent); outline-offset:-2px; z-index:1; }
+.cell.picked { outline:3px solid var(--accent); outline-offset:-3px; z-index:1; }
+.cell.picked img { opacity:.75; }
 .badge { position:absolute; right:4px; bottom:4px; background:#000a;
          padding:1px 5px; border-radius:3px; font-size:11px; }
+.pick { position:absolute; left:5px; top:5px; width:20px; height:20px; padding:0;
+        border-radius:50%; background:#000a; border:1.5px solid #fff9;
+        opacity:.55; z-index:2; }
+.cell:hover .pick { opacity:1; }
+.cell.picked .pick { opacity:1; background:var(--accent); border-color:var(--accent); }
+.cell.picked .pick::after { content:"\\2713"; color:#0d0f12; font-weight:700;
+                            font-size:13px; line-height:17px; }
 /* Tier is an inset ring so it can coexist with the selection outline — the two
    answer different questions and a cull needs both at once. */
 .cell[data-tier="photo"] { box-shadow: inset 0 0 0 3px var(--keep); }
 .cell[data-tier="top"]   { box-shadow: inset 0 0 0 3px var(--top); }
-.cell[data-tier="none"]  { opacity:.28; }
-.cell[data-tier]:not([data-tier=""])::after {
-  position:absolute; left:4px; top:4px; padding:1px 5px; border-radius:3px;
+.cell[data-tier="none"]  { opacity:.3; }
+.cell[data-tier="photo"]::after, .cell[data-tier="top"]::after,
+.cell[data-tier="none"]::after {
+  position:absolute; right:4px; top:4px; padding:1px 5px; border-radius:3px;
   font-size:11px; font-weight:600; color:#0d0f12; }
 .cell[data-tier="photo"]::after { content:"keep"; background:var(--keep); }
 .cell[data-tier="top"]::after   { content:"top";  background:var(--top); }
 .cell[data-tier="none"]::after  { content:"out";  background:var(--dim); }
-.bar { position:sticky; top:0; z-index:2; background:var(--bg);
-       padding:10px 0 12px; margin:-8px 0 8px; display:flex; gap:10px;
-       align-items:center; flex-wrap:wrap; border-bottom:1px solid var(--line); }
-.bar b { color:var(--fg); font-weight:600; }
-.count { font-variant-numeric:tabular-nums; }
-button { background:#222833; color:var(--fg); border:1px solid var(--line);
-         border-radius:4px; padding:5px 12px; font:inherit; cursor:pointer;
-         margin-left:auto; }
-button:hover:not(:disabled) { border-color:var(--accent); }
-button:disabled { opacity:.4; cursor:default; }
-.note { color:#ffb4a2; margin:0 0 10px; }
+.tags { position:absolute; left:5px; bottom:4px; right:4px; font-size:10px;
+        color:#fff; text-shadow:0 1px 3px #000; overflow:hidden;
+        white-space:nowrap; text-overflow:ellipsis; }
+
+table { border-collapse:collapse; width:100%; max-width:900px; }
+th,td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line); }
+th { color:var(--dim); font-weight:500; font-size:12px;
+     text-transform:uppercase; letter-spacing:.06em; }
+td.num { text-align:right; font-variant-numeric:tabular-nums; }
 td.done { color:var(--keep); }
-#viewer { position:fixed; inset:0; background:#000e; display:none;
+.note { color:#ffb4a2; margin:8px 0 0; }
+.empty { color:var(--dim); padding:40px 0; }
+
+#viewer { position:fixed; inset:0; background:#000e; display:none; z-index:30;
           align-items:center; justify-content:center; flex-direction:column; }
 #viewer.on { display:flex; }
 #viewer img, #viewer video { max-width:94vw; max-height:86vh;
                              object-fit:contain; display:none; }
 #viewer img.on, #viewer video.on { display:block; }
 #viewer .meta { padding:10px; color:var(--dim); font-size:12px; }
-.empty { color:var(--dim); padding:40px 0; }
 """
 
 
-def _page(title: str, body: str, *, crumb: str = "") -> HTMLResponse:
+def _page(title: str, body: str, *, bar: str = "") -> HTMLResponse:
+    """One shell. `bar` is extra rows inside the sticky header."""
     return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title}</title><style>{_STYLE}</style></head><body>
-<header><h1><a href="/">pix2</a></h1><span class="dim">{crumb}</span></header>
-<main>{body}</main></body></html>""")
+<div class="topbar"><div class="row"><a class="brand" href="/">pix2</a>{bar}</div>
+</div><main>{body}</main></body></html>""")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -183,7 +241,7 @@ def home(user: Annotated[str, Depends(require_user)]) -> HTMLResponse:
         return _page("pix2", '<p class="empty">Nothing indexed yet.</p>')
 
     cells = "".join(
-        f'<tr><td><a href="/event/{_q(r["event"])}">{_h(r["event"])}</a></td>'
+        f'<tr><td><a href="/browse?event={_q(r["event"])}">{_h(r["event"])}</a></td>'
         f'<td class="num">{r["n"]:,}</td>'
         + ('<td class="num done">done</td>' if not r["unreviewed"] else
            f'<td class="num dim">{r["unreviewed"]:,}</td>')
@@ -192,177 +250,468 @@ def home(user: Annotated[str, Depends(require_user)]) -> HTMLResponse:
         for r in rows
     )
     return _page("pix2", f"""<p class="dim">{head}</p>
+<p><a href="/browse">Browse everything &rarr;</a></p>
 <table><thead><tr><th>Event</th><th class="num">Files</th>
 <th class="num">Unreviewed</th><th>First</th><th>Last</th></tr></thead>
 <tbody>{cells}</tbody></table>""")
 
 
+def filters(
+    event: Annotated[str | None, Query()] = None,
+    year: Annotated[str | None, Query()] = None,
+    tag: Annotated[str | None, Query()] = None,
+    tier: Annotated[str | None, Query()] = None,
+    kind: Annotated[str | None, Query()] = None,
+    band: Annotated[str | None, Query()] = None,
+) -> ix.Filters:
+    """The current view, read off the query string.
+
+    In the URL rather than in the page's memory, so a view is a link: shareable,
+    bookmarkable, and survivable across the reload that a bulk edit sometimes
+    wants. It is also what makes the browser's back button mean "the filter I
+    had before", which is the only undo a filter needs.
+    """
+    return ix.Filters(event=event, year=year, tag=tag, tier=tier,
+                      kind=kind, band=band)
+
+
+#: How many files one grid renders. Enough to hold the largest seeded event
+#: (1,766) in a single page, because paging through a cull loses your place.
+PAGE_LIMIT: int = 2000
+
+
 @app.get("/event/{event}", response_class=HTMLResponse)
-def event_grid(event: str,
-               user: Annotated[str, Depends(require_user)]) -> HTMLResponse:
-    """Review one event — pass 2, the keep pass (§8).
+def event_grid(event: str) -> RedirectResponse:
+    """Kept so older links still land somewhere — an event is just a filter now."""
+    return RedirectResponse(f"/browse?event={_q(event)}", status_code=307)
 
-    **Promote keepers; do not reject rejects.** An event goes from several
-    hundred photos to 20-50, so positive selection is a tenth of the gestures and
-    the common case for any one photo is never being touched. Finishing the event
-    writes `none` to everything left, which is what closes positive selection's
-    one hole: reviewed-and-rejected stops being indistinguishable from not yet
-    looked at.
 
-    Thumbnails only — previews load on demand when the viewer opens.
+@app.get("/browse", response_class=HTMLResponse)
+def browse(user: Annotated[str, Depends(require_user)],
+           view: Annotated[ix.Filters, Depends(filters)]) -> HTMLResponse:
+    """The one grid, filtered — select files, then say something about them.
+
+    Selecting an event on the landing page is just this page with `?event=`, so
+    there is one surface to learn rather than a browser and a separate editor.
     """
     conn = db()
-    rows = ix.files(conn, event=event, limit=2000)
-    if not rows:
-        return _page(event, '<p class="empty">No files.</p>', crumb=_h(event))
+    rows = ix.files(conn, view, limit=PAGE_LIMIT)
+    total = ix.count(conn, view)
 
-    cells = "".join(
-        f'<div class="cell" data-folder="{_h(r["folder"])}" '
-        f'data-name="{_h(r["name"])}" data-kind="{_h(r["kind"])}" '
-        f'data-tier="{_h(r["tier"] or "")}" '
-        f'data-date="{_h(str(r["capture_date"] or "no date"))}">'
-        f'<img loading="lazy" src="/thumb/{_q(r["folder"])}/{_q(r["name"])}">'
-        + (f'<span class="badge">{_dur(r["duration"])}</span>'
-           if r["kind"] == "video" else "")
-        + "</div>"
-        for r in rows
-    )
-    return _page(event, f"""
-<div class="bar">
-  <span id="prog" class="count"></span>
-  <span class="dim">&middot;</span>
-  <span class="dim"><b>P</b> keep &middot; <b>T</b> top &middot; <b>X</b> reject
-  &middot; <b>0</b> undo &middot; <b>Enter</b> view &middot; arrows move</span>
-  <button id="finish">Finish event</button>
-</div>
-<p id="note" class="note" hidden></p>
-<div class="grid" id="grid">{cells}</div>
+    cells = "".join(_cell(r) for r in rows)
+    shown = (f"{total:,} files" if total <= PAGE_LIMIT else
+             f"{len(rows):,} of {total:,} files")
+    body = (f'<div class="grid" id="grid">{cells}</div>'
+            if rows else '<p class="empty">Nothing matches these filters.</p>')
+    return _page("pix2 browse", f"""<p class="note" id="note" hidden></p>{body}
 <div id="viewer"><img id="vimg"><video id="vvid" controls playsinline></video>
 <div class="meta" id="vmeta"></div></div>
-<script>{_GRID_JS}</script>""", crumb=_h(event))
+<div id="menu" hidden></div>
+<script>const VIEW={_js(_view_dict(view))},CHIPS={_js(_CHIPS)},FIXED={_js(_FIXED)};</script>
+<script>{_BROWSE_JS}</script>""", bar=f"""
+<div class="chips" id="chips"></div>
+<span class="count" id="count">{shown}</span>
+</div>
+<div class="row" id="actions" hidden>
+  <span class="count" id="selcount" style="margin:0"></span>
+  <button data-act="event">Event&hellip;</button>
+  <button data-act="tag">Add tag&hellip;</button>
+  <button data-act="untag">Remove tag&hellip;</button>
+  <button data-act="date">Date&hellip;</button>
+  <span class="sep"></span>
+  <button data-tier="photo">Keep</button>
+  <button data-tier="top">Top</button>
+  <button data-tier="none">Reject</button>
+  <button data-tier="">Undo</button>
+  <span class="sep"></span>
+  <button id="selnone">Deselect</button>
+</div>
+<div class="row">
+  <span class="hint"><b>click</b> a circle to select &middot;
+  <b>shift</b> for a range &middot; <b>ctrl</b> to add &middot;
+  <b>P</b> keep &middot; <b>T</b> top &middot; <b>X</b> reject &middot;
+  <b>0</b> undo &middot; <b>Enter</b> view</span>
+  <button id="selall" style="margin-left:auto">Select all</button>""")
 
 
-_GRID_JS = """
+def _cell(row: sqlite3.Row) -> str:
+    tags = str(row["tags"] or "").split("\n") if row["tags"] else []
+    return (
+        f'<div class="cell" data-folder="{_h(row["folder"])}" '
+        f'data-name="{_h(row["name"])}" data-kind="{_h(row["kind"])}" '
+        f'data-tier="{_h(row["tier"] or "")}" '
+        f'data-tags="{_h("".join(tags))}" '
+        f'data-date="{_h(str(row["effective_date"] or "no date"))}">'
+        f'<img loading="lazy" src="/thumb/{_q(row["folder"])}/{_q(row["name"])}">'
+        f'<button class="pick" aria-label="select"></button>'
+        + (f'<span class="badge">{_dur(row["duration"])}</span>'
+           if row["kind"] == "video" else "")
+        + (f'<span class="tags">{_h(" ".join(tags))}</span>' if tags else "")
+        + "</div>"
+    )
+
+
+def _view_dict(view: ix.Filters) -> dict[str, str | None]:
+    return {name: getattr(view, name) for name in ix.Filters.NAMES}
+
+
+#: Labels for the filter chips and the fixed vocabularies. Kept server-side so
+#: the tier and band words are defined once, next to the columns they describe.
+_CHIPS: tuple[tuple[str, str], ...] = (
+    ("event", "Event"), ("year", "Year"), ("tag", "Tag"),
+    ("tier", "Status"), ("kind", "Type"), ("band", "Size"),
+)
+
+_FIXED: dict[str, tuple[tuple[str, str], ...]] = {
+    "tier": (("new", "New — undecided"), ("photo", "Keep"), ("top", "Top"),
+             ("none", "Rejected")),
+    "kind": (("image", "Photos"), ("video", "Video"), ("other", "Other")),
+    "band": (("small", "Small / short"), ("medium", "Medium"),
+             ("large", "Large / long")),
+}
+
+_BROWSE_JS = """
 const cells=[...document.querySelectorAll('.cell')];
+const grid=document.getElementById('grid');
+const menu=document.getElementById('menu');
+const chips=document.getElementById('chips');
+const actions=document.getElementById('actions');
+const selcount=document.getElementById('selcount');
+const note=document.getElementById('note');
 const viewer=document.getElementById('viewer');
 const vimg=document.getElementById('vimg'), vvid=document.getElementById('vvid');
 const vmeta=document.getElementById('vmeta');
-const prog=document.getElementById('prog'), note=document.getElementById('note');
-const finishBtn=document.getElementById('finish');
 // Bounded so each request stays short: the server accepts 500, but a chunk that
 // takes ten seconds gives no progress reading and holds the single worker.
 const CHUNK=100;
-let i=-1, busy=false;
 
-function show(n){
+let cur=-1, anchor=-1, busy=false;
+const picked=new Set();
+
+// --- filter chips ------------------------------------------------------------
+function url(patch){
+  const q=new URLSearchParams();
+  for(const [k,v] of Object.entries({...VIEW,...patch})) if(v!==null&&v!=='') q.set(k,v);
+  return '/browse'+(q.toString()?'?'+q:'');
+}
+function drawChips(){
+  chips.innerHTML='';
+  for(const [col,label] of CHIPS){
+    const v=VIEW[col];
+    const b=document.createElement('button');
+    b.className='chip'+(v?' on':'');
+    b.innerHTML=label+(v?`<span class="val">${esc(labelFor(col,v))}</span>`
+                        +'<span class="x">&times;</span>':'');
+    b.onclick=e=>{
+      if(e.target.classList.contains('x')){location.href=url({[col]:null});return;}
+      openMenu(b,{column:col,mode:'filter'});
+    };
+    chips.appendChild(b);
+  }
+}
+function labelFor(col,v){
+  const fixed=FIXED[col];
+  if(!fixed) return v;
+  const hit=fixed.find(f=>f[0]===v);
+  return hit?hit[1]:v;
+}
+function esc(s){return String(s).replace(/[&<>"]/g,c=>(
+  {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+// --- the shared menu ---------------------------------------------------------
+let menuCtx=null;
+function closeMenu(){menu.hidden=true;menuCtx=null;}
+document.addEventListener('click',e=>{
+  if(!menu.hidden&&!menu.contains(e.target)&&!e.target.closest('.chip,[data-act]'))
+    closeMenu();
+});
+
+async function openMenu(anchorEl,ctx){
+  menuCtx=ctx;
+  const r=anchorEl.getBoundingClientRect();
+  menu.style.left=Math.min(r.left,window.innerWidth-316)+'px';
+  menu.style.top=(r.bottom+window.scrollY+4)+'px';
+  menu.hidden=false;
+
+  if(ctx.mode==='date'){drawDate();return;}
+  const fixed=FIXED[ctx.column];
+  menu.innerHTML='<input id="menuq" autocomplete="off">'
+                +'<div id="menulist" class="dim" style="padding:10px 11px">'
+                +'loading…</div>';
+  const q=document.getElementById('menuq');
+  q.placeholder = ctx.mode==='set'
+    ? 'Type a new name, or pick one below'
+    : 'Filter…';
+  q.oninput=()=>render(q.value);
+  q.onkeydown=e=>{
+    if(e.key==='Enter'&&ctx.mode==='set'&&q.value.trim()){
+      choose(q.value.trim()); e.preventDefault();
+    }
+    if(e.key==='Escape'){closeMenu();}
+    e.stopPropagation();
+  };
+  setTimeout(()=>q.focus(),0);
+
+  let opts=[];
+  if(fixed && ctx.mode!=='set'){
+    opts=fixed.map(f=>({value:f[0],label:f[1],n:null,scope:'all'}));
+  }else{
+    const p=new URLSearchParams();
+    for(const [k,v] of Object.entries(VIEW)) if(v) p.set(k,v);
+    p.set('column',ctx.column);
+    try{
+      const res=await fetch('/api/suggest?'+p);
+      opts=(await res.json()).map(o=>({...o,label:o.value}));
+    }catch(e){opts=[];}
+  }
+  if(menuCtx!==ctx) return;   // a later menu opened while this was loading
+
+  function choose(value){
+    closeMenu();
+    if(ctx.mode==='filter') location.href=url({[ctx.column]:value});
+    else applyToSelection(ctx.column,value);
+  }
+  function render(text){
+    const t=(text||'').toLowerCase();
+    const hits=opts.filter(o=>o.label.toLowerCase().includes(t));
+    const list=document.createElement('div');
+    list.id='menulist';
+    if(ctx.mode==='filter'&&VIEW[ctx.column]){
+      list.appendChild(opt({label:'Any '+ctx.column,n:null},()=>choose(null)));
+    }
+    const typed=(text||'').trim();
+    if(ctx.mode==='set'&&typed&&!opts.some(o=>o.label===typed)){
+      const o=opt({label:'Add “'+typed+'”',n:null},()=>choose(typed));
+      o.classList.add('new'); list.appendChild(o);
+    }
+    if(ctx.mode==='set'){
+      list.appendChild(opt({label:'Clear',n:null},()=>choose(null)));
+    }
+    // Three bands, most relevant first: values already used by what you are
+    // looking at, then by anything one filter away, then the rest.
+    for(const [scope,title] of [['all','In this view'],['any','Related'],
+                                ['other','Elsewhere']]){
+      const band=hits.filter(o=>o.scope===scope);
+      if(!band.length) continue;
+      if(hits.some(o=>o.scope!==scope)){
+        const h=document.createElement('div');
+        h.className='band'; h.textContent=title; list.appendChild(h);
+      }
+      band.forEach(o=>list.appendChild(opt(o,()=>choose(o.value))));
+    }
+    if(!hits.length&&!typed){
+      list.innerHTML='<div class="band">nothing yet</div>';
+    }
+    menu.querySelector('#menulist').replaceWith(list);
+  }
+  function opt(o,fn){
+    const d=document.createElement('div');
+    d.className='opt';
+    d.innerHTML=`<span>${esc(o.label)}</span>`
+               +(o.n!==null&&o.n!==undefined?`<span class="n">${o.n}</span>`:'');
+    d.onclick=fn;
+    return d;
+  }
+  render('');
+}
+
+function drawDate(){
+  // Year alone is a complete answer — that is the whole point of a partial
+  // date, so month and day stay optional rather than being required to submit.
+  menu.innerHTML=`<div class="form">
+    <label>Year <input id="dy" maxlength="4" placeholder="1987"></label>
+    <label>Month <input id="dm" maxlength="2" placeholder="*"></label>
+    <label>Day <input id="dd" maxlength="2" placeholder="*"></label>
+    <button class="primary" id="dok">Apply</button>
+    <button id="dclr">Clear</button>
+    <div class="hint">Leave a box empty to keep what the file already says.</div>
+  </div>`;
+  const pad=(v,n)=>v.trim()?v.trim().padStart(n,'0'):'*';
+  menu.querySelector('#dok').onclick=()=>{
+    const y=pad(dy.value,4), m=pad(dm.value,2), d=pad(dd.value,2);
+    if(y==='*'&&m==='*'&&d==='*'){closeMenu();return;}
+    closeMenu();
+    applyToSelection('date_override',`${y}-${m}-${d}-*:*:*`);
+  };
+  menu.querySelector('#dclr').onclick=()=>{
+    closeMenu(); applyToSelection('date_override',null);
+  };
+  setTimeout(()=>menu.querySelector('#dy').focus(),0);
+}
+
+// --- selection ---------------------------------------------------------------
+function setCur(n){
   if(n<0||n>=cells.length) return;
-  cells[i]?.classList.remove('sel');
-  i=n; const c=cells[i];
-  c.classList.add('sel');
-  c.scrollIntoView({block:'nearest'});
-  if(!viewer.classList.contains('on')) return;
-  const f=encodeURIComponent(c.dataset.folder), n2=encodeURIComponent(c.dataset.name);
+  cells[cur]?.classList.remove('cur');
+  cur=n; cells[cur].classList.add('cur');
+  cells[cur].scrollIntoView({block:'nearest'});
+  if(viewer.classList.contains('on')) load(cells[cur]);
+}
+function togglePick(n,on){
+  if(on===undefined) on=!picked.has(n);
+  on?picked.add(n):picked.delete(n);
+  cells[n].classList.toggle('picked',on);
+}
+function range(a,b){
+  const [lo,hi]=a<b?[a,b]:[b,a];
+  for(let n=lo;n<=hi;n++) togglePick(n,true);
+}
+function clearPicks(){picked.forEach(n=>cells[n].classList.remove('picked'));
+                      picked.clear(); drawSel();}
+function drawSel(){
+  actions.hidden = picked.size===0;
+  selcount.textContent = `${picked.size} selected`;
+}
+cells.forEach((c,n)=>{
+  c.querySelector('.pick').addEventListener('click',e=>{
+    e.stopPropagation();
+    if(e.shiftKey&&anchor>=0) range(anchor,n); else {togglePick(n); anchor=n;}
+    setCur(n); drawSel();
+  });
+  c.addEventListener('click',e=>{
+    if(e.shiftKey&&anchor>=0){range(anchor,n);setCur(n);drawSel();return;}
+    if(e.ctrlKey||e.metaKey){togglePick(n);anchor=n;setCur(n);drawSel();return;}
+    setCur(n); openViewer();
+  });
+});
+document.getElementById('selall').onclick=()=>{
+  cells.forEach((_,n)=>togglePick(n,true)); drawSel();};
+document.getElementById('selnone').onclick=clearPicks;
+
+// --- viewer ------------------------------------------------------------------
+function load(c){
+  const f=encodeURIComponent(c.dataset.folder), n=encodeURIComponent(c.dataset.name);
   // Always stop the previous clip: moving on while audio keeps playing from the
   // one before is the kind of thing that makes a viewer feel broken.
   vvid.pause(); vvid.removeAttribute('src'); vvid.load();
   if(c.dataset.kind==='video'){
     vimg.classList.remove('on'); vvid.classList.add('on');
-    vvid.src=`/media/${f}/${n2}`; vvid.play().catch(()=>{});
+    vvid.src=`/media/${f}/${n}`; vvid.play().catch(()=>{});
   }else{
     vvid.classList.remove('on'); vimg.classList.add('on');
-    vimg.src=`/preview/${f}/${n2}`;
+    vimg.src=`/preview/${f}/${n}`;
   }
-  vmeta.textContent=`${c.dataset.name} — ${c.dataset.date}`;
+  vmeta.textContent=`${c.dataset.name} — ${c.dataset.date}`
+                   +(c.dataset.tags?' — '+c.dataset.tags.split('\\n').join(', '):'');
 }
-cells.forEach((c,n)=>c.addEventListener('click',()=>{show(n);open_();}));
-function open_(){viewer.classList.add('on');show(i<0?0:i);}
-function close_(){viewer.classList.remove('on');vvid.pause();}
+function openViewer(){viewer.classList.add('on');setCur(cur<0?0:cur);}
+function closeViewer(){viewer.classList.remove('on');vvid.pause();}
+viewer.addEventListener('click',e=>{if(e.target===viewer)closeViewer();});
 
-function count(t){return cells.filter(c=>c.dataset.tier===t).length;}
-function render(text){
-  if(text){prog.textContent=text;return;}
-  const kept=count('photo')+count('top'), left=count('');
-  prog.textContent=`${cells.length} files · ${kept} kept (${count('top')} top)`
-    + ` · ${left} left`;
-  finishBtn.disabled = busy || left===0;
+// --- writing -----------------------------------------------------------------
+function say(text){note.textContent=text||''; note.hidden=!text;}
+
+function targets(){
+  const ns=picked.size?[...picked]:(cur>=0?[cur]:[]);
+  return ns.map(n=>cells[n]);
 }
-function say(text){note.textContent=text; note.hidden=!text;}
 
 // Optimistic: the cell changes now and the write follows, because a cull is a
 // rhythm and waiting on SMB between keystrokes destroys it. A failure puts the
 // old value back rather than leaving the screen claiming something untrue.
-async function decide(c, tier){
-  const prev=c.dataset.tier||'';
-  if(prev===tier) tier='';
-  c.dataset.tier=tier; render();
-  try{
-    const r=await fetch('/api/decide',{method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({folder:c.dataset.folder,name:c.dataset.name,
-                           tier:tier||null})});
-    if(!r.ok) throw new Error((await r.text()).slice(0,200));
-    say('');
-  }catch(e){
-    c.dataset.tier=prev; render();
-    say(`could not save ${c.dataset.name}: ${e.message}`);
-  }
+async function setTier(cs,tier){
+  const prev=cs.map(c=>c.dataset.tier||'');
+  cs.forEach(c=>c.dataset.tier=tier);
+  const out=await send(cs,{tier:tier||null});
+  if(out===null) cs.forEach((c,i)=>c.dataset.tier=prev[i]);
 }
 
-async function finish(){
-  const left=cells.filter(c=>!c.dataset.tier);
-  if(!left.length) return;
-  if(!confirm(`Mark ${left.length} unpromoted file(s) reviewed and rejected?\\n\\n`
-              +`Everything you kept stays as it is. This is undoable per file.`)) return;
-  busy=true; render(); say('');
+async function applyToSelection(column,value){
+  const cs=targets();
+  if(!cs.length){say('nothing selected');return;}
+  const body = column==='tag' ? {add_tags:[value]}
+             : column==='untag' ? {remove_tags:[value]}
+             : {[column]:value};
+  const out=await send(cs,body);
+  if(out===null) return;
+  if(column==='tag'||column==='untag'){
+    cs.forEach(c=>{
+      const t=new Set(c.dataset.tags?c.dataset.tags.split('\\n'):[]);
+      column==='tag'?t.add(value):t.delete(value);
+      c.dataset.tags=[...t].sort().join('\\n');
+      let el=c.querySelector('.tags');
+      if(!el&&t.size){el=document.createElement('span');el.className='tags';
+                      c.appendChild(el);}
+      if(el) el.textContent=[...t].sort().join(' ');
+    });
+  }
+  say(`${cs.length} file(s) updated — filters may no longer match. `
+      +`<a href="${location.href}">Refresh</a>`);
+  note.innerHTML=note.textContent;
+}
+
+async function send(cs,body){
+  if(busy){say('still writing…');return null;}
+  busy=true; say('');
   let done=0, failed=0;
-  for(let s=0;s<left.length;s+=CHUNK){
-    const batch=left.slice(s,s+CHUNK);
+  for(let s=0;s<cs.length;s+=CHUNK){
+    const batch=cs.slice(s,s+CHUNK);
     try{
       const r=await fetch('/api/decide/bulk',{method:'POST',
         headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({tier:'none',
+        body:JSON.stringify({...body,
           files:batch.map(c=>({folder:c.dataset.folder,name:c.dataset.name}))})});
       if(!r.ok) throw new Error((await r.text()).slice(0,200));
-      const out=await r.json();
-      failed+=out.failed.length;
-      const bad=new Set(out.failed.map(f=>f.folder+'/'+f.name));
-      batch.forEach(c=>{
-        if(!bad.has(c.dataset.folder+'/'+c.dataset.name)) c.dataset.tier='none';
-      });
+      failed+=(await r.json()).failed.length;
     }catch(e){
-      busy=false; render();
-      say(`stopped after ${done} of ${left.length}: ${e.message}`);
-      return;
+      busy=false; say(`stopped after ${done} of ${cs.length}: ${e.message}`);
+      return null;
     }
     done+=batch.length;
-    render(`finishing… ${done} of ${left.length}`);
+    if(cs.length>CHUNK) say(`writing… ${done} of ${cs.length}`);
   }
-  busy=false; render();
-  say(failed ? `${failed} file(s) could not be written — re-run Finish event` : '');
+  busy=false;
+  if(failed) say(`${failed} file(s) could not be written`);
+  else say('');
+  return true;
 }
-finishBtn.addEventListener('click',finish);
 
+actions.querySelectorAll('[data-act]').forEach(b=>{
+  b.onclick=()=>openMenu(b, b.dataset.act==='date'
+    ? {mode:'date'}
+    : {column:b.dataset.act==='untag'?'tag':b.dataset.act,
+       mode:'set', as:b.dataset.act});
+});
+actions.querySelectorAll('[data-tier]').forEach(b=>{
+  b.onclick=()=>{const cs=targets(); if(cs.length) setTier(cs,b.dataset.tier);};
+});
+
+// --- keyboard ----------------------------------------------------------------
 const KEYS={p:'photo',t:'top',x:'none','0':''};
 document.addEventListener('keydown',e=>{
-  const cols=Math.max(1,Math.round(document.getElementById('grid').clientWidth/156));
-  if(e.key==='Escape'){close_();return;}
-  if(e.key==='Enter'){viewer.classList.contains('on')?close_():open_();return;}
-  const k=e.key.toLowerCase();
-  if(k in KEYS && !e.ctrlKey && !e.metaKey){
-    e.preventDefault();
-    if(i<0) show(0);
-    decide(cells[i], KEYS[k]);
-    // Advance, because the next photo is always the next question.
-    if(i<cells.length-1) show(i+1);
+  if(e.target.tagName==='INPUT') return;
+  if(e.key==='Escape'){
+    if(viewer.classList.contains('on')) closeViewer();
+    else if(!menu.hidden) closeMenu();
+    else clearPicks();
     return;
   }
+  if(e.key==='Enter'){
+    viewer.classList.contains('on')?closeViewer():openViewer(); return;
+  }
+  const k=e.key.toLowerCase();
+  if(k in KEYS&&!e.ctrlKey&&!e.metaKey){
+    e.preventDefault();
+    if(cur<0&&!picked.size) setCur(0);
+    const cs=targets();
+    if(!cs.length) return;
+    setTier(cs,KEYS[k]);
+    // Advance only when working one at a time: with a selection the gesture is
+    // deliberate and moving the cursor underneath it would be noise.
+    if(!picked.size&&cur<cells.length-1) setCur(cur+1);
+    return;
+  }
+  const cols=Math.max(1,Math.round(grid?grid.clientWidth/156:1));
   const step={ArrowRight:1,ArrowLeft:-1,ArrowDown:cols,ArrowUp:-cols}[e.key];
   if(step===undefined) return;
-  e.preventDefault(); show((i<0?0:i)+step);
+  e.preventDefault();
+  const next=(cur<0?0:cur)+step;
+  if(e.shiftKey&&cur>=0){range(cur,Math.max(0,Math.min(cells.length-1,next)));
+                         drawSel();}
+  setCur(next);
 });
-// Clicking the video itself must reach its controls, not close the viewer.
-viewer.addEventListener('click',e=>{if(e.target===viewer)close_();});
-render();
+
+drawChips(); drawSel();
 """
 
 
@@ -426,12 +775,30 @@ def _serve(root: Path, folder: str, name: str) -> FileResponse:
 
 @app.get("/api/files")
 def api_files(user: Annotated[str, Depends(require_user)],
-              event: Annotated[str | None, Query()] = None,
-              tier: Annotated[str | None, Query()] = None,
+              view: Annotated[ix.Filters, Depends(filters)],
               limit: Annotated[int, Query(le=2000)] = 500,
               offset: Annotated[int, Query(ge=0)] = 0) -> JSONResponse:
-    rows = ix.files(db(), event=event, tier=tier, limit=limit, offset=offset)
+    rows = ix.files(db(), view, limit=limit, offset=offset)
     return JSONResponse([dict(r) for r in rows])
+
+
+@app.get("/api/suggest")
+def api_suggest(user: Annotated[str, Depends(require_user)],
+                view: Annotated[ix.Filters, Depends(filters)],
+                column: Annotated[str, Query()]) -> JSONResponse:
+    """Existing values for a column, most relevant to the current view first.
+
+    A library ends up with hundreds of events and tags, and an alphabetical
+    list of all of them buries the handful that apply to what is on screen.
+    Ranking by how much of the current view already uses a value puts the
+    likely answer in the first few rows — see `index.suggest`.
+    """
+    if column not in ("event", "tag", "year", "kind", "band"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            f"cannot suggest values for {column!r}")
+    return JSONResponse([
+        {"value": s.value, "n": s.n, "scope": s.scope}
+        for s in ix.suggest(db(), column, view)])
 
 
 @app.get("/api/events")
@@ -453,6 +820,9 @@ class DecideBody(BaseModel):
     tier: str | None = None
     event: str | None = None
     date_override: str | None = None
+    tags: list[str] | None = None
+    add_tags: list[str] = []
+    remove_tags: list[str] = []
 
 
 @app.post("/api/decide")
@@ -465,13 +835,14 @@ def api_decide(user: Annotated[str, Depends(require_user)],
     `pix2 index` catches up — drift is only ever "the index is behind", never
     "the record is wrong". `indexed` in the response says which happened.
     """
-    decision, indexed = _decide(body.folder, body.name, _fields(body))
+    decision, indexed = _decide(body.folder, body.name, _change(body))
     return JSONResponse({
         "folder": body.folder,
         "name": body.name,
         "tier": decision.tier,
         "event": decision.event,
         "date_override": decision.date_override,
+        "tags": list(decision.tags),
         "has_sidecar": not decision.is_empty(),
         "indexed": indexed,
     })
@@ -503,6 +874,9 @@ class DecideBulkBody(BaseModel):
     tier: str | None = None
     event: str | None = None
     date_override: str | None = None
+    tags: list[str] | None = None
+    add_tags: list[str] = []
+    remove_tags: list[str] = []
 
 
 #: Bounds one request rather than the whole gesture. Finishing a 1,766-file
@@ -529,7 +903,7 @@ def api_decide_bulk(user: Annotated[str, Depends(require_user)],
             status.HTTP_400_BAD_REQUEST,
             f"{len(body.files)} files in one request — send at most {BULK_LIMIT}")
 
-    fields = _fields(body)
+    change = _change(body)
     written = 0
     indexed = 0
     failed: list[dict[str, str]] = []
@@ -540,7 +914,7 @@ def api_decide_bulk(user: Annotated[str, Depends(require_user)],
     try:
         for target in body.files:
             try:
-                _, was_indexed = _decide(target.folder, target.name, fields,
+                _, was_indexed = _decide(target.folder, target.name, change,
                                          conn=conn)
             except HTTPException as e:
                 failed.append({"folder": target.folder, "name": target.name,
@@ -558,18 +932,36 @@ def api_decide_bulk(user: Annotated[str, Depends(require_user)],
 
 # --- the write path ----------------------------------------------------------
 
-def _fields(body: DecideBody | DecideBulkBody) -> dict[str, str | None | Unset]:
+@dataclass(frozen=True)
+class _Change:
+    """One decision edit, with "leave it alone" distinct from "clear it"."""
+
+    tier: str | None | Unset = decisions.UNSET
+    event: str | None | Unset = decisions.UNSET
+    date_override: str | None | Unset = decisions.UNSET
+    tags: Sequence[str] | None | Unset = decisions.UNSET
+    add_tags: Sequence[str] = field(default_factory=tuple)
+    remove_tags: Sequence[str] = field(default_factory=tuple)
+
+
+def _change(body: DecideBody | DecideBulkBody) -> _Change:
     """Which decision fields the request actually sent.
 
     Omitted and `null` mean different things, so a field nobody sent becomes
-    `UNSET` and is left exactly as it was.
+    `UNSET` and is left exactly as it was. Tags additionally distinguish
+    *replace* from *add* and *remove*: applying a tag to a selection of 200
+    files has to add to what each one already carries.
     """
     sent = body.model_fields_set
-    return {name: (getattr(body, name) if name in sent else decisions.UNSET)
-            for name in ("tier", "event", "date_override")}
+    def got(name: str) -> Any:
+        return getattr(body, name) if name in sent else decisions.UNSET
+    return _Change(tier=got("tier"), event=got("event"),
+                   date_override=got("date_override"), tags=got("tags"),
+                   add_tags=tuple(body.add_tags),
+                   remove_tags=tuple(body.remove_tags))
 
 
-def _decide(folder: str, name: str, fields: dict[str, str | None | Unset],
+def _decide(folder: str, name: str, change: _Change,
             *, conn: sqlite3.Connection | None = None) -> tuple[Decision, bool]:
     """Write one decision to master, then bring its index row up to date.
 
@@ -589,7 +981,10 @@ def _decide(folder: str, name: str, fields: dict[str, str | None | Unset],
     media = _master_file(folder, name)
     with _write_lock:
         try:
-            decision = decisions.apply(media, **fields)
+            decision = decisions.apply(
+                media, tier=change.tier, event=change.event,
+                date_override=change.date_override, tags=change.tags,
+                add_tags=change.add_tags, remove_tags=change.remove_tags)
         except decisions.DecisionError as e:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
         except OSError as e:
@@ -647,6 +1042,16 @@ def _h(text: object) -> str:
     """Escape for HTML text and attributes."""
     return (str(text).replace("&", "&amp;").replace("<", "&lt;")
             .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def _js(value: object) -> str:
+    """Embed a value in a <script> block.
+
+    `<` is escaped because an event named with a literal `</script>` would
+    otherwise close the block and run whatever followed as markup — and event
+    names are typed by whoever is curating.
+    """
+    return json.dumps(value).replace("<", "\\u003c")
 
 
 def _q(text: object) -> str:

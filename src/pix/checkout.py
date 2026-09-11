@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
@@ -61,6 +60,7 @@ from pix.rating import XMP_RATING, effective_rating
 from pix.root import local_dir
 from pix.special_folders import FILTERED_FOLDER
 from pix.tag_filter import Bucket
+from pix import datestr
 
 CHECKOUT_DIRNAME: str = "checkout"
 SNAPSHOT_FILENAME: str = "snapshot.json"
@@ -672,9 +672,7 @@ def diff_workspace(
 
 # --- Commit: override math ---------------------------------------------------
 
-_OVERRIDE_RE = re.compile(
-    r"^(\*|\d{4})-(\*|\d{2})-(\*|\d{2})-(\*|\d{2}):(\*|\d{2}):(\*|\d{2})$"
-)
+_OVERRIDE_RE = datestr.OVERRIDE_RE
 _DATE_SLOT = {"year": 0, "month": 1, "day": 2}
 
 

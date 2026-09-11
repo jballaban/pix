@@ -13,7 +13,6 @@ text is presentational; the structured data is the source of truth.
 from __future__ import annotations
 
 import dataclasses
-import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -35,6 +34,7 @@ from pix.events import PIX_IMPORT_ID, derive_event_auto
 from pix.markers import CONVERT_INFIX
 from pix.metadata import FileMetadata
 from pix.progress import LiveProgress
+from pix import datestr
 
 
 # pix:* tag keys (group-prefixed, family-0, as exiftool reports them).
@@ -1016,92 +1016,13 @@ def _plan_keep(
 
 # --- canonical filename + override math ---
 
-_OVERRIDE_RE = re.compile(
-    r"^(?P<Y>\*|\d{4})-(?P<M>\*|\d{2})-(?P<D>\*|\d{2})-"
-    r"(?P<h>\*|\d{2}):(?P<m>\*|\d{2}):(?P<s>\*|\d{2})$"
-)
-
-
-def valid_date_override(value: str) -> bool:
-    """True if `value` is a well-formed `DateOverride` pattern
-    (`YYYY-MM-DD-HH:MM:SS`, any component may be `*`). Used by `pix tag set`
-    to validate a date override before writing it."""
-    return _OVERRIDE_RE.match(value) is not None
-
-
-def _override_has_pinning(override: str | None) -> bool:
-    """True if `override` actually pins at least one date component.
-
-    A `DateOverride` of all `*` slots (e.g. `*-*-*-*:*:*`) is equivalent to
-    no override and should never be stored (tag-editing clears it). This
-    helper is defensive: if such a string IS on disk, treat it as
-    "no pinning" so we don't flag drift as masked.
-    """
-    if not override:
-        return False
-    # Any digit means at least one slot has a real value.
-    return any(c.isdigit() for c in override)
-
-
-def _apply_override(auto: datetime, override: str) -> datetime | None:
-    """Patch the `auto` datetime with non-`*` slots from `override`."""
-    m = _OVERRIDE_RE.match(override)
-    if m is None:
-        return None
-    parts = m.groupdict()
-
-    def pick(key: str, fallback: int) -> int:
-        v = parts[key]
-        return fallback if v == "*" else int(v)
-
-    try:
-        return datetime(
-            year=pick("Y", auto.year),
-            month=pick("M", auto.month),
-            day=pick("D", auto.day),
-            hour=pick("h", auto.hour),
-            minute=pick("m", auto.minute),
-            second=pick("s", auto.second),
-        )
-    except ValueError:
-        return None
-
-
-def _date_from_override_only(override: str | None) -> datetime | None:
-    """Synthesize an effective date from `DateOverride` alone (no DateAuto).
-
-    Used when a file has no `pix:DateAuto` (un-dated) but the user pinned
-    date components via tag-editing. A **year is required** as the anchor;
-    any unspecified lower field defaults to its minimum (month/day → 01,
-    time → 00:00:00). Without a year there's nothing to anchor, so the
-    effective date stays null. The stored override is unchanged — only
-    what the user actually set is persisted; the defaults are applied
-    here at read time.
-    """
-    if not override:
-        return None
-    m = _OVERRIDE_RE.match(override)
-    if m is None:
-        return None
-    parts = m.groupdict()
-    if parts["Y"] == "*":
-        return None  # no year anchor
-
-    def pick(key: str, default: int) -> int:
-        v = parts[key]
-        return default if v == "*" else int(v)
-
-    try:
-        return datetime(
-            year=int(parts["Y"]),
-            month=pick("M", 1),
-            day=pick("D", 1),
-            hour=pick("h", 0),
-            minute=pick("m", 0),
-            second=pick("s", 0),
-        )
-    except ValueError:
-        return None
+# The override grammar lives in `pix.datestr` — one copy, shared with
+# checkout and with the NAS sidecars, which need the same semantics.
+_OVERRIDE_RE = datestr.OVERRIDE_RE
+valid_date_override = datestr.valid
+_override_has_pinning = datestr.pins_anything
+_apply_override = datestr.apply
+_date_from_override_only = datestr.alone
 
 
 def effective_date(meta: FileMetadata) -> datetime | None:

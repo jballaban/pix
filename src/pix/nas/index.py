@@ -15,6 +15,12 @@ Two rules from §4 shape it:
   That is what let seeding skip writing ~62k sidecars: inherited events simply
   appear, and a sidecar is created only when a value is first changed.
 
+`effective_date` and `year` sit alongside the raw `capture_date` and are the one
+deliberate exception, because they are not interpretations — they are the defined
+composition of a fact with a decision (`pix.datestr`), computed from two columns
+of the same row. They exist because filtering and sorting a library by *the date
+a photo actually has* is the common case, and re-deriving it per query is not.
+
 Built from the **meta tier** rather than the media, which is the whole reason
 `process` writes it: rebuilding reads small JSON instead of opening every file.
 
@@ -32,35 +38,73 @@ import sqlite3
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterator, cast
+from typing import Any, Callable, ClassVar, Iterator, cast
 
+from pix import datestr
 from pix.nas import decisions
 from pix.nas.const import MASTER_DIR, META_DIR
 from pix.nas.decisions import Decision
 
-SCHEMA_VERSION: int = 1
+#: Bumped whenever the shape changes. A mismatch drops and rebuilds rather than
+#: migrating: the index is disposable by design, and a migration path is
+#: machinery to maintain for something a `pix2 index` reproduces exactly.
+SCHEMA_VERSION: int = 2
+
+#: `tier` filter value meaning *no decision yet* — the "new" chip in the UI.
+#: A sentinel rather than a separate flag, because unreviewed is a tier state
+#: and modelling it twice invites the two to disagree.
+UNREVIEWED: str = "new"
+
+#: Where *small/short*, *medium* and *large/long* fall. One filter whose
+#: meaning follows the file: for a clip the question is length, for a photo
+#: it is weight, and asking it as two controls would mean picking the right
+#: one before you could ask.
+#:
+#: Tuned against the seeded year (5,685 photos, 724 clips): clip durations run
+#: p25 3.2s / p50 9.7s / p75 17.9s, so 5s isolates the 32% that are throwaway
+#: fragments and 60s the 5% that are real footage. Photos run p50 3.1MB, and
+#: 500KB is well below anything a camera produces — it finds screenshots and
+#: re-compressed messaging images rather than early-2000s originals, which
+#: matters because those are still to be seeded.
+SHORT_VIDEO_SECONDS: float = 5.0
+LONG_VIDEO_SECONDS: float = 60.0
+SMALL_IMAGE_BYTES: int = 500_000
+LARGE_IMAGE_BYTES: int = 6_000_000
 
 _SCHEMA: str = """
 CREATE TABLE IF NOT EXISTS files (
-    folder        TEXT NOT NULL,
-    name          TEXT NOT NULL,
-    size          INTEGER,
-    mtime_ns      INTEGER,
-    kind          TEXT,          -- image | video | other
-    capture_date  TEXT,          -- probed fact, ISO-ish, NULL if the file has none
-    camera        TEXT,
-    width         INTEGER,
-    height        INTEGER,
-    duration      REAL,
-    event         TEXT,          -- decision, or inherited from embedded tags
-    tier          TEXT,          -- decision: none | photo | top; NULL = unreviewed
-    date_override TEXT,
-    has_sidecar   INTEGER NOT NULL DEFAULT 0,
+    folder         TEXT NOT NULL,
+    name           TEXT NOT NULL,
+    size           INTEGER,
+    mtime_ns       INTEGER,
+    kind           TEXT,          -- image | video | other
+    capture_date   TEXT,          -- probed fact, ISO-ish, NULL if the file has none
+    camera         TEXT,
+    width          INTEGER,
+    height         INTEGER,
+    duration       REAL,
+    event          TEXT,          -- decision, or inherited from embedded tags
+    tier           TEXT,          -- decision: none | photo | top; NULL = unreviewed
+    date_override  TEXT,          -- decision, may pin only some components
+    effective_date TEXT,          -- capture_date as overridden; pix format
+    year           TEXT,          -- first four of effective_date
+    band           TEXT,          -- small | medium | large, by kind
+    has_sidecar    INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (folder, name)
 );
-CREATE INDEX IF NOT EXISTS files_event   ON files(event);
-CREATE INDEX IF NOT EXISTS files_tier    ON files(tier);
-CREATE INDEX IF NOT EXISTS files_capture ON files(capture_date);
+CREATE INDEX IF NOT EXISTS files_event ON files(event);
+CREATE INDEX IF NOT EXISTS files_tier  ON files(tier);
+CREATE INDEX IF NOT EXISTS files_year  ON files(year);
+CREATE INDEX IF NOT EXISTS files_eff   ON files(effective_date);
+CREATE INDEX IF NOT EXISTS files_kind  ON files(kind);
+CREATE INDEX IF NOT EXISTS files_band  ON files(band);
+CREATE TABLE IF NOT EXISTS file_tags (
+    folder TEXT NOT NULL,
+    name   TEXT NOT NULL,
+    tag    TEXT NOT NULL,
+    PRIMARY KEY (folder, name, tag)
+);
+CREATE INDEX IF NOT EXISTS file_tags_tag ON file_tags(tag);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 """
 
@@ -82,19 +126,76 @@ class IndexStats:
     with_date: int = 0
     with_sidecar: int = 0
     events: int = 0
+    tags: int = 0
     skipped: list[str] = field(default_factory=lambda: [])
 
 
+@dataclass(frozen=True)
+class Filters:
+    """What the browser is currently looking at.
+
+    Every field is independent and ANDed. `None` means *not filtering on this*,
+    which is distinct from filtering on an empty value — `event=""` would be a
+    filter nothing matches, where `event=None` is no filter at all.
+    """
+
+    event: str | None = None
+    year: str | None = None
+    tag: str | None = None
+    tier: str | None = None
+    kind: str | None = None
+    band: str | None = None
+
+    #: Every filterable column, in the order the top bar shows them.
+    NAMES: ClassVar[tuple[str, ...]] = ("event", "year", "tag", "tier",
+                                       "kind", "band")
+
+    def active(self) -> tuple[str, ...]:
+        """Which filters are set, by name."""
+        return tuple(n for n in self.NAMES if getattr(self, n) is not None)
+
+
+@dataclass(frozen=True)
+class Suggestion:
+    """One option for a dropdown, with how relevant it is to the current view."""
+
+    value: str
+    n: int
+    #: `all` — used by files matching every other active filter; `any` — used by
+    #: files matching at least one; `other` — used elsewhere in the library.
+    scope: str
+
+
 def connect(db_path: Path) -> sqlite3.Connection:
-    """Open (creating if needed) the index database."""
+    """Open (creating if needed) the index database, at the current schema.
+
+    A schema mismatch drops everything and starts over. That is safe precisely
+    because this file is a cache: the decisions live in master, and the only
+    cost of throwing it away is the `pix2 index` that follows.
+    """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    if _stored_version(conn) not in (None, SCHEMA_VERSION):
+        conn.executescript(
+            "DROP TABLE IF EXISTS files; DROP TABLE IF EXISTS file_tags;")
     conn.executescript(_SCHEMA)
     conn.execute("INSERT OR REPLACE INTO meta VALUES ('schema', ?)",
                  (str(SCHEMA_VERSION),))
     conn.commit()
     return conn
+
+
+def _stored_version(conn: sqlite3.Connection) -> int | None:
+    try:
+        row = conn.execute(
+            "SELECT value FROM meta WHERE key = 'schema'").fetchone()
+    except sqlite3.Error:
+        return None
+    try:
+        return int(row["value"]) if row else None
+    except (TypeError, ValueError):
+        return None
 
 
 def open_ro(db_path: Path) -> sqlite3.Connection:
@@ -143,11 +244,13 @@ def build(db_path: Path, *, echo: Callable[[str], None] = lambda _: None,
 
     conn = connect(db_path)
     stats = IndexStats()
-    events: set[str] = set()
+    events_seen: set[str] = set()
+    tags_seen: set[str] = set()
 
     try:
         with conn:
             conn.execute("DELETE FROM files")
+            conn.execute("DELETE FROM file_tags")
             for folder, decided in _folders(meta_root, master_root):
                 for record in _records(meta_root / folder):
                     row = _row(folder, record, decided)
@@ -155,18 +258,24 @@ def build(db_path: Path, *, echo: Callable[[str], None] = lambda _: None,
                         stats.skipped.append(f"{folder}: unreadable record")
                         continue
                     conn.execute(_INSERT, row)
+                    name = str(row["name"])
+                    decision = decided.get(name)
+                    if decision is not None and decision.tags:
+                        _write_tags(conn, folder, name, decision.tags)
+                        tags_seen.update(decision.tags)
                     stats.files += 1
                     if row["capture_date"]:
                         stats.with_date += 1
                     if row["has_sidecar"]:
                         stats.with_sidecar += 1
                     if row["event"]:
-                        events.add(str(row["event"]))
+                        events_seen.add(str(row["event"]))
                 echo(f"indexed {folder}")
             conn.execute("INSERT OR REPLACE INTO meta VALUES ('built_at', ?)",
                          (str(int(time.time())),))
     finally:
-        stats.events = len(events)
+        stats.events = len(events_seen)
+        stats.tags = len(tags_seen)
 
     return stats
 
@@ -174,9 +283,11 @@ def build(db_path: Path, *, echo: Callable[[str], None] = lambda _: None,
 _INSERT: str = (
     "INSERT OR REPLACE INTO files "
     "(folder, name, size, mtime_ns, kind, capture_date, camera, width, height, "
-    " duration, event, tier, date_override, has_sidecar) "
+    " duration, event, tier, date_override, effective_date, year, band, "
+    " has_sidecar) "
     "VALUES (:folder, :name, :size, :mtime_ns, :kind, :capture_date, :camera, "
-    " :width, :height, :duration, :event, :tier, :date_override, :has_sidecar)"
+    " :width, :height, :duration, :event, :tier, :date_override, "
+    " :effective_date, :year, :band, :has_sidecar)"
 )
 
 
@@ -206,14 +317,29 @@ def refresh(conn: sqlite3.Connection, folder: str, name: str, *,
     if record is None:
         return False
     media = master_root / folder / name
-    decided = ({name: decisions.read(media)}
-               if decisions.sidecar_path(media).is_file() else {})
+    decided: dict[str, Decision | None] = (
+        {name: decisions.read(media)}
+        if decisions.sidecar_path(media).is_file() else {})
     row = _row(folder, record, decided)
     if row is None:
         return False
+    decision = decided.get(name)
     with conn:
         conn.execute(_INSERT, row)
+        _write_tags(conn, folder, name,
+                    decision.tags if decision is not None else ())
     return True
+
+
+def _write_tags(conn: sqlite3.Connection, folder: str, name: str,
+                tags: tuple[str, ...]) -> None:
+    """Replace one file's tag rows. Delete-then-insert, so removal works."""
+    conn.execute("DELETE FROM file_tags WHERE folder = ? AND name = ?",
+                 (folder, name))
+    if tags:
+        conn.executemany(
+            "INSERT OR REPLACE INTO file_tags (folder, name, tag) VALUES (?,?,?)",
+            [(folder, name, tag) for tag in tags])
 
 
 def built_at(conn: sqlite3.Connection) -> float | None:
@@ -307,13 +433,18 @@ def _row(folder: str, record: dict[str, Any],
     # (spec §4). Per-field rather than whole-record, so tiering a photo does not
     # hide the event it inherited.
     decision = decided.get(name)
+    capture = _capture_date(exif_map)
+    override = ((decision.date_override if decision else None)
+                or _tag(exif_map, "DateOverride"))
+    effective = datestr.effective(
+        datestr.parse_exiftool(capture) if capture else None, override)
     return {
         "folder": folder,
         "name": name,
         "size": record.get("size"),
         "mtime_ns": record.get("mtime_ns"),
         "kind": kind,
-        "capture_date": _capture_date(exif_map),
+        "capture_date": capture,
         "camera": _tag(exif_map, "Model"),
         "width": width,
         "height": height,
@@ -322,10 +453,31 @@ def _row(folder: str, record: dict[str, Any],
                   or _tag(exif_map, "EventOverride")
                   or _tag(exif_map, "EventAuto")),
         "tier": (decision.tier if decision else None) or _tag(exif_map, "Tier"),
-        "date_override": ((decision.date_override if decision else None)
-                          or _tag(exif_map, "DateOverride")),
+        "date_override": override,
+        "effective_date": datestr.format_pix(effective) if effective else None,
+        "year": f"{effective.year:04d}" if effective else None,
+        "band": _band(kind, record.get("size"), _duration(exif_map)),
         "has_sidecar": 1 if name in decided else 0,
     }
+
+
+def _band(kind: str, size: object, duration: float | None) -> str | None:
+    """Which size band a file falls in — by length for video, weight for stills.
+
+    One axis rather than two because the question being asked is the same one:
+    *is this a throwaway?* A 3-second clip and a 50KB image are the same kind
+    of suspect, and making the curator pick the right control first would be
+    asking them to know the answer before the question.
+    """
+    if kind == "video":
+        if duration is None:
+            return None
+        return ("small" if duration < SHORT_VIDEO_SECONDS
+                else "large" if duration > LONG_VIDEO_SECONDS else "medium")
+    if not isinstance(size, int):
+        return None
+    return ("small" if size < SMALL_IMAGE_BYTES
+            else "large" if size > LARGE_IMAGE_BYTES else "medium")
 
 
 def _tag(exif: dict[str, Any], key: str) -> str | None:
@@ -360,13 +512,71 @@ def _dimensions(exif: dict[str, Any]) -> tuple[int | None, int | None]:
 
 
 def _duration(exif: dict[str, Any]) -> float | None:
+    """Seconds, from either shape ExifTool emits.
+
+    It writes `12.53 s` for some sources and `0:00:38` for others — 91 of the
+    seeded year's 724 clips take the second form, and reading only the first
+    made them render as the word "video" instead of a length.
+    """
     raw = _tag(exif, "Duration") or _tag(exif, "MediaDuration")
     if not raw:
         return None
+    text = str(raw).strip()
+    if ":" in text:
+        try:
+            parts = [float(p) for p in text.split(":")]
+        except ValueError:
+            return None
+        seconds = 0.0
+        for part in parts:                      # H:MM:SS, or MM:SS
+            seconds = seconds * 60 + part
+        return seconds
     try:
-        return float(str(raw).split()[0])
-    except ValueError:
+        return float(text.split()[0])
+    except (ValueError, IndexError):
         return None
+
+
+# --- filtering ---------------------------------------------------------------
+
+def _clauses(filters: Filters) -> dict[str, tuple[str, dict[str, Any]]]:
+    """Each active filter as a SQL fragment plus its parameters."""
+    out: dict[str, tuple[str, dict[str, Any]]] = {}
+    if filters.event is not None:
+        out["event"] = ("COALESCE(files.event, '(none)') = :f_event",
+                        {"f_event": filters.event})
+    if filters.year is not None:
+        out["year"] = ("files.year = :f_year", {"f_year": filters.year})
+    if filters.tag is not None:
+        out["tag"] = (
+            "EXISTS (SELECT 1 FROM file_tags ft WHERE ft.folder = files.folder "
+            "AND ft.name = files.name AND ft.tag = :f_tag)",
+            {"f_tag": filters.tag})
+    if filters.tier is not None:
+        out["tier"] = (
+            ("files.tier IS NULL" if filters.tier == UNREVIEWED
+             else "files.tier = :f_tier"),
+            {} if filters.tier == UNREVIEWED else {"f_tier": filters.tier})
+    if filters.kind is not None:
+        out["kind"] = ("files.kind = :f_kind", {"f_kind": filters.kind})
+    if filters.band is not None:
+        out["band"] = ("files.band = :f_band", {"f_band": filters.band})
+    return out
+
+
+def _bind(clauses: dict[str, tuple[str, dict[str, Any]]]) -> dict[str, Any]:
+    params: dict[str, Any] = {}
+    for _, bound in clauses.values():
+        params.update(bound)
+    return params
+
+
+def _combine(clauses: dict[str, tuple[str, dict[str, Any]]],
+             joiner: str) -> str:
+    """Fold fragments into one expression, with `1` standing for "no filters"."""
+    if not clauses:
+        return "1"
+    return "(" + f" {joiner} ".join(sql for sql, _ in clauses.values()) + ")"
 
 
 # --- queries -----------------------------------------------------------------
@@ -380,30 +590,85 @@ def events(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """
     return list(conn.execute(
         "SELECT COALESCE(event, '(none)') AS event, COUNT(*) AS n, "
-        "       MIN(capture_date) AS first_seen, MAX(capture_date) AS last_seen, "
+        "       MIN(effective_date) AS first_seen, "
+        "       MAX(effective_date) AS last_seen, "
         "       SUM(CASE WHEN tier IS NULL THEN 1 ELSE 0 END) AS unreviewed "
         "FROM files GROUP BY event ORDER BY n DESC"
     ))
 
 
-def files(conn: sqlite3.Connection, *, event: str | None = None,
-          tier: str | None = None, limit: int = 500,
-          offset: int = 0) -> list[sqlite3.Row]:
-    """Files, optionally filtered, in capture order."""
-    where: list[str] = []
-    params: dict[str, Any] = {"limit": limit, "offset": offset}
-    if event is not None:
-        where.append("COALESCE(event, '(none)') = :event")
-        params["event"] = event
-    if tier is not None:
-        where.append("tier IS :tier" if tier == "" else "tier = :tier")
-        params["tier"] = tier or None
-    clause = f"WHERE {' AND '.join(where)}" if where else ""
+def files(conn: sqlite3.Connection, filters: Filters | None = None, *,
+          limit: int = 500, offset: int = 0) -> list[sqlite3.Row]:
+    """Files matching every active filter, in effective-date order.
+
+    Undated files sort last rather than scattering through the grid: they are a
+    work item of their own, not a date that happens to be small.
+    """
+    clauses = _clauses(filters or Filters())
+    where = " AND ".join(sql for sql, _ in clauses.values())
+    params: dict[str, Any] = {**_bind(clauses), "limit": limit, "offset": offset}
     return list(conn.execute(
-        f"SELECT * FROM files {clause} "
-        "ORDER BY capture_date IS NULL, capture_date, name "
+        "SELECT files.*, ("
+        "  SELECT group_concat(ft.tag, char(10)) FROM file_tags ft "
+        "  WHERE ft.folder = files.folder AND ft.name = files.name"
+        ") AS tags FROM files "
+        + (f"WHERE {where} " if where else "")
+        + "ORDER BY effective_date IS NULL, effective_date, name "
         "LIMIT :limit OFFSET :offset", params
     ))
+
+
+def count(conn: sqlite3.Connection, filters: Filters | None = None) -> int:
+    """How many files match, regardless of the page being shown."""
+    clauses = _clauses(filters or Filters())
+    where = " AND ".join(sql for sql, _ in clauses.values())
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM files " + (f"WHERE {where}" if where else ""),
+        _bind(clauses)).fetchone()
+    return int(row["n"])
+
+
+def suggest(conn: sqlite3.Connection, column: str,
+            filters: Filters | None = None, *,
+            limit: int = 400) -> list[Suggestion]:
+    """Existing values for `column`, most relevant to the current view first.
+
+    Three bands, in order: values used by files matching **every** other active
+    filter, then by files matching **any** of them, then everything else.
+    Looking at `year:2026 + tag:tv` and reaching for an event name, the events
+    already used in that exact slice come first, the ones used in either slice
+    next, and the rest of the library last. With no other filters set, every
+    value lands in the first band and the list is simply most-used-first.
+
+    The filter on `column` itself is excluded from the scope, or the first band
+    would only ever contain the value already being filtered on — which is the
+    one option nobody is reaching for.
+    """
+    clauses = _clauses(filters or Filters())
+    clauses.pop(column, None)
+    params: dict[str, Any] = {**_bind(clauses), "limit": limit}
+    tally = (f"COUNT(*) AS n, "
+             f"SUM(CASE WHEN {_combine(clauses, 'AND')} THEN 1 ELSE 0 END) AS n_all, "
+             f"SUM(CASE WHEN {_combine(clauses, 'OR')} THEN 1 ELSE 0 END) AS n_any ")
+    order = ("ORDER BY n_all > 0 DESC, n_any > 0 DESC, n DESC, value "
+             "LIMIT :limit")
+
+    if column == "tag":
+        sql = ("SELECT ft.tag AS value, " + tally
+               + "FROM file_tags ft "
+                 "JOIN files ON files.folder = ft.folder AND files.name = ft.name "
+                 "GROUP BY value " + order)
+    elif column in ("event", "year", "kind", "band"):
+        sql = (f"SELECT files.{column} AS value, " + tally
+               + f"FROM files WHERE files.{column} IS NOT NULL "
+                 "GROUP BY value " + order)
+    else:
+        raise ValueError(f"cannot suggest values for {column!r}")
+
+    return [Suggestion(value=str(r["value"]), n=int(r["n"]),
+                       scope=("all" if r["n_all"] else
+                              "any" if r["n_any"] else "other"))
+            for r in conn.execute(sql, params)]
 
 
 def summary(conn: sqlite3.Connection) -> sqlite3.Row:
@@ -412,6 +677,6 @@ def summary(conn: sqlite3.Connection) -> sqlite3.Row:
         "SELECT COUNT(*) AS files, "
         "       COUNT(DISTINCT event) AS events, "
         "       SUM(CASE WHEN tier IS NULL THEN 1 ELSE 0 END) AS unreviewed, "
-        "       SUM(CASE WHEN capture_date IS NULL THEN 1 ELSE 0 END) AS undated "
+        "       SUM(CASE WHEN effective_date IS NULL THEN 1 ELSE 0 END) AS undated "
         "FROM files"
     ).fetchone()

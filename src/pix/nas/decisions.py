@@ -1,8 +1,15 @@
 """Curation decisions — the `.xmp` sidecar beside each master file (spec §4).
 
-Three fields, and only three: **`tier`, `event`, and a date override**. Nothing
+Four fields: **`tier`, `event`, `tags`, and a date override**. Nothing
 recomputable goes here, because master is the one tier backed up forever and
-caching a probed fact in it duplicates recomputable data into permanent storage.
+caching a probed fact in it duplicates recomputable data into permanent
+storage. Everything that is here is a human judgement about the file.
+
+**The date override has holes in it.** It is a `YYYY-MM-DD-HH:MM:SS` pattern
+where any component may be `*` (`pix.datestr`), so *this scan is from
+1987* can be recorded without inventing a month, a day and a time nobody
+knows. Fabricating that precision is not a harmless convenience — a made-up
+`1987-01-01 00:00:00` is indistinguishable from a real one a year later.
 
 The sidecar is named **full filename plus `.xmp`** (`IMG_4471.HEIC.xmp`, not
 `IMG_4471.xmp`). Lightroom's basename-replacing convention would collide on the
@@ -29,8 +36,15 @@ understand:
 | decision | pix property | also written as |
 |---|---|---|
 | event | `pix:EventOverride` | `Iptc4xmpExt:Event` |
-| date override | `pix:DateOverride` | `photoshop:DateCreated` (ISO 8601) |
+| tags | — | `dc:subject`, the standard keywords bag |
+| date override | `pix:DateOverride` | `photoshop:DateCreated`, when the
+  override pins a whole timestamp — a partial one has no standard form |
 | tier | `pix:Tier` | — no standard equivalent; rating was dropped |
+
+Tags live **only** in `dc:subject` rather than getting a `pix:` twin. It is
+the industry keyword field, every tool round-trips it, and nothing in pix
+used it before — so there is no legacy vocabulary to reconcile and no reason
+to invent a second home that could disagree with the first.
 
 Writes are temp-then-rename, so a kill mid-write cannot leave a half-written
 sidecar that parses as a decision nobody made.
@@ -40,12 +54,13 @@ from __future__ import annotations
 
 import os
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, field
 from pathlib import Path
-from xml.sax.saxutils import quoteattr
+from typing import Iterable, Sequence
+from xml.sax.saxutils import escape, quoteattr
 
-from pix.dates import PIX_DATETIME_FORMAT
+from pix import datestr
+from pix.datestr import PIX_DATETIME_FORMAT
 from pix.markers import SIDECAR_TMP_SUFFIX
 
 #: The pix XMP namespace, as registered in `exiftool_config.cfg`.
@@ -53,6 +68,7 @@ PIX_NS: str = "http://pix.local/"
 _PHOTOSHOP_NS: str = "http://ns.adobe.com/photoshop/1.0/"
 _IPTC_EXT_NS: str = "http://iptc.org/std/Iptc4xmpExt/2008-02-29/"
 _RDF_NS: str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+_DC_NS: str = "http://purl.org/dc/elements/1.1/"
 
 #: Delivery selector (spec §7). Absent means unreviewed; `none` means reviewed
 #: and rejected. `rating` was deliberately dropped — a 1-5 scale asked people to
@@ -73,15 +89,36 @@ UNSET: Unset = Unset()
 
 @dataclass(frozen=True)
 class Decision:
-    """What a human decided about one master file."""
+    """What a human decided about one master file.
+
+    `tags` is sorted and de-duplicated on construction, so two sidecars
+    recording the same judgement are the same bytes — which keeps a
+    re-write from looking like a change.
+    """
 
     tier: str | None = None
     event: str | None = None
     date_override: str | None = None
+    tags: tuple[str, ...] = field(default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "tags", normalize_tags(self.tags))
 
     def is_empty(self) -> bool:
         """True when nothing has been decided, so no sidecar should exist."""
-        return not (self.tier or self.event or self.date_override)
+        return not (self.tier or self.event or self.date_override
+                    or self.tags)
+
+
+def normalize_tags(values: Iterable[str]) -> tuple[str, ...]:
+    """Trim, drop blanks, de-duplicate, sort.
+
+    Case is preserved rather than folded: `Beach` and `beach` stay distinct,
+    because the fix for that is the UI offering the tags that already exist
+    so people pick instead of retyping. Folding here would silently rewrite
+    what someone typed into the permanent record.
+    """
+    return tuple(sorted({v.strip() for v in values if v and v.strip()}))
 
 
 class DecisionError(ValueError):
@@ -134,7 +171,10 @@ def write(media: Path, decision: Decision) -> None:
 def apply(media: Path, *,
           tier: str | None | Unset = UNSET,
           event: str | None | Unset = UNSET,
-          date_override: str | None | Unset = UNSET) -> Decision:
+          date_override: str | None | Unset = UNSET,
+          tags: Sequence[str] | None | Unset = UNSET,
+          add_tags: Sequence[str] = (),
+          remove_tags: Sequence[str] = ()) -> Decision:
     """Change some fields of `media`'s decision, leaving the rest alone.
 
     Read-modify-write rather than replace, because the UI changes one field at a
@@ -142,13 +182,27 @@ def apply(media: Path, *,
     Last-write-wins is the conflict policy (spec §8) and is sufficient — a
     single process serializes the writes, so concurrency is a policy question
     here, never an integrity one.
+
+    Tags take `add_tags`/`remove_tags` as well as a wholesale `tags`, and the
+    difference matters at scale: tagging a selection of 200 files must add to
+    what each already carries, not flatten them all to one list.
     """
     current = read(media) or Decision()
+    if isinstance(tags, Unset):
+        kept = current.tags
+    else:
+        kept = normalize_tags(tags or ())
+    if add_tags or remove_tags:
+        dropped = set(normalize_tags(remove_tags))
+        kept = normalize_tags(
+            [t for t in [*kept, *normalize_tags(add_tags)] if t not in dropped])
     updated = Decision(
         tier=current.tier if isinstance(tier, Unset) else tier,
         event=current.event if isinstance(event, Unset) else event,
         date_override=(current.date_override
-                       if isinstance(date_override, Unset) else date_override),
+                       if isinstance(date_override, Unset)
+                       else date_override),
+        tags=kept,
     )
     write(media, updated)
     return updated
@@ -161,24 +215,18 @@ def _validate(decision: Decision) -> None:
         raise DecisionError(
             f"unknown tier {decision.tier!r} — expected one of "
             f"{', '.join(sorted(TIERS))}")
-    if decision.date_override and _as_datetime(decision.date_override) is None:
-        raise DecisionError(
-            f"date override {decision.date_override!r} is not "
-            f"{PIX_DATETIME_FORMAT}")
-
-
-def _as_datetime(value: str) -> datetime | None:
-    """Parse a pix-format date override, accepting ISO 8601 as well.
-
-    Accepting both is for values arriving from a standard XMP writer; what pix
-    produces is always the pix format, so the two never diverge on disk.
-    """
-    for fmt in (PIX_DATETIME_FORMAT, "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
-        try:
-            return datetime.strptime(value, fmt)
-        except ValueError:
-            continue
-    return None
+    if decision.date_override:
+        if not datestr.valid(decision.date_override):
+            raise DecisionError(
+                f"date override {decision.date_override!r} is not "
+                f"{PIX_DATETIME_FORMAT} with `*` for unknown components")
+        if not datestr.pins_anything(decision.date_override):
+            raise DecisionError(
+                "date override pins nothing — clear it instead of storing "
+                "all-`*`, which would record a decision nobody made")
+    for tag in decision.tags:
+        if len(tag) > 120:
+            raise DecisionError(f"tag {tag[:40]!r}… is too long")
 
 
 _TEMPLATE: str = """<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
@@ -186,9 +234,10 @@ _TEMPLATE: str = """<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
  <rdf:RDF xmlns:rdf="{rdf}">
   <rdf:Description rdf:about=""
     xmlns:pix="{pix}"
+    xmlns:dc="{dc}"
     xmlns:photoshop="{photoshop}"
     xmlns:Iptc4xmpExt="{iptc}"
-{props}  />
+{props}  >{children}</rdf:Description>
  </rdf:RDF>
 </x:xmpmeta>
 <?xpacket end="w"?>
@@ -204,13 +253,26 @@ def _to_xml(decision: Decision) -> str:
         props.append(("Iptc4xmpExt:Event", decision.event))
     if decision.date_override:
         props.append(("pix:DateOverride", decision.date_override))
-        moment = _as_datetime(decision.date_override)
-        if moment is not None:
+        # Only a fully-pinned override has a standard equivalent: a partial
+        # date has no ISO 8601 form, and filling the holes to produce one
+        # would publish a precision the curator explicitly did not claim.
+        moment = datestr.alone(decision.date_override)
+        if moment is not None and '*' not in decision.date_override:
             props.append(("photoshop:DateCreated", moment.isoformat()))
 
     body = "".join(f"    {key}={quoteattr(value)}\n" for key, value in props)
-    return _TEMPLATE.format(rdf=_RDF_NS, pix=PIX_NS, photoshop=_PHOTOSHOP_NS,
-                            iptc=_IPTC_EXT_NS, props=body)
+    children = _tag_bag(decision.tags)
+    return _TEMPLATE.format(rdf=_RDF_NS, pix=PIX_NS, dc=_DC_NS,
+                            photoshop=_PHOTOSHOP_NS, iptc=_IPTC_EXT_NS,
+                            props=body, children=children)
+
+
+def _tag_bag(tags: tuple[str, ...]) -> str:
+    """Tags as a `dc:subject` RDF Bag — the shape every XMP reader expects."""
+    if not tags:
+        return ""
+    items = "".join(f"\n     <rdf:li>{escape(t)}</rdf:li>" for t in tags)
+    return (f"\n   <dc:subject>\n    <rdf:Bag>{items}\n    </rdf:Bag>\n   </dc:subject>\n  ")
 
 
 def _from_xml(root: ET.Element) -> Decision | None:
@@ -236,8 +298,25 @@ def _from_xml(root: ET.Element) -> Decision | None:
 
     decision = Decision(tier=values.get("Tier"),
                         event=values.get("EventOverride"),
-                        date_override=values.get("DateOverride"))
+                        date_override=values.get("DateOverride"),
+                        tags=_read_tags(description))
     return None if decision.is_empty() else decision
+
+
+def _read_tags(description: ET.Element) -> tuple[str, ...]:
+    """Keywords from `dc:subject`, whether bagged or written bare.
+
+    A Bag is what this writes and what Lightroom writes, but a single-keyword
+    `dc:subject` is sometimes written as plain text, and a sidecar edited
+    elsewhere still has to read.
+    """
+    found: list[str] = []
+    for subject in description.iter(f"{{{_DC_NS}}}subject"):
+        for item in subject.iter(f"{{{_RDF_NS}}}li"):
+            found.append((item.text or "").strip())
+        if not list(subject.iter(f"{{{_RDF_NS}}}li")):
+            found.append((subject.text or "").strip())
+    return normalize_tags(found)
 
 
 def _description(root: ET.Element) -> ET.Element | None:

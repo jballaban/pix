@@ -189,7 +189,8 @@ def test_files_filter_by_event(tree: dict[str, Path]) -> None:
     _build(tree)
 
     conn = ix.connect(tree["db"])
-    assert [r["name"] for r in ix.files(conn, event="Sicily")] == ["a.jpg"]
+    hits = ix.files(conn, ix.Filters(event="Sicily"))
+    assert [r["name"] for r in hits] == ["a.jpg"]
 
 
 def test_files_sort_dated_before_undated(tree: dict[str, Path]) -> None:
@@ -407,3 +408,219 @@ def test_open_rw_will_not_create_an_index(tree: dict[str, Path]) -> None:
     rather than 'nobody built one yet'."""
     with pytest.raises(sqlite3.OperationalError):
         ix.open_rw(tree["db"]).execute("SELECT 1 FROM files")
+
+
+# --- effective dates, years and bands ----------------------------------------
+
+def test_the_year_comes_from_the_capture_date(tree: dict[str, Path]) -> None:
+    _record(tree, "init_2026", "a.jpg",
+            {"EXIF:DateTimeOriginal": "2026:01:04 14:51:34"})
+    _build(tree)
+
+    row = ix.connect(tree["db"]).execute("SELECT * FROM files").fetchone()
+    assert row["year"] == "2026"
+    assert row["effective_date"] == "2026-01-04-14:51:34"
+
+
+def test_a_year_override_moves_only_the_year(tree: dict[str, Path]) -> None:
+    """The point of a partial date: the month, day and time the file actually
+    records are kept, because nobody claimed those were wrong."""
+    _record(tree, "init_2026", "a.jpg",
+            {"EXIF:DateTimeOriginal": "2026:01:04 14:51:34"})
+    _decide(tree, "init_2026", "a.jpg", Decision(date_override="1987-*-*-*:*:*"))
+    _build(tree)
+
+    row = ix.connect(tree["db"]).execute("SELECT * FROM files").fetchone()
+    assert row["year"] == "1987"
+    assert row["effective_date"] == "1987-01-04-14:51:34"
+    assert row["capture_date"] == "2026:01:04 14:51:34"   # the fact is untouched
+
+
+def test_an_undated_file_has_no_year(tree: dict[str, Path]) -> None:
+    _record(tree, "init_2026", "a.jpg", {})
+    _build(tree)
+
+    row = ix.connect(tree["db"]).execute("SELECT * FROM files").fetchone()
+    assert (row["year"], row["effective_date"]) == (None, None)
+
+
+def test_duration_parses_both_exiftool_shapes(tree: dict[str, Path]) -> None:
+    """91 of the seeded year's 724 clips report `0:00:38`, and reading only
+    `38.0 s` rendered them as the word "video" instead of a length."""
+    _record(tree, "init_2026", "a.mp4", {"QuickTime:Duration": "0:01:38"})
+    _record(tree, "init_2026", "b.mp4", {"QuickTime:Duration": "12.5 s"})
+    _build(tree)
+
+    rows = {r["name"]: r["duration"]
+            for r in ix.connect(tree["db"]).execute("SELECT * FROM files")}
+    assert rows == {"a.mp4": 98.0, "b.mp4": 12.5}
+
+
+def test_a_short_clip_bands_as_small(tree: dict[str, Path]) -> None:
+    _record(tree, "init_2026", "a.mp4", {"QuickTime:Duration": "3.0 s"})
+    _record(tree, "init_2026", "b.mp4", {"QuickTime:Duration": "0:02:00"})
+    _build(tree)
+
+    rows = {r["name"]: r["band"]
+            for r in ix.connect(tree["db"]).execute("SELECT * FROM files")}
+    assert rows == {"a.mp4": "small", "b.mp4": "large"}
+
+
+def test_a_tiny_image_bands_as_small(tree: dict[str, Path]) -> None:
+    """The other half of one question: a 50KB image is the same kind of suspect
+    as a 3-second clip, so one control asks it."""
+    _record(tree, "init_2026", "a.jpg", {}, size=50_000)
+    _record(tree, "init_2026", "b.jpg", {}, size=3_000_000)
+    _build(tree)
+
+    rows = {r["name"]: r["band"]
+            for r in ix.connect(tree["db"]).execute("SELECT * FROM files")}
+    assert rows == {"a.jpg": "small", "b.jpg": "medium"}
+
+
+# --- tags in the index -------------------------------------------------------
+
+def test_tags_reach_the_index(tree: dict[str, Path]) -> None:
+    _record(tree, "init_2026", "a.jpg", {})
+    _decide(tree, "init_2026", "a.jpg", Decision(tags=("beach", "kids")))
+    stats = _build(tree)
+
+    conn = ix.connect(tree["db"])
+    assert stats.tags == 2
+    assert [r["name"] for r in ix.files(conn, ix.Filters(tag="beach"))] == ["a.jpg"]
+    assert ix.files(conn, ix.Filters(tag="nope")) == []
+
+
+def test_refreshing_removes_a_dropped_tag(tree: dict[str, Path]) -> None:
+    """Delete-then-insert, or removing a tag would silently do nothing."""
+    _record(tree, "init_2026", "a.jpg", {})
+    _decide(tree, "init_2026", "a.jpg", Decision(tags=("beach", "kids")))
+    _build(tree)
+
+    decisions.write(tree["master"] / "init_2026" / "a.jpg",
+                    Decision(tags=("kids",)))
+    conn = ix.connect(tree["db"])
+    _refresh(tree, conn, "init_2026", "a.jpg")
+
+    assert ix.files(conn, ix.Filters(tag="beach")) == []
+    assert len(ix.files(conn, ix.Filters(tag="kids"))) == 1
+
+
+# --- filters -----------------------------------------------------------------
+
+def test_filters_combine_with_and(tree: dict[str, Path]) -> None:
+    _record(tree, "init_2026", "a.jpg",
+            {"EXIF:DateTimeOriginal": "2026:01:04 14:51:34",
+             "XMP:EventAuto": "Sicily"})
+    _record(tree, "init_2026", "b.jpg",
+            {"EXIF:DateTimeOriginal": "2025:01:04 14:51:34",
+             "XMP:EventAuto": "Sicily"})
+    _build(tree)
+
+    conn = ix.connect(tree["db"])
+    hits = ix.files(conn, ix.Filters(event="Sicily", year="2026"))
+    assert [r["name"] for r in hits] == ["a.jpg"]
+
+
+def test_the_new_filter_finds_undecided_files(tree: dict[str, Path]) -> None:
+    _record(tree, "init_2026", "a.jpg", {})
+    _record(tree, "init_2026", "b.jpg", {})
+    _decide(tree, "init_2026", "a.jpg", Decision(tier="none"))
+    _build(tree)
+
+    conn = ix.connect(tree["db"])
+    hits = ix.files(conn, ix.Filters(tier=ix.UNREVIEWED))
+    assert [r["name"] for r in hits] == ["b.jpg"]
+
+
+def test_count_ignores_the_page(tree: dict[str, Path]) -> None:
+    for n in range(5):
+        _record(tree, "init_2026", f"{n}.jpg", {})
+    _build(tree)
+
+    conn = ix.connect(tree["db"])
+    assert len(ix.files(conn, limit=2)) == 2
+    assert ix.count(conn) == 5
+
+
+# --- suggestions -------------------------------------------------------------
+
+def test_suggestions_are_most_used_first_when_nothing_is_filtered(
+    tree: dict[str, Path]
+) -> None:
+    for n in range(3):
+        _record(tree, "init_2026", f"big{n}.jpg", {"XMP:EventAuto": "Big"})
+    _record(tree, "init_2026", "small.jpg", {"XMP:EventAuto": "Small"})
+    _build(tree)
+
+    got = ix.suggest(ix.connect(tree["db"]), "event")
+    assert [s.value for s in got] == ["Big", "Small"]
+    assert {s.scope for s in got} == {"all"}
+
+
+def test_the_current_view_floats_to_the_top(tree: dict[str, Path]) -> None:
+    """The whole point: looking at `tag:tv`, the events already used there come
+    before the far larger ones used everywhere else."""
+    for n in range(20):
+        _record(tree, "init_2026", f"big{n}.jpg", {"XMP:EventAuto": "Big"})
+    _record(tree, "init_2026", "tv.jpg", {"XMP:EventAuto": "Telly"})
+    _decide(tree, "init_2026", "tv.jpg", Decision(tags=("tv",)))
+    _build(tree)
+
+    got = ix.suggest(ix.connect(tree["db"]), "event", ix.Filters(tag="tv"))
+    assert [(s.value, s.scope) for s in got] == [("Telly", "all"), ("Big", "other")]
+
+
+def test_matching_one_filter_of_two_lands_in_the_middle_band(
+    tree: dict[str, Path]
+) -> None:
+    """`all` is every filter, `any` is one of them, `other` is neither — so a
+    near miss is still offered, just below the exact ones."""
+    _record(tree, "init_2026", "both.jpg",
+            {"EXIF:DateTimeOriginal": "2026:01:04 14:51:34",
+             "XMP:EventAuto": "Both"})
+    _decide(tree, "init_2026", "both.jpg", Decision(tags=("tv",)))
+    _record(tree, "init_2026", "year.jpg",
+            {"EXIF:DateTimeOriginal": "2026:06:04 14:51:34",
+             "XMP:EventAuto": "YearOnly"})
+    _record(tree, "init_2026", "none.jpg",
+            {"EXIF:DateTimeOriginal": "2001:01:04 14:51:34",
+             "XMP:EventAuto": "Neither"})
+    _build(tree)
+
+    got = ix.suggest(ix.connect(tree["db"]), "event",
+                     ix.Filters(tag="tv", year="2026"))
+    assert [(s.value, s.scope) for s in got] == [
+        ("Both", "all"), ("YearOnly", "any"), ("Neither", "other")]
+
+
+def test_a_column_ignores_its_own_filter(tree: dict[str, Path]) -> None:
+    """Filtering on `event:X` and reaching for an event, `X` is the one option
+    nobody wants — so its own filter is excluded from the scope."""
+    _record(tree, "init_2026", "a.jpg", {"XMP:EventAuto": "Here"})
+    _record(tree, "init_2026", "b.jpg", {"XMP:EventAuto": "Elsewhere"})
+    _build(tree)
+
+    got = ix.suggest(ix.connect(tree["db"]), "event", ix.Filters(event="Here"))
+    assert {s.scope for s in got} == {"all"}
+
+
+def test_suggesting_an_unknown_column_is_refused(tree: dict[str, Path]) -> None:
+    _build(tree)
+    with pytest.raises(ValueError):
+        ix.suggest(ix.connect(tree["db"]), "camera")
+
+
+# --- schema ------------------------------------------------------------------
+
+def test_an_old_schema_is_dropped_not_migrated(tree: dict[str, Path]) -> None:
+    """The index is a cache; a migration path is machinery to maintain for
+    something `pix2 index` reproduces exactly."""
+    conn = ix.connect(tree["db"])
+    conn.execute("INSERT OR REPLACE INTO meta VALUES ('schema', '1')")
+    conn.execute("INSERT INTO files (folder, name) VALUES ('old', 'stale.jpg')")
+    conn.commit()
+    conn.close()
+
+    conn = ix.connect(tree["db"])
+    assert conn.execute("SELECT COUNT(*) FROM files").fetchone()[0] == 0
