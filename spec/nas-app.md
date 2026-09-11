@@ -636,8 +636,21 @@ touch the existing ~2.3TB backlog or anything uploaded by other means. Against
 master it is a single path that handles every case identically — and the network
 is not the bottleneck anyway, since encoding is slower than gigabit.
 
-It generates thumbnails for everything and renders for what can have one. The app
-operates on the **ready set** and shows the rest as a visible backlog
+It generates thumbnails and previews for everything, and renders for what can
+have one — **all of it desktop-side**. Doing thumbnails on the NAS instead would
+mean a second implementation inside the app for a job the desktop does faster;
+the cost of keeping it here is that the first pass pulls the bulk of master over
+SMB to decode it, which is hours, once.
+
+**Transfers must be parallel.** Measured over SMB against this NAS: single-threaded
+small-file throughput is 11-20 MB/s, against 28-34 MB/s at 32 threads. Sequential
+transfer of ~62k files would take over a day, so a worker pool is a correctness
+concern for the schedule rather than a later optimisation. The same applies to
+`upload`. Open UNC paths with the `\\?\UNC\` prefix
+([implementation.md](implementation.md)) — flattened names plus deep folders will
+find the 260-character limit.
+
+The app operates on the **ready set** and shows the rest as a visible backlog
 ("1,247 files awaiting processing"). **The app never transcodes.**
 
 **Master is adoption-based.** `upload` is really just "get correctly-named files
@@ -827,7 +840,7 @@ name is correct rather than noise: a master folder records an ingestion event
 | 1 | Verify `raw/` coverage by `OriginalPath` lineage; review the remainder | — |
 | 2 | Archive `raw/` offline (external drive + `sha256` manifest), then delete it | **+~3.4TB** |
 | 3 | Folder-import + upload `G:\pix`, one run per year | ~2.5TB on the NAS, 9-24h |
-| 4 | Thumbnails NAS-side, H.264 renders desktop-side | background |
+| 4 | `pix process` — thumbnails, previews, renders (all desktop-side) | background |
 | 5 | Once the new process is proven: archive and delete the old library | +~2.5TB |
 
 **Both trees coexist during the transition** — the old NAS `pix/` and the new
