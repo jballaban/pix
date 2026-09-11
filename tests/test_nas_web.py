@@ -1332,3 +1332,36 @@ def test_a_failed_write_is_loud(client: TestClient) -> None:
 
     assert "unhandledrejection" in js
     assert "could not be written`,true)" in js
+
+
+# --- what a thumbnail shows ---------------------------------------------------
+
+def test_each_value_is_its_own_chip_with_a_tooltip(client: TestClient,
+                                                   writable: Path) -> None:
+    """A thumbnail is 150px and three role names are not: one run of text just
+    gets cut off mid-word with no way to find out what it said."""
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg",
+        "add_audience": ["family"], "add_tags": ["beach", "kids"]})
+
+    html = client.get("/browse").text
+    assert '<i title="family">family</i>' in html
+    assert '<i title="beach">beach</i>' in html
+    assert 'title="beach, kids"' in html
+
+
+def test_the_three_corners_do_not_collide(client: TestClient) -> None:
+    """Access bottom-left, tags top-right, duration bottom-right."""
+    css = client.get("/browse").text
+
+    assert ".who  { left:5px; bottom:4px; }" in css
+    assert ".tags { right:4px; top:4px;" in css
+    assert ".badge { position:absolute; right:4px; bottom:4px;" in css
+
+
+def test_an_edited_cell_looks_like_a_fetched_one(client: TestClient) -> None:
+    """The client repaints chips in the same shape the server renders, or a
+    photo you just tagged would look different from one you reloaded."""
+    js = client.get("/browse").text
+
+    assert "el.innerHTML=list.map(v=>`<i title=" in js

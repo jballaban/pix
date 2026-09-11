@@ -254,9 +254,8 @@ button.primary { background:var(--accent); color:#0d0f12; border-color:var(--acc
 .cell.cur { outline:2px solid var(--accent); outline-offset:-2px; z-index:1; }
 .cell.picked { outline:3px solid var(--accent); outline-offset:-3px; z-index:1; }
 .cell.picked img { opacity:.75; }
-.badge { position:absolute; left:5px; top:5px; margin-left:26px;
-         background:#000a; padding:1px 5px; border-radius:3px;
-         font-size:11px; }
+.badge { position:absolute; right:4px; bottom:4px; background:#000a;
+         padding:1px 5px; border-radius:3px; font-size:11px; }
 /* Out of the way until wanted: 2,000 circles over 2,000 photographs is a page
    about its own controls. Hover reveals it, and a made choice keeps it. */
 .pick { position:absolute; left:5px; top:5px; width:20px; height:20px; padding:0;
@@ -274,16 +273,20 @@ button.primary { background:var(--accent); color:#0d0f12; border-color:var(--acc
    and a cull needs both at once. */
 .cell[data-audience]:not([data-audience=""]) {
   box-shadow: inset 0 0 0 3px var(--keep); }
-/* Access along the bottom, tags in the corner. Access is the decision that
-   changes what a photograph *is* to the household, so it gets the wider
-   line; a tag is a label and fits in a corner. */
-.who { position:absolute; left:5px; bottom:4px; right:4px; padding:1px 5px;
-       border-radius:3px; background:#000a; color:var(--keep);
-       font-size:11px; font-weight:600; overflow:hidden;
-       white-space:nowrap; text-overflow:ellipsis; }
-.tags { position:absolute; right:4px; top:4px; max-width:72%; font-size:10px;
-        padding:1px 5px; border-radius:3px; background:#000a; color:#fff;
-        overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+/* Access bottom-left, tags top-right, duration bottom-right — three corners,
+   nothing overlapping. Each value is its own chip: a thumbnail is 150px and
+   three role names are not, so one run of text just gets cut off mid-word
+   with no way to find out what it said. */
+.who, .tags { position:absolute; display:flex; gap:3px; overflow:hidden;
+              max-width:64%; }
+.who  { left:5px; bottom:4px; }
+.tags { right:4px; top:4px; justify-content:flex-end; max-width:72%; }
+.who i, .tags i { font-style:normal; max-width:80px; overflow:hidden;
+                  white-space:nowrap; text-overflow:ellipsis;
+                  padding:1px 5px; border-radius:3px; background:#000b;
+                  font-size:10px; font-weight:600; }
+.who i  { color:var(--keep); }
+.tags i { color:#fff; }
 
 table { border-collapse:collapse; width:100%; max-width:900px; }
 th,td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line); }
@@ -551,6 +554,20 @@ def _actions(user: Principal) -> str:
 </div>"""
 
 
+def _chips_html(cls: str, values: list[str]) -> str:
+    """One chip per value, each truncated with the whole thing as a tooltip.
+
+    Individually rather than as a run of text, because a thumbnail is 150px
+    and three role names are not: a single line just gets cut off mid-word
+    with no way to find out what it said. The container carries the full list
+    too, for when there are more chips than fit.
+    """
+    if not values:
+        return ""
+    chips = "".join(f'<i title="{_h(v)}">{_h(v)}</i>' for v in values)
+    return f'<span class="{cls}" title="{_h(", ".join(values))}">{chips}</span>'
+
+
 def _cell(row: sqlite3.Row) -> str:
     tags = _split(row["tags"])
     shared = _split(row["audience"])
@@ -568,8 +585,7 @@ def _cell(row: sqlite3.Row) -> str:
         f'<button class="pick" aria-label="select"></button>'
         + (f'<span class="badge">{_dur(row["duration"])}</span>'
            if row["kind"] == "video" else "")
-        + (f'<span class="who">{_h(" ".join(shared))}</span>' if shared else "")
-        + (f'<span class="tags">{_h(" ".join(tags))}</span>' if tags else "")
+        + _chips_html("who", shared) + _chips_html("tags", tags)
         + "</div>"
     )
 
@@ -1120,11 +1136,14 @@ function paint(c,field,value,add){
 }
 function repaint(c,field){
   const cls=field==='tags'?'tags':'who';
-  const list=c.dataset[field]?c.dataset[field].split('\\n'):[];
+  const list=valuesOf(c,field);
   let el=c.querySelector('.'+cls);
   if(!list.length){if(el) el.remove(); return;}
   if(!el){el=document.createElement('span');el.className=cls;c.appendChild(el);}
-  el.textContent=list.join(' ');
+  // Same shape the server renders, so a cell edited here and a cell fetched
+  // fresh cannot look different.
+  el.setAttribute('title',list.join(', '));
+  el.innerHTML=list.map(v=>`<i title="${esc(v)}">${esc(v)}</i>`).join('');
 }
 
 async function send(cs,body){
