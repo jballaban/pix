@@ -60,6 +60,7 @@ construction rather than by machinery. See [§12](#12-what-this-deletes).
 /pix/master/{device}_{datetime}/.import.jsonl                    download ledger — the skip record
 /pix/render/{device}_{datetime}/{filepath}_{filename}.{ext}.{jpg|mp4}
 /pix/thumb/{device}_{datetime}/{filepath}_{filename}.{ext}.jpg
+/pix/preview/{device}_{datetime}/{filepath}_{filename}.{ext}.jpg
 /pix/rules.yaml                                                   distribution definitions
 /photo, /tv, /book, ...                                           distributions
 <distribution>/.pix-export.json                                   per-tree manifest
@@ -71,6 +72,7 @@ construction rather than by machinery. See [§12](#12-what-this-deletes).
 | sidecars | **yes** | yes | nothing — this is the record |
 | renders | no | no | master |
 | thumbnails | no | no | master/render |
+| previews | no | no | master/render |
 | distributions | no | no | master + sidecars + rules |
 | index | no | no | sidecars |
 
@@ -258,7 +260,7 @@ regardless of whether it will ever reach a distribution.
 
 Renders are disposable and excluded from backup.
 
-## 6. Thumbnails
+## 6. Thumbnails and previews
 
 A separate tier, one small JPEG per master file, ~20GB for the whole library,
 disposable.
@@ -270,6 +272,13 @@ thumbnail extracted from its embedded LRV proxy — a single-frame extract, not 
 transcode — appears in the app, can be assigned an event, and is then findable
 later so it can be opened in Insta360 Studio. The app is a **catalogue** for
 material it cannot display.
+
+**Previews are a second derived size, and curation needs them.** A thumbnail is
+for grids; you cannot tell sharp from soft at 200px, and judging is the entire
+point of [curation](#8-the-app). Serving the full render instead means pushing
+several MB per photo off an Atom while someone pages through hundreds. So a
+preview tier — roughly 1600px, a few hundred KB, ~20GB for the library — sits
+between them. Same rules: derived, disposable, never backed up.
 
 Three independent properties, rather than a file-state enum:
 
@@ -436,6 +445,86 @@ reused password leaks.
 **Synology SSO Server** (a DSM 7 package that acts as an OIDC provider) is the
 upgrade path if DSM accounts should become the login. More setup than two users
 justify on day one; revisit if access widens.
+
+### Curation
+
+Curation is the app's reason to exist. The library is 61,846 files at 0.15%
+curated ([§14](#14-seeding-the-existing-library)), and whether that ever gets
+worked through is a property of the interface, not of the archive.
+
+**61,846 is not the real number, if it is built right.** Three levers, each
+collapsing an order of magnitude:
+
+- **Events are proposed, not assigned.** Cluster by capture-time gaps — a day's
+  break is almost always a boundary. Naming groups is hundreds of decisions, not
+  62k.
+- **Promote keepers; do not reject rejects.** An event goes from several hundred
+  photos to 20-50, so positive selection is roughly a tenth of the gestures, and
+  the common case for any given photo is that it is never touched.
+- **Near-duplicates collapse.** Most of a burst is one photo shot eight times.
+  Group them, pick one, the rest follow. This is the payoff for image perceptual
+  hashing ([roadmap.md](roadmap.md)), still unbuilt; video fingerprinting already
+  exists.
+
+**Finishing an event writes `tier: none` for everything unpromoted.** Positive
+selection has one hole — if you never touch the rejects you cannot distinguish
+*reviewed and rejected* from *not yet reviewed*, which is exactly what `tier:
+none` is for ([§7](#7-distributions)). Closing it at the UI layer rather than the
+data layer keeps the model per-file and unchanged: one click, a few hundred 2KB
+sidecar writes in the background, no event-level state, and a real progress
+reading — *2015: 14 of 22 events reviewed*.
+
+#### Ranges select; they do not rule
+
+Defining "France Trip, Dec 1-3" and having it **write `event` into every sidecar
+in that range** is the gesture that makes event assignment cheap. The range is a
+*selection*, evaluated once — not a stored rule that decides membership on the
+fly.
+
+Persisted ranges were considered. Their real advantage is that a rule keeps
+applying: a spouse's phone imported a week later, a forgotten camera, a corrected
+capture date — all would join the event with no work. That is a genuine recurring
+benefit in a multi-device household.
+
+**Rejected because a rule is a new *kind* of state.** Everything else here is
+per-file sidecars: independently written, last-write-wins, no coordination, and
+losing one costs one file. A rules document is shared and mutable — it reintroduces
+concurrent editing between two curators, and a small single point of failure whose
+loss re-orphans the library's grouping. That is precisely what this architecture
+spent its design eliminating, reappearing at smaller scale. It also needs two
+mechanisms where one would do, since ranges require per-file include/exclude
+overrides layered on top, and "why is this photo in France Trip?" stops being
+*read the tag* and becomes *evaluate a rule and its exceptions*.
+
+As a selection gesture, the exceptions that motivated the doubt stop being
+awkward. A stray WhatsApp image inside the range is just edited afterwards — the
+same mechanism, not a second one. A plane photo from the day before needs no
+"include from outside range" concept; you simply also select it. Selection is
+selection.
+
+**The auto-join benefit is recovered without rules**: at import, the app proposes
+an event from **time-neighbours** — *these 40 new photos fall between two files
+tagged France Trip; assign them?* Same practical result as a persisted range, as a
+proposal rather than stored state, and it handles what rules cannot: a second
+camera whose clock is off by hours still sits among its neighbours.
+
+#### Three passes
+
+| Pass | Unit | Gestures |
+|---|---|---|
+| 1 — events | proposed clusters | name / merge / split — hundreds in total |
+| 2 — keep | one event at a time | promote to `photo`; finishing writes the rest to `none` |
+| 3 — top | the promoted 20-50 | pick ~10 |
+
+Three cheap passes with clear finish conditions, rather than one infinite browse.
+Explorer failed at this precisely because it was a navigator with no notion of
+*done*.
+
+Seeded events are the starting point for pass 1, not scaffolding to discard. Most
+inherited events are meaningful; some are junk (the old `EventAuto` took values
+like `a` from device folder names). Both are fixed in the UI with the same
+gestures, which is why seeding preserves them all
+([§14](#14-seeding-the-existing-library)).
 
 ### The write queue
 
@@ -606,6 +695,7 @@ the converting.
 | master + sidecars | 2.3TB (1.55TB of it `.insv`) | **yes** |
 | renders | whatever needs conversion; disposable | no |
 | thumbnails | ~20GB | no |
+| previews | ~20GB | no |
 | `/photo` | ~0.15TB | no |
 | top-10 tree | negligible — ~10 per event | no |
 | **offsite** | **~2.3TB** | |
@@ -785,17 +875,11 @@ distributions and the curation scale — [§7](#7-distributions); multi-user, au
 Synology Photos write-back — [§8](#8-the-app); Btrfs — [§10](#10-hardware);
 the sidecar/index model — [§4](#4-metadata--xmp-sidecars); seeding — [§14](#14-seeding-the-existing-library).)*
 
-- **The curation UI — the big one.** 61,846 files have to be reviewed, in passes
-  of hundreds per event down to 20-50. Nothing here specifies what that looks
-  like, and it is what determines whether the archive ever actually gets curated.
-
-  One shape it should probably take: **`event` is now a primary decision, not an
-  override.** `EventAuto` used to derive from the source folder name, but photos
-  coming off a phone have no folder structure to derive from — so every event is a
-  human judgement on every file. If the app instead **proposes event boundaries by
-  clustering capture times** (a day's gap is almost always a boundary) and the
-  human only *names* the groups, that is one decision per event rather than per
-  photo — the difference between 61,846 decisions and a few hundred.
+- **Curation UI — what remains.** The model is specced
+  ([§8](#8-the-app)): three passes, promote-only, ranges as selection. Still open
+  are the visual design itself, the keyboard grammar, and **near-duplicate
+  grouping**, which is pass 2's biggest lever and depends on image perceptual
+  hashing ([roadmap.md](roadmap.md)) that does not exist yet.
 - **Ad-hoc `pix export` CLI surface.** The desktop one-off case
   ([§7](#7-distributions)) needs inline filter and template arguments; new CLI
   surface, unspecified.
