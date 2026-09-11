@@ -25,7 +25,7 @@ import json
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, cast
 
 from pix.nas.const import MASTER_DIR, META_DIR
 
@@ -178,8 +178,9 @@ def _row(folder: str, record: dict[str, Any],
     name = record.get("file")
     if not isinstance(name, str) or not name:
         return None
-    exif = record.get("exif")
-    exif_map: dict[str, Any] = exif if isinstance(exif, dict) else {}
+    raw_exif: object = record.get("exif")
+    exif_map: dict[str, Any] = (
+        cast("dict[str, Any]", raw_exif) if isinstance(raw_exif, dict) else {})
 
     suffix = Path(name).suffix.lower()
     kind = ("video" if suffix in _VIDEO_EXTS
