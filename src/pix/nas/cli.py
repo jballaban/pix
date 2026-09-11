@@ -16,6 +16,7 @@ from pix import banner
 from pix.nas.const import IMPORT_ROOT, MASTER_DIR
 from pix.nas.folder_import import FolderImportError, run_folder_import
 from pix.nas.derive import run_process
+from pix.nas.device_import import ImportError_, run_device_import
 from pix.nas.ledger import NasUnreachable
 from pix.nas.upload import run_upload
 
@@ -71,6 +72,47 @@ def import_folder(
             typer.echo(f"  {line}", err=True)
         if len(summary.failed) > 20:
             typer.echo(f"  ... and {len(summary.failed) - 20} more", err=True)
+        raise typer.Exit(code=1)
+
+
+@import_app.command("device")
+def import_device(
+    device: Annotated[str | None, typer.Option("--device", help=(
+        "Select by serial or name substring. Omit to auto-select a single "
+        "known device, or be asked."
+    ))] = None,
+    name: Annotated[str | None, typer.Option("--name", help=(
+        "Override the staging folder name. Omit to use the remembered name, "
+        "or be asked once for a new device."
+    ))] = None,
+) -> None:
+    """Pull new media off a connected phone or camera into staging."""
+    banner()
+    try:
+        summary = run_device_import(device=device, name=name, echo=typer.echo)
+    except NasUnreachable as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+    except ImportError_ as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+
+    dev = summary.device
+    typer.echo(
+        f"{dev.friendly or dev.model} (serial {dev.serial}): "
+        f"{summary.downloaded} new, {summary.skipped} already imported, "
+        f"{summary.verified} verified."
+    )
+    typer.echo(f"Staging: {summary.landing}")
+
+    if summary.needs_session:
+        typer.echo("", err=True)
+        typer.echo(
+            f"{len(summary.needs_session)} file(s) need a device reconnect - "
+            "unplug, replug, and re-run.", err=True)
+    if summary.failed_media or summary.failed:
+        for line in (summary.failed_media + summary.failed)[:10]:
+            typer.echo(f"  {line}", err=True)
         raise typer.Exit(code=1)
 
 

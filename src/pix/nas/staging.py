@@ -18,6 +18,8 @@ import os
 from pathlib import Path
 from typing import Any, cast
 
+import yaml
+
 from pix.importer import sanitize_component
 from pix.ingest import MANIFEST_DIRNAME
 from pix.markers import IMPORT_TMP_SUFFIX
@@ -103,10 +105,16 @@ def write_sidecar(landed: Path, *, name: str, source_root: Path, rel: str,
 
 
 def read_sidecar(path: Path) -> dict[str, Any] | None:
-    """Parse one `.importinfo`, or None if it is missing or unreadable."""
+    """Parse one `.importinfo`, or None if it is missing or unreadable.
+
+    Parsed as **YAML**, which reads both shapes: the device importer writes YAML
+    (`importer._write_sidecar`) and the folder adapter writes JSON, and JSON is a
+    subset of YAML. Upload has to understand staging from either source, so one
+    reader that handles both beats two that each handle half.
+    """
     try:
-        parsed: object = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        parsed: object = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
         return None
     if not isinstance(parsed, dict):
         return None

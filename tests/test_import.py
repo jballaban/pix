@@ -15,6 +15,7 @@ from typing import Callable
 import pytest
 
 from pix import importer
+from pix.ingest import committed_import_ids
 from pix.importer import ImportError_
 from pix.wpd import DeviceInfo, WpdObject
 
@@ -178,49 +179,49 @@ def test_sweep_temps_removes_partials(tmp_path: Path) -> None:
 
 def test_select_none_connected() -> None:
     with pytest.raises(ImportError_, match="no portable devices"):
-        importer._select_device([], None)
+        importer.select_device([], None)
 
 
 def test_lone_unknown_device_needs_choice() -> None:
     # A single *unknown* device is NOT auto-selected — ask (so a cancel saves nothing).
     with pytest.raises(importer.NeedsDeviceChoice):
-        importer._select_device([_dev("SER1")], None, known=set())
+        importer.select_device([_dev("SER1")], None, known=set())
 
 
 def test_lone_known_device_auto_selected() -> None:
     d = _dev("SER1")
-    assert importer._select_device([d], None, known={"SER1"}) is d
+    assert importer.select_device([d], None, known={"SER1"}) is d
 
 
 def test_one_known_among_several_auto_selected() -> None:
     phone, reader = _dev("SER1", "Apple iPhone"), _reader()
-    got = importer._select_device([phone, reader], None, known={"SER1"})
+    got = importer.select_device([phone, reader], None, known={"SER1"})
     assert got.serial == "SER1"
 
 
 def test_zero_known_among_several_needs_choice() -> None:
     with pytest.raises(importer.NeedsDeviceChoice) as ei:
-        importer._select_device([_dev("A"), _reader()], None, known=set())
+        importer.select_device([_dev("A"), _reader()], None, known=set())
     assert len(ei.value.devices) == 2
 
 
 def test_multiple_known_needs_choice() -> None:
     with pytest.raises(importer.NeedsDeviceChoice):
-        importer._select_device([_dev("A"), _dev("B", "Pixel")], None,
+        importer.select_device([_dev("A"), _dev("B", "Pixel")], None,
                                 known={"A", "B"})
 
 
 def test_prompt_device_choice_returns_selection(monkeypatch: "pytest.MonkeyPatch") -> None:
     monkeypatch.setattr("builtins.input", lambda: "2")
     devs = [_dev("A", "iPhone"), _dev("B", "Pixel")]
-    assert importer._prompt_device_choice(devs) is devs[1]
+    assert importer.prompt_device_choice(devs) is devs[1]
 
 
 def test_prompt_device_choice_retries_then_selects(monkeypatch: "pytest.MonkeyPatch") -> None:
     answers = iter(["", "99", "1"])
     monkeypatch.setattr("builtins.input", lambda: next(answers))
     devs = [_dev("A", "iPhone"), _dev("B", "Pixel")]
-    assert importer._prompt_device_choice(devs) is devs[0]
+    assert importer.prompt_device_choice(devs) is devs[0]
 
 
 def test_prompt_device_choice_eof_raises(monkeypatch: "pytest.MonkeyPatch") -> None:
@@ -229,17 +230,17 @@ def test_prompt_device_choice_eof_raises(monkeypatch: "pytest.MonkeyPatch") -> N
 
     monkeypatch.setattr("builtins.input", boom)
     with pytest.raises(ImportError_, match="no device selected"):
-        importer._prompt_device_choice([_dev("A"), _dev("B", "Pixel")])
+        importer.prompt_device_choice([_dev("A"), _dev("B", "Pixel")])
 
 
 def test_select_by_serial_substring() -> None:
     a, b = _dev("M2DF33MY06"), _dev("XYZ", "Pixel")
-    assert importer._select_device([a, b], "m2df") is a
+    assert importer.select_device([a, b], "m2df") is a
 
 
 def test_select_ambiguous_selector() -> None:
     with pytest.raises(ImportError_, match="ambiguous"):
-        importer._select_device([_dev("A", "iPhone"), _dev("B", "iPhone-2")], "iphone")
+        importer.select_device([_dev("A", "iPhone"), _dev("B", "iPhone-2")], "iphone")
 
 
 # --- registry / friendly name ------------------------------------------------
@@ -508,7 +509,16 @@ def _run_loop(
     fake = _FakeDev(tree, content)
     monkeypatch.setattr(importer.wpd, "open_device", lambda _dev_id: fake)
     monkeypatch.setattr(importer, "media_check", _scripted_media_check(script))
-    importer._import_loop(tmp_path, _dev(), "iPhone", landing, summary, None)
+    # The loop takes its skip-sets and verify logger as parameters now, so the
+    # NAS architecture can reuse it; supply the root-derived ones the legacy
+    # `run_import` passes, to keep these tests exercising the same behaviour.
+    importer.import_loop(
+        _dev(), "iPhone", landing, summary, None,
+        seed=importer._load_seed(tmp_path, "iPhone"),
+        committed=committed_import_ids(tmp_path),
+        log_verify=lambda device_path, ev, detail: importer._append_verify_log(
+            tmp_path, "iPhone", device_path, ev, detail),
+    )
     return summary, landing
 
 

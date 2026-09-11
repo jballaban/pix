@@ -186,6 +186,28 @@ def committed_folder_keys(name: str, source_root: Path) -> set[tuple[str, int]]:
     return keys
 
 
+def committed_import_ids(serial: str) -> set[str]:
+    """Every `"<serial>:<puid>"` already uploaded from this device.
+
+    The same shape the legacy importer's committed half used, so
+    `importer._import_loop` consumes it unchanged.
+
+    Scoped by serial via the ledger headers, which is what makes this cheap: a
+    device's folders are identified by reading one line each, and only those get
+    their bodies opened.
+    """
+    require_share()
+    ids: set[str] = set()
+    for header in iter_headers():
+        if header.source != "device" or header.serial != serial:
+            continue
+        for entry in iter_entries(header.folder / LEDGER_NAME):
+            puid = entry.get("puid")
+            if isinstance(puid, str) and puid:
+                ids.add(f"{serial}:{puid}")
+    return ids
+
+
 def known_devices() -> dict[str, str]:
     """Serial → friendly name, derived from ledger headers.
 
@@ -197,3 +219,28 @@ def known_devices() -> dict[str, str]:
         for h in iter_headers()
         if h.source == "device" and h.serial
     }
+
+
+def pending_devices(import_root: Path) -> dict[str, str]:
+    """Serial → friendly name for devices staged but not yet uploaded.
+
+    A phone imported and not yet uploaded has no ledger, so master cannot know
+    it. Its staging sidecars do: `importer._write_sidecar` records both `serial`
+    and `device_name`. Without this, re-importing before uploading would prompt
+    for a name that has already been given — and a second answer would create a
+    second staging folder for one phone.
+    """
+    from pix.nas.staging import SIDECAR_EXT, read_sidecar
+
+    found: dict[str, str] = {}
+    if not import_root.is_dir():
+        return found
+    for sidecar in import_root.rglob(f"*{SIDECAR_EXT}"):
+        data = read_sidecar(sidecar)
+        if data is None:
+            continue
+        serial = data.get("serial")
+        name = data.get("device_name")
+        if isinstance(serial, str) and serial and isinstance(name, str) and name:
+            found.setdefault(serial, name)
+    return found

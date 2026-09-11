@@ -426,7 +426,7 @@ def _describe(d: wpd.DeviceInfo) -> str:
     return f"{d.friendly or d.model or '?'} (serial {d.serial})"
 
 
-def _select_device(devices: list[wpd.DeviceInfo], selector: str | None,
+def select_device(devices: list[wpd.DeviceInfo], selector: str | None,
                    known: frozenset[str] | set[str] = frozenset()) -> wpd.DeviceInfo:
     """Pick the import source, registry-driven.
 
@@ -463,7 +463,7 @@ def _select_device(devices: list[wpd.DeviceInfo], selector: str | None,
     raise NeedsDeviceChoice(devices)
 
 
-def _prompt_device_choice(devices: list[wpd.DeviceInfo]) -> wpd.DeviceInfo:
+def prompt_device_choice(devices: list[wpd.DeviceInfo]) -> wpd.DeviceInfo:
     """Interactive numbered picker over connected devices.
 
     Reads via the builtin `input()` (not click.prompt) to keep the console
@@ -511,7 +511,7 @@ def run_import(
 
     interactive = sys.stdin.isatty() and sys.stdout.isatty() and not dry_run
     try:
-        info = _select_device(devices, device, known=set(_load_registry(root)))
+        info = select_device(devices, device, known=set(_load_registry(root)))
     except NeedsDeviceChoice as e:
         listing = "\n".join(f"  - {_describe(d)}" for d in e.devices)
         base = "pass --device <name-or-serial>:\n" + listing
@@ -520,7 +520,7 @@ def run_import(
                 "more than one device connected and not exactly one known; " + base
             ) from e
         try:
-            info = _prompt_device_choice(e.devices)
+            info = prompt_device_choice(e.devices)
         except ImportError_:
             # user made no selection (declined / EOF)
             raise ImportError_("no device selected; " + base) from None
@@ -550,16 +550,35 @@ def run_import(
         summary.apply_log = runs_dir / "apply.log"
         log = summary.apply_log.open("a", encoding="utf-8")
     try:
-        _import_loop(root, info, friendly, landing, summary, log)
+        import_loop(
+            info, friendly, landing, summary, log,
+            seed=_load_seed(root, friendly),
+            committed=committed_import_ids(root),
+            log_verify=lambda device_path, ev, detail: _append_verify_log(
+                root, friendly, device_path, ev, detail),
+        )
     finally:
         if log is not None:
             log.close()
     return summary
 
 
-def _import_loop(root: Path, info: wpd.DeviceInfo, friendly: str, landing: Path,
-                 summary: ImportSummary, log: IO[str] | None) -> None:
-    """The drain-as-you-go DFS + dirty re-loop (run folder already set up)."""
+# Public because the NAS architecture reuses them verbatim — see
+# `pix.nas.device_import`. They are the validated core of device import;
+# a second copy of this logic would be the wrong kind of duplication.
+def import_loop(info: wpd.DeviceInfo, friendly: str, landing: Path,
+                 summary: ImportSummary, log: IO[str] | None, *,
+                 seed: set[tuple[str, int]],
+                 committed: set[str],
+                 log_verify: Callable[[str, str, str], None]) -> None:
+    """The drain-as-you-go DFS + dirty re-loop (run folder already set up).
+
+    Takes its skip-sets and verify logger as parameters rather than deriving
+    them from a library root, so the NAS architecture
+    (`pix.nas.device_import`) can reuse this loop unchanged. It is ~200 lines of
+    recovery-ladder logic validated against a physical iPhone; a second copy of
+    it would be the wrong kind of duplication.
+    """
     swept = _sweep_temps(landing)
     if swept:
         _log(log, "sweep", f"removed {swept} stale temp(s)")
@@ -576,8 +595,6 @@ def _import_loop(root: Path, info: wpd.DeviceInfo, friendly: str, landing: Path,
         )
 
     manifest = _scan_manifest(landing)
-    seed = _load_seed(root, friendly)  # deprecated-tool skip list, if any
-    committed = committed_import_ids(root)  # ImportIds already in the library
     used_paths: dict[Path, str] = {}
     attempts: dict[tuple[str, int | None], int] = {}
     failed_keys: set[tuple[str, int | None]] = set()
@@ -612,7 +629,7 @@ def _import_loop(root: Path, info: wpd.DeviceInfo, friendly: str, landing: Path,
                 _log(log, "VERIFIED", device_path)
 
             def event(device_path: str, ev: str, detail: str) -> None:
-                _append_verify_log(root, friendly, device_path, ev, detail)
+                log_verify(device_path, ev, detail)
                 _echo_line(f"  ! {ev}: {device_path}" + (f"  ({detail})" if detail else ""))
 
             def validate_and_commit(obj: wpd.WpdObject, landed: Path,
