@@ -10,6 +10,7 @@ import pytest
 from pix.ingest import MANIFEST_DIRNAME
 from pix.markers import IMPORT_TMP_SUFFIX
 from pix.nas import folder_import as fi
+from pix.nas import ledger
 from pix.nas import staging as st
 
 
@@ -28,9 +29,20 @@ def source(tmp_path: Path) -> Path:
 
 @pytest.fixture(autouse=True)
 def staging_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Point IMPORT_ROOT at a temp dir — never the real F:\\pix."""
+    """Redirect both roots at temp dirs — never the real `G:` or the real share.
+
+    The master share has to exist even when empty: `import` reads the committed
+    half of the skip manifest from it and refuses to run without it, so an
+    unreachable share is a hard failure rather than an empty archive
+    (spec/nas-app.md §9).
+    """
     root = tmp_path / "staging"
     monkeypatch.setattr(fi, "IMPORT_ROOT", root)
+
+    share = tmp_path / "nas"
+    (share / "master").mkdir(parents=True)
+    monkeypatch.setattr(ledger, "MASTER_SHARE", share)
+    monkeypatch.setattr(ledger, "MASTER_DIR", share / "master")
     return root
 
 

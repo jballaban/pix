@@ -15,6 +15,7 @@ import typer
 from pix import banner
 from pix.nas.const import IMPORT_ROOT, MASTER_DIR
 from pix.nas.folder_import import FolderImportError, run_folder_import
+from pix.nas.ledger import NasUnreachable
 
 app: typer.Typer = typer.Typer(
     name="pix2",
@@ -47,6 +48,9 @@ def import_folder(
     banner()
     try:
         summary = run_folder_import(source, name, echo=typer.echo)
+    except NasUnreachable as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
     except FolderImportError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e

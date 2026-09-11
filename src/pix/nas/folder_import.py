@@ -14,6 +14,10 @@ to a real copy.
 Cancel and resume is free: a landed file whose size matches its source is adopted
 (its sidecar is written) rather than re-linked, and anything already in the
 manifest is skipped outright.
+
+The skip manifest has **two halves**, and both are consulted: the *pending* half
+is the `.importinfo` sidecars in staging, and the *committed* half is master's
+ledgers. The NAS is therefore required — see `ledger.require_share`.
 """
 
 from __future__ import annotations
@@ -25,7 +29,7 @@ from pathlib import Path
 from typing import Callable, Literal
 
 from pix.markers import IMPORT_TMP_SUFFIX, is_pix_marker
-from pix.nas import staging as st
+from pix.nas import ledger, staging as st
 from pix.nas.const import IMPORT_ROOT
 
 
@@ -43,7 +47,7 @@ class FolderImportSummary:
     linked: int = 0        # hardlinked into staging
     copied: int = 0        # cross-volume fallback
     adopted: int = 0       # already landed from a cancelled run; sidecar written
-    skipped: int = 0       # already in the manifest
+    skipped: int = 0       # already staged or already uploaded
     ignored: int = 0       # companions we never land
     failed: list[str] = field(default_factory=lambda: [])
 
@@ -73,6 +77,10 @@ def run_folder_import(
     if not source.is_dir():
         raise FolderImportError(f"source is not a folder: {source}")
 
+    # The committed half first: reaching the NAS is a precondition, and failing
+    # here costs nothing, where failing later would leave a half-staged tree.
+    committed = ledger.committed_folder_keys(name)
+
     staging = staging_for(name)
     if staging.exists() and not staging.is_dir():
         raise FolderImportError(f"staging path exists and is not a folder: {staging}")
@@ -85,6 +93,9 @@ def run_folder_import(
     manifest = st.scan_manifest(staging)
     if manifest:
         echo(f"{len(manifest)} file(s) already staged for '{name}'")
+    if committed:
+        echo(f"{len(committed)} file(s) already uploaded under '{name}'")
+    manifest |= committed
 
     summary = FolderImportSummary(name=name, source=source, staging=staging)
 
