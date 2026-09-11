@@ -39,7 +39,7 @@ def _staged(roots: dict[str, Path], name: str, count: int) -> Path:
     return src
 
 
-def test_cancel_keeps_staging_and_skips_verification(
+def test_cancel_keeps_staging_and_leaves_the_batch_unverified(
     roots: dict[str, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The destructive step must not run on a partial batch."""
@@ -55,9 +55,6 @@ def test_cancel_keeps_staging_and_skips_verification(
         return real(src, dst)
 
     monkeypatch.setattr(up, "_copy_hashing", interrupt_partway)
-    verified: list[object] = []
-    monkeypatch.setattr(up, "_verify",
-                        lambda *a: verified.append(a) or True)
 
     [s] = up.run_upload()
 
@@ -65,7 +62,6 @@ def test_cancel_keeps_staging_and_skips_verification(
     assert s.verified is False
     assert s.staging_cleared is False
     assert (roots["staging"] / "legacy").is_dir()
-    assert verified == []          # verification never attempted
 
 
 def test_cancel_stops_later_staging_folders(

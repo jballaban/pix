@@ -45,6 +45,17 @@ def tag_of(src: Path) -> str:
     return source_tag(src)
 
 
+def _corrupting(real: object):
+    """Wrap the copy so the landed bytes differ from what was hashed."""
+    def wrapped(src: Path, dst: Path) -> str:
+        digest = real(src, dst)  # type: ignore[operator]
+        data = bytearray(dst.read_bytes())
+        data[0] ^= 0x01          # one bit, same length
+        dst.write_bytes(bytes(data))
+        return digest
+    return wrapped
+
+
 def _entries(master_folder: Path) -> list[dict[str, object]]:
     return list(ledger.iter_entries(master_folder / ".import.jsonl"))
 
@@ -78,14 +89,36 @@ def test_staging_is_cleared_only_after_verification(staged: Path,
 def test_staging_survives_a_failed_verification(staged: Path, roots: dict[str, Path],
                                                 monkeypatch: pytest.MonkeyPatch) -> None:
     """If master does not hold what we sent, staging must not be destroyed."""
-    monkeypatch.setattr(up, "_verify",
-                        lambda items, target, digests: False)
+    monkeypatch.setattr(up, "_copy_hashing", _corrupting(up._copy_hashing))
 
     [s] = up.run_upload()
 
     assert s.verified is False
     assert s.staging_cleared is False
+    assert s.failed and "read-back" in s.failed[0]
     assert (roots["staging"] / "legacy").is_dir()
+
+
+def test_a_corrupt_copy_is_removed_from_master(staged: Path,
+                                               monkeypatch: pytest.MonkeyPatch) -> None:
+    """A known-bad file must never be left in the archive."""
+    monkeypatch.setattr(up, "_copy_hashing", _corrupting(up._copy_hashing))
+
+    [s] = up.run_upload()
+
+    present = [p for p in s.master_folder.iterdir() if p.suffix != ".jsonl"]
+    assert present == []
+
+
+def test_a_corrupt_copy_is_not_recorded_in_the_ledger(
+    staged: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ledger is the archive's record; it must only hold verified files."""
+    monkeypatch.setattr(up, "_copy_hashing", _corrupting(up._copy_hashing))
+
+    [s] = up.run_upload()
+
+    assert _entries(s.master_folder) == []
 
 
 def test_ledger_has_a_header_then_entries(staged: Path) -> None:

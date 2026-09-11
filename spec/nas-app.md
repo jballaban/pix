@@ -732,8 +732,14 @@ routinely stopped and continued another day.
   device — an edit, or optimized-storage rehydration) versus re-probe locally (it
   did not). Sidecars are written temp-then-rename, so a kill mid-write cannot leave
   a corrupt sidecar that reads as `VERIFIED`.
-- **`upload` needs two things.** Copy to a **marker-named temp and rename into
-  place** — the `*.__*` convention [`export`](#7-distributions) already uses — because
+- **`upload` verifies each file as it lands, not in a pass at the end.** A
+  trailing pass is not cancellable (Ctrl+C there escapes the worker pool
+  uncaught), is sequential where the copy is 32-wide, reads every file back cold
+  instead of while the NAS may still have it cached, and can only report that
+  *the batch* failed rather than which file. A mismatch removes the bad file from
+  master, keeps it out of the ledger, and leaves staging intact.
+- **`upload` also needs two mechanics.** Copy to a **marker-named temp and rename
+  into place** — the `*.__*` convention [`export`](#7-distributions) already uses — because
   otherwise a truncated file at master looks real to a name-and-size check, and the
   marker pattern is already sync-excluded. And **read the existing ledger on
   resume**, skipping objects already recorded, so `.import.jsonl` gains no duplicate

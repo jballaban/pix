@@ -30,6 +30,17 @@ def roots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
     return {"staging": staging, "master": master, "tmp": tmp_path}
 
 
+def _corrupting(real: object):
+    """Wrap the copy so the landed bytes differ from what was hashed."""
+    def wrapped(src: Path, dst: Path) -> str:
+        digest = real(src, dst)  # type: ignore[operator]
+        data = bytearray(dst.read_bytes())
+        data[0] ^= 0x01
+        dst.write_bytes(bytes(data))
+        return digest
+    return wrapped
+
+
 def _source(tmp: Path, name: str, files: dict[str, bytes]) -> Path:
     root = tmp / name
     root.mkdir(parents=True, exist_ok=True)
@@ -48,16 +59,15 @@ def test_cancelled_then_extended_batch_stays_one_folder(
     fi.run_folder_import(a, "legacy")
 
     # First attempt fails verification, so staging (and its marker) survive.
-    ok = {"value": False}
-    monkeypatch.setattr(up, "_verify",
-                        lambda items, target, digests: ok["value"])
+    real = up._copy_hashing
+    monkeypatch.setattr(up, "_copy_hashing", _corrupting(real))
     [first] = up.run_upload()
     assert first.staging_cleared is False
 
     b = _source(roots["tmp"], "B", {"two.jpg": b"two"})
     fi.run_folder_import(b, "legacy")
 
-    ok["value"] = True
+    monkeypatch.setattr(up, "_copy_hashing", real)
     [second] = up.run_upload()
 
     assert second.master_folder == first.master_folder
@@ -75,14 +85,13 @@ def test_extended_batch_files_are_still_skipped_on_reimport(
     a = _source(roots["tmp"], "A", {"one.jpg": b"one"})
     fi.run_folder_import(a, "legacy")
 
-    ok = {"value": False}
-    monkeypatch.setattr(up, "_verify",
-                        lambda items, target, digests: ok["value"])
+    real = up._copy_hashing
+    monkeypatch.setattr(up, "_copy_hashing", _corrupting(real))
     up.run_upload()
 
     b = _source(roots["tmp"], "B", {"two.jpg": b"two"})
     fi.run_folder_import(b, "legacy")
-    ok["value"] = True
+    monkeypatch.setattr(up, "_copy_hashing", real)
     up.run_upload()
 
     # B's root is not in the header, but its entries are in the ledger.

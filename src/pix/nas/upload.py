@@ -62,6 +62,10 @@ class UploadError(Exception):
     """Upload could not start."""
 
 
+class IntegrityError(Exception):
+    """A file at master does not match the bytes it should hold."""
+
+
 @dataclass
 class UploadSummary:
     """What one staging folder's upload did."""
@@ -154,7 +158,6 @@ def _upload_one(staging: Path, *, echo: Callable[[str], None]) -> UploadSummary:
     lock = threading.Lock()
     total_bytes = sum(i.size for i in items)
     started = time.monotonic()
-    digests: dict[str, str] = {}
     # Mutable so the progress thread can read it without the lock. `inflight`
     # is what makes a cancel legible: the operator sees copies closing out
     # rather than a terminal that appears to have hung.
@@ -183,8 +186,10 @@ def _upload_one(staging: Path, *, echo: Callable[[str], None]) -> UploadSummary:
                 progress.advance()
                 return
             try:
+                # Raises on mismatch, so the ledger below only ever records
+                # files that were verified at master.
                 moved, digest = _copy_one(item, target)
-            except OSError as e:
+            except (OSError, IntegrityError) as e:
                 with lock:
                     summary.failed.append(f"{item.rel}: {e}")
                 progress.advance()
@@ -195,7 +200,6 @@ def _upload_one(staging: Path, *, echo: Callable[[str], None]) -> UploadSummary:
                     summary.bytes_copied += item.size
                 else:
                     summary.skipped += 1
-                digests[item.flat] = digest
                 _append(log, {
                     "rel": item.rel, "root": item.root, "size": item.size,
                     "file": item.flat, "blake3": digest, "outcome": "kept",
@@ -228,13 +232,9 @@ def _upload_one(staging: Path, *, echo: Callable[[str], None]) -> UploadSummary:
                 _append(log, {"rel": rel, "root": root, "size": size,
                               "outcome": "culled"})
 
-    if summary.cancelled or summary.failed:
-        # Never verify a partial batch: it would fail on files that were simply
-        # never attempted, and verification is what gates deleting staging.
-        summary.verified = False
-    else:
-        echo(f"{name}: verifying {len(items)} file(s) against master")
-        summary.verified = _verify(items, target, digests)
+    # Every file was verified as it landed, so the batch is verified exactly
+    # when nothing failed and nothing was skipped by a cancel.
+    summary.verified = not summary.cancelled and not summary.failed
     if summary.verified:
         _clear(staging)
         summary.staging_cleared = True
@@ -353,26 +353,48 @@ def _unique(flat: str, rel: str, used: dict[str, str]) -> str:
 
 
 def _copy_one(item: _Item, target: Path) -> tuple[bool, str]:
-    """Copy one staged file into master, hashing it on the way through.
+    """Copy one staged file into master and **verify it before returning**.
 
-    Returns `(bytes moved, blake3 digest)`. Staged through a marker temp and
-    renamed into place, so a kill mid-copy leaves something that can never be
-    mistaken for a finished file.
+    Returns `(bytes moved, blake3 digest)`, or raises `IntegrityError` if what
+    landed is not what was sent.
 
-    **The hash costs nothing extra.** The bytes are already streaming through
-    this process, so digesting them is free — and it turns the ledger into a
-    permanent integrity record. Size alone catches truncation but not a flipped
+    Verification is per-file rather than a pass at the end, which matters four
+    ways: it is cancellable (it runs inside the worker pool that already handles
+    Ctrl+C, where a trailing pass would escape uncaught); it is parallel instead
+    of a sequential read of the whole batch; it reads back while the file may
+    still be in the NAS's cache rather than hours later when everything is cold;
+    and a failure names the file instead of just the batch.
+
+    **The write hash costs nothing** — the bytes are already streaming through
+    this process. The read-back is the real expense, and it is what makes
+    "uploaded" mean verified: size alone catches truncation but not a flipped
     bit, and for an archive of originals "corrupt but the right length" is the
     failure that goes unnoticed for years.
+
+    Scope, honestly: reading back straight after a write may be served from the
+    NAS's cache, so this proves the **transmission**, not the storage. Storage is
+    Btrfs's job — it checksums at rest and repairs from SHR parity.
     """
     dest = target / item.flat
     if dest.is_file() and dest.stat().st_size == item.size:
         # Present but unrecorded — a run killed between the rename and the
-        # ledger flush. Hash what is there so the record is still complete.
-        return False, _digest(dest)
+        # ledger flush. Verify it against the source rather than trusting it,
+        # then record it.
+        expected = _digest(item.source)
+        if _digest(dest) != expected:
+            raise IntegrityError(
+                f"{item.flat}: master copy does not match its source")
+        return False, expected
+
     tmp = dest.with_name(dest.name + EXPORT_TMP_SUFFIX)
     digest = _copy_hashing(item.source, tmp)
     os.replace(tmp, dest)
+    if _digest(dest) != digest:
+        # Never leave a known-bad file in the archive. Removing it also means a
+        # re-run simply copies it again instead of skipping it on size.
+        dest.unlink(missing_ok=True)
+        raise IntegrityError(
+            f"{item.flat}: read-back does not match what was written")
     return True, digest
 
 
@@ -419,33 +441,6 @@ def _sweep_target(target: Path) -> int:
         except OSError:
             pass
     return removed
-
-
-def _verify(items: list[_Item], target: Path,
-            digests: dict[str, str]) -> bool:
-    """Every uploaded file present at master, at size, and byte-identical.
-
-    **Reads the files back off the NAS and hashes them.** Size alone catches a
-    truncated or interrupted copy but not a flipped bit in transit, and this
-    check is what gates clearing staging — the one destructive step in the
-    pipeline. An unverified "probably fine" is not worth the staging it deletes.
-
-    The read-back roughly adds a third to a batch's wall time (writes run near
-    30 MB/s, reads near 100, and recently-written files often come back out of
-    the NAS's own cache). For a one-time seed of originals that cannot be
-    regenerated, that is a good trade.
-    """
-    for item in items:
-        dest = target / item.flat
-        try:
-            if not dest.is_file() or dest.stat().st_size != item.size:
-                return False
-        except OSError:
-            return False
-        expected = digests.get(item.flat)
-        if expected is not None and _digest(dest) != expected:
-            return False
-    return True
 
 
 def _clear(staging: Path) -> None:
