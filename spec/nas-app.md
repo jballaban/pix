@@ -178,9 +178,22 @@ too**, as a convenience rather than a dependency. ~62k rows is small; restoring 
 turns hours of re-probing into copying a file back. That is the difference between
 a cache you *may* back up and a record you *must*.
 
-**Most files therefore have no sidecar at all.** One exists only once a human has
-decided something — today roughly 100 files out of 61,846
-([§14](#14-seeding-the-existing-library)), growing only as curation proceeds.
+**In the steady state most files have no sidecar at all** — one exists only once a
+human has decided something.
+
+**The seeded library is the exception**, and for a reason worth understanding.
+Legacy events live in `EventAuto`, derived from the old source folder structure.
+Once those folders are flattened into master filenames
+([§14](#14-seeding-the-existing-library)) **the derivation source is gone** —
+nothing can recompute them. So every event must be captured as an `event`
+decision at seed time, or curation work already done across the whole library is
+discarded. Seeding therefore writes ~62k sidecars, not ~100.
+
+That breaks no principle: `event` genuinely *is* a decision, it just arrives
+inherited rather than freshly made. (Many of those events are poor — the old
+`EventAuto` took them from device folder names, giving values like `a` — but
+carrying them is still right, since curation can fix them and discarding them
+cannot be undone.)
 
 It also makes review state fall out for free: **no sidecar means unreviewed**,
 which is exactly what "`tier` absent = uncategorized"
@@ -443,12 +456,26 @@ state that exists anywhere is a per-machine config holding two of them.
 | Command | Does |
 |---|---|
 | `pix config` | set the **import folder** and the **master location** (per-machine) |
-| `pix import` | device → import folder |
+| `pix import` | device **or folder** → import folder |
 | `pix upload` | import folder → master; appends the ledger; clears the import folder |
 | `pix process` | master → renders + thumbnails for anything missing them |
 
 `import` and `upload` are separate on purpose: "no time, just get it off the phone"
 has to be a complete gesture on its own.
+
+**`import` takes a folder source as well as a device.** That is what makes
+[seeding](#14-seeding-the-existing-library) a normal upload rather than a
+throwaway migration tool — the special case lives entirely in the source adapter,
+and `upload` stays one code path. A folder source has no device to interrogate, so
+it takes the device name as an argument; identity is `(relative path, size)`
+rather than `PUID + size`, which keeps the run resumable and idempotent.
+
+**A folder import hardlinks; it does not copy.** Source and import folder are on
+one NTFS volume, so links are instant and free — and necessary, since there is
+nowhere locally with room to duplicate a 2.5TB library. Every downstream
+behaviour is unchanged: culling deletes the link while the `.manifest/` sidecar
+survives as the durable skip record, deleting a whole folder is still the
+"redo this batch" gesture, and `upload` reads through the link none the wiser.
 
 **Transport is SMB, not an app API.** An upload is potentially hundreds of GB, and
 pushing that through a Python app on a 4-core Atom would be far slower than the
@@ -689,49 +716,43 @@ pix/2015/a/2015-03-15_115256.jpg
   this will ever be re-pulled from a phone.
 - `OriginalPath` rides into the sidecar, so true provenance survives regardless.
 
-### Sequence — seed by reflink, keep both trees
+### Sequence — seeding is a folder import
 
-The library syncs to the NAS today, so the bytes are **already there**. Seeding
-creates a *second* tree referencing them rather than uploading anything.
+Seeding runs the **production upload path**, not a migration tool: a folder-source
+`pix import` from `G:\pix` on the desktop ([§9](#9-ingest--the-desktop-cli)),
+then a normal `pix upload`. The largest batch the system will ever process is
+therefore also the one that proves it, and the existing skip logic makes a
+multi-hour upload resumable instead of restartable.
 
-**Use `cp --reflink`.** A copy-on-write clone is instant and costs zero extra
-bytes, and because neither tree is ever modified — master files are immutable, the
-old library is frozen — they share extents indefinitely and never diverge. That
-makes "run both in parallel until the new process is proven" free, which is the
-whole point of the transition period.
+One import per year directory, with the device name carrying the year — so
+`G:\pix\2015` lands as `legacy_2015_{upload-time}`. That keeps folders at a few
+thousand files rather than one directory of 62k, and the upload timestamp in the
+name is correct rather than noise: a master folder records an ingestion event
+([§3](#3-master)).
 
 | | | Frees / costs |
 |---|---|---|
 | 1 | Verify `raw/` coverage by `OriginalPath` lineage; review the remainder | — |
 | 2 | Archive `raw/` offline (external drive + `sha256` manifest), then delete it | **+~3.4TB** |
-| 3 | Generate sidecars **on the desktop**, while `G:\pix` is still local | tiny files |
-| 4 | Reflink the NAS-side library into `legacy_{year}/` | **~0 bytes, minutes** |
-| 5 | Thumbnails NAS-side, H.264 renders desktop-side | background |
-| 6 | Once the new process is proven: archive and delete the old library | frees ~0 — see below |
+| 3 | Folder-import + upload `G:\pix`, one run per year | ~2.5TB on the NAS, 9-24h |
+| 4 | Thumbnails NAS-side, H.264 renders desktop-side | background |
+| 5 | Once the new process is proven: archive and delete the old library | +~2.5TB |
 
-**The sync never needs cutting until step 6.** An earlier draft had it cut before
-reorganizing, because *moving* files would look like mass deletion to the sync
-client and propagate back. Reflinking into a **new** tree produces no events in
-the synced folder at all, so both can run in parallel with the sync untouched.
+**Both trees coexist during the transition** — the old NAS `pix/` and the new
+master — which is the point: nothing is deleted until the new process has earned
+it. After step 2 there is room for both.
 
-**Step 6 reclaims almost nothing, and that is correct.** Reflinked trees pay for
-the bytes once however many trees reference them, so deleting the original is
-tidiness rather than reclamation. Note also that DSM reports shared-folder usage
-*logically*, so it will show both trees at full size while the volume consumed
-one; `btrfs filesystem usage /volume1` is the truth.
+**The sync is never cut.** Uploading creates a separate tree and touches nothing
+in the synced folder, so Synology Drive sees no events at all until step 5.
 
-**Probe reflink before planning around it.** Master and the old library are
-separate shared folders, which on DSM are separate btrfs subvolumes. Cross-
-subvolume reflink is supported by btrfs generally, but Synology's kernel is old
-enough not to assume it:
+**Sidecars are written by the seed**, one per file carrying the inherited `event`
+(and a date override where one exists) — see
+[§4](#4-metadata--xmp-sidecars) for why events cannot simply be re-derived later.
 
-```
-cp --reflink=always /volume1/pix/<some-file>.jpg /volume1/<master-share>/test.jpg
-```
-
-If it fails, either keep master inside the same shared folder for the transition,
-or fall back to a real copy — there is room for that after step 2, it just costs
-2.5TB and hours instead of minutes.
+**Legacy folders get an `.import.jsonl` like any other.** An earlier draft
+special-cased them as having none; using the real upload path means one gets
+written anyway, and it is a genuine record of what was seeded and where each file
+came from.
 
 **Step 1 must use lineage, not content hash.** Conversion changed the bytes, so a
 HEIC in `raw/` and the JPG it became have different hashes and containment would
@@ -741,8 +762,9 @@ not. The unaccounted remainder separates into deliberately-dropped (migrate
 (formats the policy skips), and genuinely-missed — the last being the reason the
 check is worth running at all.
 
-**Step 3 matters more than it looks**: reading tags off 62k files is far faster
-against a local drive than over SMB against an Atom.
+**Measure before committing to step 3.** Run one year folder and time it; the
+whole-library estimate spans 9-24 hours depending on how the Atom handles the
+write path.
 
 ### Scale
 
@@ -789,6 +811,6 @@ the sidecar/index model — [§4](#4-metadata--xmp-sidecars); seeding — [§14]
   Btrfs snapshots and Synology Drive version history are the usual causes, and they
   need sorting before the `raw/` deletion in
   [§14](#14-seeding-the-existing-library) can actually free anything.
-- **Whether cross-subvolume reflink works on this DSM kernel** — it decides
-  whether seeding is minutes at zero cost or hours at 2.5TB
-  ([§14](#14-seeding-the-existing-library)).
+- **Folder-source import details** — the `.manifest/` shape for a source with no
+  PUID, and how `(relative path, size)` behaves against a tree that is not
+  immutable while the import runs.
