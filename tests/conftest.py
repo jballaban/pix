@@ -4,10 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from pix import cache_db, sync_check
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from fastapi.testclient import TestClient
 
 
 @pytest.fixture(autouse=True)
@@ -109,3 +115,126 @@ def _isolate_nas_paths(  # pyright: ignore[reportUnusedFunction]
             if isinstance(value, Path) and under_real_root(value):
                 monkeypatch.setattr(module, name, sandbox / name.lower(),
                                     raising=False)
+
+
+# --- the NAS app ---------------------------------------------------------------
+#
+# Shared here rather than in one test module, because several exercise the same
+# running app: the browse page, the account boundary, and the operation log.
+# Importing a fixture from another test module works at runtime and does not
+# type-check, which is a needless thing to explain to the next reader.
+
+@pytest.fixture
+def app_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
+    """A small archive on disk, indexed, with the app pointed at it."""
+    import json
+
+    from pix.nas import accounts, web
+    from pix.nas import index as ix
+
+    share = tmp_path / "nas"
+    meta, master = share / "meta", share / "master"
+    thumb, preview = share / "thumb", share / "preview"
+    for d in (meta, master, thumb, preview):
+        d.mkdir(parents=True)
+
+    (meta / "init_2026").mkdir()
+    (meta / "init_2026" / "a.jpg.json").write_text(json.dumps({
+        "file": "a.jpg", "folder": "init_2026", "size": 10, "mtime_ns": 1,
+        "exif": {"EXIF:DateTimeOriginal": "2026:08:30 15:34:55",
+                 "XMP:EventAuto": "Italy - Sicily"},
+    }), encoding="utf-8")
+    (meta / "init_2026" / "b.mp4.json").write_text(json.dumps({
+        "file": "b.mp4", "folder": "init_2026", "size": 20, "mtime_ns": 1,
+        "exif": {"QuickTime:Duration": "75 s",
+                 "XMP:EventAuto": "Italy - Sicily"},
+    }), encoding="utf-8")
+
+    for tier in (thumb, preview):
+        (tier / "init_2026").mkdir()
+        (tier / "init_2026" / "a.jpg.jpg").write_bytes(b"\xff\xd8fake-jpeg")
+        (tier / "init_2026" / "b.mp4.jpg").write_bytes(b"\xff\xd8fake-jpeg")
+
+    db = tmp_path / "index.db"
+    ix.build(db, meta_dir=meta, master_dir=master)
+
+    monkeypatch.setattr(web, "DB_PATH", db)
+    monkeypatch.setattr(web, "THUMB_DIR", thumb)
+    monkeypatch.setattr(web, "PREVIEW_DIR", preview)
+    # Accounts live in the sandbox; the autouse NAS guard already keeps
+    # ACCOUNTS_FILE off the real share, and this pins it per test.
+    monkeypatch.setattr(accounts, "ACCOUNTS_FILE", tmp_path / "users.json")
+    return {"share": share, "thumb": thumb, "db": db}
+
+
+@pytest.fixture
+def master(app_env: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A master folder holding the real files the media endpoint streams."""
+    from pix.nas import web
+
+    m = app_env["share"] / "master" / "init_2026"
+    m.mkdir(parents=True, exist_ok=True)
+    (m / "b.mp4").write_bytes(bytes([0, 0, 0, 0x18]) + b"ftypmp42" + b"x" * 400)
+    monkeypatch.setattr(web, "MASTER_DIR", app_env["share"] / "master")
+    return m
+
+
+@pytest.fixture
+def writable(app_env: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Master with the real files a decision attaches to, and the tier roots the
+    endpoints resolve against."""
+    from pix.nas import web
+
+    m = app_env["share"] / "master" / "init_2026"
+    m.mkdir(parents=True, exist_ok=True)
+    (m / "a.jpg").write_bytes(b"\xff\xd8original")
+    monkeypatch.setattr(web, "MASTER_DIR", app_env["share"] / "master")
+    monkeypatch.setattr(web, "META_DIR", app_env["share"] / "meta")
+    return m
+
+
+@pytest.fixture
+def sign_in() -> "Callable[[str, str], TestClient]":
+    """Sign a client in, through the form rather than by forging a cookie, so
+    the tests exercise the path a browser actually takes.
+
+    A fixture rather than an importable function: several modules need it, and
+    a fixture is how pytest shares one without an import that works at runtime
+    and not for the type checker.
+    """
+    from fastapi.testclient import TestClient
+
+    from pix.nas import web
+
+    def go(name: str, password: str) -> TestClient:
+        client = TestClient(web.app)
+        r = client.post("/login", data={"name": name, "password": password},
+                        follow_redirects=False)
+        assert r.status_code == 303, r.text[:200]
+        return client
+
+    return go
+
+
+@pytest.fixture
+def add_user() -> "Callable[..., None]":
+    """Create an account directly, for tests that only need one to exist."""
+    def go(name: str, password: str, roles: tuple[str, ...] = ()) -> None:
+        from pix.nas import accounts, auth
+
+        book = accounts.load()
+        book.users[name] = accounts.Account(
+            name, auth.hash_password(password), roles)
+        book.roles = sorted({*book.roles, *roles})
+        accounts.save(book)
+
+    return go
+
+
+@pytest.fixture
+def client(app_env: dict[str, Path],
+           sign_in: "Callable[[str, str], TestClient]") -> "TestClient":
+    """Signed in as the built-in admin, which is what curating is done as."""
+    from pix.nas import accounts
+
+    return sign_in(accounts.ADMIN, "admin")

@@ -24,16 +24,17 @@ children should not see and photographs that belong on the television, and
 that is one axis, not a quality ranking. "The best ones" is simply an
 audience that happens to be small.
 
-An audience is a **name**, and some names happen to have a login. `private`
-has none, so nothing can ever sign in as it — which is what makes *keep this
-but show it to nobody* a normal value rather than a special state. The owner
-is never in the list: an administrator sees everything by definition.
+An audience is a **name**, and some names happen to have a login: a role like
+`family` has none, and grants to it are what a household actually runs on.
+Nothing is special-cased — *keep this but show it to nobody* is a role with no
+members, created like any other. The owner is never in the list: an
+administrator sees everything by definition.
 
 **No sidecar means undecided.** That is the whole review-state model — there
 is no separate "reviewed" flag, and clearing every field deletes the file
-rather than leaving an empty one, so the two states stay distinguishable.
-Assigning `private` is a decision and does create a sidecar: choosing to keep
-something to yourself *is* a judgement.
+rather than leaving an empty one, so the two states stay distinguishable. An
+audience with no members is still a decision and does create a sidecar:
+choosing to keep something to yourself *is* a judgement.
 
 ### Serialization
 
@@ -69,7 +70,7 @@ import os
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Any, Iterable, Sequence
 from xml.sax.saxutils import escape, quoteattr
 
 from pix import datestr
@@ -82,7 +83,6 @@ _PHOTOSHOP_NS: str = "http://ns.adobe.com/photoshop/1.0/"
 _IPTC_EXT_NS: str = "http://iptc.org/std/Iptc4xmpExt/2008-02-29/"
 _RDF_NS: str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
 _DC_NS: str = "http://purl.org/dc/elements/1.1/"
-
 
 
 class Unset:
@@ -193,15 +193,16 @@ def write(media: Path, decision: Decision) -> None:
         raise
 
 
-def apply(media: Path, *,
-          event: str | None | Unset = UNSET,
-          date_override: str | None | Unset = UNSET,
-          tags: Sequence[str] | None | Unset = UNSET,
-          add_tags: Sequence[str] = (),
-          remove_tags: Sequence[str] = (),
-          audience: Sequence[str] | None | Unset = UNSET,
-          add_audience: Sequence[str] = (),
-          remove_audience: Sequence[str] = ()) -> Decision:
+def change(media: Path, *,
+           event: str | None | Unset = UNSET,
+           date_override: str | None | Unset = UNSET,
+           tags: Sequence[str] | None | Unset = UNSET,
+           add_tags: Sequence[str] = (),
+           remove_tags: Sequence[str] = (),
+           audience: Sequence[str] | None | Unset = UNSET,
+           add_audience: Sequence[str] = (),
+           remove_audience: Sequence[str] = (),
+           ) -> tuple[Decision | None, Decision]:
     """Change some fields of `media`'s decision, leaving the rest alone.
 
     Read-modify-write rather than replace, because the UI changes one field at a
@@ -214,8 +215,13 @@ def apply(media: Path, *,
     and the difference matters at scale: sharing 200 files with the kids must
     add to whatever each is already shared with, not flatten them all to one
     list.
+
+    Returns **both** the previous decision and the new one. The caller needs the
+    previous value to be able to undo it, and it has already been read here —
+    asking for it again would double the SMB reads of every bulk edit.
     """
-    current = read(media) or Decision()
+    was = read(media)
+    current = was or Decision()
     updated = Decision(
         event=current.event if isinstance(event, Unset) else event,
         date_override=(current.date_override
@@ -226,7 +232,12 @@ def apply(media: Path, *,
                         add_audience, remove_audience, fold=True),
     )
     write(media, updated)
-    return updated
+    return was, updated
+
+
+def apply(media: Path, **fields: Any) -> Decision:
+    """`change`, for callers with no use for the previous value."""
+    return change(media, **fields)[1]
 
 
 def _merge(current: tuple[str, ...], replace: Sequence[str] | None | Unset,

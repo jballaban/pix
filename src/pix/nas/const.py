@@ -75,6 +75,12 @@ INDEX_DB: Path = MASTER_SHARE / "index" / "index.db"
 #: swap.
 ACCOUNTS_FILE: Path = MASTER_SHARE / "app" / "users.json"
 
+#: What was changed, and enough to put it back. Append-only, one line per bulk
+#: edit. Configuration-adjacent like the accounts file: every decision still
+#: lives in the `.xmp` beside its file, so losing this costs the ability to
+#: undo, not a fact about a photograph.
+OPERATIONS_FILE: Path = MASTER_SHARE / "app" / "operations.jsonl"
+
 #: Per-folder download ledger, written during upload. Its first line is a
 #: header describing the source, which is what makes the known-device registry
 #: derivable instead of stored.

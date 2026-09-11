@@ -8,7 +8,7 @@ curation decisions: an `.xmp` beside the master file, then that file's index row
 
 from __future__ import annotations
 
-import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
@@ -16,85 +16,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from pix.nas import accounts
-from pix.nas import auth
 from pix.nas import decisions
 from pix.nas import index as ix
 from pix.nas import web
 from pix.nas.web import _split
 from pix.nas.decisions import Decision
-
-
-@pytest.fixture
-def app_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
-    share = tmp_path / "nas"
-    meta, master = share / "meta", share / "master"
-    thumb, preview = share / "thumb", share / "preview"
-    for d in (meta, master, thumb, preview):
-        d.mkdir(parents=True)
-
-    (meta / "init_2026").mkdir()
-    (meta / "init_2026" / "a.jpg.json").write_text(json.dumps({
-        "file": "a.jpg", "folder": "init_2026", "size": 10, "mtime_ns": 1,
-        "exif": {"EXIF:DateTimeOriginal": "2026:08:30 15:34:55",
-                 "XMP:EventAuto": "Italy - Sicily"},
-    }), encoding="utf-8")
-    (meta / "init_2026" / "b.mp4.json").write_text(json.dumps({
-        "file": "b.mp4", "folder": "init_2026", "size": 20, "mtime_ns": 1,
-        "exif": {"QuickTime:Duration": "75 s", "XMP:EventAuto": "Italy - Sicily"},
-    }), encoding="utf-8")
-
-    for tier in (thumb, preview):
-        (tier / "init_2026").mkdir()
-        (tier / "init_2026" / "a.jpg.jpg").write_bytes(b"\xff\xd8fake-jpeg")
-        (tier / "init_2026" / "b.mp4.jpg").write_bytes(b"\xff\xd8fake-jpeg")
-
-    db = tmp_path / "index.db"
-    ix.build(db, meta_dir=meta, master_dir=master)
-
-    monkeypatch.setattr(web, "DB_PATH", db)
-    monkeypatch.setattr(web, "THUMB_DIR", thumb)
-    monkeypatch.setattr(web, "PREVIEW_DIR", preview)
-    # Accounts live in the sandbox; the autouse NAS guard already keeps
-    # ACCOUNTS_FILE off the real share, and this pins it per test.
-    monkeypatch.setattr(accounts, "ACCOUNTS_FILE", tmp_path / "users.json")
-    return {"share": share, "thumb": thumb, "db": db}
-
-
-@pytest.fixture
-def master(app_env: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A master folder holding the real files the media endpoint streams."""
-    m = app_env["share"] / "master" / "init_2026"
-    m.mkdir(parents=True, exist_ok=True)
-    (m / "b.mp4").write_bytes(bytes([0, 0, 0, 0x18]) + b"ftypmp42" + b"x" * 400)
-    monkeypatch.setattr(web, "MASTER_DIR", app_env["share"] / "master")
-    return m
-
-
-def sign_in(name: str, password: str) -> TestClient:
-    """A client holding a real session cookie for `name`.
-
-    Through the form rather than by forging a cookie, so the tests exercise
-    the path a browser actually takes.
-    """
-    client = TestClient(web.app)
-    r = client.post("/login", data={"name": name, "password": password},
-                    follow_redirects=False)
-    assert r.status_code == 303, r.text[:200]
-    return client
-
-
-def add_user(name: str, password: str, roles: tuple[str, ...] = ()) -> None:
-    book = accounts.load()
-    book.users[name] = accounts.Account(
-        name, auth.hash_password(password), roles)
-    book.roles = sorted({*book.roles, *roles})
-    accounts.save(book)
-
-
-@pytest.fixture
-def client(app_env: dict[str, Path]) -> TestClient:
-    """Signed in as the built-in admin, which is what curating is done as."""
-    return sign_in(accounts.ADMIN, "admin")
 
 
 # --- browse ------------------------------------------------------------------
@@ -243,7 +169,7 @@ def test_an_api_call_gets_json_not_a_redirect(app_env: dict[str, Path]) -> None:
     assert "www-authenticate" not in r.headers
 
 
-def test_the_admin_account_is_built_in(app_env: dict[str, Path]) -> None:
+def test_the_admin_account_is_built_in(app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
     """Hard-coded, so there is no way to lock yourself out by editing a file —
     and no way to delete the only account that can grant access."""
     assert sign_in(accounts.ADMIN, "admin").get("/").status_code == 200
@@ -272,7 +198,7 @@ def test_the_form_does_not_say_which_half_was_wrong(
     assert "no such" not in text.lower()
 
 
-def test_signing_out_forgets_the_session(app_env: dict[str, Path]) -> None:
+def test_signing_out_forgets_the_session(app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
     """The thing HTTP Basic cannot do, and the reason this exists."""
     client = sign_in(accounts.ADMIN, "admin")
     assert client.get("/api/files").status_code == 200
@@ -281,7 +207,7 @@ def test_signing_out_forgets_the_session(app_env: dict[str, Path]) -> None:
     assert client.get("/api/files").status_code == 401
 
 
-def test_a_tampered_cookie_is_not_a_session(app_env: dict[str, Path]) -> None:
+def test_a_tampered_cookie_is_not_a_session(app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
     client = sign_in(accounts.ADMIN, "admin")
     token = client.cookies[accounts.COOKIE]
     client.cookies.set(accounts.COOKIE, token.replace("admin", "kid", 1))
@@ -289,7 +215,7 @@ def test_a_tampered_cookie_is_not_a_session(app_env: dict[str, Path]) -> None:
     assert client.get("/api/files").status_code == 401
 
 
-def test_an_account_is_created_and_can_sign_in(app_env: dict[str, Path]) -> None:
+def test_an_account_is_created_and_can_sign_in(app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
     admin = sign_in(accounts.ADMIN, "admin")
     admin.post("/accounts/save",
                data={"name": "kid", "password": "pw", "roles": "family"})
@@ -297,7 +223,7 @@ def test_an_account_is_created_and_can_sign_in(app_env: dict[str, Path]) -> None
     assert sign_in("kid", "pw").get("/api/files").status_code == 200
 
 
-def test_a_removed_account_stops_working(app_env: dict[str, Path]) -> None:
+def test_a_removed_account_stops_working(app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
     """Read per request, not cached — a stale cache here means a removed
     account still works, the one staleness an access system cannot have."""
     admin = sign_in(accounts.ADMIN, "admin")
@@ -309,16 +235,14 @@ def test_a_removed_account_stops_working(app_env: dict[str, Path]) -> None:
     assert kid.get("/api/files").status_code == 401
 
 
-def test_the_admin_account_cannot_be_removed(app_env: dict[str, Path]) -> None:
+def test_the_admin_account_cannot_be_removed(app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
     admin = sign_in(accounts.ADMIN, "admin")
     admin.post("/accounts/delete", data={"name": accounts.ADMIN})
 
     assert sign_in(accounts.ADMIN, "admin").get("/").status_code == 200
 
 
-def test_changing_the_admin_password_takes_effect(
-    app_env: dict[str, Path]
-) -> None:
+def test_changing_the_admin_password_takes_effect(app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
     admin = sign_in(accounts.ADMIN, "admin")
     admin.post("/accounts/save",
                data={"name": accounts.ADMIN, "password": "better"})
@@ -330,9 +254,7 @@ def test_changing_the_admin_password_takes_effect(
     assert "bad=1" in bad.headers["location"]
 
 
-def test_the_shipped_admin_password_is_called_out(
-    app_env: dict[str, Path]
-) -> None:
+def test_the_shipped_admin_password_is_called_out(app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
     """A default password nobody is told about is a default password nobody
     changes."""
     admin = sign_in(accounts.ADMIN, "admin")
@@ -344,7 +266,7 @@ def test_the_shipped_admin_password_is_called_out(
         accounts.ADMIN, "better").get("/").text
 
 
-def test_only_an_admin_manages_accounts(app_env: dict[str, Path]) -> None:
+def test_only_an_admin_manages_accounts(app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient], add_user: Callable[..., None]) -> None:
     add_user("kid", "pw")
     kid = sign_in("kid", "pw")
 
@@ -353,8 +275,7 @@ def test_only_an_admin_manages_accounts(app_env: dict[str, Path]) -> None:
                     data={"name": "eve", "password": "x"}).status_code == 403
 
 
-def test_a_role_reaches_what_was_shared_with_it(app_env: dict[str, Path],
-                                                writable: Path) -> None:
+def test_a_role_reaches_what_was_shared_with_it(app_env: dict[str, Path], writable: Path, sign_in: Callable[[str, str], TestClient], add_user: Callable[..., None]) -> None:
     """A grant names a person or a role and the check cannot tell them apart."""
     add_user("kid", "pw", ("family",))
     admin = sign_in(accounts.ADMIN, "admin")
@@ -365,8 +286,7 @@ def test_a_role_reaches_what_was_shared_with_it(app_env: dict[str, Path],
     assert [r["name"] for r in rows] == ["a.jpg"]
 
 
-def test_losing_a_role_loses_the_access(app_env: dict[str, Path],
-                                        writable: Path) -> None:
+def test_losing_a_role_loses_the_access(app_env: dict[str, Path], writable: Path, sign_in: Callable[[str, str], TestClient], add_user: Callable[..., None]) -> None:
     add_user("kid", "pw", ("family",))
     admin = sign_in(accounts.ADMIN, "admin")
     admin.post("/api/decide", json={"folder": "init_2026", "name": "a.jpg",
@@ -390,8 +310,7 @@ def test_the_login_page_never_leaves_the_app(app_env: dict[str, Path]) -> None:
 
 # --- index not built ---------------------------------------------------------
 
-def test_a_missing_index_says_what_to_run(tmp_path: Path,
-                                          monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_missing_index_says_what_to_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sign_in: Callable[[str, str], TestClient]) -> None:
     """'503' is useless on its own; the fix is one command."""
     monkeypatch.setattr(web, "DB_PATH", tmp_path / "nope.db")
     monkeypatch.setattr(accounts, "ACCOUNTS_FILE", tmp_path / "users.json")
@@ -404,7 +323,7 @@ def test_a_missing_index_says_what_to_run(tmp_path: Path,
 
 # --- video playback ----------------------------------------------------------
 
-def test_master_video_is_streamable(master: Path, app_env: dict[str, Path]) -> None:
+def test_master_video_is_streamable(master: Path, app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
     """Videos need the master file: there is no delivery rendition to serve.
 
     The seeded library is MP4 throughout, so master *is* the playable copy.
@@ -415,14 +334,13 @@ def test_master_video_is_streamable(master: Path, app_env: dict[str, Path]) -> N
     assert r.content.startswith(bytes([0, 0, 0, 0x18]) + b"ftyp")
 
 
-def test_media_advertises_range_support(master: Path,
-                                        app_env: dict[str, Path]) -> None:
+def test_media_advertises_range_support(master: Path, app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
     """Without ranges a browser cannot seek, only play from the start."""
     r = sign_in(accounts.ADMIN, "admin").get("/media/init_2026/b.mp4")
     assert r.headers.get("accept-ranges") == "bytes"
 
 
-def test_media_serves_a_byte_range(master: Path, app_env: dict[str, Path]) -> None:
+def test_media_serves_a_byte_range(master: Path, app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
     r = sign_in(accounts.ADMIN, "admin").get("/media/init_2026/b.mp4",
                                 headers={"Range": "bytes=8-15"})
     assert r.status_code == 206
@@ -437,8 +355,7 @@ def test_media_refuses_traversal(master: Path, app_env: dict[str, Path]) -> None
         assert c.get(bad).status_code in (400, 404), bad
 
 
-def test_media_is_missing_for_an_unknown_file(master: Path,
-                                              app_env: dict[str, Path]) -> None:
+def test_media_is_missing_for_an_unknown_file(master: Path, app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
     assert sign_in(accounts.ADMIN, "admin").get("/media/init_2026/nope.mp4").status_code == 404
 
 
@@ -950,7 +867,7 @@ def test_an_empty_batch_reports_nothing_dropped(client: TestClient,
 # --- access ------------------------------------------------------------------
 
 @pytest.fixture
-def household(app_env: dict[str, Path], writable: Path) -> dict[str, object]:
+def household(app_env: dict[str, Path], writable: Path, sign_in: Callable[[str, str], TestClient], add_user: Callable[..., None]) -> dict[str, object]:
     """One shared photo and one that is not, with an admin and a viewer."""
     (writable / "b.mp4").write_bytes(b"fake")
     add_user("kid", "pw")
@@ -1064,7 +981,7 @@ def test_granted_nothing_sees_nothing(app_env: dict[str, Path]) -> None:
 
 # --- names are case-insensitive ----------------------------------------------
 
-def test_signing_in_ignores_case(app_env: dict[str, Path]) -> None:
+def test_signing_in_ignores_case(app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
     assert sign_in("ADMIN", "admin").get("/").status_code == 200
     assert sign_in("Admin", "admin").get("/").status_code == 200
 
@@ -1078,7 +995,7 @@ def test_a_password_is_still_case_sensitive(app_env: dict[str, Path]) -> None:
     assert "bad=1" in r.headers["location"]
 
 
-def test_one_person_cannot_become_two_accounts(app_env: dict[str, Path]) -> None:
+def test_one_person_cannot_become_two_accounts(app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
     admin = sign_in(accounts.ADMIN, "admin")
     admin.post("/accounts/save", data={"name": "Kid", "password": "pw"})
     admin.post("/accounts/save", data={"name": "KID", "password": "pw2"})
@@ -1088,8 +1005,7 @@ def test_one_person_cannot_become_two_accounts(app_env: dict[str, Path]) -> None
     assert sign_in("kid", "pw2").get("/").status_code == 200
 
 
-def test_a_grant_reaches_whatever_case_signed_in(app_env: dict[str, Path],
-                                                 writable: Path) -> None:
+def test_a_grant_reaches_whatever_case_signed_in(app_env: dict[str, Path], writable: Path, sign_in: Callable[[str, str], TestClient]) -> None:
     """The failure this prevents looks exactly like a correctly-kept secret:
     signed in as `Kid`, a photo shared with `kid` simply is not there."""
     admin = sign_in(accounts.ADMIN, "admin")
@@ -1101,8 +1017,7 @@ def test_a_grant_reaches_whatever_case_signed_in(app_env: dict[str, Path],
     assert [r["name"] for r in rows] == ["a.jpg"]
 
 
-def test_a_role_matches_regardless_of_case(app_env: dict[str, Path],
-                                           writable: Path) -> None:
+def test_a_role_matches_regardless_of_case(app_env: dict[str, Path], writable: Path, sign_in: Callable[[str, str], TestClient]) -> None:
     admin = sign_in(accounts.ADMIN, "admin")
     admin.post("/accounts/save",
                data={"name": "kid", "password": "pw", "roles": "Family"})
@@ -1126,9 +1041,7 @@ def test_audience_values_can_be_suggested(client: TestClient,
     assert [s["value"] for s in got] == ["family"]
 
 
-def test_the_access_list_is_seeded_from_the_accounts(
-    app_env: dict[str, Path]
-) -> None:
+def test_the_access_list_is_seeded_from_the_accounts(app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient], add_user: Callable[..., None]) -> None:
     """Sharing has to be possible on the very first file, before any decision
     exists to draw a suggestion from — and only real accounts and roles are
     offered, because a grant to anything else reaches nobody."""
@@ -1241,9 +1154,7 @@ def test_a_viewer_sees_only_events_they_can_open(
     assert all(r["n"] == 1 for r in rows)
 
 
-def test_someone_shared_nothing_sees_an_empty_home(
-    app_env: dict[str, Path], writable: Path
-) -> None:
+def test_someone_shared_nothing_sees_an_empty_home(app_env: dict[str, Path], writable: Path, sign_in: Callable[[str, str], TestClient], add_user: Callable[..., None]) -> None:
     add_user("nobody", "pw")
 
     assert sign_in("nobody", "pw").get("/api/events").json() == []

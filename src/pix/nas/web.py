@@ -39,6 +39,7 @@ from pydantic import BaseModel
 from pix.nas import accounts
 from pix.nas import auth
 from pix.nas import decisions
+from pix.nas import history
 from pix.nas import index as ix
 from pix.nas.const import (
     INDEX_DB, MASTER_DIR, META_DIR, PREVIEW_DIR, RENDER_DIR, THUMB_DIR,
@@ -378,7 +379,8 @@ def _whoami(user: Principal | None) -> str:
     """
     if user is None:
         return '<a class="who-link" href="/login">Sign in</a>'
-    manage = ('<a class="who-link" href="/accounts">Accounts</a>'
+    manage = ('<a class="who-link" href="/history">History</a>'
+              '<a class="who-link" href="/accounts">Accounts</a>'
               if user.is_admin else "")
     return (f'<span class="who-link dim">{_h(user.name)}</span>{manage}'
             '<form method="post" action="/logout" class="who-link">'
@@ -1560,7 +1562,9 @@ def api_decide(user: Annotated[Principal, Depends(require_admin)],
     `pix2 index` catches up — drift is only ever "the index is behind", never
     "the record is wrong". `indexed` in the response says which happened.
     """
-    decision, indexed = _decide(body.folder, body.name, _change(body))
+    was, decision, indexed = _decide(body.folder, body.name, _change(body))
+    history.record(user.name, _summary(_change(body), 1),
+                   [history.Before(body.folder, body.name, was)])
     return JSONResponse({
         "folder": body.folder,
         "name": body.name,
@@ -1647,13 +1651,14 @@ def api_decide_bulk(user: Annotated[Principal, Depends(require_admin)],
     # of it the open rather than the write.
     conn = ix.open_rw(DB_PATH) if DB_PATH.is_file() else None
     done: list[tuple[str, str]] = []
+    undo: list[history.Before] = []
     dropped: list[dict[str, str]] = []
     total: int | None = None
     try:
         for target in body.files:
             try:
-                _, was_indexed = _decide(target.folder, target.name, change,
-                                         conn=conn)
+                was, _, was_indexed = _decide(target.folder, target.name,
+                                              change, conn=conn)
             except HTTPException as e:
                 failed.append({"folder": target.folder, "name": target.name,
                                "error": str(e.detail)})
@@ -1661,6 +1666,7 @@ def api_decide_bulk(user: Annotated[Principal, Depends(require_admin)],
             written += 1
             indexed += 1 if was_indexed else 0
             done.append((target.folder, target.name))
+            undo.append(history.Before(target.folder, target.name, was))
         if conn is not None and done:
             stays = ix.matching(conn, view, done)
             dropped = [{"folder": f, "name": n}
@@ -1670,6 +1676,12 @@ def api_decide_bulk(user: Annotated[Principal, Depends(require_admin)],
         if conn is not None:
             conn.close()
 
+    # One log line per request, holding what each file said before. The
+    # previous values in full rather than a diff: a diff has to be read
+    # against whatever the file says *now*, and now may already have moved —
+    # which is the whole reason somebody is reverting.
+    if undo:
+        history.record(user.name, _summary(change, len(undo)), undo)
     return JSONResponse({"written": written, "indexed": indexed,
                          "failed": failed, "dropped": dropped,
                          "total": total})
@@ -1712,7 +1724,8 @@ def _change(body: DecideBody | DecideBulkBody) -> _Change:
 
 
 def _decide(folder: str, name: str, change: _Change,
-            *, conn: sqlite3.Connection | None = None) -> tuple[Decision, bool]:
+            *, conn: sqlite3.Connection | None = None
+            ) -> tuple[Decision | None, Decision, bool]:
     """Write one decision to master, then bring its index row up to date.
 
     **Sidecar first, index follows** (§4). If the sidecar write fails nothing
@@ -1731,7 +1744,7 @@ def _decide(folder: str, name: str, change: _Change,
     media = _master_file(folder, name)
     with _write_lock:
         try:
-            decision = decisions.apply(
+            was, decision = decisions.change(
                 media, event=change.event,
                 date_override=change.date_override, tags=change.tags,
                 add_tags=change.add_tags, remove_tags=change.remove_tags,
@@ -1761,7 +1774,34 @@ def _decide(folder: str, name: str, change: _Change,
             finally:
                 if own:
                     conn.close()
-    return decision, indexed
+    return was, decision, indexed
+
+
+def _summary(change: _Change, n: int) -> str:
+    """What an operation did, in the words a person would use.
+
+    Read months later off a list, so it says the value and the count — "gave
+    family access to 312 files" is a thing you can recognise as the mistake
+    you are looking for; "bulk edit" is not.
+    """
+    files = f"{n} file" + ("s" if n != 1 else "")
+    if change.add_audience:
+        return f"gave {', '.join(change.add_audience)} access to {files}"
+    if change.remove_audience:
+        return f"took {', '.join(change.remove_audience)} access "\
+               f"from {files}"
+    if change.add_tags:
+        return f"tagged {files} {', '.join(change.add_tags)}"
+    if change.remove_tags:
+        return f"untagged {', '.join(change.remove_tags)} on {files}"
+    if not isinstance(change.event, Unset):
+        return (f"set the event on {files} to {change.event}"
+                if change.event else f"cleared the event on {files}")
+    if not isinstance(change.date_override, Unset):
+        return (f"dated {files} {change.date_override}"
+                if change.date_override
+                else f"cleared the date override on {files}")
+    return f"changed {files}"
 
 
 def _master_file(folder: str, name: str) -> Path:
@@ -2082,3 +2122,103 @@ async def accounts_roles(
 
 def _back(message: str) -> Response:
     return RedirectResponse(f"/accounts?msg={_q(message)}", status_code=303)
+
+
+# --- history ------------------------------------------------------------------
+
+@app.get("/history", response_class=HTMLResponse)
+def history_page(user: Annotated[Principal, Depends(require_admin)],
+                 msg: Annotated[str, Query()] = "") -> HTMLResponse:
+    """What has been changed, newest first, each with a way back.
+
+    A bulk edit can touch several hundred files from one click, and *I just
+    gave the children access to three hundred photographs* has no other cure:
+    the decisions are individually correct in three hundred sidecars, and
+    nothing else remembers they used to say something else.
+    """
+    ops = history.recent()
+    already = history.undone(ops)
+
+    rows = "".join(
+        f'<tr><td class="dim">{_h(_when(op.when))}</td>'
+        f'<td>{_h(op.summary)}</td>'
+        f'<td class="dim">{_h(op.who)}</td>'
+        + ('<td class="dim">undone</td>' if op.id in already else
+           '<td class="dim">a revert</td>' if op.reverts else
+           f'<td><form method="post" action="/history/revert">'
+           f'<input type="hidden" name="id" value="{_h(op.id)}">'
+           f'<button>Revert</button></form></td>')
+        + "</tr>"
+        for op in ops
+    )
+    note = f'<p class="note">{_h(msg)}</p>' if msg else ""
+    if not ops:
+        return _page("History", f'{note}<p class="empty">Nothing changed yet.</p>',
+                     user=user)
+    return _page("History", f"""{note}
+<p class="dim">Reverting puts those files back to exactly what they said
+before — not an undo stack, because several people curate here and the last
+thing done is not always yours. A revert is itself recorded, so it can be
+reverted in turn.</p>
+<table class="acct"><thead><tr><th>When</th><th>What</th><th>Who</th>
+<th></th></tr></thead><tbody>{rows}</tbody></table>""", user=user)
+
+
+@app.post("/history/revert")
+async def history_revert(
+    request: Request,
+    user: Annotated[Principal, Depends(require_admin)],
+) -> Response:
+    """Put the files in one operation back to what they said before it.
+
+    Written wholesale from the recorded previous value, not as an inverse of
+    the change: the inverse of *added family* is only *remove family* if nothing
+    else touched the file since, and something might have.
+    """
+    op_id = (await _form(request)).get("id", "")
+    op = history.get(op_id)
+    if op is None:
+        return RedirectResponse("/history?msg=no+such+operation", status_code=303)
+
+    restored = 0
+    failed = 0
+    undo: list[history.Before] = []
+    conn = ix.open_rw(DB_PATH) if DB_PATH.is_file() else None
+    try:
+        for item in op.files:
+            media = MASTER_DIR / item.folder / item.name
+            if not _under(MASTER_DIR, media) or not media.is_file():
+                failed += 1
+                continue
+            with _write_lock:
+                try:
+                    was = decisions.read(media)
+                    decisions.write(media, item.decision or decisions.Decision())
+                except (decisions.DecisionError, OSError):
+                    failed += 1
+                    continue
+                undo.append(history.Before(item.folder, item.name, was))
+                if conn is not None:
+                    try:
+                        ix.refresh(conn, item.folder, item.name,
+                                   meta_dir=META_DIR, master_dir=MASTER_DIR)
+                    except sqlite3.Error:
+                        pass
+            restored += 1
+    finally:
+        if conn is not None:
+            conn.close()
+
+    if undo:
+        history.record(user.name, f"reverted: {op.summary}", undo,
+                       reverts=op.id)
+    tail = f", {failed} could not be" if failed else ""
+    noun = "file" if restored == 1 else "files"
+    return RedirectResponse(
+        f"/history?msg={_q(f'{restored} {noun} put back{tail}')}",
+        status_code=303)
+
+
+def _when(moment: float) -> str:
+    """A timestamp as a person reads it."""
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(moment))
