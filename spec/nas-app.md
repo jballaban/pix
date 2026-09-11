@@ -546,20 +546,57 @@ state that exists anywhere is a per-machine config holding two of them.
 
 | Command | Does |
 |---|---|
-| `pix config` | set the **import folder** and the **master location** (per-machine) |
-| `pix import` | device **or folder** → import folder |
-| `pix upload` | import folder → master; appends the ledger; clears the import folder |
-| `pix process` | master → renders + thumbnails for anything missing them |
+| `pix import device` | interactive; auto-selects a single **known** device, else lists and prompts |
+| `pix import folder <source> --name <n>` | a folder (SD card, shared folder, the legacy library) |
+| `pix upload` | every pending staging folder → master; appends the ledger; clears staging |
+| `pix process` | master → thumbnails, previews, renders for anything missing them |
+
+**Transitional note.** This is built as a fresh module (`src/pix/nas/`) behind a
+second console script — `pix2` — so the existing CLI keeps working untouched until
+seeding is proven. It reuses what [§13](#13-what-survives) lists rather than
+duplicating it. When the old architecture is amputated, `nas/` is promoted to
+`src/pix/` and the second entry point disappears, so the temporary name never
+outlives its purpose.
+
+**No config, and no library root.** Paths are build constants in one module, the
+way `EXTENSION_POLICY` already is:
+
+| | |
+|---|---|
+| `F:\pix\import\{name}\` | staging |
+| `\\nas\pix` | master |
+
+**No dry-runs and no run folders**, because nothing here is destructive — import
+hardlinks, upload copies, process writes derived trees. The **one** destructive
+step is clearing staging after upload, and it is gated per-folder on verification
+(every file present at master at matching size), not on the run completing. A
+folder that fails verification keeps its staging and says so. That single step is
+the entire risk surface, which is what buys the loss of the plan/apply ceremony.
 
 `import` and `upload` are separate on purpose: "no time, just get it off the phone"
 has to be a complete gesture on its own.
 
-**`import` takes a folder source as well as a device.** That is what makes
-[seeding](#14-seeding-the-existing-library) a normal upload rather than a
-throwaway migration tool — the special case lives entirely in the source adapter,
-and `upload` stays one code path. A folder source has no device to interrogate, so
-it takes the device name as an argument; identity is `(relative path, size)`
-rather than `PUID + size`, which keeps the run resumable and idempotent.
+**`import` has two source adapters, as subcommands.** They take genuinely
+different arguments — a device import has no path and may need to *select* among
+several connected phones, while a folder import has a path and nothing else — so
+inferring the source from a string would be fragile, and an MTP device is not
+addressable as a path at all. `upload` stays one code path regardless, which is
+what makes [seeding](#14-seeding-the-existing-library) a normal upload rather than
+a throwaway migration tool.
+
+A folder source has no device to interrogate, so it takes `--name`; identity is
+`(relative path, size)` rather than `PUID + size`, which keeps the run resumable
+and idempotent. **Both adapters are permanent** — phones are MTP, but SD cards,
+shared folders and anything that mounts as a drive letter are folder imports.
+
+`--name` becomes the `{device}` component of the master folder, so a phone gives
+`Jamies-iPhone_{upload-time}` and seeding gives `legacy_2015_{upload-time}`.
+
+**Device selection already works this way** (`importer.py`): a `--device`
+substring override, auto-select when exactly **one known** device is connected,
+otherwise list and prompt; a new serial is named once and remembered, with
+collision handling if two serials want the same name. It carries over unchanged
+apart from where the registry lives — see below.
 
 **A folder import hardlinks; it does not copy.** Source and import folder are on
 one NTFS volume, so links are instant and free — and necessary, since there is
@@ -598,8 +635,28 @@ already there by name and size.
 ### The ledger
 
 `{device}_{datetime}/.import.jsonl` is appended **during** upload (not written at
-the end, so a crash leaves a consistent partial record). One line per object
-pulled in that batch:
+the end, so a crash leaves a consistent partial record). Its **first line is a
+header** describing the source, and every line after it is one object pulled in
+that batch:
+
+```json
+{"device_name":"Jamies-iPhone","serial":"...","source":"device","uploaded":"..."}
+{"name":"legacy_2015","source":"folder","source_path":"G:\\pix\\2015","uploaded":"..."}
+```
+
+**The header makes the known-device registry derivable, so there is no registry
+file.** Known devices are the union of the serials in master's ledger headers and
+those in pending staging's `.manifest/*.importinfo` sidecars (which already record
+`serial` and `device_name`) — so a phone imported but not yet uploaded is still
+known. A stored `devices.yaml` could drift from reality; a derived one cannot,
+which is the same rule the index follows.
+
+The cost is that resolving it needs the NAS reachable: a listing plus one small
+read per folder, cached for the run. Offline, it falls back to the local staging
+folder names, so a device with pending staging still resolves and anything else
+prompts for a name exactly as a fresh device would.
+
+Per-object lines carry:
 
 > PUID, device path, name, size, capture date, outcome — `kept` / `culled` / `failed`
 
