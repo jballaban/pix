@@ -65,6 +65,32 @@ def test_flatten_carries_provenance() -> None:
     assert up.flatten("2015/a/one.jpg") == "2015_a_one.jpg"
 
 
+def test_flatten_drops_organize_placeholders() -> None:
+    """`(null)` is the retired tool rendering absence, not provenance.
+
+    Baking it into an archive filename would preserve a statement about
+    `organize`'s folder rendering forever, in an architecture where absence is
+    simply a missing tag.
+    """
+    assert up.flatten("G_pix_2026/(null)/2026-01-04.jpg") == "G_pix_2026_2026-01-04.jpg"
+    assert up.flatten("G_pix_2003/(filtered)/x.jpg") == "G_pix_2003_x.jpg"
+
+
+def test_flatten_keeps_real_event_folders() -> None:
+    """Only the placeholders go — a real event name is provenance."""
+    assert up.flatten("G_pix_2001/Tremblant/x.jpg") == "G_pix_2001_Tremblant_x.jpg"
+
+
+def test_placeholder_drop_can_collide_and_is_disambiguated() -> None:
+    """`2015/(null)/x.jpg` and `2015/x.jpg` flatten alike; neither may overwrite."""
+    used: dict[str, str] = {}
+    a = up._unique(up.flatten("2015/(null)/x.jpg"), "2015/(null)/x.jpg", used)
+    b = up._unique(up.flatten("2015/x.jpg"), "2015/x.jpg", used)
+
+    assert a == "2015_x.jpg"
+    assert b != a
+
+
 def test_uploads_and_flattens(staged: Path, roots: dict[str, Path]) -> None:
     [s] = up.run_upload()
 
