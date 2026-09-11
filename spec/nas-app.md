@@ -146,6 +146,64 @@ it") at folder granularity.
 
 A rating change is therefore a 2KB write, not a multi-gigabyte file rewrite.
 
+### The sidecars are the database
+
+A sidecar holds **everything needed to index the file**, not just the human
+decisions — so the app never has to open a media file to build its view.
+
+| | |
+|---|---|
+| **probed facts** | capture date, dimensions, duration, codec, camera, GPS, size, content hash |
+| **decisions** | `tier`, `rating`, event override, date override |
+| **provenance** | `OriginalPath` |
+| **never stored** | *effective* values — computed live from facts + decisions |
+
+The alternative (store decisions only, re-probe for the rest) was rejected on
+cost: rebuilding an index that way means re-opening all ~62k media files with
+exiftool, on spinning disks behind an Atom, and MP4 is the bad case because the
+`moov` atom can sit at the end of the file — a 2.6GB `.insv` costs a seek to EOF
+just to read a date. Reading ~120MB of XMP in the same directories is minutes
+instead of hours.
+
+**Facts, not interpretations.** The sidecar stores the raw reading
+(`EXIF:DateTimeOriginal`), never the effective date after pix's heuristics ran.
+They go stale differently:
+
+- **Facts can never go stale**, because master files are immutable — nothing can
+  change underneath a cached reading. This caching would be unsafe in the old
+  architecture, where migrate rewrote files. It is [§1](#1-why-sacred-originals-and-not-self-describing-files)
+  paying off again.
+- **Interpretations go stale whenever the logic changes.** Persisting them means
+  improving a date heuristic invalidates every file and forces a re-probe — the
+  `_auto` re-derivation treadmill the old design had. Computing them live costs
+  nothing and is always current.
+
+Standard XMP fields stay standard, so Lightroom and Bridge read `rating` and the
+dates; the pix-namespace properties they simply ignore.
+
+### The index
+
+The app still needs a queryable index — you cannot scan 62k XMP files for every
+UI filter. It is **SQLite, disposable, and never authoritative**: an aggregation
+cache over the sidecars.
+
+Storing everything centrally *instead* of in sidecars is the option to reject. It
+recreates the single database this architecture exists to avoid, and breaks "lose
+a folder, lose only that folder."
+
+- **Authority order: sidecar first, index follows.** Write the sidecar; only on
+  success update the index. Drift then only ever means "the index is behind,"
+  which a rescan fixes — it can never mean "the record is wrong."
+- **Staleness detection is the existing `(size, mtime_ns)` stat comparison**, the
+  same key `cache.db` already uses. ~62k stats, under a minute.
+- **A full rebuild is minutes**, because the input is ~120MB of XMP rather than
+  2.5TB of media. That is what makes the cache cheap to own: you never protect,
+  back up, or carefully recover it — nuke and rebuild is a normal operation.
+
+This replaces `cache.db` entirely. Its job was caching probe results keyed on
+`(size, mtime_ns)`; the sidecar now does that, co-located with the file it
+describes, travelling with it when a folder is copied elsewhere.
+
 ## 5. Renders
 
 A render is a **format conversion only**, produced when the master file is not
@@ -540,6 +598,8 @@ rather than anything pix builds ([§3](#3-master)):
   inode identity to protect; tagging is a direct edit
 - **The library root** — no `.pix/` scaffolding, no root discovery, no `pix init`,
   no per-library config; the desktop tool is stateless but for two configured paths
+- **`cache.db`** — superseded by sidecars, which cache the same probe results
+  co-located with the files they describe ([§4](#4-metadata--xmp-sidecars))
 - **The library lock** — one long-lived process owns the archive; concurrency
   becomes an internal queue and DB transactions rather than defence against
   competing CLI invocations
@@ -563,26 +623,113 @@ rather than anything pix builds ([§3](#3-master)):
   — and it stops being contentious: transcoding was only ever risky because it
   destroyed the original, and now the original is preserved forever
 
-## 14. Open questions
+## 14. Seeding the existing library
+
+A one-time migration, distinct from the steady-state design above.
+
+### The source is the current library, as-is
+
+`pix/` on the NAS — already normalized (HEIC converted to JPG, video remuxed,
+some legacy HEVC transcodes) — becomes master directly. **Neither the run folders
+nor `raw/` are processed.**
+
+Considered and declined: reconstructing pristine originals from
+`F:\.pix\runs` (158 runs, 1.95TB, **54,325 `CONVERT` captures** — each one a
+recoverable pre-conversion original). It would have been nearly free in compute —
+original becomes master, today's library file becomes its render, nothing
+transcodes — but it costs ~1TB more on the array and offsite.
+
+What makes declining coherent is that **the originals are archived offline
+instead**: `raw/` is copied to an external drive with a `sha256` manifest and
+shelved. The pristine tier exists, cold, verified. The NAS holds the warm working
+archive. It is also reversible while the run folders survive — master and render
+are separate tiers, so a later pass could promote originals and demote today's
+files to renders. Pruning `F:\.pix\runs` is what makes it permanent.
+
+Accepted consequence: master holds already-lossy HEVC transcodes, so H.264
+delivery renders for that subset re-encode from a lossy source. Bounded
+generation loss.
+
+### Legacy naming
+
+`OriginalPath` cannot supply `{device}` — only a minority of the library came
+through MTP (`G:\pix\raw\tmp\mtp\lola\...`); most predates any device
+concept (`G:\pix\raw\media\{year}\...`, `G:\pix\f\{year}\...`). So the
+bucket is synthetic, and the library's own `{year}/{event}/` maps onto
+[§3](#3-master)'s flattening rule:
+
+```
+pix/2015/a/2015-03-15_115256.jpg
+    ->  /pix/master/legacy_2015/a_2015-03-15_115256.jpg
+        /pix/master/legacy_2015/a_2015-03-15_115256.jpg.xmp
+```
+
+- `legacy_{year}` in the `{device}_{datetime}` slot — visibly not a real import,
+  and it keeps folders at a few thousand files rather than one directory of 62k.
+- **The event prefix is load-bearing, not decorative.** Canonical names only
+  disambiguate within a target folder, so `2015/a/` and `2015/b/` can both hold
+  `2015-03-15_115256.jpg`; flattening without the prefix would collide.
+- No `.import.jsonl` — the ledger exists to skip device downloads, and none of
+  this will ever be re-pulled from a phone.
+- `OriginalPath` rides into the sidecar, so true provenance survives regardless.
+
+### Sequence
+
+The library syncs to the NAS today, so the bytes are **already there**. Seeding is
+a server-side reorganization, not a 2.5TB upload — but the sync has to be cut
+first, or the reorganization looks like mass deletion and propagates back.
+
+| | | Frees / costs |
+|---|---|---|
+| 1 | Verify `raw/` coverage by `OriginalPath` lineage; review the remainder | — |
+| 2 | Archive `raw/` offline, then delete it | **+~3.4TB** |
+| 3 | Generate sidecars **on the desktop**, while `G:\pix` is still local | tiny files, they sync up |
+| 4 | Stop syncing `G:\pix` | — |
+| 5 | Reorganize the NAS-side copy into `legacy_{year}/` | server-side renames, instant |
+| 6 | Thumbnails NAS-side, H.264 renders desktop-side | background |
+| 7 | Delete `G:\pix` locally | +2.5TB on G: |
+
+Step 1 must use **lineage, not content hash** — conversion changed the bytes, so
+a HEIC in `raw/` and the JPG it became have different hashes and containment
+would flag every converted file as missing. `OriginalPath` is exact where hashing
+is not. The unaccounted remainder separates into deliberately-dropped (migrate
+`DELETE` lines, cross-checkable against the 158 run plans), never-processed
+(formats the policy skips), and genuinely-missed — the last being the reason the
+check is worth running at all.
+
+Step 3 matters more than it looks: reading tags off 62k files is far faster
+against a local drive than over SMB against an Atom.
+
+### Scale
+
+**61,846 media files**, of which the existing exports hold 95 and 7 — curation is
+at **0.15%**. Translating that into `tier` is trivial; the number's real
+significance is different.
+
+The app is not a convenience layer over a mostly-curated library. Its entire job
+is making **61,846 uncategorized decisions tractable** — hundreds per event down
+to 20-50. That moves the curation UI from a detail to the thing the project lives
+or dies on, and it is the largest remaining unknown in [§15](#15-open-questions).
+
+## 15. Open questions
 
 *(Resolved in discussion: import-ledger identity — [§9](#9-ingest--the-desktop-cli);
 distributions and the curation scale — [§7](#7-distributions); multi-user, auth and
-Synology Photos write-back — [§8](#8-the-app) and [§7](#7-distributions); Btrfs —
-[§10](#10-hardware).)*
+Synology Photos write-back — [§8](#8-the-app); Btrfs — [§10](#10-hardware);
+the sidecar/index model — [§4](#4-metadata--xmp-sidecars); seeding — [§14](#14-seeding-the-existing-library).)*
 
-- **Seeding the existing library.** The current ~2.3TB has to become master
-  folders, and it is already normalized rather than pristine
-  ([§3](#3-master)). Whether run-folder originals are worth recovering first, and
-  what `{device}_{datetime}` means for material whose import event is long past,
-  is undesigned.
-- **The app's UI.** Nothing in this document specifies what curation actually
-  looks like — the grid, the event view, how a pass over hundreds of photos is
-  driven from the keyboard.
+- **The curation UI — the big one.** 61,846 files have to be reviewed, in passes
+  of hundreds per event down to 20-50. Nothing here specifies what that looks
+  like, and it is what determines whether the archive ever actually gets curated.
 - **Ad-hoc `pix export` CLI surface.** The desktop one-off case
-  ([§7](#7-distributions)) needs inline filter and template arguments; that is new
-  CLI surface and unspecified.
+  ([§7](#7-distributions)) needs inline filter and template arguments; new CLI
+  surface, unspecified.
+- **`tier` and the probed facts as stored XMP** — namespace and serialization are
+  unspecified, as is whether `tier` is baked into delivery copies (nothing reads
+  it there, but it costs nothing and aids debugging).
 - **Face detection** remains deferred, and `{person}` depends on it — which is what
   the people-grouped ad-hoc distribution would need.
-- **`tier` as a stored XMP property** — namespace and serialization are
-  unspecified, as is whether it is baked into delivery copies (nothing reads it
-  there, but it costs nothing and aids debugging).
+- **Reclaiming space on the NAS.** Emptying `#recycle` did not return space;
+  Btrfs snapshots and Synology Drive version history are the usual causes and need
+  sorting before the `raw/` deletion in [§14](#14-seeding-the-existing-library)
+  can actually free anything.
