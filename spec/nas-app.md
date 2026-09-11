@@ -246,7 +246,9 @@ already delivery-ready. One per file — no size or quality profiles.
   `/book`, where a delivery-compressed copy would be a visible loss on print.
 - Renders carry **no pix metadata**. Metadata is baked at distribution time
   instead, which means a tag change never invalidates a render and never
-  re-transcodes anything.
+  re-transcodes anything. (If non-destructive editing is ever built
+  ([§15](#15-open-questions)), an *edit* change would invalidate a render — a tag
+  change still would not.)
 - Whether a render is needed is an **extension** question for images and a
   **codec** question for video: an `.mp4` containing HEVC still needs one.
 - `.insv` can never have a meaningful render (a flat transcode yields
@@ -883,6 +885,21 @@ the sidecar/index model — [§4](#4-metadata--xmp-sidecars); seeding — [§14]
 - **Ad-hoc `pix export` CLI surface.** The desktop one-off case
   ([§7](#7-distributions)) needs inline filter and template arguments; new CLI
   surface, unspecified.
+- **Non-destructive edits — deferred, noted for posterity.** Cropping a photo or
+  trimming a video keeps the original untouched and saves the result separately.
+  This needs no new concepts: **parameters in the sidecar** (crop rect, trim
+  points, rotation — they are human decisions like any other), **result in the
+  render** (derived, regenerable from original + parameters). It is the
+  raw-photography model the sidecar design already borrows from — develop settings
+  beside the negative, the JPEG is an export.
+
+  One rule it changes: [§5](#5-renders) says a tag change never invalidates a
+  render. That stays true, but an **edit** change does — the render is what the
+  edit produces. Video trims are also cheap here specifically because the render
+  is already a transcode; a keyframe-aligned cut can be lossless, and a
+  frame-accurate one costs nothing extra since the delivery encode is happening
+  anyway. Identity is unaffected either way: the original's content hash never
+  changes.
 - **`tier` and the probed facts as stored XMP** — namespace and serialization are
   unspecified, as is whether `tier` is baked into delivery copies (nothing reads
   it there, but it costs nothing and aids debugging).
