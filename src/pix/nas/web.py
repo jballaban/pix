@@ -186,7 +186,17 @@ main { padding:16px 20px 40px; }
 .row + .row { margin-top:8px; border-top:1px solid var(--line); padding-top:8px; }
 .brand { font-weight:600; letter-spacing:.02em; color:var(--fg); }
 .count { font-variant-numeric:tabular-nums; color:var(--dim);
-         margin-left:auto; white-space:nowrap; }
+         white-space:nowrap; }
+.spacer { flex:1; }
+/* Counts and messages along the bottom, so the header is only controls:
+   every row of chrome up there is a row of photographs pushed off. */
+.footbar { position:fixed; left:0; right:0; bottom:0; z-index:4;
+           background:var(--bg); border-top:1px solid var(--line);
+           padding:6px 20px; display:flex; gap:14px; align-items:baseline;
+           flex-wrap:wrap; font-size:12px; }
+.footbar:empty { display:none; }
+.footbar .note { margin:0; margin-left:auto; }
+main { padding-bottom:48px; }
 .hint { color:var(--dim); font-size:12px; }
 .hint b { color:var(--fg); font-weight:600; }
 
@@ -206,6 +216,10 @@ button.primary { background:var(--accent); color:#0d0f12; border-color:var(--acc
 #menu { position:absolute; z-index:20; width:300px; max-height:60vh;
         background:var(--panel); border:1px solid var(--line); border-radius:6px;
         box-shadow:0 10px 30px #0009; display:flex; flex-direction:column; }
+/* An id selector beats the user agent's `[hidden] { display:none }`, so the
+   rule above quietly won and `hidden = true` set a flag that hid nothing —
+   the menu could be opened and never dismissed. */
+#menu[hidden] { display:none; }
 #menu input { background:#14161a; color:var(--fg); border:0;
               border-bottom:1px solid var(--line); padding:9px 11px; font:inherit;
               border-radius:6px 6px 0 0; outline:none; width:100%; }
@@ -272,11 +286,10 @@ h2.year { font-size:15px; margin:26px 0 8px; display:flex; gap:12px;
 h2.year:first-of-type { margin-top:12px; }
 h2.year span { font-size:13px; font-weight:400; }
 .note { color:#ffb4a2; margin:8px 0 0; }
+.gate .note, main > .note { margin:8px 0; }
 .warn { color:#e3b341; }
 .who-link { margin-left:10px; display:inline-flex; align-items:center; }
 .who-link button { padding:3px 9px; margin:0; }
-.admin-badge { background:var(--top); color:#0d0f12; border-radius:3px;
-               padding:0 5px; font-size:11px; font-weight:600; }
 .empty { color:var(--dim); padding:40px 0; }
 
 #viewer { position:fixed; inset:0; background:#000e; display:none; z-index:30; }
@@ -296,7 +309,9 @@ h2.year span { font-size:13px; font-weight:400; }
 #viewer.norail #rail { display:none; }
 #railtoggle { position:absolute; top:10px; right:12px; z-index:2;
               margin:0; opacity:.75; }
-#railtoggle:hover { opacity:1; }
+#viewclose { position:absolute; top:10px; left:12px; z-index:2; margin:0;
+             opacity:.75; font-size:17px; line-height:1; padding:2px 10px; }
+#railtoggle:hover, #viewclose:hover { opacity:1; }
 .rail-h { color:var(--dim); font-size:11px; text-transform:uppercase;
           letter-spacing:.07em; margin:16px 0 5px; }
 .rail-h:first-child { margin-top:0; }
@@ -315,15 +330,23 @@ h2.year span { font-size:13px; font-weight:400; }
 """
 
 
-def _page(title: str, body: str, *, bar: str = "",
-          user: Principal | None = None) -> HTMLResponse:
-    """One shell. `bar` is extra rows inside the sticky header."""
+def _page(title: str, body: str, *, tools: str = "", rows: str = "",
+          footer: str = "", user: Principal | None = None) -> HTMLResponse:
+    """One shell.
+
+    `tools` sits beside the brand on the first row, `rows` are whole extra rows
+    below it, and `footer` is the strip along the bottom. Counts and messages
+    live down there so the header is only controls — every row of chrome at the
+    top is a row of photographs pushed off the screen.
+    """
     return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title}</title><style>{_STYLE}</style></head><body>
-<div class="topbar"><div class="row"><a class="brand" href="/">pix2</a>{bar}
-{_whoami(user)}</div>
-</div><main>{body}</main></body></html>""")
+<div class="topbar">
+<div class="row"><a class="brand" href="/">pix2</a>{tools}
+<span class="spacer"></span>{_whoami(user)}</div>{rows}
+</div><main>{body}</main>
+<footer class="footbar">{footer}</footer></body></html>""")
 
 
 def _whoami(user: Principal | None) -> str:
@@ -335,10 +358,9 @@ def _whoami(user: Principal | None) -> str:
     """
     if user is None:
         return '<a class="who-link" href="/login">Sign in</a>'
-    badge = ' <span class="admin-badge">admin</span>' if user.is_admin else ""
     manage = ('<a class="who-link" href="/accounts">Accounts</a>'
               if user.is_admin else "")
-    return (f'<span class="who-link dim">{_h(user.name)}{badge}</span>{manage}'
+    return (f'<span class="who-link dim">{_h(user.name)}</span>{manage}'
             '<form method="post" action="/logout" class="who-link">'
             '<button>Sign out</button></form>')
 
@@ -455,27 +477,27 @@ def browse(user: Annotated[Principal, Depends(require_user)],
              f"{len(rows):,} of {total:,} files")
     body = (f'<div class="grid" id="grid">{cells}</div>'
             if rows else '<p class="empty">Nothing matches these filters.</p>')
-    return _page("pix2 browse", f"""<p class="note" id="note" hidden></p>{body}
+    return _page("pix2 browse", f"""{body}
 <div id="viewer">
   <div class="stage"><img id="vimg">
   <video id="vvid" controls playsinline></video>
   <div class="meta" id="vmeta"></div></div>
+  <button id="viewclose" title="Close (Esc)">&times;</button>
   <button id="railtoggle" title="Details (I)">Details</button>
   <aside id="rail"></aside>
 </div>
 <div id="menu" hidden></div>
 <script>const VIEW={_js(_view_dict(view))},CHIPS={_js(_CHIPS)},FIXED={_js(_FIXED)},EXTRA={_js(_EXTRA)},ADMIN={_js(user.is_admin)},USERS={_js(_audience_names())};</script>
-<script>{_BROWSE_JS}</script>""", bar=f"""
-<div class="chips" id="chips"></div>
-<span class="count" id="count">{shown}</span>
-</div>
-{_actions(user)}
-<div class="row">
-  <span class="hint"><b>click</b> a circle to select &middot;
-  <b>shift</b> for a range &middot; <b>ctrl</b> to add &middot;
-  <b>S</b> repeat last share &middot; <b>Enter</b> view &middot;
-  <b>I</b> details</span>
-  <button id="selall" style="margin-left:auto">Select all</button>""",
+<script>{_BROWSE_JS}</script>""",
+        tools=('<div class="chips" id="chips"></div>'
+               '<button id="selall">Select all</button>'),
+        rows=_actions(user),
+        footer=f"""<span class="count" id="count">{shown}</span>
+<span class="hint"><b>click</b> a circle to select &middot;
+<b>shift</b> for a range &middot; <b>ctrl</b> to add &middot;
+<b>S</b> repeat last access &middot; <b>Enter</b> view &middot;
+<b>I</b> details</span>
+<span class="note" id="note" hidden></span>""",
         user=user)
 
 
@@ -490,8 +512,8 @@ def _actions(user: Principal) -> str:
         return ""
     return """<div class="row" id="actions" hidden>
   <span class="count" id="selcount" style="margin:0"></span>
-  <button data-act="share">Share with&hellip;</button>
-  <button data-act="unshare">Unshare&hellip;</button>
+  <button data-act="share">Add access&hellip;</button>
+  <button data-act="unshare">Remove access&hellip;</button>
   <span class="sep"></span>
   <button data-act="event">Event&hellip;</button>
   <button data-act="tag">Add tag&hellip;</button>
@@ -543,7 +565,7 @@ def _audience_names() -> list[str]:
 #: the tier and band words are defined once, next to the columns they describe.
 _CHIPS: tuple[tuple[str, str], ...] = (
     ("event", "Event"), ("year", "Year"), ("tag", "Tag"),
-    ("audience", "Shared with"), ("kind", "Type"), ("band", "Size"),
+    ("audience", "Access"), ("kind", "Type"), ("band", "Size"),
 )
 
 #: Complete vocabularies — these columns cannot hold anything else.
@@ -557,7 +579,7 @@ _FIXED: dict[str, tuple[tuple[str, str], ...]] = {
 #: text, but "nobody yet" is a state rather than a name, and it is the single
 #: most useful thing to filter on — it is the pile of work.
 _EXTRA: dict[str, tuple[tuple[str, str], ...]] = {
-    "audience": ((ix.UNREVIEWED, "New — shared with nobody"),),
+    "audience": ((ix.UNREVIEWED, "New — nobody has access"),),
 }
 
 _BROWSE_JS = """
@@ -573,6 +595,7 @@ const note=document.getElementById('note');
 const viewer=document.getElementById('viewer');
 const vimg=document.getElementById('vimg'), vvid=document.getElementById('vvid');
 const vmeta=document.getElementById('vmeta');
+const stage=document.querySelector('.stage');
 // Bounded so each request stays short: the server accepts 500, but a chunk that
 // takes ten seconds gives no progress reading and holds the single worker.
 const CHUNK=100;
@@ -644,12 +667,13 @@ async function openMenu(anchorEl,ctx){
                 +'<div id="menulist" class="dim" style="padding:10px 11px">'
                 +'loading…</div>';
   const q=document.getElementById('menuq');
-  q.placeholder = ctx.mode==='set'
-    ? 'Type a new name, or pick one below'
-    : 'Filter…';
+  q.placeholder = ctx.mode!=='set' ? 'Filter…'
+    : ctx.column==='audience' ? 'Pick a person or role'
+    : 'Type a new name, or pick one below';
   q.oninput=()=>render(q.value);
   q.onkeydown=e=>{
-    if(e.key==='Enter'&&ctx.mode==='set'&&q.value.trim()){
+    if(e.key==='Enter'&&ctx.mode==='set'&&ctx.column!=='audience'
+       &&q.value.trim()){
       choose(q.value.trim()); e.preventDefault();
     }
     if(e.key==='Escape'){closeMenu();}
@@ -684,7 +708,9 @@ async function openMenu(anchorEl,ctx){
   function choose(value){
     closeMenu();
     if(ctx.mode==='filter') location.href=url({[ctx.column]:value});
-    else applyToSelection(ctx.column,value);
+    // The act, not the column: `untag` and `tag` share a column but do
+    // opposite things, and passing the column made removing a tag add it.
+    else applyToSelection(ctx.as||ctx.column,value);
   }
   function render(text){
     const t=(text||'').toLowerCase();
@@ -692,10 +718,14 @@ async function openMenu(anchorEl,ctx){
     const list=document.createElement('div');
     list.id='menulist';
     if(ctx.mode==='filter'&&VIEW[ctx.column]){
-      list.appendChild(opt({label:'Any '+ctx.column,n:null},()=>choose(null)));
+      list.appendChild(opt({label:'Any',n:null},()=>choose(null)));
     }
     const typed=(text||'').trim();
-    if(ctx.mode==='set'&&typed&&!opts.some(o=>o.label===typed)){
+    // Tags are invented as you go; access is not. Somebody who can be given
+    // access is an account or a role, made under Accounts — offering to
+    // create one here would write a grant that reaches nobody.
+    const invent=ctx.mode==='set'&&ctx.column!=='audience';
+    if(invent&&typed&&!opts.some(o=>o.label===typed)){
       const o=opt({label:'Add “'+typed+'”',n:null},()=>choose(typed));
       o.classList.add('new'); list.appendChild(o);
     }
@@ -827,6 +857,8 @@ function drawRail(){
 }
 railToggle.onclick=e=>{e.stopPropagation();railOn=!railOn;drawRail();
                        if(railOn&&cells[cur]) fill(cells[cur]);};
+document.getElementById('viewclose').onclick=e=>{
+  e.stopPropagation(); closeViewer();};
 drawRail();
 
 const details=new Map();
@@ -915,7 +947,12 @@ function railHtml(d){
 
 function openViewer(){viewer.classList.add('on');setCur(cur<0?0:cur);}
 function closeViewer(){viewer.classList.remove('on');vvid.pause();}
-viewer.addEventListener('click',e=>{if(e.target===viewer)closeViewer();});
+// The stage fills the viewer, so clicking beside the picture lands on it
+// rather than on the viewer itself — the old check never matched and there
+// was no way back out except the keyboard.
+viewer.addEventListener('click',e=>{
+  if(e.target===viewer||e.target===stage||e.target===vmeta) closeViewer();
+});
 rail.addEventListener('click',e=>e.stopPropagation());
 
 // --- writing -----------------------------------------------------------------
@@ -1023,11 +1060,17 @@ async function send(cs,body){
   return true;
 }
 
+// What each action edits, and which column its suggestions come from. The
+// two are not the same word: `unshare` writes the audience field and offers
+// audience values, and using the action name as the column asked the server
+// for a column called `share` — a 400, and an empty list every time.
+const ACT_COLUMN={tag:'tag', untag:'tag', share:'audience',
+                  unshare:'audience', event:'event'};
 (actions?[...actions.querySelectorAll('[data-act]')]:[]).forEach(b=>{
-  b.onclick=e=>{e.stopPropagation();openMenu(b, b.dataset.act==='date'
+  const act=b.dataset.act;
+  b.onclick=e=>{e.stopPropagation();openMenu(b, act==='date'
     ? {mode:'date'}
-    : {column:b.dataset.act==='untag'?'tag':b.dataset.act,
-       mode:'set', as:b.dataset.act});};
+    : {column:ACT_COLUMN[act]||act, mode:'set', as:act});};
 });
 
 // --- keyboard ----------------------------------------------------------------
@@ -1189,7 +1232,7 @@ def api_suggest(user: Annotated[Principal, Depends(require_user)],
     Ranking by how much of the current view already uses a value puts the
     likely answer in the first few rows — see `index.suggest`.
     """
-    if column not in ("event", "tag", "year", "kind", "band"):
+    if column not in ("event", "tag", "audience", "year", "kind", "band"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             f"cannot suggest values for {column!r}")
     return JSONResponse([

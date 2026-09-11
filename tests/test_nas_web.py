@@ -1111,3 +1111,116 @@ def test_a_role_matches_regardless_of_case(app_env: dict[str, Path],
 
     rows = sign_in("kid", "pw").get("/api/files").json()
     assert [r["name"] for r in rows] == ["a.jpg"]
+
+
+# --- the access menu ----------------------------------------------------------
+
+def test_audience_values_can_be_suggested(client: TestClient,
+                                          writable: Path) -> None:
+    """The endpoint refused `audience` outright, so the Access list was empty
+    however many accounts existed."""
+    client.post("/api/decide", json={"folder": "init_2026", "name": "a.jpg",
+                                     "add_audience": ["family"]})
+
+    got = client.get("/api/suggest?column=audience").json()
+    assert [s["value"] for s in got] == ["family"]
+
+
+def test_the_access_list_is_seeded_from_the_accounts(
+    app_env: dict[str, Path]
+) -> None:
+    """Sharing has to be possible on the very first file, before any decision
+    exists to draw a suggestion from."""
+    add_user("james", "pw", ("family",))
+    html = sign_in(accounts.ADMIN, "admin").get("/browse").text
+
+    assert '"james"' in html
+    assert '"family"' in html
+    assert '"private"' in html
+
+
+def test_the_admin_is_never_offered_as_an_audience(
+    app_env: dict[str, Path]
+) -> None:
+    """An administrator sees everything already, so sharing with one is a
+    no-op dressed as a decision."""
+    assert accounts.ADMIN not in web._audience_names()
+
+
+def test_an_action_asks_for_the_column_it_edits(client: TestClient) -> None:
+    """`unshare` writes the audience field; using the action name as the column
+    asked the server for one called `share`, which is a 400 and an empty list."""
+    js = client.get("/browse").text
+
+    assert "share:'audience'" in js
+    assert "unshare:'audience'" in js
+    assert "untag:'tag'" in js
+
+
+def test_the_menu_can_actually_be_hidden(client: TestClient) -> None:
+    """An id selector beats the user agent's `[hidden] { display:none }`, so
+    `#menu { display:flex }` quietly won and the menu could be opened but never
+    dismissed."""
+    css = client.get("/browse").text
+
+    assert "#menu[hidden] { display:none; }" in css
+
+
+def test_the_filter_is_called_access(client: TestClient) -> None:
+    html = client.get("/browse").text
+
+    assert '"Access"' in html
+    assert "Add access" in html
+    assert "Remove access" in html
+
+
+# --- layout and the viewer ----------------------------------------------------
+
+def test_counts_and_messages_live_in_the_footer(client: TestClient) -> None:
+    """Every row of chrome at the top is a row of photographs pushed off."""
+    html = client.get("/browse").text
+
+    assert 'class="footbar"' in html
+    assert html.index('class="footbar"') > html.index('id="grid"')
+
+
+def test_the_identity_controls_sit_top_right(client: TestClient) -> None:
+    html = client.get("/browse").text
+
+    assert 'class="spacer"' in html
+    assert html.index('class="spacer"') < html.index('Sign out')
+
+
+def test_select_all_is_reachable_with_nothing_selected(
+    client: TestClient
+) -> None:
+    """It moved up beside the filters; leaving it on the selection row would
+    have made selecting everything impossible until something was selected."""
+    html = client.get("/browse").text
+    header = html[:html.index('id="actions"')]
+
+    assert 'id="selall"' in header
+
+
+def test_the_admin_is_not_badged(client: TestClient) -> None:
+    assert "admin-badge" not in client.get("/browse").text
+
+
+def test_the_viewer_closes_on_a_click_beside_the_picture(
+    client: TestClient
+) -> None:
+    """The stage fills the viewer, so a click beside the picture lands on it
+    rather than on the viewer — the old check never matched and there was no
+    way back out except the keyboard."""
+    js = client.get("/browse").text
+
+    assert "e.target===stage" in js
+    assert 'id="viewclose"' in js
+
+
+def test_access_cannot_be_invented_from_the_menu(client: TestClient) -> None:
+    """Somebody who can be given access is an account or a role, made under
+    Accounts. Offering to create one here would write a grant reaching nobody."""
+    js = client.get("/browse").text
+
+    assert "ctx.column!=='audience'" in js
