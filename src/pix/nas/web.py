@@ -25,7 +25,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Annotated, Any, Sequence
+from typing import Annotated, Any, Sequence, cast
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, status
 from fastapi.responses import (
@@ -208,13 +208,39 @@ h2.year span { font-size:13px; font-weight:400; }
 .note { color:#ffb4a2; margin:8px 0 0; }
 .empty { color:var(--dim); padding:40px 0; }
 
-#viewer { position:fixed; inset:0; background:#000e; display:none; z-index:30;
-          align-items:center; justify-content:center; flex-direction:column; }
+#viewer { position:fixed; inset:0; background:#000e; display:none; z-index:30; }
 #viewer.on { display:flex; }
-#viewer img, #viewer video { max-width:94vw; max-height:86vh;
-                             object-fit:contain; display:none; }
-#viewer img.on, #viewer video.on { display:block; }
-#viewer .meta { padding:10px; color:var(--dim); font-size:12px; }
+.stage { flex:1; min-width:0; display:flex; flex-direction:column;
+         align-items:center; justify-content:center; padding:12px; }
+.stage img, .stage video { max-width:100%; max-height:86vh;
+                           object-fit:contain; display:none; }
+.stage img.on, .stage video.on { display:block; }
+.stage .meta { padding:10px; color:var(--dim); font-size:12px;
+               text-align:center; }
+/* A reserved column, not an overlay: metadata you have to summon and that
+   then covers the photograph is metadata nobody consults while looking. */
+#rail { width:330px; flex:none; background:var(--panel); overflow-y:auto;
+        border-left:1px solid var(--line); padding:14px 16px 30px;
+        font-size:13px; }
+#viewer.norail #rail { display:none; }
+#railtoggle { position:absolute; top:10px; right:12px; z-index:2;
+              margin:0; opacity:.75; }
+#railtoggle:hover { opacity:1; }
+.rail-h { color:var(--dim); font-size:11px; text-transform:uppercase;
+          letter-spacing:.07em; margin:16px 0 5px; }
+.rail-h:first-child { margin-top:0; }
+.kv { display:grid; grid-template-columns:104px 1fr; gap:2px 10px;
+      align-items:baseline; }
+.kv dt { color:var(--dim); }
+.kv dd { margin:0; overflow-wrap:anywhere; }
+.kv dd.was { color:var(--dim); text-decoration:line-through; }
+.kv dd .set { color:var(--top); }
+.pill { display:inline-block; background:#2a3340; border-radius:3px;
+        padding:0 6px; margin:0 4px 4px 0; font-size:12px; }
+#rail details { margin-top:14px; }
+#rail summary { cursor:pointer; color:var(--dim); }
+#rail details .kv { grid-template-columns:1fr; gap:0; margin-top:8px; }
+#rail details dt { margin-top:6px; font-size:11px; }
 """
 
 
@@ -333,8 +359,13 @@ def browse(user: Annotated[str, Depends(require_user)],
     body = (f'<div class="grid" id="grid">{cells}</div>'
             if rows else '<p class="empty">Nothing matches these filters.</p>')
     return _page("pix2 browse", f"""<p class="note" id="note" hidden></p>{body}
-<div id="viewer"><img id="vimg"><video id="vvid" controls playsinline></video>
-<div class="meta" id="vmeta"></div></div>
+<div id="viewer">
+  <div class="stage"><img id="vimg">
+  <video id="vvid" controls playsinline></video>
+  <div class="meta" id="vmeta"></div></div>
+  <button id="railtoggle" title="Details (I)">Details</button>
+  <aside id="rail"></aside>
+</div>
 <div id="menu" hidden></div>
 <script>const VIEW={_js(_view_dict(view))},CHIPS={_js(_CHIPS)},FIXED={_js(_FIXED)};</script>
 <script>{_BROWSE_JS}</script>""", bar=f"""
@@ -359,7 +390,7 @@ def browse(user: Annotated[str, Depends(require_user)],
   <span class="hint"><b>click</b> a circle to select &middot;
   <b>shift</b> for a range &middot; <b>ctrl</b> to add &middot;
   <b>P</b> keep &middot; <b>T</b> top &middot; <b>X</b> reject &middot;
-  <b>0</b> undo &middot; <b>Enter</b> view</span>
+  <b>0</b> undo &middot; <b>Enter</b> view &middot; <b>I</b> details</span>
   <button id="selall" style="margin-left:auto">Select all</button>""")
 
 
@@ -637,10 +668,111 @@ function load(c){
   }
   vmeta.textContent=`${c.dataset.name} — ${c.dataset.date}`
                    +(c.dataset.tags?' — '+c.dataset.tags.split('\\n').join(', '):'');
+  fill(c);
 }
+const rail=document.getElementById('rail');
+const railToggle=document.getElementById('railtoggle');
+// Remembered per browser: whether you want the numbers alongside is a
+// working style, not a per-photo choice.
+let railOn=true;
+try{railOn=localStorage.getItem('pix2.rail')!=='0';}catch(e){}
+function drawRail(){
+  viewer.classList.toggle('norail',!railOn);
+  railToggle.textContent=railOn?'Hide details':'Details';
+  try{localStorage.setItem('pix2.rail',railOn?'1':'0');}catch(e){}
+}
+railToggle.onclick=e=>{e.stopPropagation();railOn=!railOn;drawRail();
+                       if(railOn&&cells[cur]) fill(cells[cur]);};
+drawRail();
+
+const details=new Map();
+async function fill(c){
+  if(!railOn) return;
+  const key=c.dataset.folder+'\\n'+c.dataset.name;
+  rail.innerHTML='<p class="dim">loading…</p>';
+  let d=details.get(key);
+  if(!d){
+    try{
+      const r=await fetch(`/api/file/${encodeURIComponent(c.dataset.folder)}`
+                         +`/${encodeURIComponent(c.dataset.name)}`);
+      if(!r.ok) throw new Error(await r.text());
+      d=await r.json(); details.set(key,d);
+    }catch(e){rail.innerHTML='<p class="dim">no details</p>';return;}
+  }
+  // The cursor may have moved on while this was in flight.
+  if(cells[cur]!==c) return;
+  rail.innerHTML=railHtml(d);
+}
+
+function kv(rows){
+  const body=rows.filter(r=>r[1]!==null&&r[1]!==undefined&&r[1]!=='')
+    .map(r=>`<dt>${esc(r[0])}</dt><dd${r[2]?' class="'+r[2]+'"':''}>`
+            +`${r[3]?r[1]:esc(r[1])}</dd>`).join('');
+  return body?`<dl class="kv">${body}</dl>`:'';
+}
+function bytes(n){
+  if(!n&&n!==0) return null;
+  const u=['B','KB','MB','GB']; let i=0, v=n;
+  while(v>=1024&&i<u.length-1){v/=1024;i++;}
+  return (i?v.toFixed(1):v)+' '+u[i];
+}
+function secs(n){
+  if(n===null||n===undefined) return null;
+  const t=Math.round(n); return `${Math.floor(t/60)}:${String(t%60).padStart(2,'0')}`;
+}
+
+// Fact and judgement are shown apart, always. Collapsing them into one
+// "date" would hide the only interesting question: is this what the file
+// says, or what somebody chose?
+function railHtml(d){
+  const dec=d.decided||{};
+  const inh=d.inherited||{};
+  const overridden=v=>`<span class="set">${esc(v)}</span>`;
+
+  const dateRows=[['Effective',d.effective_date||'—']];
+  if(d.date_override){
+    dateRows.push(['Camera said',d.capture_date||'nothing','was']);
+    dateRows.push(['Override',overridden(d.date_override),null,true]);
+  }else{
+    dateRows.push(['Camera said',d.capture_date||'nothing']);
+  }
+
+  const eventRow=dec.event
+    ? [['Event',overridden(dec.event),null,true],
+       ...(inh.event_auto&&inh.event_auto!==dec.event
+           ? [['Inherited',inh.event_auto,'was']] : [])]
+    : [['Event',d.event||'—']];
+
+  const tags=(d.tags||[]).map(t=>`<span class="pill">${esc(t)}</span>`).join('');
+  const all=Object.entries(d.exif||{})
+    .map(([k,v])=>`<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
+
+  return `<div class="rail-h">Decisions</div>`
+    + kv([['Status',d.tier||'undecided',d.tier?null:'was'],
+          ...eventRow])
+    + (tags?`<div style="margin-top:6px">${tags}</div>`
+          :'<div class="dim" style="margin-top:4px">no tags</div>')
+    + (d.has_sidecar?'':'<div class="dim" style="margin-top:6px">'
+        +'no sidecar &mdash; nothing decided yet</div>')
+    + `<div class="rail-h">Date</div>` + kv(dateRows)
+    + `<div class="rail-h">File</div>`
+    + kv([['Name',d.name],['Folder',d.folder],['Size',bytes(d.size)],
+          ['Kind',d.kind],['Band',d.band],
+          ['Pixels',d.width&&d.height?`${d.width} × ${d.height}`:null],
+          ['Length',secs(d.duration)],
+          ['Render',d.kind==='video'?(d.has_render?'yes':'no'):null]])
+    + (d.facts&&d.facts.length
+        ? `<div class="rail-h">Capture</div>`
+          + kv(d.facts.map(f=>[f.label,f.value])) : '')
+    + (all?`<details><summary>All metadata`
+           +` (${Object.keys(d.exif).length})</summary>`
+           +`<dl class="kv">${all}</dl></details>`:'');
+}
+
 function openViewer(){viewer.classList.add('on');setCur(cur<0?0:cur);}
 function closeViewer(){viewer.classList.remove('on');vvid.pause();}
 viewer.addEventListener('click',e=>{if(e.target===viewer)closeViewer();});
+rail.addEventListener('click',e=>e.stopPropagation());
 
 // --- writing -----------------------------------------------------------------
 function say(text){note.textContent=text||''; note.hidden=!text;}
@@ -728,6 +860,8 @@ async function send(cs,body){
     if(cs.length>CHUNK) say(`writing… ${done} of ${cs.length}`);
   }
   busy=false;
+  cs.forEach(c=>details.delete(c.dataset.folder+'\\n'+c.dataset.name));
+  if(viewer.classList.contains('on')&&cells[cur]) fill(cells[cur]);
   drop(gone);
   if(total!==null&&countEl) countEl.textContent=`${total.toLocaleString()} files`;
   if(failed) say(`${failed} file(s) could not be written`);
@@ -750,6 +884,11 @@ actions.querySelectorAll('[data-tier]').forEach(b=>{
 const KEYS={p:'photo',t:'top',x:'none','0':''};
 document.addEventListener('keydown',e=>{
   if(e.target.tagName==='INPUT') return;
+  if(e.key==='i'||e.key==='I'){
+    e.preventDefault(); railOn=!railOn; drawRail();
+    if(railOn&&cells[cur]) fill(cells[cur]);
+    return;
+  }
   if(e.key==='Escape'){
     if(viewer.classList.contains('on')) closeViewer();
     else if(!menu.hidden) closeMenu();
@@ -869,6 +1008,87 @@ def api_suggest(user: Annotated[str, Depends(require_user)],
     return JSONResponse([
         {"value": s.value, "n": s.n, "scope": s.scope}
         for s in ix.suggest(db(), column, view)])
+
+
+#: The readings worth surfacing, in the order a person asks for them. The full
+#: set runs to ~176 keys per file and is available underneath; this is the part
+#: that answers "what is this photograph".
+_FACTS: tuple[tuple[str, str], ...] = (
+    ("Camera", "Model"), ("Make", "Make"), ("Lens", "LensID"),
+    ("Exposure", "ExposureTime"), ("Aperture", "FNumber"), ("ISO", "ISO"),
+    ("Focal length", "FocalLength"), ("Flash", "Flash"),
+    ("Codec", "CompressorID"), ("Frame rate", "VideoFrameRate"),
+    ("Location", "GPSPosition"), ("Software", "Software"),
+    ("Original path", "OriginalPath"),
+)
+
+#: Where a value came from before anyone decided anything. These are the legacy
+#: `pix:*` tags embedded in seeded files — the inherited half of the read-through
+#: in §4, which is what lets the rail show *inherited* apart from *decided*.
+_INHERITED: tuple[tuple[str, str], ...] = (
+    ("event", "EventOverride"), ("event_auto", "EventAuto"),
+    ("date_override", "DateOverride"), ("tier", "Tier"),
+)
+
+
+@app.get("/api/file/{folder}/{name}")
+def api_file(folder: str, name: str,
+             user: Annotated[str, Depends(require_user)]) -> JSONResponse:
+    """Everything known about one file, with fact and judgement kept apart.
+
+    The rail's whole job is that separation. `capture_date` is what the camera
+    wrote and can never change; `date_override` is what a person decided;
+    `effective_date` is the composition of the two. Collapsing them into one
+    "date" would hide the only interesting question — whether this is what the
+    file says or what somebody chose.
+    """
+    row = ix.one(db(), folder, name)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "not indexed")
+
+    media = MASTER_DIR / folder / name
+    decision = decisions.read(media) if _under(MASTER_DIR, media) else None
+    record = ix.record_for(folder, name, meta_dir=META_DIR) or {}
+    raw: object = record.get("exif")
+    exif: dict[str, Any] = (
+        cast("dict[str, Any]", raw) if isinstance(raw, dict) else {})
+
+    facts = [{"label": label, "value": ix.tag(exif, key)}
+             for label, key in _FACTS if ix.tag(exif, key)]
+    inherited = {field: ix.tag(exif, key) for field, key in _INHERITED}
+
+    return JSONResponse({
+        "folder": folder,
+        "name": name,
+        "size": row["size"],
+        "kind": row["kind"],
+        "width": row["width"],
+        "height": row["height"],
+        "duration": row["duration"],
+        "band": row["band"],
+        "camera": row["camera"],
+        # Fact, judgement, and the composition of the two — kept apart.
+        "capture_date": row["capture_date"],
+        "date_override": row["date_override"],
+        "effective_date": row["effective_date"],
+        "year": row["year"],
+        "event": row["event"],
+        "tier": row["tier"],
+        "tags": str(row["tags"] or "").split("\n") if row["tags"] else [],
+        "has_sidecar": bool(row["has_sidecar"]),
+        "decided": ({"tier": decision.tier, "event": decision.event,
+                     "date_override": decision.date_override,
+                     "tags": list(decision.tags)} if decision else None),
+        "inherited": inherited,
+        "facts": facts,
+        "exif": {k: str(v) for k, v in sorted(exif.items())},
+        "has_render": (RENDER_DIR / folder / (name + ".mp4")).is_file(),
+    })
+
+
+def _under(root: Path, target: Path) -> bool:
+    """Whether `target` really sits inside `root`, after resolving `..`."""
+    return root.resolve() in target.resolve().parents
 
 
 @app.get("/api/events")

@@ -638,6 +638,34 @@ def files(conn: sqlite3.Connection, filters: Filters | None = None, *,
     ))
 
 
+def one(conn: sqlite3.Connection, folder: str,
+        name: str) -> sqlite3.Row | None:
+    """A single row with its tags, or None if the file is not indexed."""
+    return conn.execute(
+        "SELECT files.*, ("
+        "  SELECT group_concat(ft.tag, char(10)) FROM file_tags ft "
+        "  WHERE ft.folder = files.folder AND ft.name = files.name"
+        ") AS tags FROM files WHERE folder = ? AND name = ?",
+        (folder, name)).fetchone()
+
+
+def record_for(folder: str, name: str, *,
+               meta_dir: Path | None = None) -> dict[str, Any] | None:
+    """The probed facts `process` wrote for one file.
+
+    Read straight from the meta tier rather than cached in the index: it is
+    ~176 keys per file, wanted only when someone opens one photograph, and
+    duplicating it into 62k rows to serve that would be the wrong trade.
+    """
+    root = meta_dir if meta_dir is not None else META_DIR
+    return _record(root / folder / f"{name}.json")
+
+
+def tag(exif: dict[str, Any], key: str) -> str | None:
+    """Public name for the group-insensitive tag lookup (see `_tag`)."""
+    return _tag(exif, key)
+
+
 def count(conn: sqlite3.Connection, filters: Filters | None = None) -> int:
     """How many files match, regardless of the page being shown."""
     clauses = _clauses(filters or Filters())
