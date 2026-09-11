@@ -21,20 +21,25 @@ from pathlib import Path
 #: copies. It cannot: the 2022 folder alone is 946GB and 2023 is 816GB, against
 #: 819GB free on F:. Second, Synology Drive syncs per top-level folder
 #: (`.SynologyWorkingDirectory` sits in `G:\pix` and `G:\photo`, not at `G:\`),
-#: so a sibling folder is outside every sync scope and staging never uploads
-#: itself.
-LOCAL_ROOT: Path = Path(r"G:\pix-import")
+#: so the sibling folder `G:\pix2` (named to match the tool) is outside
+#: every sync scope and staging never uploads itself.
+LOCAL_ROOT: Path = Path(r"G:\pix2")
 
 #: One subfolder per `--name`, accumulating across import runs until uploaded.
 IMPORT_ROOT: Path = LOCAL_ROOT
 
 # --- NAS ---------------------------------------------------------------------
 
-#: The share root. Reached over SMB directly, never through Synology Drive —
+#: The share root. A **new, empty** share, deliberately not the existing `pix`
+#: one — that holds the current library and is Synology Drive-synced, so the
+#: two trees coexist untouched through the transition and the old share can be
+#: retired on its own schedule.
+#:
+#: Reached over SMB directly, never through Synology Drive —
 #: routing master through a sync client would make it a *synced* folder again
 #: and drag back every problem this architecture dropped (re-upload on rename,
 #: conflict copies, working-directory noise).
-MASTER_SHARE: Path = Path(r"\\nas\pix")
+MASTER_SHARE: Path = Path(r"\\nas\pix2")
 
 #: Sacred originals plus their `.xmp` decision sidecars. Backed up.
 MASTER_DIR: Path = MASTER_SHARE / "master"

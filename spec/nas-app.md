@@ -581,8 +581,8 @@ way `EXTENSION_POLICY` already is:
 
 | | |
 |---|---|
-| `G:\pix-import\{name}\` | staging |
-| `\\nas\pix` | master |
+| `G:\pix2\{name}\` | staging |
+| `\\nas\pix2` | master |
 
 **Staging lives on `G:`, and that is forced rather than arbitrary.** A folder
 import hardlinks, and hardlinks cannot cross volumes — so staging must share a
@@ -593,7 +593,8 @@ real copies. It cannot afford to: measured, the 2022 folder alone is **946GB** a
 It also has to sit *outside* the Synology Drive sync scope, or staging would
 upload itself through the sync client. Drive syncs per top-level folder —
 `.SynologyWorkingDirectory` is present in `G:\pix` and `G:\photo` but not at
-`G:\` — so a sibling folder at `G:\pix-import` is outside every scope.
+`G:\` — so the sibling folder `G:\pix2`, named to match the tool, is
+outside every scope.
 
 **No dry-runs and no run folders**, because nothing here is destructive — import
 hardlinks, upload copies, process writes derived trees. The **one** destructive
