@@ -100,29 +100,14 @@ def pending_folders() -> list[Path]:
     return sorted(p for p in IMPORT_ROOT.iterdir() if p.is_dir())
 
 
-#: Folder names the old `organize` emits to render the *absence* of a value —
-#: `(null)` when a token is null, `(filtered)` when it matches no filter
-#: (`organize.py`). They describe the retired tool's rendering, not the file, so
-#: they are dropped rather than baked into an archive filename forever. Under
-#: this architecture absence is simply a missing tag.
-PLACEHOLDER_PARTS: frozenset[str] = frozenset({"(null)", "(filtered)"})
-
-
 def flatten(rel: str) -> str:
     """Flatten a relative path into a single filename.
 
     `2015/a/one.jpg` becomes `2015_a_one.jpg`, so the name carries its own
     provenance: pull one file out of master and it still says where it came
     from (spec/nas-app.md §3).
-
-    Organize's placeholder components are dropped on the way through — see
-    `PLACEHOLDER_PARTS`. `2015/(null)/one.jpg` becomes `2015_one.jpg`, because
-    "this had no event" is not provenance and does not belong in the name of a
-    file meant to outlive the tool that wrote it.
     """
-    parts = [p for p in rel.replace("\\", "/").split("/")
-             if p and p not in PLACEHOLDER_PARTS]
-    return "_".join(parts)
+    return rel.replace("/", "_").replace("\\", "_")
 
 
 def run_upload(*, echo: Callable[[str], None] = lambda _: None) -> list[UploadSummary]:
