@@ -60,7 +60,7 @@ _RDF_NS: str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
 TIERS: frozenset[str] = frozenset({"none", "photo", "top"})
 
 
-class _Unset:
+class Unset:
     """Sentinel: this field is not being changed.
 
     Distinct from `None`, which means *clear this decision*. Without the
@@ -68,7 +68,7 @@ class _Unset:
     """
 
 
-UNSET: _Unset = _Unset()
+UNSET: Unset = Unset()
 
 
 @dataclass(frozen=True)
@@ -132,9 +132,9 @@ def write(media: Path, decision: Decision) -> None:
 
 
 def apply(media: Path, *,
-          tier: str | None | _Unset = UNSET,
-          event: str | None | _Unset = UNSET,
-          date_override: str | None | _Unset = UNSET) -> Decision:
+          tier: str | None | Unset = UNSET,
+          event: str | None | Unset = UNSET,
+          date_override: str | None | Unset = UNSET) -> Decision:
     """Change some fields of `media`'s decision, leaving the rest alone.
 
     Read-modify-write rather than replace, because the UI changes one field at a
@@ -145,10 +145,10 @@ def apply(media: Path, *,
     """
     current = read(media) or Decision()
     updated = Decision(
-        tier=current.tier if isinstance(tier, _Unset) else tier,
-        event=current.event if isinstance(event, _Unset) else event,
+        tier=current.tier if isinstance(tier, Unset) else tier,
+        event=current.event if isinstance(event, Unset) else event,
         date_override=(current.date_override
-                       if isinstance(date_override, _Unset) else date_override),
+                       if isinstance(date_override, Unset) else date_override),
     )
     write(media, updated)
     return updated

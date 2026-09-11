@@ -36,6 +36,7 @@ from pix.nas import index as ix
 from pix.nas.const import (
     INDEX_DB, MASTER_DIR, META_DIR, PREVIEW_DIR, RENDER_DIR, THUMB_DIR,
 )
+from pix.nas.decisions import Decision, Unset
 
 #: Re-exported so the CLI and tests have one name for it.
 DB_PATH: Path = INDEX_DB
@@ -94,7 +95,7 @@ def db() -> sqlite3.Connection:
 
 _STYLE = """
 :root { color-scheme: dark; --bg:#14161a; --fg:#e7e9ee; --dim:#8b93a3;
-        --line:#272b33; --accent:#6aa3ff; }
+        --line:#272b33; --accent:#6aa3ff; --keep:#56c16a; --top:#e3b341; }
 * { box-sizing: border-box; }
 body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5
        system-ui,-apple-system,Segoe UI,sans-serif; }
@@ -115,9 +116,32 @@ td.num { text-align:right; font-variant-numeric:tabular-nums; }
 .cell { position:relative; aspect-ratio:1; background:#0d0f12; overflow:hidden;
         border-radius:3px; cursor:pointer; }
 .cell img { width:100%; height:100%; object-fit:cover; display:block; }
-.cell.sel { outline:2px solid var(--accent); outline-offset:-2px; }
+.cell.sel { outline:2px solid var(--accent); outline-offset:-2px; z-index:1; }
 .badge { position:absolute; right:4px; bottom:4px; background:#000a;
          padding:1px 5px; border-radius:3px; font-size:11px; }
+/* Tier is an inset ring so it can coexist with the selection outline — the two
+   answer different questions and a cull needs both at once. */
+.cell[data-tier="photo"] { box-shadow: inset 0 0 0 3px var(--keep); }
+.cell[data-tier="top"]   { box-shadow: inset 0 0 0 3px var(--top); }
+.cell[data-tier="none"]  { opacity:.28; }
+.cell[data-tier]:not([data-tier=""])::after {
+  position:absolute; left:4px; top:4px; padding:1px 5px; border-radius:3px;
+  font-size:11px; font-weight:600; color:#0d0f12; }
+.cell[data-tier="photo"]::after { content:"keep"; background:var(--keep); }
+.cell[data-tier="top"]::after   { content:"top";  background:var(--top); }
+.cell[data-tier="none"]::after  { content:"out";  background:var(--dim); }
+.bar { position:sticky; top:0; z-index:2; background:var(--bg);
+       padding:10px 0 12px; margin:-8px 0 8px; display:flex; gap:10px;
+       align-items:center; flex-wrap:wrap; border-bottom:1px solid var(--line); }
+.bar b { color:var(--fg); font-weight:600; }
+.count { font-variant-numeric:tabular-nums; }
+button { background:#222833; color:var(--fg); border:1px solid var(--line);
+         border-radius:4px; padding:5px 12px; font:inherit; cursor:pointer;
+         margin-left:auto; }
+button:hover:not(:disabled) { border-color:var(--accent); }
+button:disabled { opacity:.4; cursor:default; }
+.note { color:#ffb4a2; margin:0 0 10px; }
+td.done { color:var(--keep); }
 #viewer { position:fixed; inset:0; background:#000e; display:none;
           align-items:center; justify-content:center; flex-direction:column; }
 #viewer.on { display:flex; }
@@ -146,8 +170,13 @@ def home(user: Annotated[str, Depends(require_user)]) -> HTMLResponse:
 
     open_note = ("" if _users() else
                  '<span class="dim">&middot; no auth configured</span>')
-    head = (f'{s["files"]:,} files &middot; {s["events"]} events &middot; '
-            f'{s["unreviewed"]:,} unreviewed &middot; {s["undated"]:,} undated '
+    # Events reviewed, not files reviewed: pass 2 has a finish condition per
+    # event, and "14 of 22 events" is the reading that tells you whether the
+    # library is getting worked through (§8). A file count never lands.
+    done = sum(1 for r in rows if not r["unreviewed"])
+    head = (f'{s["files"]:,} files &middot; '
+            f'<b>{done} of {len(rows)} events reviewed</b> &middot; '
+            f'{s["unreviewed"]:,} files left &middot; {s["undated"]:,} undated '
             f'&middot; indexed {_age(ix.built_at(conn))} {open_note}')
 
     if not rows:
@@ -156,8 +185,9 @@ def home(user: Annotated[str, Depends(require_user)]) -> HTMLResponse:
     cells = "".join(
         f'<tr><td><a href="/event/{_q(r["event"])}">{_h(r["event"])}</a></td>'
         f'<td class="num">{r["n"]:,}</td>'
-        f'<td class="num dim">{r["unreviewed"]:,}</td>'
-        f'<td class="dim">{_h(str(r["first_seen"] or "")[:10])}</td>'
+        + ('<td class="num done">done</td>' if not r["unreviewed"] else
+           f'<td class="num dim">{r["unreviewed"]:,}</td>')
+        + f'<td class="dim">{_h(str(r["first_seen"] or "")[:10])}</td>'
         f'<td class="dim">{_h(str(r["last_seen"] or "")[:10])}</td></tr>'
         for r in rows
     )
@@ -170,7 +200,17 @@ def home(user: Annotated[str, Depends(require_user)]) -> HTMLResponse:
 @app.get("/event/{event}", response_class=HTMLResponse)
 def event_grid(event: str,
                user: Annotated[str, Depends(require_user)]) -> HTMLResponse:
-    """A grid for one event. Thumbnails only — previews load on demand."""
+    """Review one event — pass 2, the keep pass (§8).
+
+    **Promote keepers; do not reject rejects.** An event goes from several
+    hundred photos to 20-50, so positive selection is a tenth of the gestures and
+    the common case for any one photo is never being touched. Finishing the event
+    writes `none` to everything left, which is what closes positive selection's
+    one hole: reviewed-and-rejected stops being indistinguishable from not yet
+    looked at.
+
+    Thumbnails only — previews load on demand when the viewer opens.
+    """
     conn = db()
     rows = ix.files(conn, event=event, limit=2000)
     if not rows:
@@ -179,6 +219,7 @@ def event_grid(event: str,
     cells = "".join(
         f'<div class="cell" data-folder="{_h(r["folder"])}" '
         f'data-name="{_h(r["name"])}" data-kind="{_h(r["kind"])}" '
+        f'data-tier="{_h(r["tier"] or "")}" '
         f'data-date="{_h(str(r["capture_date"] or "no date"))}">'
         f'<img loading="lazy" src="/thumb/{_q(r["folder"])}/{_q(r["name"])}">'
         + (f'<span class="badge">{_dur(r["duration"])}</span>'
@@ -187,7 +228,14 @@ def event_grid(event: str,
         for r in rows
     )
     return _page(event, f"""
-<p class="dim">{len(rows):,} files &middot; arrow keys to move, Esc to close</p>
+<div class="bar">
+  <span id="prog" class="count"></span>
+  <span class="dim">&middot;</span>
+  <span class="dim"><b>P</b> keep &middot; <b>T</b> top &middot; <b>X</b> reject
+  &middot; <b>0</b> undo &middot; <b>Enter</b> view &middot; arrows move</span>
+  <button id="finish">Finish event</button>
+</div>
+<p id="note" class="note" hidden></p>
 <div class="grid" id="grid">{cells}</div>
 <div id="viewer"><img id="vimg"><video id="vvid" controls playsinline></video>
 <div class="meta" id="vmeta"></div></div>
@@ -199,7 +247,13 @@ const cells=[...document.querySelectorAll('.cell')];
 const viewer=document.getElementById('viewer');
 const vimg=document.getElementById('vimg'), vvid=document.getElementById('vvid');
 const vmeta=document.getElementById('vmeta');
-let i=-1;
+const prog=document.getElementById('prog'), note=document.getElementById('note');
+const finishBtn=document.getElementById('finish');
+// Bounded so each request stays short: the server accepts 500, but a chunk that
+// takes ten seconds gives no progress reading and holds the single worker.
+const CHUNK=100;
+let i=-1, busy=false;
+
 function show(n){
   if(n<0||n>=cells.length) return;
   cells[i]?.classList.remove('sel');
@@ -223,16 +277,92 @@ function show(n){
 cells.forEach((c,n)=>c.addEventListener('click',()=>{show(n);open_();}));
 function open_(){viewer.classList.add('on');show(i<0?0:i);}
 function close_(){viewer.classList.remove('on');vvid.pause();}
+
+function count(t){return cells.filter(c=>c.dataset.tier===t).length;}
+function render(text){
+  if(text){prog.textContent=text;return;}
+  const kept=count('photo')+count('top'), left=count('');
+  prog.textContent=`${cells.length} files · ${kept} kept (${count('top')} top)`
+    + ` · ${left} left`;
+  finishBtn.disabled = busy || left===0;
+}
+function say(text){note.textContent=text; note.hidden=!text;}
+
+// Optimistic: the cell changes now and the write follows, because a cull is a
+// rhythm and waiting on SMB between keystrokes destroys it. A failure puts the
+// old value back rather than leaving the screen claiming something untrue.
+async function decide(c, tier){
+  const prev=c.dataset.tier||'';
+  if(prev===tier) tier='';
+  c.dataset.tier=tier; render();
+  try{
+    const r=await fetch('/api/decide',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({folder:c.dataset.folder,name:c.dataset.name,
+                           tier:tier||null})});
+    if(!r.ok) throw new Error((await r.text()).slice(0,200));
+    say('');
+  }catch(e){
+    c.dataset.tier=prev; render();
+    say(`could not save ${c.dataset.name}: ${e.message}`);
+  }
+}
+
+async function finish(){
+  const left=cells.filter(c=>!c.dataset.tier);
+  if(!left.length) return;
+  if(!confirm(`Mark ${left.length} unpromoted file(s) reviewed and rejected?\\n\\n`
+              +`Everything you kept stays as it is. This is undoable per file.`)) return;
+  busy=true; render(); say('');
+  let done=0, failed=0;
+  for(let s=0;s<left.length;s+=CHUNK){
+    const batch=left.slice(s,s+CHUNK);
+    try{
+      const r=await fetch('/api/decide/bulk',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({tier:'none',
+          files:batch.map(c=>({folder:c.dataset.folder,name:c.dataset.name}))})});
+      if(!r.ok) throw new Error((await r.text()).slice(0,200));
+      const out=await r.json();
+      failed+=out.failed.length;
+      const bad=new Set(out.failed.map(f=>f.folder+'/'+f.name));
+      batch.forEach(c=>{
+        if(!bad.has(c.dataset.folder+'/'+c.dataset.name)) c.dataset.tier='none';
+      });
+    }catch(e){
+      busy=false; render();
+      say(`stopped after ${done} of ${left.length}: ${e.message}`);
+      return;
+    }
+    done+=batch.length;
+    render(`finishing… ${done} of ${left.length}`);
+  }
+  busy=false; render();
+  say(failed ? `${failed} file(s) could not be written — re-run Finish event` : '');
+}
+finishBtn.addEventListener('click',finish);
+
+const KEYS={p:'photo',t:'top',x:'none','0':''};
 document.addEventListener('keydown',e=>{
   const cols=Math.max(1,Math.round(document.getElementById('grid').clientWidth/156));
   if(e.key==='Escape'){close_();return;}
   if(e.key==='Enter'){viewer.classList.contains('on')?close_():open_();return;}
+  const k=e.key.toLowerCase();
+  if(k in KEYS && !e.ctrlKey && !e.metaKey){
+    e.preventDefault();
+    if(i<0) show(0);
+    decide(cells[i], KEYS[k]);
+    // Advance, because the next photo is always the next question.
+    if(i<cells.length-1) show(i+1);
+    return;
+  }
   const step={ArrowRight:1,ArrowLeft:-1,ArrowDown:cols,ArrowUp:-cols}[e.key];
   if(step===undefined) return;
   e.preventDefault(); show((i<0?0:i)+step);
 });
 // Clicking the video itself must reach its controls, not close the viewer.
 viewer.addEventListener('click',e=>{if(e.target===viewer)close_();});
+render();
 """
 
 
@@ -335,38 +465,7 @@ def api_decide(user: Annotated[str, Depends(require_user)],
     `pix2 index` catches up — drift is only ever "the index is behind", never
     "the record is wrong". `indexed` in the response says which happened.
     """
-    media = _master_file(body.folder, body.name)
-    sent = body.model_fields_set
-    with _write_lock:
-        try:
-            decision = decisions.apply(
-                media,
-                tier=body.tier if "tier" in sent else decisions.UNSET,
-                event=body.event if "event" in sent else decisions.UNSET,
-                date_override=(body.date_override if "date_override" in sent
-                               else decisions.UNSET),
-            )
-        except decisions.DecisionError as e:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
-        except OSError as e:
-            raise HTTPException(
-                status.HTTP_500_INTERNAL_SERVER_ERROR,
-                f"could not write the sidecar: {e}") from e
-
-        indexed = False
-        if DB_PATH.is_file():
-            conn = ix.open_rw(DB_PATH)
-            try:
-                # Passed rather than left to the index's own constants, so
-                # the path the decision was written to and the path the row is
-                # rebuilt from are the same one.
-                indexed = ix.refresh(conn, body.folder, body.name,
-                                     meta_dir=META_DIR, master_dir=MASTER_DIR)
-            except sqlite3.Error:
-                indexed = False
-            finally:
-                conn.close()
-
+    decision, indexed = _decide(body.folder, body.name, _fields(body))
     return JSONResponse({
         "folder": body.folder,
         "name": body.name,
@@ -376,6 +475,145 @@ def api_decide(user: Annotated[str, Depends(require_user)],
         "has_sidecar": not decision.is_empty(),
         "indexed": indexed,
     })
+
+
+class Target(BaseModel):
+    """One file in a selection."""
+
+    folder: str
+    name: str
+
+
+class DecideBulkBody(BaseModel):
+    """One decision applied across a selection of files.
+
+    The primitive both bulk gestures need. *Finishing an event* writes
+    `tier: "none"` to everything left unpromoted (§8) — a few hundred files from
+    one click. *Naming a range* writes `event` across every file the curator
+    selected, which is what makes event assignment cheap: the range is evaluated
+    once, here, and never stored as a rule.
+
+    The selection is **explicit file names, not a query.** The client already has
+    them, and sending them means what gets written is what the curator saw — a
+    query re-evaluated server-side could pick up a file someone else just moved
+    into the event.
+    """
+
+    files: list[Target]
+    tier: str | None = None
+    event: str | None = None
+    date_override: str | None = None
+
+
+#: Bounds one request rather than the whole gesture. Finishing a 1,766-file
+#: event is chunked by the client, which keeps each request short enough not to
+#: hold the single worker and gives a progress reading for free.
+BULK_LIMIT: int = 500
+
+
+@app.post("/api/decide/bulk")
+def api_decide_bulk(user: Annotated[str, Depends(require_user)],
+                    body: Annotated[DecideBulkBody, Body()]) -> JSONResponse:
+    """Apply one decision to many files, reporting per-file failures.
+
+    Partial success is the normal outcome to design for, not an error case: a
+    few hundred sidecar writes over SMB will occasionally lose one, and the
+    right answer is to say which rather than to fail the batch and leave the
+    curator unsure what landed. Every write is independent — there is no
+    transaction to roll back, because per-file sidecars are the whole point.
+    """
+    if not body.files:
+        return JSONResponse({"written": 0, "indexed": 0, "failed": []})
+    if len(body.files) > BULK_LIMIT:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"{len(body.files)} files in one request — send at most {BULK_LIMIT}")
+
+    fields = _fields(body)
+    written = 0
+    indexed = 0
+    failed: list[dict[str, str]] = []
+    # One index connection for the whole batch. Opening a SQLite file over SMB
+    # per row dominated the cost — measured at 96ms/file against the NAS, most
+    # of it the open rather than the write.
+    conn = ix.open_rw(DB_PATH) if DB_PATH.is_file() else None
+    try:
+        for target in body.files:
+            try:
+                _, was_indexed = _decide(target.folder, target.name, fields,
+                                         conn=conn)
+            except HTTPException as e:
+                failed.append({"folder": target.folder, "name": target.name,
+                               "error": str(e.detail)})
+                continue
+            written += 1
+            indexed += 1 if was_indexed else 0
+    finally:
+        if conn is not None:
+            conn.close()
+
+    return JSONResponse({"written": written, "indexed": indexed,
+                         "failed": failed})
+
+
+# --- the write path ----------------------------------------------------------
+
+def _fields(body: DecideBody | DecideBulkBody) -> dict[str, str | None | Unset]:
+    """Which decision fields the request actually sent.
+
+    Omitted and `null` mean different things, so a field nobody sent becomes
+    `UNSET` and is left exactly as it was.
+    """
+    sent = body.model_fields_set
+    return {name: (getattr(body, name) if name in sent else decisions.UNSET)
+            for name in ("tier", "event", "date_override")}
+
+
+def _decide(folder: str, name: str, fields: dict[str, str | None | Unset],
+            *, conn: sqlite3.Connection | None = None) -> tuple[Decision, bool]:
+    """Write one decision to master, then bring its index row up to date.
+
+    **Sidecar first, index follows** (§4). If the sidecar write fails nothing
+    happened; if the index update fails the decision still stands and a
+    `pix2 index` catches up — drift is only ever "the index is behind", never
+    "the record is wrong".
+
+    The lock is taken per file, not per batch. Finishing a large event would
+    otherwise hold it for a minute and stall every other curator's clicks, and
+    there is nothing to gain: the files are disjoint, and where they are not,
+    last-write-wins is the stated policy anyway (§8).
+
+    `conn` lets a batch reuse one index connection; alone, it opens and closes
+    its own.
+    """
+    media = _master_file(folder, name)
+    with _write_lock:
+        try:
+            decision = decisions.apply(media, **fields)
+        except decisions.DecisionError as e:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
+        except OSError as e:
+            raise HTTPException(
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                f"could not write the sidecar: {e}") from e
+
+        indexed = False
+        own = conn is None and DB_PATH.is_file()
+        if own:
+            conn = ix.open_rw(DB_PATH)
+        if conn is not None:
+            try:
+                # Passed rather than left to the index's own constants, so the
+                # path the decision was written to and the path the row is
+                # rebuilt from are the same one.
+                indexed = ix.refresh(conn, folder, name,
+                                     meta_dir=META_DIR, master_dir=MASTER_DIR)
+            except sqlite3.Error:
+                indexed = False
+            finally:
+                if own:
+                    conn.close()
+    return decision, indexed
 
 
 def _master_file(folder: str, name: str) -> Path:

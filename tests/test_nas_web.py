@@ -416,3 +416,130 @@ def test_there_is_no_reindex_endpoint(client: TestClient) -> None:
     """A rebuild reads ~62k records and would block the single worker for
     minutes, at the request of anyone holding the URL."""
     assert client.post("/api/reindex").status_code == 404
+
+
+# --- the keep pass -----------------------------------------------------------
+
+def _targets(*names: str) -> list[dict[str, str]]:
+    return [{"folder": "init_2026", "name": n} for n in names]
+
+
+def test_the_review_page_carries_the_current_tier(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """The grid is the state — promoting must survive a reload, not live in the
+    browser."""
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "tier": "top"})
+
+    r = client.get("/event/Italy%20-%20Sicily")
+    assert 'data-tier="top"' in r.text
+    assert 'data-tier=""' in r.text
+
+
+def test_the_review_page_offers_finishing(client: TestClient) -> None:
+    assert 'id="finish"' in client.get("/event/Italy%20-%20Sicily").text
+
+
+def test_bulk_writes_one_decision_across_a_selection(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """Finishing an event is a few hundred sidecar writes from one click."""
+    (writable / "b.mp4").write_bytes(b"fake")
+    r = client.post("/api/decide/bulk", json={
+        "tier": "none", "files": _targets("a.jpg", "b.mp4")})
+
+    assert r.status_code == 200
+    assert r.json()["written"] == 2
+    assert r.json()["failed"] == []
+    assert decisions.read(writable / "a.jpg") == Decision(tier="none")
+    assert decisions.read(writable / "b.mp4") == Decision(tier="none")
+
+    conn = ix.open_ro(app_env["db"])
+    tiers = {r["name"]: r["tier"] for r in conn.execute("SELECT * FROM files")}
+    assert tiers == {"a.jpg": "none", "b.mp4": "none"}
+
+
+def test_bulk_names_a_selection(client: TestClient, writable: Path) -> None:
+    """Pass 1's gesture: a range is a *selection*, written once — never a stored
+    rule that decides membership later."""
+    r = client.post("/api/decide/bulk", json={
+        "event": "France Trip", "files": _targets("a.jpg")})
+
+    assert r.json()["written"] == 1
+    assert decisions.read(writable / "a.jpg") == Decision(event="France Trip")
+
+
+def test_bulk_leaves_untouched_fields_alone(client: TestClient,
+                                            writable: Path) -> None:
+    """Finishing an event must not wipe the events people already assigned."""
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "event": "Sicily Trip"})
+    client.post("/api/decide/bulk", json={"tier": "none",
+                                          "files": _targets("a.jpg")})
+
+    assert decisions.read(writable / "a.jpg") == Decision(
+        tier="none", event="Sicily Trip")
+
+
+def test_one_bad_file_does_not_lose_the_rest(client: TestClient,
+                                             writable: Path) -> None:
+    """Partial success is the normal outcome over SMB. Failing the whole batch
+    would leave the curator unsure what landed."""
+    r = client.post("/api/decide/bulk", json={
+        "tier": "none", "files": _targets("a.jpg", "gone.jpg")})
+
+    assert r.status_code == 200
+    assert r.json()["written"] == 1
+    assert [f["name"] for f in r.json()["failed"]] == ["gone.jpg"]
+    assert decisions.read(writable / "a.jpg") == Decision(tier="none")
+
+
+def test_an_empty_selection_is_not_an_error(client: TestClient,
+                                            writable: Path) -> None:
+    """Finishing an already-finished event is a no-op, not a failure."""
+    r = client.post("/api/decide/bulk", json={"tier": "none", "files": []})
+
+    assert r.status_code == 200
+    assert r.json()["written"] == 0
+
+
+def test_an_oversized_batch_is_refused(client: TestClient,
+                                       writable: Path) -> None:
+    """Bounds one request so a 1,766-file event cannot hold the single worker."""
+    files = _targets(*[f"f{n}.jpg" for n in range(web.BULK_LIMIT + 1)])
+    r = client.post("/api/decide/bulk", json={"tier": "none", "files": files})
+
+    assert r.status_code == 400
+
+
+def test_bulk_refuses_an_unknown_tier(client: TestClient,
+                                      writable: Path) -> None:
+    r = client.post("/api/decide/bulk", json={
+        "tier": "five-stars", "files": _targets("a.jpg")})
+
+    assert r.json()["written"] == 0
+    assert not decisions.sidecar_path(writable / "a.jpg").exists()
+
+
+def test_bulk_cannot_escape_the_tier(client: TestClient, writable: Path,
+                                     tmp_path: Path) -> None:
+    r = client.post("/api/decide/bulk", json={
+        "tier": "none",
+        "files": [{"folder": "../../..", "name": "escape.jpg"}]})
+
+    assert r.json()["written"] == 0
+    assert list(tmp_path.rglob("escape.jpg.xmp")) == []
+
+
+def test_bulk_needs_the_same_auth_as_browsing(
+    app_env: dict[str, Path], writable: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PIX2_USERS", f"james:{auth.hash_password('pw')}")
+    client = TestClient(web.app)
+
+    r = client.post("/api/decide/bulk", json={"tier": "none",
+                                              "files": _targets("a.jpg")})
+
+    assert r.status_code == 401
+    assert not decisions.sidecar_path(writable / "a.jpg").exists()
