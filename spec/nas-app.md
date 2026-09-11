@@ -689,31 +689,59 @@ pix/2015/a/2015-03-15_115256.jpg
   this will ever be re-pulled from a phone.
 - `OriginalPath` rides into the sidecar, so true provenance survives regardless.
 
-### Sequence
+### Sequence — seed by reflink, keep both trees
 
-The library syncs to the NAS today, so the bytes are **already there**. Seeding is
-a server-side reorganization, not a 2.5TB upload — but the sync has to be cut
-first, or the reorganization looks like mass deletion and propagates back.
+The library syncs to the NAS today, so the bytes are **already there**. Seeding
+creates a *second* tree referencing them rather than uploading anything.
+
+**Use `cp --reflink`.** A copy-on-write clone is instant and costs zero extra
+bytes, and because neither tree is ever modified — master files are immutable, the
+old library is frozen — they share extents indefinitely and never diverge. That
+makes "run both in parallel until the new process is proven" free, which is the
+whole point of the transition period.
 
 | | | Frees / costs |
 |---|---|---|
 | 1 | Verify `raw/` coverage by `OriginalPath` lineage; review the remainder | — |
-| 2 | Archive `raw/` offline, then delete it | **+~3.4TB** |
-| 3 | Generate sidecars **on the desktop**, while `G:\pix` is still local | tiny files, they sync up |
-| 4 | Stop syncing `G:\pix` | — |
-| 5 | Reorganize the NAS-side copy into `legacy_{year}/` | server-side renames, instant |
-| 6 | Thumbnails NAS-side, H.264 renders desktop-side | background |
-| 7 | Delete `G:\pix` locally | +2.5TB on G: |
+| 2 | Archive `raw/` offline (external drive + `sha256` manifest), then delete it | **+~3.4TB** |
+| 3 | Generate sidecars **on the desktop**, while `G:\pix` is still local | tiny files |
+| 4 | Reflink the NAS-side library into `legacy_{year}/` | **~0 bytes, minutes** |
+| 5 | Thumbnails NAS-side, H.264 renders desktop-side | background |
+| 6 | Once the new process is proven: archive and delete the old library | frees ~0 — see below |
 
-Step 1 must use **lineage, not content hash** — conversion changed the bytes, so
-a HEIC in `raw/` and the JPG it became have different hashes and containment
-would flag every converted file as missing. `OriginalPath` is exact where hashing
-is not. The unaccounted remainder separates into deliberately-dropped (migrate
+**The sync never needs cutting until step 6.** An earlier draft had it cut before
+reorganizing, because *moving* files would look like mass deletion to the sync
+client and propagate back. Reflinking into a **new** tree produces no events in
+the synced folder at all, so both can run in parallel with the sync untouched.
+
+**Step 6 reclaims almost nothing, and that is correct.** Reflinked trees pay for
+the bytes once however many trees reference them, so deleting the original is
+tidiness rather than reclamation. Note also that DSM reports shared-folder usage
+*logically*, so it will show both trees at full size while the volume consumed
+one; `btrfs filesystem usage /volume1` is the truth.
+
+**Probe reflink before planning around it.** Master and the old library are
+separate shared folders, which on DSM are separate btrfs subvolumes. Cross-
+subvolume reflink is supported by btrfs generally, but Synology's kernel is old
+enough not to assume it:
+
+```
+cp --reflink=always /volume1/pix/<some-file>.jpg /volume1/<master-share>/test.jpg
+```
+
+If it fails, either keep master inside the same shared folder for the transition,
+or fall back to a real copy — there is room for that after step 2, it just costs
+2.5TB and hours instead of minutes.
+
+**Step 1 must use lineage, not content hash.** Conversion changed the bytes, so a
+HEIC in `raw/` and the JPG it became have different hashes and containment would
+flag every converted file as missing. `OriginalPath` is exact where hashing is
+not. The unaccounted remainder separates into deliberately-dropped (migrate
 `DELETE` lines, cross-checkable against the 158 run plans), never-processed
 (formats the policy skips), and genuinely-missed — the last being the reason the
 check is worth running at all.
 
-Step 3 matters more than it looks: reading tags off 62k files is far faster
+**Step 3 matters more than it looks**: reading tags off 62k files is far faster
 against a local drive than over SMB against an Atom.
 
 ### Scale
@@ -758,6 +786,9 @@ the sidecar/index model — [§4](#4-metadata--xmp-sidecars); seeding — [§14]
 - **Face detection** remains deferred, and `{person}` depends on it — which is what
   the people-grouped ad-hoc distribution would need.
 - **Reclaiming space on the NAS.** Emptying `#recycle` did not return space;
-  Btrfs snapshots and Synology Drive version history are the usual causes and need
-  sorting before the `raw/` deletion in [§14](#14-seeding-the-existing-library)
-  can actually free anything.
+  Btrfs snapshots and Synology Drive version history are the usual causes, and they
+  need sorting before the `raw/` deletion in
+  [§14](#14-seeding-the-existing-library) can actually free anything.
+- **Whether cross-subvolume reflink works on this DSM kernel** — it decides
+  whether seeding is minutes at zero cost or hours at 2.5TB
+  ([§14](#14-seeding-the-existing-library)).
