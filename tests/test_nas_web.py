@@ -53,6 +53,16 @@ def app_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
 
 
 @pytest.fixture
+def master(app_env: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A master folder holding the real files the media endpoint streams."""
+    m = app_env["share"] / "master" / "init_2026"
+    m.mkdir(parents=True, exist_ok=True)
+    (m / "b.mp4").write_bytes(bytes([0, 0, 0, 0x18]) + b"ftypmp42" + b"x" * 400)
+    monkeypatch.setattr(web, "MASTER_DIR", app_env["share"] / "master")
+    return m
+
+
+@pytest.fixture
 def client(app_env: dict[str, Path]) -> TestClient:
     return TestClient(web.app)
 
@@ -191,3 +201,50 @@ def test_a_missing_index_says_what_to_run(tmp_path: Path,
 
     assert r.status_code == 503
     assert "pix2 index" in r.text
+
+
+# --- video playback ----------------------------------------------------------
+
+def test_master_video_is_streamable(master: Path, app_env: dict[str, Path]) -> None:
+    """Videos need the master file: there is no delivery rendition to serve.
+
+    The seeded library is MP4 throughout, so master *is* the playable copy.
+    """
+    r = TestClient(web.app).get("/media/init_2026/b.mp4")
+
+    assert r.status_code == 200
+    assert r.content.startswith(bytes([0, 0, 0, 0x18]) + b"ftyp")
+
+
+def test_media_advertises_range_support(master: Path,
+                                        app_env: dict[str, Path]) -> None:
+    """Without ranges a browser cannot seek, only play from the start."""
+    r = TestClient(web.app).get("/media/init_2026/b.mp4")
+    assert r.headers.get("accept-ranges") == "bytes"
+
+
+def test_media_serves_a_byte_range(master: Path, app_env: dict[str, Path]) -> None:
+    r = TestClient(web.app).get("/media/init_2026/b.mp4",
+                                headers={"Range": "bytes=8-15"})
+    assert r.status_code == 206
+    assert len(r.content) == 8
+
+
+def test_media_refuses_traversal(master: Path, app_env: dict[str, Path]) -> None:
+    """The only endpoint touching master, so the guard matters most here."""
+    c = TestClient(web.app)
+    for bad in ("/media/..%2f..%2fetc/passwd",
+                "/media/init_2026/..%2f..%2f..%2fetc%2fpasswd"):
+        assert c.get(bad).status_code in (400, 404), bad
+
+
+def test_media_is_missing_for_an_unknown_file(master: Path,
+                                              app_env: dict[str, Path]) -> None:
+    assert TestClient(web.app).get("/media/init_2026/nope.mp4").status_code == 404
+
+
+def test_grid_marks_which_cells_are_video(client: TestClient) -> None:
+    """The viewer picks <video> or <img> from this, so it has to be present."""
+    html = client.get("/event/Italy - Sicily").text
+    assert 'data-kind="video"' in html
+    assert 'data-kind="image"' in html

@@ -316,11 +316,17 @@ difference between minutes and milliseconds on a long clip.
 it, and a sideways thumbnail is worse than useless in a grid being scanned for one
 photo.
 
-**Renders are deliberately not built yet.** Master is seeded from the
-already-normalised library ([§14](#14-seeding-the-existing-library)), so it is JPG
-and MP4 throughout and almost nothing needs converting. The exceptions — legacy
-HEVC clips needing H.264 for delivery — drag in codec probing and the encode path
-for nearly no work today, so they wait until there is something to look at.
+**Renders are not built yet, and video needs them more than expected.** Master is
+seeded from the already-normalised library
+([§14](#14-seeding-the-existing-library)), so for **images** it is JPG throughout
+and nothing needs converting. For **video** that reasoning was wrong: measured
+across the seeded year, **421 of 724 clips are `hvc1` (HEVC) against 303 `avc1`**,
+so 58% will not play in a browser at all. The app streams master directly — there
+is no delivery rendition to serve instead — so those clips show their poster frame
+and refuse to start.
+
+The H.264 render tier is therefore not polish for a future delivery tree; it is
+what most of the video library needs to be watchable in the app itself.
 
 Three independent properties, rather than a file-state enum:
 

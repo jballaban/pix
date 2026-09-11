@@ -26,7 +26,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from pix.nas import auth
 from pix.nas import index as ix
-from pix.nas.const import INDEX_DB, PREVIEW_DIR, THUMB_DIR
+from pix.nas.const import INDEX_DB, MASTER_DIR, PREVIEW_DIR, THUMB_DIR
 
 #: Re-exported so the CLI and tests have one name for it.
 DB_PATH: Path = INDEX_DB
@@ -107,7 +107,9 @@ td.num { text-align:right; font-variant-numeric:tabular-nums; }
 #viewer { position:fixed; inset:0; background:#000e; display:none;
           align-items:center; justify-content:center; flex-direction:column; }
 #viewer.on { display:flex; }
-#viewer img { max-width:94vw; max-height:86vh; object-fit:contain; }
+#viewer img, #viewer video { max-width:94vw; max-height:86vh;
+                             object-fit:contain; display:none; }
+#viewer img.on, #viewer video.on { display:block; }
 #viewer .meta { padding:10px; color:var(--dim); font-size:12px; }
 .empty { color:var(--dim); padding:40px 0; }
 """
@@ -162,7 +164,8 @@ def event_grid(event: str,
 
     cells = "".join(
         f'<div class="cell" data-folder="{_h(r["folder"])}" '
-        f'data-name="{_h(r["name"])}" data-date="{_h(str(r["capture_date"] or "no date"))}">'
+        f'data-name="{_h(r["name"])}" data-kind="{_h(r["kind"])}" '
+        f'data-date="{_h(str(r["capture_date"] or "no date"))}">'
         f'<img loading="lazy" src="/thumb/{_q(r["folder"])}/{_q(r["name"])}">'
         + (f'<span class="badge">{_dur(r["duration"])}</span>'
            if r["kind"] == "video" else "")
@@ -172,14 +175,16 @@ def event_grid(event: str,
     return _page(event, f"""
 <p class="dim">{len(rows):,} files &middot; arrow keys to move, Esc to close</p>
 <div class="grid" id="grid">{cells}</div>
-<div id="viewer"><img id="vimg"><div class="meta" id="vmeta"></div></div>
+<div id="viewer"><img id="vimg"><video id="vvid" controls playsinline></video>
+<div class="meta" id="vmeta"></div></div>
 <script>{_GRID_JS}</script>""", crumb=_h(event))
 
 
 _GRID_JS = """
 const cells=[...document.querySelectorAll('.cell')];
 const viewer=document.getElementById('viewer');
-const vimg=document.getElementById('vimg'), vmeta=document.getElementById('vmeta');
+const vimg=document.getElementById('vimg'), vvid=document.getElementById('vvid');
+const vmeta=document.getElementById('vmeta');
 let i=-1;
 function show(n){
   if(n<0||n>=cells.length) return;
@@ -187,14 +192,23 @@ function show(n){
   i=n; const c=cells[i];
   c.classList.add('sel');
   c.scrollIntoView({block:'nearest'});
-  if(viewer.classList.contains('on')){
-    vimg.src=`/preview/${encodeURIComponent(c.dataset.folder)}/${encodeURIComponent(c.dataset.name)}`;
-    vmeta.textContent=`${c.dataset.name} — ${c.dataset.date}`;
+  if(!viewer.classList.contains('on')) return;
+  const f=encodeURIComponent(c.dataset.folder), n2=encodeURIComponent(c.dataset.name);
+  // Always stop the previous clip: moving on while audio keeps playing from the
+  // one before is the kind of thing that makes a viewer feel broken.
+  vvid.pause(); vvid.removeAttribute('src'); vvid.load();
+  if(c.dataset.kind==='video'){
+    vimg.classList.remove('on'); vvid.classList.add('on');
+    vvid.src=`/media/${f}/${n2}`; vvid.play().catch(()=>{});
+  }else{
+    vvid.classList.remove('on'); vimg.classList.add('on');
+    vimg.src=`/preview/${f}/${n2}`;
   }
+  vmeta.textContent=`${c.dataset.name} — ${c.dataset.date}`;
 }
 cells.forEach((c,n)=>c.addEventListener('click',()=>{show(n);open_();}));
 function open_(){viewer.classList.add('on');show(i<0?0:i);}
-function close_(){viewer.classList.remove('on');}
+function close_(){viewer.classList.remove('on');vvid.pause();}
 document.addEventListener('keydown',e=>{
   const cols=Math.max(1,Math.round(document.getElementById('grid').clientWidth/156));
   if(e.key==='Escape'){close_();return;}
@@ -203,7 +217,8 @@ document.addEventListener('keydown',e=>{
   if(step===undefined) return;
   e.preventDefault(); show((i<0?0:i)+step);
 });
-viewer.addEventListener('click',close_);
+// Clicking the video itself must reach its controls, not close the viewer.
+viewer.addEventListener('click',e=>{if(e.target===viewer)close_();});
 """
 
 
@@ -219,6 +234,29 @@ def thumb(folder: str, name: str,
 def preview(folder: str, name: str,
             user: Annotated[str, Depends(require_user)]) -> FileResponse:
     return _serve(PREVIEW_DIR, folder, name)
+
+
+@app.get("/media/{folder}/{name}")
+def media(folder: str, name: str,
+          user: Annotated[str, Depends(require_user)]) -> FileResponse:
+    """Stream the master file itself, for video playback.
+
+    The **only** endpoint that touches master, and strictly read-only — the
+    archive is served, never modified.
+
+    There is no separate delivery rendition to serve instead: the seeded library
+    is already MP4 throughout, so master *is* the playable copy. Clips that are
+    HEVC rather than H.264 (the legacy transcode era) will not play in a browser;
+    that is what the deferred H.264 render tier is for, and until it exists those
+    clips show their poster frame and refuse to start.
+    """
+    target = (MASTER_DIR / folder / name).resolve()
+    if MASTER_DIR.resolve() not in target.parents:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "bad path")
+    if not target.is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "not found")
+    return FileResponse(target, headers={"Cache-Control": "private, max-age=3600",
+                                         "Accept-Ranges": "bytes"})
 
 
 def _serve(root: Path, folder: str, name: str) -> FileResponse:
