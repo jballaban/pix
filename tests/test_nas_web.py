@@ -1297,3 +1297,38 @@ def test_one_menu_shows_the_three_states(client: TestClient) -> None:
 
     assert "function shareState" in js
     assert "'none':(n===cs.length?'all':'some')" in js
+
+
+# --- the script must be able to see the page ---------------------------------
+
+def test_the_page_script_comes_last(client: TestClient) -> None:
+    """The bug this exists to prevent: the count and the message line moved
+    into the footer, below the script that looks them up, so both were `null`.
+    Every write began by setting a message, so every write threw before it sent
+    anything — and said nothing, because saying things was the broken part."""
+    html = client.get("/browse").text
+
+    assert html.index("<footer") < html.index("const VIEW=")
+    assert html.index('id="note"') < html.index("const VIEW=")
+    assert html.index('id="count"') < html.index("const VIEW=")
+    assert html.index('id="grid"') < html.index("const VIEW=")
+
+
+def test_every_element_the_script_looks_up_exists(client: TestClient) -> None:
+    """Each of these is fetched by id at load; a missing one is a null that
+    only shows up when somebody clicks."""
+    html = client.get("/browse").text
+
+    for wanted in ("grid", "menu", "chips", "actions", "selcount", "count",
+                   "note", "viewer", "vimg", "vvid", "vmeta", "rail",
+                   "railtoggle", "viewclose", "selall", "selnone"):
+        assert f'id="{wanted}"' in html, wanted
+
+
+def test_a_failed_write_is_loud(client: TestClient) -> None:
+    """A write that fails without saying so is indistinguishable from one that
+    worked, and the curator finds out much later that nothing was recorded."""
+    js = client.get("/browse").text
+
+    assert "unhandledrejection" in js
+    assert "could not be written`,true)" in js

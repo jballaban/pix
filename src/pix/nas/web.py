@@ -196,6 +196,8 @@ main { padding:16px 20px 40px; }
            flex-wrap:wrap; font-size:12px; }
 .footbar:empty { display:none; }
 .footbar .note { margin:0; margin-left:auto; }
+.note.loud { background:#5a1d16; color:#ffd9d2; padding:2px 8px;
+             border-radius:3px; font-weight:600; }
 main { padding-bottom:48px; }
 .hint { color:var(--dim); font-size:12px; }
 .hint b { color:var(--fg); font-weight:600; }
@@ -339,13 +341,19 @@ h2.year span { font-size:13px; font-weight:400; }
 
 
 def _page(title: str, body: str, *, tools: str = "", rows: str = "",
-          footer: str = "", user: Principal | None = None) -> HTMLResponse:
+          footer: str = "", script: str = "",
+          user: Principal | None = None) -> HTMLResponse:
     """One shell.
 
     `tools` sits beside the brand on the first row, `rows` are whole extra rows
     below it, and `footer` is the strip along the bottom. Counts and messages
     live down there so the header is only controls — every row of chrome at the
     top is a row of photographs pushed off the screen.
+
+    `script` goes **last**, after the footer. A page script that runs from
+    inside `<main>` cannot see anything below it: moving the count and the
+    message line into the footer left both as `null`, and the first thing every
+    write did was set a message — so nothing was ever sent, silently.
     """
     return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -354,7 +362,8 @@ def _page(title: str, body: str, *, tools: str = "", rows: str = "",
 <div class="row"><a class="brand" href="/">pix2</a>{tools}
 <span class="spacer"></span>{_whoami(user)}</div>{rows}
 </div><main>{body}</main>
-<footer class="footbar">{footer}</footer></body></html>""")
+<footer class="footbar">{footer}</footer>
+{script}</body></html>""")
 
 
 def _whoami(user: Principal | None) -> str:
@@ -502,12 +511,16 @@ def browse(user: Annotated[Principal, Depends(require_user)],
   <button id="railtoggle" title="Details (I)">Details</button>
   <aside id="rail"></aside>
 </div>
-<div id="menu" hidden></div>
-<script>const VIEW={_js(_view_dict(view))},CHIPS={_js(_chips(user))},FIXED={_js(_FIXED)},EXTRA={_js(_EXTRA)},ADMIN={_js(user.is_admin)},USERS={_js(_audience_names())};</script>
-<script>{_BROWSE_JS}</script>""",
+<div id="menu" hidden></div>""",
         tools=('<div class="chips" id="chips"></div>'
                '<button id="selall">Select all</button>'),
         rows=_actions(user),
+        script=(
+            f"<script>const VIEW={_js(_view_dict(view))},"
+            f"CHIPS={_js(_chips(user))},FIXED={_js(_FIXED)},"
+            f"EXTRA={_js(_EXTRA)},ADMIN={_js(user.is_admin)},"
+            f"USERS={_js(_audience_names())};</script>"
+            f"<script>{_BROWSE_JS}</script>"),
         footer=f"""<span class="count" id="count">{shown}</span>
 <span class="hint"><b>click</b> a circle to select &middot;
 <b>shift</b> for a range &middot; <b>ctrl</b> to add &middot;
@@ -1019,7 +1032,21 @@ viewer.addEventListener('click',e=>{
 rail.addEventListener('click',e=>e.stopPropagation());
 
 // --- writing -----------------------------------------------------------------
-function say(text){note.textContent=text||''; note.hidden=!text;}
+// Loud, because the alternative has bitten twice: a write that fails without
+// saying so is indistinguishable from one that worked, and the curator only
+// finds out much later that nothing was recorded.
+function say(text,bad){
+  if(!note) return;
+  note.textContent=text||'';
+  note.hidden=!text;
+  note.classList.toggle('loud',!!bad);
+}
+
+// A page script that throws takes every handler with it and leaves a grid that
+// simply ignores clicks. Saying so beats looking broken.
+window.addEventListener('error',e=>say('page error: '+e.message,true));
+window.addEventListener('unhandledrejection',
+  e=>say('page error: '+(e.reason&&e.reason.message||e.reason),true));
 
 function targets(){
   return picked.size?[...picked]:(cells[cur]?[cells[cur]]:[]);
@@ -1121,7 +1148,8 @@ async function send(cs,body){
       gone=gone.concat(out.dropped||[]);
       if(out.total!==null&&out.total!==undefined) total=out.total;
     }catch(e){
-      busy=false; say(`stopped after ${done} of ${cs.length}: ${e.message}`);
+      busy=false;
+      say(`stopped after ${done} of ${cs.length}: ${e.message}`,true);
       return null;
     }
     done+=batch.length;
@@ -1132,7 +1160,7 @@ async function send(cs,body){
   if(viewer.classList.contains('on')&&cells[cur]) fill(cells[cur]);
   drop(gone);
   if(total!==null&&countEl) countEl.textContent=`${total.toLocaleString()} files`;
-  if(failed) say(`${failed} file(s) could not be written`);
+  if(failed) say(`${failed} file(s) could not be written`,true);
   else if(gone.length) say(`${gone.length} file(s) no longer match — removed`);
   else say('');
   return true;
