@@ -116,7 +116,8 @@ class Decision:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "tags", normalize_tags(self.tags))
-        object.__setattr__(self, "audience", normalize_tags(self.audience))
+        object.__setattr__(self, "audience",
+                           normalize_names(self.audience))
 
     def is_empty(self) -> bool:
         """True when nothing has been decided, so no sidecar should exist."""
@@ -125,14 +126,28 @@ class Decision:
 
 
 def normalize_tags(values: Iterable[str]) -> tuple[str, ...]:
-    """Trim, drop blanks, de-duplicate, sort.
+    """Trim, drop blanks, de-duplicate, sort — **keeping case**.
 
-    Case is preserved rather than folded: `Beach` and `beach` stay distinct,
-    because the fix for that is the UI offering the tags that already exist
-    so people pick instead of retyping. Folding here would silently rewrite
-    what someone typed into the permanent record.
+    A tag is a phrase someone wrote, so `Beach` and `beach` stay distinct:
+    folding here would silently rewrite what they typed into the permanent
+    record, and the fix for the duplicate is the UI offering the tags that
+    already exist so people pick instead of retyping.
     """
     return tuple(sorted({v.strip() for v in values if v and v.strip()}))
+
+
+def normalize_names(values: Iterable[str]) -> tuple[str, ...]:
+    """The same, but **case-folded** — for names of people and roles.
+
+    An audience is an identifier, not a phrase, and two spellings of one
+    person are not two audiences. It has to fold here rather than only at
+    the login, because the access check compares a grant against a name:
+    signing in as `Kid` while a photograph is shared with `kid` would
+    otherwise read as *not shared*, which is a failure that looks exactly
+    like a correctly-kept secret.
+    """
+    return tuple(sorted({v.strip().casefold()
+                         for v in values if v and v.strip()}))
 
 
 class DecisionError(ValueError):
@@ -212,20 +227,26 @@ def apply(media: Path, *,
                        else date_override),
         tags=_merge(current.tags, tags, add_tags, remove_tags),
         audience=_merge(current.audience, audience,
-                        add_audience, remove_audience),
+                        add_audience, remove_audience, fold=True),
     )
     write(media, updated)
     return updated
 
 
 def _merge(current: tuple[str, ...], replace: Sequence[str] | None | Unset,
-           add: Sequence[str], remove: Sequence[str]) -> tuple[str, ...]:
-    """Apply a replace-or-add-or-remove edit to one multi-valued field."""
-    kept = current if isinstance(replace, Unset) else normalize_tags(replace or ())
+           add: Sequence[str], remove: Sequence[str], *,
+           fold: bool = False) -> tuple[str, ...]:
+    """Apply a replace-or-add-or-remove edit to one multi-valued field.
+
+    `fold` picks the normaliser, and it matters most for *remove*:
+    unsharing `Kid` has to match a stored `kid`, or access could be
+    granted and then not taken back.
+    """
+    norm = normalize_names if fold else normalize_tags
+    kept = current if isinstance(replace, Unset) else norm(replace or ())
     if add or remove:
-        dropped = set(normalize_tags(remove))
-        kept = normalize_tags(
-            [v for v in [*kept, *normalize_tags(add)] if v not in dropped])
+        dropped = set(norm(remove))
+        kept = norm([v for v in [*kept, *norm(add)] if v not in dropped])
     return kept
 
 
@@ -315,7 +336,8 @@ def _from_xml(root: ET.Element) -> Decision | None:
     decision = Decision(event=values.get("EventOverride"),
                         date_override=values.get("DateOverride"),
                         tags=_read_bag(description, _DC_NS, "subject"),
-                        audience=_read_bag(description, PIX_NS, "Audience"))
+                        audience=normalize_names(
+                            _read_bag(description, PIX_NS, "Audience")))
     return None if decision.is_empty() else decision
 
 

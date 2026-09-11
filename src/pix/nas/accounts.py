@@ -57,6 +57,22 @@ from pix.nas.const import ACCOUNTS_FILE
 #: and excluded from every audience: an admin sees everything already.
 ADMIN: str = "admin"
 
+
+def canonical(name: str) -> str:
+    """The one spelling of a name.
+
+    Names are **case-insensitive**: `Kid`, `kid` and `KID` are one person,
+    and typing the wrong one at a login should not fail. Folded at every
+    boundary rather than only at sign-in, because a grant is compared
+    against a name — a mismatch there reads as *not shared*, which looks
+    exactly like a correctly-kept secret rather than like a bug.
+
+    `casefold` and not `lower`: it is the comparison the standard library
+    provides for exactly this, and it handles the scripts `lower` gets
+    wrong.
+    """
+    return name.strip().casefold()
+
 #: scrypt hash of the initial admin password — the literal string `admin`.
 #: Deliberately a hash and not the password: this file has a git remote, and a
 #: password in a repository is a published password. Changing it in the app
@@ -102,8 +118,9 @@ class Store:
         Themselves plus their roles, because a share names one or the other and
         the access check is not allowed to care which.
         """
-        account = self.users.get(name)
-        return frozenset({name, *(account.roles if account else ())})
+        who = canonical(name)
+        account = self.users.get(who)
+        return frozenset({who, *(account.roles if account else ())})
 
     def audiences(self) -> list[str]:
         """Everything that can be shared with — people and roles, never admin."""
@@ -132,13 +149,16 @@ def load(path: Path | None = None) -> Store:
             continue
         entry = cast("dict[str, Any]", value)
         roles_raw: object = entry.get("roles")
-        users[str(name)] = Account(
-            name=str(name),
+        who = canonical(str(name))
+        users[who] = Account(
+            name=who,
             password=str(entry.get("password") or ""),
-            roles=tuple(str(r) for r in cast("list[Any]", roles_raw or [])),
+            roles=tuple(sorted({canonical(str(r)) for r
+                                in cast("list[Any]", roles_raw or [])})),
         )
     raw_roles: object = data.get("roles")
-    roles = [str(r) for r in cast("list[Any]", raw_roles or [])]
+    roles = sorted({canonical(str(r))
+                    for r in cast("list[Any]", raw_roles or []) if str(r).strip()})
     return Store(users=users, roles=roles, secret=str(data.get("secret") or ""))
 
 
@@ -187,6 +207,7 @@ def check(store: Store, name: str, password: str) -> bool:
     The admin's stored password wins over the built-in one, so changing it
     actually changes it — but the account itself cannot be removed.
     """
+    name = canonical(name)
     if name == ADMIN:
         account = store.users.get(ADMIN)
         stored = account.password if account and account.password else ADMIN_INITIAL_HASH
@@ -214,7 +235,7 @@ def mint(store: Store, name: str, *, now: float | None = None,
     """
     moment = time.time() if now is None else now
     expires = int(moment + SESSION_DAYS * 86400)
-    body = f"{name}|{expires}"
+    body = f"{canonical(name)}|{expires}"
     return f"{body}|{_sign(ensure_secret(store, path), body)}"
 
 

@@ -1062,3 +1062,52 @@ def test_granted_nothing_sees_nothing(app_env: dict[str, Path]) -> None:
     assert len(ix.files(conn, ix.Filters())) == 2
 
 
+# --- names are case-insensitive ----------------------------------------------
+
+def test_signing_in_ignores_case(app_env: dict[str, Path]) -> None:
+    assert sign_in("ADMIN", "admin").get("/").status_code == 200
+    assert sign_in("Admin", "admin").get("/").status_code == 200
+
+
+def test_a_password_is_still_case_sensitive(app_env: dict[str, Path]) -> None:
+    """Folding the name is a convenience; folding the secret is a weakness."""
+    r = TestClient(web.app).post(
+        "/login", data={"name": "admin", "password": "ADMIN"},
+        follow_redirects=False)
+
+    assert "bad=1" in r.headers["location"]
+
+
+def test_one_person_cannot_become_two_accounts(app_env: dict[str, Path]) -> None:
+    admin = sign_in(accounts.ADMIN, "admin")
+    admin.post("/accounts/save", data={"name": "Kid", "password": "pw"})
+    admin.post("/accounts/save", data={"name": "KID", "password": "pw2"})
+
+    book = accounts.load()
+    assert list(book.users) == ["kid"]
+    assert sign_in("kid", "pw2").get("/").status_code == 200
+
+
+def test_a_grant_reaches_whatever_case_signed_in(app_env: dict[str, Path],
+                                                 writable: Path) -> None:
+    """The failure this prevents looks exactly like a correctly-kept secret:
+    signed in as `Kid`, a photo shared with `kid` simply is not there."""
+    admin = sign_in(accounts.ADMIN, "admin")
+    admin.post("/accounts/save", data={"name": "kid", "password": "pw"})
+    admin.post("/api/decide", json={"folder": "init_2026", "name": "a.jpg",
+                                    "add_audience": ["KID"]})
+
+    rows = sign_in("KiD", "pw").get("/api/files").json()
+    assert [r["name"] for r in rows] == ["a.jpg"]
+
+
+def test_a_role_matches_regardless_of_case(app_env: dict[str, Path],
+                                           writable: Path) -> None:
+    admin = sign_in(accounts.ADMIN, "admin")
+    admin.post("/accounts/save",
+               data={"name": "kid", "password": "pw", "roles": "Family"})
+    admin.post("/api/decide", json={"folder": "init_2026", "name": "a.jpg",
+                                    "add_audience": ["family"]})
+
+    rows = sign_in("kid", "pw").get("/api/files").json()
+    assert [r["name"] for r in rows] == ["a.jpg"]

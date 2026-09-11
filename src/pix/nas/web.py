@@ -131,7 +131,7 @@ def signed_in(
         return _principal(book, name)
     if credentials and accounts.check(book, credentials.username,
                                       credentials.password):
-        return _principal(book, credentials.username)
+        return _principal(book, accounts.canonical(credentials.username))
     return None
 
 
@@ -1655,7 +1655,8 @@ async def _form(request: Request) -> dict[str, str]:
 async def login(request: Request) -> Response:
     """Check the credentials and hand out a session cookie."""
     form = await _form(request)
-    name, password = form.get("name", ""), form.get("password", "")
+    name = accounts.canonical(form.get("name", ""))
+    password = form.get("password", "")
     next = form.get("next", "/")
     book = store()
     if not accounts.check(book, name, password):
@@ -1778,7 +1779,7 @@ async def accounts_save(request: Request,
     name = form.get("name", "")
     password = form.get("password", "")
     book = store()
-    who = name.strip()
+    who = accounts.canonical(name)
     if not who:
         return _back("a name is required")
 
@@ -1791,7 +1792,8 @@ async def accounts_save(request: Request,
     # Absent and empty are different: the admin form submits no roles field at
     # all and must not clear them, while an empty box on the people form is how
     # you take somebody out of every role.
-    kept = (tuple(r.strip() for r in form["roles"].split(",") if r.strip())
+    kept = (tuple(sorted({accounts.canonical(r) for r in form["roles"].split(",")
+                          if r.strip()}))
             if "roles" in form else (existing.roles if existing else ()))
     book.users[who] = accounts.Account(who, hashed, kept)
     # A role used here should exist without having to be declared twice.
@@ -1812,6 +1814,7 @@ async def accounts_delete(
     restores the access, and nothing had to be rewritten across the archive.
     """
     name = (await _form(request)).get("name", "")
+    name = accounts.canonical(name)
     book = store()
     if name == accounts.ADMIN:
         return _back("the admin account is built in")
@@ -1833,7 +1836,8 @@ async def accounts_roles(
     """
     roles = (await _form(request)).get("roles", "")
     book = store()
-    book.roles = sorted({r.strip() for r in roles.split(",") if r.strip()})
+    book.roles = sorted({accounts.canonical(r) for r in roles.split(",")
+                         if r.strip()})
     accounts.save(book)
     return _back("saved roles")
 

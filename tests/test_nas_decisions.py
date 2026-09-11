@@ -300,3 +300,47 @@ def test_an_override_that_pins_nothing_is_refused(media: Path) -> None:
     made, and `no sidecar means unreviewed` depends on that not happening."""
     with pytest.raises(decisions.DecisionError):
         decisions.write(media, Decision(date_override="*-*-*-*:*:*"))
+
+
+# --- names fold, tags do not -------------------------------------------------
+
+def test_an_audience_folds_to_one_spelling(media: Path) -> None:
+    """`Kid` and `kid` are one person, not two audiences that look identical."""
+    decisions.write(media, Decision(audience=("Kid", "KID", "kid")))
+
+    assert decisions.read(media) == Decision(audience=("kid",))
+
+
+def test_unsharing_matches_whatever_case_was_typed(media: Path) -> None:
+    """The one that matters: access granted and then not taken back is worse
+    than never granting it."""
+    decisions.apply(media, add_audience=["Family"])
+    decisions.apply(media, remove_audience=["FAMILY"])
+
+    assert not decisions.sidecar_path(media).exists()
+
+
+def test_sharing_twice_in_different_case_is_one_grant(media: Path) -> None:
+    decisions.apply(media, add_audience=["tv"])
+    decisions.apply(media, add_audience=["TV"])
+
+    assert decisions.read(media) == Decision(audience=("tv",))
+
+
+def test_a_sidecar_written_elsewhere_still_folds(media: Path) -> None:
+    """Read-side too, or a hand-edited `Kid` would be a grant nothing matches."""
+    decisions.sidecar_path(media).write_text(
+        '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+        '<rdf:Description rdf:about="" xmlns:pix="http://pix.local/">'
+        "<pix:Audience><rdf:Bag><rdf:li>Kid</rdf:li></rdf:Bag></pix:Audience>"
+        "</rdf:Description></rdf:RDF>", encoding="utf-8")
+
+    assert decisions.read(media) == Decision(audience=("kid",))
+
+
+def test_tags_keep_their_case(media: Path) -> None:
+    """A tag is a phrase someone wrote, not an identifier — folding it would
+    rewrite what they typed into the permanent record."""
+    decisions.write(media, Decision(tags=("Beach", "beach")))
+
+    assert decisions.read(media) == Decision(tags=("Beach", "beach"))
