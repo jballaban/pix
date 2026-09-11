@@ -239,6 +239,20 @@ def needs_render(media: Path, codec: str | None) -> bool:
     return not render_path(media).is_file()
 
 
+def wants_render(media: Path) -> bool:
+    """Whether `media` needs an H.264 render, without probing images.
+
+    The extension check comes first so the codec lookup — a meta-tier read — is
+    only paid for video.
+    """
+    ext = media.suffix.lower()
+    if ext not in _VIDEO_EXTS or ext in _NO_RENDER_EXTS:
+        return False
+    if render_path(media).is_file():
+        return False
+    return needs_render(media, video_codec(media))
+
+
 def needs_work(media: Path) -> tuple[bool, bool, bool]:
     """`(needs thumb, needs preview, needs meta)` — what is missing.
 
@@ -315,12 +329,8 @@ def pending_files(echo: Callable[[str], None] = lambda _: None) -> list[Path]:
                         or name + ".json" not in metas)
                 # A video may be complete on every image tier and still need a
                 # render — the codec question the extension cannot answer.
-                if not want:
-                    ext = Path(name).suffix.lower()
-                    if (ext in _VIDEO_EXTS and ext not in _NO_RENDER_EXTS
-                            and name + ".mp4" not in renders):
-                        want = needs_render(folder / name,
-                                            video_codec(folder / name))
+                if not want and name + ".mp4" not in renders:
+                    want = wants_render(folder / name)
                 if want:
                     pending.append(folder / name)
                     scanned["found"] += 1
@@ -463,7 +473,11 @@ def _derive_one(media: Path, summary: ProcessSummary, lock: threading.Lock,
                 exif: "_ExifPool", state: dict[str, int]) -> None:
     """Make whatever `media` is missing."""
     want_thumb, want_preview, want_meta = needs_work(media)
-    if not (want_thumb or want_preview or want_meta):
+    # A video can be complete on every image tier and still need a render — the
+    # codec question an extension cannot answer. Leaving this out of the early
+    # return dismissed all 421 HEVC clips as "already done".
+    want_render = wants_render(media)
+    if not (want_thumb or want_preview or want_meta or want_render):
         with lock:
             summary.skipped += 1
         return
@@ -487,15 +501,14 @@ def _derive_one(media: Path, summary: ProcessSummary, lock: threading.Lock,
 
     # A render is the expensive item, so it goes after the cheap ones: a
     # cancelled run still leaves the thumbnails and metadata it managed.
-    if not state["cancelling"]:
+    if want_render and not state["cancelling"]:
         try:
-            if needs_render(media, video_codec(media)):
-                if render_video(media):
-                    with lock:
-                        summary.renders += 1
-                else:
-                    with lock:
-                        summary.failed.append(f"{media.name}: render failed")
+            if render_video(media):
+                with lock:
+                    summary.renders += 1
+            else:
+                with lock:
+                    summary.failed.append(f"{media.name}: render failed")
         except Exception as e:                # noqa: BLE001
             if not state["cancelling"]:
                 with lock:

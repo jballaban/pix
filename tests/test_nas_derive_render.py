@@ -161,3 +161,66 @@ def test_no_render_is_attempted_while_cancelling(tiers: dict[str, Path]) -> None
 
     assert summary.renders == 0
     assert summary.failed == []
+
+
+# --- the gap between the scan and the worker ---------------------------------
+
+def test_a_clip_needing_only_a_render_is_not_skipped(
+    tiers: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The regression: `pending_files` found all 421, `_derive_one` skipped them.
+
+    `_derive_one` returned early once the thumb, preview and meta tiers were
+    complete — before it ever reached the render block — so every HEVC clip was
+    counted as "already done" and nothing was encoded.
+    """
+    media = _clip(tiers, "a.mp4", "hvc1")
+    for tier in ("thumb", "preview"):
+        d = tiers["master"].parent / tier / "init_2026"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "a.mp4.jpg").write_bytes(b"x")
+
+    called: list[Path] = []
+    monkeypatch.setattr(derive, "render_video",
+                        lambda m, **k: called.append(m) or True)
+
+    summary = derive.ProcessSummary()
+    derive._derive_one(media, summary, derive.threading.Lock(),
+                       derive._ExifPool(), {"cancelling": 0})
+
+    assert called == [media]
+    assert summary.renders == 1
+    assert summary.skipped == 0
+
+
+def test_a_finished_h264_clip_is_still_skipped(
+    tiers: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The early return must still fire for work that is genuinely done."""
+    media = _clip(tiers, "a.mp4", "avc1")
+    for tier in ("thumb", "preview"):
+        d = tiers["master"].parent / tier / "init_2026"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "a.mp4.jpg").write_bytes(b"x")
+
+    called: list[Path] = []
+    monkeypatch.setattr(derive, "render_video",
+                        lambda m, **k: called.append(m) or True)
+
+    summary = derive.ProcessSummary()
+    derive._derive_one(media, summary, derive.threading.Lock(),
+                       derive._ExifPool(), {"cancelling": 0})
+
+    assert called == []
+    assert summary.skipped == 1
+
+
+def test_images_never_cost_a_codec_lookup(
+    tiers: dict[str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """5,685 JPEGs must not each pay a meta-tier read to be told they are images."""
+    media = _clip(tiers, "a.jpg", None)
+    monkeypatch.setattr(derive, "video_codec",
+                        lambda m: pytest.fail("probed an image"))
+
+    assert derive.wants_render(media) is False
