@@ -632,6 +632,35 @@ third day produces a single folder holding all of it. A master folder means
 Resuming an interrupted upload reuses the existing folder, skipping what is
 already there by name and size.
 
+### The NAS is required, and import fails without it
+
+The skip manifest's **committed half lives on the NAS** (the ledgers), so `import`
+has to read it before it can be incremental.
+
+**Collecting it is cheap, because of the header.** List master, read the *first
+line* of each `.import.jsonl` to learn its device, then read the bodies of only the
+folders matching that serial. A phone with 20,000 photos across fifty upload
+folders is a few MB of JSONL.
+
+**Read it fresh every run — do not cache it locally.** A stale cache is worse than
+none, because its failure mode is silently re-downloading.
+
+**If the NAS is unreachable, `import` stops** — and the reason is not caution.
+Without the committed half it is not a degraded operation, it is a *different*
+one: "pull new photos" becomes "re-pull the phone's entire history," which is tens
+of thousands of redundant MTP downloads that then upload into master as duplicates
+nothing removes on its own, since [dedupe no longer deletes](#13-what-survives).
+Failing is strictly better. **Check reachability before touching the device**, not
+halfway through enumerating it.
+
+This differs from the [device registry](#the-ledger), which degrades gracefully: a
+missing friendly name means a prompt, a missing manifest means corrupting the
+archive. One is convenience, the other is correctness.
+
+(If offline import ever becomes a real need — pulling a phone while travelling —
+the answer is a local cache of the committed manifest, accepting staleness when
+another machine uploads. Speculative while imports happen at the desk.)
+
 ### Cancel and resume
 
 **Every command is cancel-and-resume safe**, which matters because a long import is
