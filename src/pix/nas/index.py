@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator, cast
@@ -146,10 +147,31 @@ def build(db_path: Path, *, echo: Callable[[str], None] = lambda _: None,
                     if row["event"]:
                         events.add(str(row["event"]))
                 echo(f"indexed {folder}")
+            conn.execute("INSERT OR REPLACE INTO meta VALUES ('built_at', ?)",
+                         (str(int(time.time())),))
     finally:
         stats.events = len(events)
 
     return stats
+
+
+def built_at(conn: sqlite3.Connection) -> float | None:
+    """When the index was last built, as a unix timestamp.
+
+    Staleness has no other signal: nothing watches the share, so an index that
+    predates the last `process` run simply does not know about the files it
+    made. Surfacing the age is how that gets noticed rather than experienced as
+    photos mysteriously missing.
+    """
+    try:
+        row = conn.execute(
+            "SELECT value FROM meta WHERE key = 'built_at'").fetchone()
+    except sqlite3.Error:
+        return None
+    try:
+        return float(row["value"]) if row else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _folders(meta_root: Path, master_root: Path) -> Iterator[tuple[str, set[str]]]:

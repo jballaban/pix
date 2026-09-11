@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import time
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -136,7 +137,7 @@ def home(user: Annotated[str, Depends(require_user)]) -> HTMLResponse:
                  '<span class="dim">&middot; no auth configured</span>')
     head = (f'{s["files"]:,} files &middot; {s["events"]} events &middot; '
             f'{s["unreviewed"]:,} unreviewed &middot; {s["undated"]:,} undated '
-            f'{open_note}')
+            f'&middot; indexed {_age(ix.built_at(conn))} {open_note}')
 
     if not rows:
         return _page("pix2", '<p class="empty">Nothing indexed yet.</p>')
@@ -315,6 +316,27 @@ def _q(text: object) -> str:
     from urllib.parse import quote
 
     return quote(str(text), safe="")
+
+
+def _age(timestamp: float | None) -> str:
+    """How long ago the index was built, in words.
+
+    Nothing watches the share, so an index predating the last `process` run
+    simply does not know about the files it made. Showing the age is how that
+    gets noticed, rather than experienced as photos mysteriously missing.
+    """
+    if timestamp is None:
+        return "at an unknown time"
+    seconds = max(time.time() - timestamp, 0)
+    if seconds < 90:
+        return "just now"
+    minutes = seconds / 60
+    if minutes < 90:
+        return f"{int(minutes)}m ago"
+    hours = minutes / 60
+    if hours < 36:
+        return f"{int(hours)}h ago"
+    return f"{int(hours / 24)}d ago"
 
 
 def _dur(seconds: object) -> str:

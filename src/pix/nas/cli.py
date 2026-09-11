@@ -186,6 +186,12 @@ def process() -> None:
     if len(summary.failed) > 10:
         typer.echo(f"  ... and {len(summary.failed) - 10} more", err=True)
 
+    # Rebuild the index here rather than leaving it as a step to remember.
+    # `process` is the last pipeline stage and knows new derived data exists,
+    # and a rebuild is correct for whatever currently exists — so even a
+    # cancelled run leaves a valid index rather than a stale one.
+    _reindex(quiet=True)
+
     if summary.cancelled:
         typer.echo("")
         typer.echo("Cancelled. Re-run `pix2 process` to continue where it left off.")
@@ -203,16 +209,24 @@ def index_cmd() -> None:
     always correct beats an incremental path that can drift.
     """
     banner()
-    from pix.nas import index as ix
-    from pix.nas.const import INDEX_DB
-
     try:
         ledger.require_share()
     except NasUnreachable as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
 
+    _reindex(quiet=False)
+
+
+def _reindex(*, quiet: bool) -> None:
+    """Rebuild the index, reporting unless it is a trailing step of another run."""
+    from pix.nas import index as ix
+    from pix.nas.const import INDEX_DB
+
     stats = ix.build(INDEX_DB, echo=lambda m: None)
+    if quiet:
+        typer.echo(f"indexed {stats.files:,} file(s)")
+        return
     typer.echo(
         f"{stats.files:,} file(s), {stats.events} event(s), "
         f"{stats.with_date:,} dated, {stats.with_sidecar:,} with decisions"

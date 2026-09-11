@@ -248,3 +248,24 @@ def test_grid_marks_which_cells_are_video(client: TestClient) -> None:
     html = client.get("/event/Italy - Sicily").text
     assert 'data-kind="video"' in html
     assert 'data-kind="image"' in html
+
+
+# --- staleness ---------------------------------------------------------------
+
+def test_home_shows_when_the_index_was_built(client: TestClient) -> None:
+    """Nothing watches the share, so age is the only signal an index is stale."""
+    assert "indexed" in client.get("/").text
+
+
+def test_age_is_rendered_in_words() -> None:
+    import time as _t
+
+    assert web._age(_t.time()) == "just now"
+    assert web._age(_t.time() - 600) == "10m ago"
+    assert web._age(_t.time() - 7200) == "2h ago"
+    assert web._age(_t.time() - 86400 * 3) == "3d ago"
+
+
+def test_an_index_without_a_timestamp_still_renders() -> None:
+    """Older index files predate the built_at row; they must not 500."""
+    assert web._age(None) == "at an unknown time"

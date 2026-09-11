@@ -243,3 +243,15 @@ def test_open_ro_does_not_create_a_missing_database(tmp_path: Path) -> None:
 
     with pytest.raises(sqlite3.OperationalError):
         ix.open_ro(tmp_path / "nope.db").execute("SELECT 1 FROM files")
+
+
+def test_build_records_when_it_ran(tree: dict[str, Path]) -> None:
+    import time as _t
+
+    _record(tree, "init_2026", "a.jpg", {})
+    _build(tree)
+
+    stamp = ix.built_at(ix.open_ro(tree["db"]))
+
+    assert stamp is not None
+    assert abs(_t.time() - stamp) < 60
