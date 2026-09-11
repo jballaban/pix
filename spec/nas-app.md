@@ -581,8 +581,19 @@ way `EXTENSION_POLICY` already is:
 
 | | |
 |---|---|
-| `F:\pix\import\{name}\` | staging |
+| `G:\pix-import\{name}\` | staging |
 | `\\nas\pix` | master |
+
+**Staging lives on `G:`, and that is forced rather than arbitrary.** A folder
+import hardlinks, and hardlinks cannot cross volumes — so staging must share a
+volume with the legacy library at `G:\pix`, or seeding silently falls back to
+real copies. It cannot afford to: measured, the 2022 folder alone is **946GB** and
+2023 is **816GB**, against 819GB free on `F:`. A single year would not fit.
+
+It also has to sit *outside* the Synology Drive sync scope, or staging would
+upload itself through the sync client. Drive syncs per top-level folder —
+`.SynologyWorkingDirectory` is present in `G:\pix` and `G:\photo` but not at
+`G:\` — so a sibling folder at `G:\pix-import` is outside every scope.
 
 **No dry-runs and no run folders**, because nothing here is destructive — import
 hardlinks, upload copies, process writes derived trees. The **one** destructive

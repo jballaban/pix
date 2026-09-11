@@ -17,6 +17,9 @@ dependencies = [
 
 [project.scripts]
 pix = "pix.cli:main"
+# Transitional second entry point for the NAS architecture (spec/nas-app.md).
+# Removed when src/pix/nas/ is promoted to src/pix/.
+pix2 = "pix.nas.cli:main"
 
 [build-system]
 requires = ["hatchling"]

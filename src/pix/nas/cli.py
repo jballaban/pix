@@ -1,0 +1,81 @@
+"""`pix2` — the NAS architecture's console script (spec/nas-app.md).
+
+A second entry point so the existing `pix` keeps working untouched until seeding
+is proven. When the old architecture is amputated, this package is promoted to
+`src/pix/` and `pix2` disappears.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Annotated
+
+import typer
+
+from pix import banner
+from pix.nas.const import IMPORT_ROOT, MASTER_DIR
+from pix.nas.folder_import import FolderImportError, run_folder_import
+
+app: typer.Typer = typer.Typer(
+    name="pix2",
+    help="Personal media archive: import, upload, process. See spec/nas-app.md.",
+    add_completion=False,
+    no_args_is_help=True,
+)
+
+import_app: typer.Typer = typer.Typer(
+    name="import",
+    help="Pull media into staging, from a device or a folder.",
+    no_args_is_help=True,
+)
+app.add_typer(import_app, name="import")
+
+
+@import_app.command("folder")
+def import_folder(
+    source: Annotated[Path, typer.Argument(help="Folder to import from.")],
+    name: Annotated[str, typer.Option("--name", help=(
+        "Staging folder name, and the prefix of the eventual master folder "
+        "(e.g. --name legacy_2015 gives legacy_2015_<upload-time>)."
+    ))],
+) -> None:
+    """Stage a folder tree for upload (SD card, shared folder, legacy library).
+
+    Hardlinks into staging where it can, so re-running is cheap and a cancelled
+    run resumes without redoing work.
+    """
+    banner()
+    try:
+        summary = run_folder_import(source, name, echo=typer.echo)
+    except FolderImportError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+
+    typer.echo(
+        f"{summary.name}: {summary.landed} staged "
+        f"({summary.linked} linked, {summary.copied} copied, "
+        f"{summary.adopted} adopted), {summary.skipped} already staged, "
+        f"{summary.ignored} ignored."
+    )
+    typer.echo(f"Staging: {summary.staging}")
+
+    if summary.failed:
+        typer.echo(f"\n{len(summary.failed)} file(s) failed:", err=True)
+        for line in summary.failed[:20]:
+            typer.echo(f"  {line}", err=True)
+        if len(summary.failed) > 20:
+            typer.echo(f"  ... and {len(summary.failed) - 20} more", err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command("where")
+def where() -> None:
+    """Print the configured paths. There is no config file — these are constants."""
+    banner()
+    typer.echo(f"staging : {IMPORT_ROOT}")
+    typer.echo(f"master  : {MASTER_DIR}")
+
+
+def main() -> None:
+    """Console-script entry point."""
+    app()
