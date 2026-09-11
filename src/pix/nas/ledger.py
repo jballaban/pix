@@ -39,7 +39,7 @@ class LedgerHeader:
     name: str
     source: str              # "device" | "folder"
     serial: str | None = None
-    source_root: str | None = None
+    source_roots: tuple[str, ...] = ()
 
 
 def require_share() -> None:
@@ -94,13 +94,19 @@ def read_header(ledger: Path) -> LedgerHeader | None:
     if not isinstance(name, str) or not isinstance(source, str):
         return None
     serial = data.get("serial")
-    root = data.get("source_root")
+    roots_raw: object = data.get("source_roots")
+    roots: tuple[str, ...] = ()
+    if isinstance(roots_raw, list):
+        items = cast("list[object]", roots_raw)
+        roots = tuple(r for r in items if isinstance(r, str))
+    elif isinstance(roots_raw, str):
+        roots = (roots_raw,)
     return LedgerHeader(
         folder=ledger.parent,
         name=name,
         source=source,
         serial=serial if isinstance(serial, str) else None,
-        source_root=root if isinstance(root, str) else None,
+        source_roots=roots,
     )
 
 
@@ -157,13 +163,23 @@ def committed_folder_keys(name: str, source_root: Path) -> set[tuple[str, int]]:
     for header in iter_headers():
         if header.name != name or header.source != "folder":
             continue
-        if header.source_root is not None and _norm_root(header.source_root) != root:
+        # Header roots are a cheap pre-filter: skip a whole folder without
+        # opening its body. A batch that never saw this root cannot hold it.
+        if header.source_roots and root not in {
+            _norm_root(r) for r in header.source_roots
+        }:
             continue
         for entry in iter_entries(header.folder / LEDGER_NAME):
             rel = entry.get("rel")
             size = entry.get("size")
-            if isinstance(rel, str) and isinstance(size, int):
-                keys.add(skip_key(rel, size))
+            if not isinstance(rel, str) or not isinstance(size, int):
+                continue
+            # One staging folder can accumulate from several sources, so the
+            # authoritative root is the entry's own.
+            entry_root = entry.get("root")
+            if isinstance(entry_root, str) and _norm_root(entry_root) != root:
+                continue
+            keys.add(skip_key(rel, size))
     return keys
 
 

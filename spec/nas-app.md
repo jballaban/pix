@@ -635,6 +635,14 @@ behaviour is unchanged: culling deletes the link while the `.manifest/` sidecar
 survives as the durable skip record, deleting a whole folder is still the
 "redo this batch" gesture, and `upload` reads through the link none the wiser.
 
+**Staging nests under a source tag**, a flattening of the source's absolute path
+(`G:\pix\2001` becomes `G_pix_2001`), and `rel` is relative to the *staging*
+root so it carries that prefix. Both collisions this prevents are real: importing
+two library years under one name would otherwise drop both `Australia Hockey/`
+trees into the same place, **and** give them one skip key — so the second year
+would be silently dropped as already-seen. It also means the flattened master
+name is fully self-describing: `G_pix_2001_Australia Hockey_x.jpg`.
+
 **Transport is SMB, not an app API.** An upload is potentially hundreds of GB, and
 pushing that through a Python app on a 4-core Atom would be far slower than the
 NAS's own Samba. It also keeps ingest working while the app is down or unbuilt —
@@ -720,7 +728,8 @@ multi-hour one.
 `{device}_{datetime}/.import.jsonl` is appended **during** upload (not written at
 the end, so a crash leaves a consistent partial record). Its **first line is a
 header** describing the source, and every line after it is one object pulled in
-that batch:
+that batch. Each entry carries its own `root`, because one staging folder can
+accumulate from several sources and the header's list is only a cheap pre-filter:
 
 ```json
 {"device_name":"Jamies-iPhone","serial":"...","source":"device","uploaded":"..."}

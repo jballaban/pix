@@ -16,6 +16,7 @@ import pytest
 from pix.nas import folder_import as fi
 from pix.nas import ledger
 from pix.nas import staging as st
+from pix.nas.staging import source_tag
 
 
 def _write_ledger(folder: Path, header: dict[str, object],
@@ -52,7 +53,7 @@ def test_empty_master_is_reachable_and_empty(master: Path) -> None:
 def test_committed_keys_are_read_from_ledgers(master: Path) -> None:
     _write_ledger(
         master / "legacy_2015_2026-09-11T02-00",
-        {"name": "legacy_2015", "source": "folder", "source_root": r"G:\pix\2015"},
+        {"name": "legacy_2015", "source": "folder", "source_roots": [r"G:\pix\2015"]},
         [{"rel": "a/one.jpg", "size": 3, "outcome": "kept"},
          {"rel": "b.heic", "size": 3, "outcome": "kept"}],
     )
@@ -71,7 +72,7 @@ def test_keys_are_scoped_by_name(master: Path) -> None:
         {"rel": "DCIM/100MSDCF/DSC00001.JPG", "size": 1024, "outcome": "kept"}
     ]
     _write_ledger(master / "card_a_2026-09-11T02-00",
-                  {"name": "card_a", "source": "folder", "source_root": str(Path("/cards/a"))}, shared)
+                  {"name": "card_a", "source": "folder", "source_roots": [str(Path("/cards/a"))]}, shared)
 
     assert ledger.committed_folder_keys("card_a", Path("/cards/a")) == {
         st.skip_key("DCIM/100MSDCF/DSC00001.JPG", 1024)
@@ -105,7 +106,7 @@ def test_malformed_ledger_is_skipped_not_fatal(master: Path) -> None:
     (master / "broken_2026" / ".import.jsonl").write_text("{not json\n", encoding="utf-8")
     _write_ledger(master / "legacy_2015_2026-09-11T02-00",
                   {"name": "legacy_2015", "source": "folder",
-                   "source_root": r"G:\pix\2015"},
+                   "source_roots": [r"G:\pix\2015"]},
                   [{"rel": "a.jpg", "size": 1}])
 
     assert ledger.committed_folder_keys("legacy_2015", Path(r"G:\pix\2015")) == {st.skip_key("a.jpg", 1)}
@@ -122,17 +123,21 @@ def test_import_skips_already_uploaded_files(master: Path, tmp_path: Path,
     (src / "two.jpg").write_bytes(b"two")
     monkeypatch.setattr(fi, "IMPORT_ROOT", tmp_path / "staging")
 
+    # `rel` is staging-relative, so it carries the source tag (staging.source_tag).
+    rel = f"{source_tag(src)}/one.jpg"
     _write_ledger(master / "legacy_2015_2026-09-11T02-00",
                   {"name": "legacy_2015", "source": "folder",
-                   "source_root": str(src.resolve())},
-                  [{"rel": "one.jpg", "size": 3, "outcome": "kept"}])
+                   "source_roots": [str(src.resolve())]},
+                  [{"rel": rel, "root": str(src.resolve()), "size": 3,
+                    "outcome": "kept"}])
 
     s = fi.run_folder_import(src, "legacy_2015")
 
     assert s.skipped == 1
     assert s.landed == 1
-    assert not (tmp_path / "staging" / "legacy_2015" / "one.jpg").exists()
-    assert (tmp_path / "staging" / "legacy_2015" / "two.jpg").exists()
+    staged = tmp_path / "staging" / "legacy_2015" / source_tag(src)
+    assert not (staged / "one.jpg").exists()
+    assert (staged / "two.jpg").exists()
 
 
 def test_import_fails_when_nas_is_unreachable(tmp_path: Path,
@@ -163,8 +168,9 @@ def test_culled_then_uploaded_stays_skipped(master: Path, tmp_path: Path,
     # Simulate upload: ledger written, staging cleared.
     _write_ledger(master / "legacy_2015_2026-09-11T02-00",
                   {"name": "legacy_2015", "source": "folder",
-                   "source_root": str(src.resolve())},
-                  [{"rel": "one.jpg", "size": 3, "outcome": "kept"}])
+                   "source_roots": [str(src.resolve())]},
+                  [{"rel": f"{source_tag(src)}/one.jpg", "root": str(src.resolve()),
+                    "size": 3, "outcome": "kept"}])
     import shutil
     shutil.rmtree(tmp_path / "staging" / "legacy_2015")
 

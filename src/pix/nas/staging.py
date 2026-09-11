@@ -18,6 +18,7 @@ import os
 from pathlib import Path
 from typing import Any, cast
 
+from pix.importer import sanitize_component
 from pix.ingest import MANIFEST_DIRNAME
 from pix.markers import IMPORT_TMP_SUFFIX
 
@@ -42,6 +43,31 @@ def is_bare_dotfile(name: str) -> bool:
 def is_skippable(name: str) -> bool:
     """True for a filename a folder import should not land at all."""
     return is_bare_dotfile(name) or Path(name).suffix.lower() in SKIP_EXTENSIONS
+
+
+def source_tag(source: Path) -> str:
+    """Flatten an absolute source path into one safe path component.
+
+    `G:\\pix\\2001` becomes `g_pix_2001`. Staging nests each import under its
+    source tag, which does two things at once:
+
+    - **No physical collision.** Importing `G:\\pix\\2001` and `G:\\pix\\2022` under
+      one name would otherwise drop both `Australia Hockey/` trees into the same
+      place.
+    - **No key collision.** The skip key is `(rel, size)` with `rel` relative to
+      the *staging* root, so including the tag makes it unique across sources.
+      Without it, `Australia Hockey/x.jpg` from two different years is one key,
+      and the second import would be silently skipped as already-seen.
+
+    It also means [upload](upload.py)'s flattening produces a fully self-describing
+    master filename: `g_pix_2001_Australia Hockey_x.jpg`.
+    """
+    text = str(Path(source).resolve())
+    for sep in (os.sep, os.altsep or "/", ":"):
+        text = text.replace(sep, "\x00")
+    parts = [p for p in text.split("\x00") if p and p not in (".", "..")]
+    tag = "_".join(sanitize_component(p) for p in parts if p)
+    return tag or "source"
 
 
 def sidecar_path(landed: Path) -> Path:
@@ -88,11 +114,15 @@ def read_sidecar(path: Path) -> dict[str, Any] | None:
 
 
 def skip_key(rel: str, size: int) -> tuple[str, int]:
-    """Folder-source identity: `(relative path, size)`.
+    """Folder-source identity: `(staging-relative path, size)`.
 
     A folder has no PUID, and path alone is unsafe because a source tree can be
     edited between runs. Size makes the pair stable enough to be idempotent
     while staying free to compute.
+
+    `rel` is relative to the **staging root**, so it carries the
+    `source_tag` prefix — that is what keeps two source trees from colliding on
+    one key. See `source_tag`.
     """
     return (rel.replace("\\", "/").lower(), size)
 

@@ -1,0 +1,322 @@
+"""`pix2 upload` — staging to master over SMB (spec/nas-app.md §9).
+
+Takes every pending staging folder and lands it in master as one folder per
+upload, `{name}_{upload-time}`, flattening each file's relative path into its
+name so the archive stays self-describing when a file is pulled out of the tree.
+
+**This is the only destructive step in the whole pipeline.** Import hardlinks,
+process writes derived trees, and neither can lose anything. Upload clears
+staging — so that clearing is gated per-folder on verification (every file
+present at master at a matching size), not on the run merely finishing. A folder
+that fails verification keeps its staging and says so.
+
+Two properties the spec calls for explicitly:
+
+- **Parallel.** Measured against this NAS, single-threaded small-file throughput
+  is 11-20 MB/s against 28-34 MB/s at 32 threads. Sequential transfer of ~62k
+  files would take over a day, so a worker pool is a schedule-correctness
+  concern, not an optimisation.
+- **Marker temp, then rename.** A killed copy must never leave a partial that a
+  name-and-size check would accept as complete. The `*.__*` marker convention is
+  already sync-excluded, so partials cannot leak anywhere either.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Callable, Iterator
+
+from pix.ingest import MANIFEST_DIRNAME
+from pix.markers import EXPORT_TMP_SUFFIX
+from pix.nas import ledger, staging as st
+from pix.nas.const import IMPORT_ROOT, LEDGER_NAME, MASTER_DIR
+
+#: Concurrency for the SMB copy. 32 is where measured throughput plateaued;
+#: past that the Atom serving the share becomes the limit, not the client.
+WORKERS: int = 32
+
+#: Records which master folder an interrupted upload was filling, so a resumed
+#: run continues into it instead of starting a second one (the folder name
+#: embeds a timestamp, so it cannot simply be recomputed).
+TARGET_MARKER: str = ".upload-target"
+
+
+class UploadError(Exception):
+    """Upload could not start."""
+
+
+@dataclass
+class UploadSummary:
+    """What one staging folder's upload did."""
+
+    name: str
+    master_folder: Path
+    copied: int = 0
+    skipped: int = 0            # already at master, from an interrupted run
+    culled: int = 0             # sidecar with no media: recorded, never copied
+    bytes_copied: int = 0
+    verified: bool = False
+    staging_cleared: bool = False
+    failed: list[str] = field(default_factory=lambda: [])
+
+
+@dataclass(frozen=True)
+class _Item:
+    """One staged file, resolved to where it will live in master."""
+
+    source: Path        # the staged file (a hardlink into the library)
+    rel: str            # path relative to the staging root
+    root: str           # the source root it was imported from
+    size: int
+    flat: str           # its flattened name in master
+
+
+def pending_folders() -> list[Path]:
+    """Every staging folder awaiting upload."""
+    if not IMPORT_ROOT.is_dir():
+        return []
+    return sorted(p for p in IMPORT_ROOT.iterdir() if p.is_dir())
+
+
+def flatten(rel: str) -> str:
+    """Flatten a relative path into a single filename.
+
+    `2015/a/one.jpg` becomes `2015_a_one.jpg`, so the name carries its own
+    provenance: pull one file out of master and it still says where it came
+    from (spec/nas-app.md §3).
+    """
+    return rel.replace("/", "_").replace("\\", "_")
+
+
+def run_upload(*, echo: Callable[[str], None] = lambda _: None) -> list[UploadSummary]:
+    """Upload every pending staging folder. Returns one summary per folder."""
+    ledger.require_share()
+    folders = pending_folders()
+    if not folders:
+        echo("nothing staged")
+        return []
+    return [_upload_one(f, echo=echo) for f in folders]
+
+
+def _upload_one(staging: Path, *, echo: Callable[[str], None]) -> UploadSummary:
+    name = staging.name
+    target = _resolve_target(staging, name)
+    target.mkdir(parents=True, exist_ok=True)
+
+    summary = UploadSummary(name=name, master_folder=target)
+    items, culled = _collect(staging)
+    summary.culled = len(culled)
+
+    ledger_path = target / LEDGER_NAME
+    already = _already_recorded(ledger_path)
+    if not ledger_path.exists():
+        _write_header(ledger_path, name,
+                  {i.root for i in items} | {c[1] for c in culled})
+
+    echo(f"{name}: {len(items)} file(s) staged, {len(culled)} culled, "
+         f"{len(already)} already recorded -> {target.name}")
+
+    lock = threading.Lock()
+    with ledger_path.open("a", encoding="utf-8") as log:
+        def handle(item: _Item) -> None:
+            if item.flat in already:
+                with lock:
+                    summary.skipped += 1
+                return
+            try:
+                moved = _copy_one(item, target)
+            except OSError as e:
+                with lock:
+                    summary.failed.append(f"{item.rel}: {e}")
+                return
+            with lock:
+                if moved:
+                    summary.copied += 1
+                    summary.bytes_copied += item.size
+                else:
+                    summary.skipped += 1
+                _append(log, {
+                    "rel": item.rel, "root": item.root, "size": item.size,
+                    "file": item.flat, "outcome": "kept",
+                })
+
+        with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+            list(pool.map(handle, items))
+
+        with lock:
+            for rel, root, size in culled:
+                if flatten(rel) in already:
+                    continue
+                _append(log, {"rel": rel, "root": root, "size": size,
+                              "outcome": "culled"})
+
+    summary.verified = not summary.failed and _verify(items, target)
+    if summary.verified:
+        _clear(staging)
+        summary.staging_cleared = True
+    return summary
+
+
+def _resolve_target(staging: Path, name: str) -> Path:
+    """The master folder this staging goes to, stable across a resumed run.
+
+    The folder name embeds an upload timestamp, so a resumed run cannot
+    recompute it — it would start a second folder and split one batch in two.
+    The marker records it instead, and is removed when staging is cleared.
+    """
+    marker = staging / TARGET_MARKER
+    if marker.is_file():
+        recorded = marker.read_text(encoding="utf-8").strip()
+        if recorded:
+            return MASTER_DIR / recorded
+    folder = f"{name}_{datetime.now().strftime('%Y-%m-%dT%H-%M-%S')}"
+    marker.write_text(folder, encoding="utf-8")
+    return MASTER_DIR / folder
+
+
+def _collect(staging: Path) -> tuple[list[_Item], list[tuple[str, str, int]]]:
+    """Split staging into files to upload and culled records to note.
+
+    A sidecar whose media is gone is a **cull**: the user deleted it deliberately
+    before upload, and the record has to travel to master anyway so the file is
+    never re-imported (spec/nas-app.md §9).
+    """
+    items: list[_Item] = []
+    culled: list[tuple[str, str, int]] = []
+    used: dict[str, str] = {}
+
+    for sidecar in sorted(staging.rglob(f"*{st.SIDECAR_EXT}")):
+        data = st.read_sidecar(sidecar)
+        if data is None:
+            continue
+        rel = data.get("rel")
+        root = data.get("source_root")
+        size = data.get("size")
+        if not isinstance(rel, str) or not isinstance(root, str):
+            continue
+
+        media = staging / Path(rel)
+        if not media.is_file():
+            # The media is gone but its size is in the sidecar — and it must
+            # reach the ledger, because the skip key is (rel, size). A culled
+            # entry without a size would never join the manifest, and the file
+            # would be re-imported on the next run.
+            if isinstance(size, int):
+                culled.append((rel, root, size))
+            continue
+
+        flat = _unique(flatten(rel), rel, used)
+        items.append(_Item(source=media, rel=rel, root=root,
+                           size=size if isinstance(size, int) else media.stat().st_size,
+                           flat=flat))
+    return items, culled
+
+
+def _unique(flat: str, rel: str, used: dict[str, str]) -> str:
+    """Disambiguate two different paths that flatten to one name.
+
+    `a/b_c.jpg` and `a_b/c.jpg` both flatten to `a_b_c.jpg`. Rare, but silent
+    overwriting in an archive is not an acceptable way to find that out.
+    """
+    if used.get(flat) in (None, rel):
+        used[flat] = rel
+        return flat
+    stem, dot, ext = flat.partition(".")
+    n = 2
+    while True:
+        candidate = f"{stem}~{n}{dot}{ext}"
+        if used.get(candidate) in (None, rel):
+            used[candidate] = rel
+            return candidate
+        n += 1
+
+
+def _copy_one(item: _Item, target: Path) -> bool:
+    """Copy one staged file into master. True if bytes moved, False if present.
+
+    Staged through a marker temp and renamed into place, so a kill mid-copy
+    leaves something that can never be mistaken for a finished file.
+    """
+    dest = target / item.flat
+    if dest.is_file() and dest.stat().st_size == item.size:
+        return False
+    tmp = dest.with_name(dest.name + EXPORT_TMP_SUFFIX)
+    shutil.copy2(item.source, tmp)
+    os.replace(tmp, dest)
+    return True
+
+
+def _verify(items: list[_Item], target: Path) -> bool:
+    """Every uploaded file present at master at its expected size."""
+    for item in items:
+        dest = target / item.flat
+        try:
+            if not dest.is_file() or dest.stat().st_size != item.size:
+                return False
+        except OSError:
+            return False
+    return True
+
+
+def _clear(staging: Path) -> None:
+    """Remove a verified staging folder — the one destructive act here."""
+    shutil.rmtree(staging, ignore_errors=True)
+
+
+def _write_header(path: Path, name: str, roots: set[str]) -> None:
+    """The ledger's first line: which source produced this master folder.
+
+    This is what makes the known-device registry derivable rather than stored,
+    and what lets a lookup skip folders belonging to other sources without
+    opening their bodies.
+    """
+    header: dict[str, Any] = {
+        "name": name,
+        "source": "folder",
+        "source_roots": sorted(roots),
+        "uploaded": datetime.now().isoformat(timespec="seconds"),
+    }
+    with path.open("w", encoding="utf-8") as f:
+        f.write(json.dumps(header) + "\n")
+
+
+def _append(log: Any, entry: dict[str, Any]) -> None:
+    """Append one ledger line and flush.
+
+    Written during the upload rather than at the end, so a crash leaves a
+    consistent partial record instead of an empty one.
+    """
+    log.write(json.dumps(entry) + "\n")
+    log.flush()
+
+
+def _already_recorded(ledger_path: Path) -> set[str]:
+    """Flattened names already in the ledger, so a resume adds no duplicates."""
+    recorded: set[str] = set()
+    for entry in ledger.iter_entries(ledger_path):
+        flat = entry.get("file")
+        if isinstance(flat, str):
+            recorded.add(flat)
+        else:
+            rel = entry.get("rel")
+            if isinstance(rel, str):
+                recorded.add(flatten(rel))
+    return recorded
+
+
+def iter_staged_sidecars(staging: Path) -> Iterator[Path]:
+    """Every `.importinfo` under a staging folder (its `.manifest/` children)."""
+    yield from staging.rglob(f"*{st.SIDECAR_EXT}")
+
+
+__all__ = [
+    "MANIFEST_DIRNAME", "TARGET_MARKER", "UploadError", "UploadSummary",
+    "flatten", "pending_folders", "run_upload",
+]

@@ -16,6 +16,7 @@ from pix import banner
 from pix.nas.const import IMPORT_ROOT, MASTER_DIR
 from pix.nas.folder_import import FolderImportError, run_folder_import
 from pix.nas.ledger import NasUnreachable
+from pix.nas.upload import run_upload
 
 app: typer.Typer = typer.Typer(
     name="pix2",
@@ -69,6 +70,38 @@ def import_folder(
             typer.echo(f"  {line}", err=True)
         if len(summary.failed) > 20:
             typer.echo(f"  ... and {len(summary.failed) - 20} more", err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command("upload")
+def upload() -> None:
+    """Send every pending staging folder to master, then clear what verified.
+
+    Clearing staging is the only destructive step in the pipeline, so it happens
+    per-folder and only after every file is confirmed present at master.
+    """
+    banner()
+    try:
+        summaries = run_upload(echo=typer.echo)
+    except NasUnreachable as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+
+    failed = 0
+    for s in summaries:
+        gb = s.bytes_copied / (1024 ** 3)
+        state = "cleared" if s.staging_cleared else "KEPT (unverified)"
+        typer.echo(
+            f"{s.name}: {s.copied} copied ({gb:.1f} GB), {s.skipped} already there, "
+            f"{s.culled} culled -> {s.master_folder.name}; staging {state}"
+        )
+        for line in s.failed[:10]:
+            typer.echo(f"  {line}", err=True)
+        if len(s.failed) > 10:
+            typer.echo(f"  ... and {len(s.failed) - 10} more", err=True)
+        failed += len(s.failed)
+
+    if failed:
         raise typer.Exit(code=1)
 
 

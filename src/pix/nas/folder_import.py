@@ -98,9 +98,12 @@ def run_folder_import(
     manifest |= committed
 
     summary = FolderImportSummary(name=name, source=source, staging=staging)
+    tag = st.source_tag(source)
 
     for src in _walk(source):
-        rel = src.relative_to(source).as_posix()
+        # Staging-relative, so two source trees under one name cannot collide
+        # either on disk or on the skip key. See `staging.source_tag`.
+        rel = f"{tag}/{src.relative_to(source).as_posix()}"
         if st.is_skippable(src.name) or is_pix_marker(src.name):
             summary.ignored += 1
             continue
