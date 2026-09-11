@@ -8,15 +8,18 @@
 services:
   pix2:
     build:
-      context: .
-      dockerfile: Dockerfile
+      # Repo root, so src/ is in context and gets baked into the image.
+      context: ..
+      dockerfile: deploy/Dockerfile
     image: pix2-app:latest
     container_name: pix2
     restart: unless-stopped
 
     volumes:
-      # The application source, bind-mounted so edits do not need a rebuild.
-      - /volume1/pix2/app/src:/app/src:ro
+      # OPTIONAL. The app source is baked into the image; mounting it here
+      # shadows the baked copy and gives a seconds-long edit loop during
+      # development. Leave it out and the image works on its own.
+      # - /volume1/pix2/app/src:/app/src:ro
 
       # The archive. Read-write because the app writes `.xmp` decisions into
       # master — it is the only writer there besides `upload`. The derived

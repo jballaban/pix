@@ -6,104 +6,77 @@ never decodes anything — `process` already made everything it displays. That i
 what keeps it viable on the RS820+'s no-AVX Atom, and why the image needs neither
 Pillow nor ffmpeg.
 
-Two routes below. **Use the GUI one** unless you already live in a terminal on
-the NAS; it needs no SSH and no compose.
+**The image is self-contained.** Import it, create a container with one volume,
+start it. Nothing to copy onto the share.
 
 ---
 
-## Layout on the NAS
+## 1. Build the image, on the desktop
+
+Docker Desktop running, from the repo root:
 
 ```
-/volume1/pix2/
-    master/  render/  thumb/  preview/  meta/    the archive and its tiers
-    index/index.db                               the app's index
-    app/src/pix/...                              the app source, bind-mounted
-```
-
----
-
-## Route A — Container Manager GUI
-
-### 1. Build the image once, on the desktop
-
-Start Docker Desktop, then from the repo root:
-
-```
-docker build -t pix2-app:latest deploy
+docker build -f deploy/Dockerfile -t pix2-app:latest .
 docker save pix2-app:latest -o pix2-app.tar
 ```
 
-That produces a ~200 MB tar. You only repeat this when a **dependency** changes,
-which is rare — the application source is mounted, not baked in.
+~60 MB. Rebuild whenever you want to ship a code change.
 
-### 2. Put the source and the image on the NAS
+## 2. Import it
 
-Copy to the `pix2` share:
+Copy `pix2-app.tar` to the NAS, then Container Manager → **Image** → **Add** →
+**Add From File** → pick the tar. It appears as `pix2-app:latest`.
 
-- `src/` → `/volume1/pix2/app/src/`
-- `pix2-app.tar` → anywhere convenient
+## 3. Create the container
 
-### 3. Import the image
-
-Container Manager → **Image** → **Add** → **Add From File** → pick
-`pix2-app.tar`. It appears as `pix2-app:latest`.
-
-### 4. Create the container
-
-Container Manager → **Container** → **Create** → choose `pix2-app:latest`.
+Container Manager → **Container** → **Create** → `pix2-app:latest`.
 
 - **General**: enable *Auto-restart*
 - **Port settings**: local `8800` → container `8000`
-- **Volume settings** — add two folder mounts:
+- **Volume settings** — add **one** folder mount:
 
   | Mount path | Container path | Access |
   |---|---|---|
-  | `/pix2/app/src` | `/app/src` | Read-only |
-  | `/pix2` | `/volume1/pix2` | Read/Write |
+  | `/pix2` | `/volume1/pix2` | **Read/Write** |
 
-  The second is read/write because curation will write `.xmp` decisions into
-  master. It is the only writer there besides `upload`.
+  Read/write because curation will write `.xmp` decisions into master. It is the
+  only writer there besides `upload`.
 
-- **Environment**: add `PIX2_USERS` with the output of `pix2 passwd james`
-  (see below). Leave it empty and the app runs with **no authentication at
-  all** — the landing page says so, but it is only appropriate on a LAN with
-  nothing exposed outward.
+- **Environment** (optional): `PIX2_USERS` — see below. Leave it unset and the
+  app runs with **no authentication at all**; the landing page says so, which is
+  fine on a LAN with nothing exposed outward and not fine otherwise.
 
 Start it. The app is on `http://<nas>:8800`.
 
-### 5. Build the index, from the desktop
+If it will not start, the log says why in plain words — Container Manager →
+`pix2` → **Log**. The two things it checks are the archive mount and, if you
+mounted source, whether it is the right directory.
+
+## 4. Build the index, from the desktop
 
 ```
 pix2 index
 ```
 
-It reads the meta tier that `process` wrote, so run `pix2 process` first if you
-have uploaded anything new.
-
-### Deploying a change
-
-No rebuild, no re-import:
-
-1. Copy `src/` → `/volume1/pix2/app/src/`
-2. Container Manager → select `pix2` → **Restart**
-
-Seconds, because the source is mounted rather than baked into the image.
+It reads the meta tier that `process` writes, so run `pix2 process` first if
+anything has been uploaded since.
 
 ---
 
-## Route B — SSH and compose
+## Shipping a change
 
-If you would rather drive it from a shell, `docker-compose.yml` in this folder
-expresses exactly the same container:
+Rebuild, save, re-import, recreate the container. A couple of minutes.
 
-```
-cd /volume1/pix2/app
-sudo docker compose up -d --build
-```
+If you are iterating and that becomes tiresome, mount the source to shadow the
+baked copy:
 
-Deploying a change is then `sudo docker restart pix2`.
+1. Copy the repo's `src/` **contents** to `/volume1/pix2/app/src/`, so that
+   `/volume1/pix2/app/src/pix/nas/web.py` exists.
+2. Add a second volume: `/pix2/app/src` → `/app/src` (read-only).
 
----
+Then deploying is copying `.py` files and hitting **Restart** — seconds, no
+rebuild. `PYTHONPATH` puts `/app/src` ahead of the baked copy, so the mount wins
+whenever it is present.
 
 ## Credentials
 
@@ -116,21 +89,23 @@ separated by `;`. Passwords are scrypt-hashed and never stored in the clear: a
 credentials file on a share reachable over SMB is exactly how a reused password
 leaks.
 
-> If you set it in `docker-compose.yml` rather than the GUI, double the `$`
+> Setting it in `docker-compose.yml` rather than the GUI? Double the `$`
 > (`salt$$hash`) — compose interpolates a single one.
 
 ## Exposing it beyond the LAN
 
 DSM → Control Panel → Login Portal → Advanced → **Reverse Proxy**, pointing a
-hostname at `localhost:8800`. That gets you TLS and a name.
+hostname at `localhost:8800`. You do **not** need Web Station; that is for
+hosting PHP and static sites.
 
-**Set `PIX2_USERS` first.** The reverse proxy does not authenticate, so the app's
-own auth is the only thing in front of your photos.
+**Set `PIX2_USERS` first.** The reverse proxy terminates TLS and routes — it does
+not authenticate — so the app's own auth is the only thing in front of your
+photos.
 
 ## Health
 
-`GET /healthz` is deliberately unauthenticated — Container Manager's probe cannot
-log in — and reports whether the index exists:
+`GET /healthz` is deliberately unauthenticated, because Container Manager's probe
+cannot log in:
 
 ```
 curl http://<nas>:8800/healthz
@@ -142,6 +117,8 @@ curl http://<nas>:8800/healthz
 - **The index is disposable.** It lives in the share so it survives container
   rebuilds — 62k rows take minutes to rebuild and there is no reason to pay that
   for an image swap — but losing it costs only a `pix2 index`.
+- **The app never writes the index.** It opens it read-only; only `pix2 index`
+  builds it.
 - **One uvicorn worker.** SQLite is opened per request and the index is
   read-mostly, so concurrency buys nothing and costs memory the NAS has not got
   spare.
