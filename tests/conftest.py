@@ -84,6 +84,11 @@ def _isolate_nas_paths(  # pyright: ignore[reportUnusedFunction]
                 continue
         return value in real_roots
 
+    # `_scratch` is a *function*, so the attribute scan below cannot see it —
+    # and it is the one that bit us: a test suite sweeping the shared poster-frame
+    # directory deleted a live run's temps mid-read.
+    monkeypatch.setattr(derive, "_scratch", lambda: sandbox / "scratch")
+
     for module in (const, derive, device_import, folder_import, ledger, upload):
         for name, value in list(vars(module).items()):
             if isinstance(value, Path) and under_real_root(value):

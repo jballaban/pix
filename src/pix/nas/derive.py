@@ -29,6 +29,7 @@ today.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import threading
@@ -140,7 +141,7 @@ def sweep_partials() -> int:
     the temps accumulate in the tiers forever. Poster frames go to local scratch
     and are cleaned there too.
     """
-    removed = 0
+    removed = _reap_dead_scratch()
     for root in (THUMB_DIR, PREVIEW_DIR, META_DIR, _scratch()):
         if not root.is_dir():
             continue
@@ -390,8 +391,11 @@ def _poster_frame(media: Path) -> Path | None:
 
     duration = _duration(media)
     offset = max(duration * FRAME_AT, 0.0) if duration else 0.0
-    tmp = media.parent / (media.name + ".poster" + EXPORT_TMP_SUFFIX + ".jpg")
-    tmp = Path(str(tmp).replace(str(media.parent), str(_scratch())))
+    # Named with the master folder as well as the file: two folders can hold the
+    # same flattened name, and a shared temp would have one worker deleting what
+    # another is reading.
+    stem = f"{media.parent.name}_{media.name}"
+    tmp = _scratch() / (stem + ".poster" + EXPORT_TMP_SUFFIX + ".jpg")
     tmp.parent.mkdir(parents=True, exist_ok=True)
 
     cmd = [ffmpeg, "-v", "error", "-ss", f"{offset:.3f}", "-i", str(media),
@@ -425,11 +429,43 @@ def _duration(media: Path) -> float | None:
 
 
 def _scratch() -> Path:
-    """Local scratch for poster frames.
+    """Local scratch for poster frames, **private to this process**.
 
     Deliberately not beside the media: master is on the NAS and writing temps
     there would put derived churn inside the archive.
+
+    Per-PID because it is swept at startup. A single shared directory means any
+    other run — including a test suite — wipes the frames a live run is in the
+    middle of reading, which surfaces as a `FileNotFoundError` on a file that
+    demonstrably existed a moment earlier. Observed exactly that.
     """
     import tempfile
 
-    return Path(tempfile.gettempdir()) / "pix2-process"
+    return Path(tempfile.gettempdir()) / "pix2-process" / str(os.getpid())
+
+
+def _reap_dead_scratch() -> int:
+    """Remove scratch directories belonging to processes that are gone.
+
+    Per-PID scratch would otherwise accumulate forever after a hard kill. Only
+    dead owners are touched: a live run's directory is never anyone else's to
+    delete, which is the whole point of splitting them up.
+    """
+    import psutil
+
+    parent = _scratch().parent
+    if not parent.is_dir():
+        return 0
+    removed = 0
+    for child in parent.iterdir():
+        if not child.is_dir() or child.name == _scratch().name:
+            continue
+        try:
+            pid = int(child.name)
+        except ValueError:
+            continue
+        if psutil.pid_exists(pid):
+            continue
+        shutil.rmtree(child, ignore_errors=True)
+        removed += 1
+    return removed
