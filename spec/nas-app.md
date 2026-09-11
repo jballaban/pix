@@ -144,7 +144,7 @@ established answer to exactly this constraint.
 together, which is the owner's stated rule ("lose the file, lose what relates to
 it") at folder granularity.
 
-A rating change is therefore a 2KB write, not a multi-gigabyte file rewrite.
+A `tier` change is therefore a 2KB write, not a multi-gigabyte file rewrite.
 
 ### Nothing rebuildable lives in master
 
@@ -153,11 +153,11 @@ human decisions about them. Everything derivable lives outside it.
 
 | Tier | Holds | Backed up |
 |---|---|---|
-| **master** | original bytes + an **overrides-only** sidecar | yes — none of it is recomputable |
+| **master** | original bytes + a **decisions-only** sidecar | yes — none of it is recomputable |
 | render / thumb | derived | no |
 | **index** | all probed EXIF + a projection of the overrides | optional, as convenience |
 
-So a sidecar is four fields — `tier`, `rating`, event override, date override.
+So a sidecar is three fields — `tier`, `event`, and a date override.
 Provenance needs no sidecar: `OriginalPath` is already embedded in the legacy
 files, and new imports carry it in
 [`.import.jsonl`](#9-ingest--the-desktop-cli).
@@ -195,8 +195,8 @@ Interpretations go stale whenever the logic changes, and persisting them would
 resurrect the `_auto` re-derivation treadmill the old design had. Effective values
 are computed live from facts plus decisions.
 
-Standard XMP fields stay standard, so Lightroom and Bridge read `rating` and any
-date override; the pix-namespace properties they simply ignore.
+Standard XMP fields stay standard, so Lightroom and Bridge read any date
+override; the pix-namespace properties they simply ignore.
 
 ### The index
 
@@ -271,13 +271,9 @@ to get there.
 
 ## 7. Distributions
 
-### `tier` selects; `rating` rates
+### The curation scale
 
-Membership is carried by its own tag, **`tier`**, not by `rating`. The two are
-orthogonal — *how good is this photo* and *where should it go* — and conflating
-them makes "a beautiful photo I don't want in the family library" or "a mediocre
-photo that has to be in the book because it is the only one of grandma"
-inexpressible.
+Curation is one decision per file, carried by **`tier`**:
 
 | State | `tier` | Meaning |
 |---|---|---|
@@ -298,18 +294,19 @@ from [deletion](#3-master), which removes the file entirely.
 
 **`tier` does not need to be a standard field, and that is the point.** Nothing
 downstream reads it — membership is expressed by which tree a file physically
-sits in, so the tag only drives pix's reconcile. `rating` was carrying this job
-badly precisely because it *is* a standard field with a different meaning.
+sits in, so the tag only drives pix's reconcile.
 
-So **`rating` goes back to being a genuine 0-5 quality mark**: independent,
-entirely optional, and still baked into delivery copies so Synology Photos and
-Lightroom can use the stars. The cost of splitting them is two decisions per
-photo instead of one, which is why `tier` is the primary gesture of a curation
-pass and `rating` is set only when you actually care.
+**There is no `rating`.** An earlier draft split "how good is this photo" from
+"where should it go," keeping `rating` as an independent 0-5 quality mark. It was
+**dropped**: `tier` already encodes quality (`photo` = good enough for the family,
+`top` = best of the event), so the axes were never orthogonal in practice — and a
+second decision per file, across 61,846 of them
+([§14](#14-seeding-the-existing-library)), is a bad trade against the only work
+that actually matters. Curation is one gesture per photo.
 
-Both spellings work with the existing filter grammar unchanged —
-`filter: tier:photo,top`, and the `{rating:1,2|3,4,5}` bucket syntax for a
-rating pass.
+Nothing is lost in the delivery copies either: tier is recoverable from which tree
+a file sits in, event from the folder path, date from EXIF. The
+sidecars-are-lost safety net survives without it.
 
 ### The trees
 
@@ -321,8 +318,11 @@ Two standing distributions on the NAS, kept continuously reconciled:
 | top-10 | `tier:top` | dumb consumers: a TV that plays a folder, a book service that takes an upload |
 
 The top tree duplicates a subset of `/photo`, which is fine — it is ~10 per event.
-It exists because its consumers cannot *filter*; anything that can filter should
-read `/photo` and use the baked rating.
+With `rating` gone there is no curation signal *inside* a delivery copy to filter
+on, so membership can only be expressed by which tree a file sits in. That makes
+the second tree necessary rather than merely convenient: it is the only way a
+consumer gets only the handful.
+
 
 **Everything else is ad-hoc, from the desktop.** A people-grouped set for LLM
 training, a one-off book export — `pix export` over SMB against master, writing to
@@ -348,7 +348,8 @@ Synology Photos, `/tv` to sync to televisions, `/book` for print.
 - **Metadata is baked into the copy** at creation. This is what makes the tree
   self-describing to Synology Photos and to anything else, and it is the second,
   independent carrier of the curation: if every sidecar were lost, every file
-  ever delivered still holds its rating and event.
+  ever delivered still holds its event and date, and its tier is recoverable from
+  which tree it sits in.
 - **A date override must rewrite the EXIF capture date** in the copy, not merely
   sit in an XMP field — otherwise a corrected date is invisible to the consumer
   that sorts by it.
@@ -609,6 +610,7 @@ rather than anything pix builds ([§3](#3-master)):
 - **`organize`** — folder shape is a view, and views are distributions
 - **`tag checkout` / `--commit` / the freeze** — no hard-link workspace, so no
   inode identity to protect; tagging is a direct edit
+- **`rating`** — `tier` subsumes it; see [§7](#7-distributions)
 - **The library root** — no `.pix/` scaffolding, no root discovery, no `pix init`,
   no per-library config; the desktop tool is stateless but for two configured paths
 - **`cache.db`** — its role passes to the app's index, which is the same
@@ -717,7 +719,8 @@ against a local drive than over SMB against an Atom.
 ### Scale
 
 **61,846 media files**, of which the existing exports hold 95 and 7 — curation is
-at **0.15%**. Translating that into `tier` is trivial; the number's real
+at **0.15%**. Those 95 were selected by the old `rating` filter; translating them
+into `tier` and discarding `rating` is trivial at that scale. The number's real
 significance is different.
 
 The app is not a convenience layer over a mostly-curated library. Its entire job
@@ -735,6 +738,14 @@ the sidecar/index model — [§4](#4-metadata--xmp-sidecars); seeding — [§14]
 - **The curation UI — the big one.** 61,846 files have to be reviewed, in passes
   of hundreds per event down to 20-50. Nothing here specifies what that looks
   like, and it is what determines whether the archive ever actually gets curated.
+
+  One shape it should probably take: **`event` is now a primary decision, not an
+  override.** `EventAuto` used to derive from the source folder name, but photos
+  coming off a phone have no folder structure to derive from — so every event is a
+  human judgement on every file. If the app instead **proposes event boundaries by
+  clustering capture times** (a day's gap is almost always a boundary) and the
+  human only *names* the groups, that is one decision per event rather than per
+  photo — the difference between 61,846 decisions and a few hundred.
 - **Ad-hoc `pix export` CLI surface.** The desktop one-off case
   ([§7](#7-distributions)) needs inline filter and template arguments; new CLI
   surface, unspecified.
