@@ -400,12 +400,12 @@ _FIXED: dict[str, tuple[tuple[str, str], ...]] = {
 }
 
 _BROWSE_JS = """
-const cells=[...document.querySelectorAll('.cell')];
 const grid=document.getElementById('grid');
 const menu=document.getElementById('menu');
 const chips=document.getElementById('chips');
 const actions=document.getElementById('actions');
 const selcount=document.getElementById('selcount');
+const countEl=document.getElementById('count');
 const note=document.getElementById('note');
 const viewer=document.getElementById('viewer');
 const vimg=document.getElementById('vimg'), vvid=document.getElementById('vvid');
@@ -414,7 +414,11 @@ const vmeta=document.getElementById('vmeta');
 // takes ten seconds gives no progress reading and holds the single worker.
 const CHUNK=100;
 
+let cells=[...document.querySelectorAll('.cell')];
 let cur=-1, anchor=-1, busy=false;
+// Keyed by element rather than index: cells leave the grid when a change
+// pushes them out of the filters, and indices would then quietly re-point
+// a selection at whatever slid into the gap.
 const picked=new Set();
 
 // --- filter chips ------------------------------------------------------------
@@ -579,22 +583,24 @@ function drawDate(){
 
 // --- selection ---------------------------------------------------------------
 function setCur(n){
-  if(n<0||n>=cells.length) return;
-  cells[cur]?.classList.remove('cur');
+  if(!cells.length){cur=-1;return;}
+  n=Math.max(0,Math.min(cells.length-1,n));
+  cells.forEach(c=>c.classList.remove('cur'));
   cur=n; cells[cur].classList.add('cur');
   cells[cur].scrollIntoView({block:'nearest'});
   if(viewer.classList.contains('on')) load(cells[cur]);
 }
 function togglePick(n,on){
-  if(on===undefined) on=!picked.has(n);
-  on?picked.add(n):picked.delete(n);
-  cells[n].classList.toggle('picked',on);
+  const c=cells[n]; if(!c) return;
+  if(on===undefined) on=!picked.has(c);
+  on?picked.add(c):picked.delete(c);
+  c.classList.toggle('picked',on);
 }
 function range(a,b){
   const [lo,hi]=a<b?[a,b]:[b,a];
   for(let n=lo;n<=hi;n++) togglePick(n,true);
 }
-function clearPicks(){picked.forEach(n=>cells[n].classList.remove('picked'));
+function clearPicks(){picked.forEach(c=>c.classList.remove('picked'));
                       picked.clear(); drawSel();}
 function drawSel(){
   actions.hidden = picked.size===0;
@@ -640,8 +646,27 @@ viewer.addEventListener('click',e=>{if(e.target===viewer)closeViewer();});
 function say(text){note.textContent=text||''; note.hidden=!text;}
 
 function targets(){
-  const ns=picked.size?[...picked]:(cur>=0?[cur]:[]);
-  return ns.map(n=>cells[n]);
+  return picked.size?[...picked]:(cells[cur]?[cells[cur]]:[]);
+}
+
+// A file that no longer matches the filters leaves the grid. Keeping it on
+// screen would be showing a view that is no longer true, and the next click
+// would act on a photograph the filters say is somewhere else.
+function drop(gone){
+  if(!gone.length) return;
+  const keys=new Set(gone.map(g=>g.folder+'\\n'+g.name));
+  const at=cells[cur];
+  const leaving=cells.filter(
+    c=>keys.has(c.dataset.folder+'\\n'+c.dataset.name));
+  leaving.forEach(c=>{picked.delete(c); c.remove();});
+  const was=cells.indexOf(at);
+  cells=cells.filter(c=>!leaving.includes(c));
+  // Land where the cursor was, not where it would have been pushed to.
+  cur=-1; anchor=-1;
+  if(cells.length) setCur(cells.includes(at)?cells.indexOf(at):Math.max(0,was));
+  if(!cells.length&&grid) grid.innerHTML=
+    '<p class="empty">Nothing matches these filters any more.</p>';
+  drawSel();
 }
 
 // Optimistic: the cell changes now and the write follows, because a cull is a
@@ -673,24 +698,28 @@ async function applyToSelection(column,value){
       if(el) el.textContent=[...t].sort().join(' ');
     });
   }
-  say(`${cs.length} file(s) updated — filters may no longer match. `
-      +`<a href="${location.href}">Refresh</a>`);
-  note.innerHTML=note.textContent;
 }
 
 async function send(cs,body){
   if(busy){say('still writing…');return null;}
   busy=true; say('');
-  let done=0, failed=0;
+  let done=0, failed=0, gone=[], total=null;
   for(let s=0;s<cs.length;s+=CHUNK){
     const batch=cs.slice(s,s+CHUNK);
     try{
-      const r=await fetch('/api/decide/bulk',{method:'POST',
+      // The filters ride along so the server can say which files left the
+      // view; it owns the matching rules, and a second copy here would drift.
+      const p=new URLSearchParams();
+      for(const [k,v] of Object.entries(VIEW)) if(v) p.set(k,v);
+      const r=await fetch('/api/decide/bulk?'+p,{method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({...body,
           files:batch.map(c=>({folder:c.dataset.folder,name:c.dataset.name}))})});
       if(!r.ok) throw new Error((await r.text()).slice(0,200));
-      failed+=(await r.json()).failed.length;
+      const out=await r.json();
+      failed+=out.failed.length;
+      gone=gone.concat(out.dropped||[]);
+      if(out.total!==null&&out.total!==undefined) total=out.total;
     }catch(e){
       busy=false; say(`stopped after ${done} of ${cs.length}: ${e.message}`);
       return null;
@@ -699,7 +728,10 @@ async function send(cs,body){
     if(cs.length>CHUNK) say(`writing… ${done} of ${cs.length}`);
   }
   busy=false;
+  drop(gone);
+  if(total!==null&&countEl) countEl.textContent=`${total.toLocaleString()} files`;
   if(failed) say(`${failed} file(s) could not be written`);
+  else if(gone.length) say(`${gone.length} file(s) no longer match — removed`);
   else say('');
   return true;
 }
@@ -925,6 +957,7 @@ BULK_LIMIT: int = 500
 
 @app.post("/api/decide/bulk")
 def api_decide_bulk(user: Annotated[str, Depends(require_user)],
+                    view: Annotated[ix.Filters, Depends(filters)],
                     body: Annotated[DecideBulkBody, Body()]) -> JSONResponse:
     """Apply one decision to many files, reporting per-file failures.
 
@@ -933,9 +966,16 @@ def api_decide_bulk(user: Annotated[str, Depends(require_user)],
     right answer is to say which rather than to fail the batch and leave the
     curator unsure what landed. Every write is independent — there is no
     transaction to roll back, because per-file sidecars are the whole point.
+
+    The current filters ride along as query parameters, and the response says
+    which of the written files **no longer match** them. Dating a file while
+    filtered to undated should make it leave the grid, and the browser cannot
+    decide that for itself: a partial override merges with the capture date
+    server-side, so only the index knows the resulting year.
     """
     if not body.files:
-        return JSONResponse({"written": 0, "indexed": 0, "failed": []})
+        return JSONResponse({"written": 0, "indexed": 0, "failed": [],
+                             "dropped": [], "total": None})
     if len(body.files) > BULK_LIMIT:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -949,6 +989,9 @@ def api_decide_bulk(user: Annotated[str, Depends(require_user)],
     # per row dominated the cost — measured at 96ms/file against the NAS, most
     # of it the open rather than the write.
     conn = ix.open_rw(DB_PATH) if DB_PATH.is_file() else None
+    done: list[tuple[str, str]] = []
+    dropped: list[dict[str, str]] = []
+    total: int | None = None
     try:
         for target in body.files:
             try:
@@ -960,12 +1003,19 @@ def api_decide_bulk(user: Annotated[str, Depends(require_user)],
                 continue
             written += 1
             indexed += 1 if was_indexed else 0
+            done.append((target.folder, target.name))
+        if conn is not None and done:
+            stays = ix.matching(conn, view, done)
+            dropped = [{"folder": f, "name": n}
+                       for f, n in done if (f, n) not in stays]
+            total = ix.count(conn, view)
     finally:
         if conn is not None:
             conn.close()
 
     return JSONResponse({"written": written, "indexed": indexed,
-                         "failed": failed})
+                         "failed": failed, "dropped": dropped,
+                         "total": total})
 
 
 # --- the write path ----------------------------------------------------------

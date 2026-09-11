@@ -38,7 +38,7 @@ import sqlite3
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, ClassVar, Iterator, cast
+from typing import Any, Callable, ClassVar, Iterator, Sequence, cast
 
 from pix import datestr
 from pix.nas import decisions
@@ -646,6 +646,34 @@ def count(conn: sqlite3.Connection, filters: Filters | None = None) -> int:
         "SELECT COUNT(*) AS n FROM files " + (f"WHERE {where}" if where else ""),
         _bind(clauses)).fetchone()
     return int(row["n"])
+
+
+def matching(conn: sqlite3.Connection, filters: Filters,
+             targets: Sequence[tuple[str, str]]) -> set[tuple[str, str]]:
+    """Which of `targets` still match `filters`.
+
+    Asked after a write, so the grid can drop the files that no longer belong in
+    the view — add a date while filtered to undated, and those files should
+    leave. The client cannot work this out for itself: a partial override merges
+    with the capture date here, so only the index knows the resulting year. Re-
+    using the same clauses the listing uses is what keeps the two from drifting.
+    """
+    if not targets:
+        return set()
+    clauses = _clauses(filters)
+    where = " AND ".join(sql for sql, _ in clauses.values())
+    # Joined on a newline because neither component can contain one, so the pair
+    # round-trips exactly — no separator a filename could forge.
+    sep = chr(10)
+    keys = {f"k{i}": folder + sep + name
+            for i, (folder, name) in enumerate(targets)}
+    holes = ",".join(f":{k}" for k in keys)
+    rows = conn.execute(
+        "SELECT folder, name FROM files WHERE "
+        + (f"({where}) AND " if where else "")
+        + f"files.folder || char(10) || files.name IN ({holes})",
+        {**_bind(clauses), **keys})
+    return {(str(r["folder"]), str(r["name"])) for r in rows}
 
 
 def suggest(conn: sqlite3.Connection, column: str,

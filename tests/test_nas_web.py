@@ -722,3 +722,63 @@ def test_a_date_that_pins_nothing_is_refused(client: TestClient,
         "date_override": "*-*-*-*:*:*"})
 
     assert r.status_code == 400
+
+
+# --- the grid drops what no longer belongs -----------------------------------
+
+def test_dating_a_file_drops_it_from_the_undated_view(
+    client: TestClient, writable: Path
+) -> None:
+    """The regression this exists to prevent: adding a date while filtered to
+    undated left the file sitting in a view it no longer belonged to."""
+    (writable / "b.mp4").write_bytes(b"fake")
+    r = client.post("/api/decide/bulk?year=(undated)", json={
+        "date_override": "1987-*-*-*:*:*", "files": _targets("b.mp4")})
+
+    assert r.json()["written"] == 1
+    assert r.json()["dropped"] == [{"folder": "init_2026", "name": "b.mp4"}]
+
+
+def test_a_file_that_still_matches_is_not_dropped(client: TestClient,
+                                                  writable: Path) -> None:
+    r = client.post("/api/decide/bulk?event=Italy%20-%20Sicily", json={
+        "tier": "top", "files": _targets("a.jpg")})
+
+    assert r.json()["dropped"] == []
+
+
+def test_deciding_drops_a_file_from_the_new_view(client: TestClient,
+                                                 writable: Path) -> None:
+    """Culling with the New filter on: each decision should take the file out."""
+    r = client.post("/api/decide/bulk?tier=new", json={
+        "tier": "photo", "files": _targets("a.jpg")})
+
+    assert [d["name"] for d in r.json()["dropped"]] == ["a.jpg"]
+
+
+def test_the_response_carries_the_new_total(client: TestClient,
+                                            writable: Path) -> None:
+    """So the header count stops claiming files the view no longer holds."""
+    before = len(client.get("/api/files?tier=new").json())
+    r = client.post("/api/decide/bulk?tier=new", json={
+        "tier": "photo", "files": _targets("a.jpg")})
+
+    assert r.json()["total"] == before - 1
+
+
+def test_a_failed_file_is_not_reported_as_dropped(client: TestClient,
+                                                  writable: Path) -> None:
+    """Dropped means "written, and it left" — a file that was never written has
+    not moved anywhere."""
+    r = client.post("/api/decide/bulk?tier=new", json={
+        "tier": "photo", "files": _targets("gone.jpg")})
+
+    assert r.json()["written"] == 0
+    assert r.json()["dropped"] == []
+
+
+def test_an_empty_batch_reports_nothing_dropped(client: TestClient,
+                                                writable: Path) -> None:
+    r = client.post("/api/decide/bulk", json={"tier": "none", "files": []})
+
+    assert r.json()["dropped"] == []

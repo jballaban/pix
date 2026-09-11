@@ -687,3 +687,43 @@ def test_undated_is_offered_as_a_year(tree: dict[str, Path]) -> None:
 
     got = ix.suggest(ix.connect(tree["db"]), "year")
     assert [s.value for s in got] == [ix.UNDATED]
+
+
+# --- what still matches after a write ----------------------------------------
+
+def test_matching_reports_only_the_rows_that_still_fit(
+    tree: dict[str, Path]
+) -> None:
+    _record(tree, "init_2026", "a.jpg", {})
+    _record(tree, "init_2026", "b.jpg",
+            {"EXIF:DateTimeOriginal": "2026:01:04 14:51:34"})
+    _build(tree)
+
+    conn = ix.connect(tree["db"])
+    stays = ix.matching(conn, ix.Filters(year=ix.UNDATED),
+                        [("init_2026", "a.jpg"), ("init_2026", "b.jpg")])
+    assert stays == {("init_2026", "a.jpg")}
+
+
+def test_matching_with_no_filters_keeps_everything(tree: dict[str, Path]) -> None:
+    _record(tree, "init_2026", "a.jpg", {})
+    _build(tree)
+
+    conn = ix.connect(tree["db"])
+    assert ix.matching(conn, ix.Filters(), [("init_2026", "a.jpg")]) == {
+        ("init_2026", "a.jpg")}
+
+
+def test_matching_an_empty_selection_asks_nothing(tree: dict[str, Path]) -> None:
+    _build(tree)
+    assert ix.matching(ix.connect(tree["db"]), ix.Filters(), []) == set()
+
+
+def test_a_name_cannot_forge_the_pair_separator(tree: dict[str, Path]) -> None:
+    """Folder and name are joined on a newline, which neither can contain — so
+    `a/b` and `a` + `/b` cannot be confused for one another."""
+    _record(tree, "init_2026", "a.jpg", {})
+    _build(tree)
+
+    conn = ix.connect(tree["db"])
+    assert ix.matching(conn, ix.Filters(), [("init", "2026/a.jpg")]) == set()
