@@ -17,6 +17,7 @@ from pix.nas.const import IMPORT_ROOT, MASTER_DIR
 from pix.nas.folder_import import FolderImportError, run_folder_import
 from pix.nas.derive import run_process
 from pix.nas.device_import import ImportError_, run_device_import
+from pix.nas import ledger
 from pix.nas.ledger import NasUnreachable
 from pix.nas.upload import run_upload
 
@@ -191,6 +192,46 @@ def process() -> None:
         raise typer.Exit(code=130)
     if summary.failed:
         raise typer.Exit(code=1)
+
+
+@app.command("index")
+def index_cmd() -> None:
+    """Rebuild the app's index from the meta tier and master's sidecars.
+
+    Disposable and never authoritative — the record is master. Rebuilt in full
+    because the input is small JSON rather than media, so a rebuild that is
+    always correct beats an incremental path that can drift.
+    """
+    banner()
+    from pix.nas import index as ix
+    from pix.nas.const import INDEX_DB
+
+    try:
+        ledger.require_share()
+    except NasUnreachable as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
+
+    stats = ix.build(INDEX_DB, echo=lambda m: None)
+    typer.echo(
+        f"{stats.files:,} file(s), {stats.events} event(s), "
+        f"{stats.with_date:,} dated, {stats.with_sidecar:,} with decisions"
+    )
+    typer.echo(f"Index: {INDEX_DB}")
+    for line in stats.skipped[:10]:
+        typer.echo(f"  {line}", err=True)
+
+
+@app.command("passwd")
+def passwd(name: str) -> None:
+    """Print a hashed credential pair for the app's PIX2_USERS setting."""
+    banner()
+    from pix.nas.auth import hash_password
+
+    secret = typer.prompt(f"Password for {name}", hide_input=True,
+                          confirmation_prompt=True)
+    typer.echo("")
+    typer.echo(f"{name}:{hash_password(secret)}")
 
 
 @app.command("where")

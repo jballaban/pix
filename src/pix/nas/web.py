@@ -1,0 +1,281 @@
+"""The app — browse the archive (spec/nas-app.md §8).
+
+Runs in Container Manager on the NAS, bind-mounting `/volume1/pix2`. It reads
+the index and serves the **derived** tiers; it never decodes anything, because
+`process` already made everything it displays. That is what keeps it viable on a
+no-AVX Atom, and it is why the image needs neither Pillow nor ffmpeg.
+
+Deliberately no frontend build step. A keyboard-driven grid needs a page and some
+JavaScript, not a toolchain — and a build pipeline is the part most likely to rot
+between the day it works and the day you next touch it.
+
+This first cut **browses only**. Curation writes `.xmp` decisions into master and
+is the next step; nothing here writes anything.
+"""
+
+from __future__ import annotations
+
+import os
+import sqlite3
+from pathlib import Path
+from typing import Annotated, Any
+
+from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+
+from pix.nas import auth
+from pix.nas import index as ix
+from pix.nas.const import INDEX_DB, PREVIEW_DIR, THUMB_DIR
+
+#: Re-exported so the CLI and tests have one name for it.
+DB_PATH: Path = INDEX_DB
+
+app: FastAPI = FastAPI(title="pix2", docs_url=None, redoc_url=None)
+_security = HTTPBasic(auto_error=False)
+
+
+# --- auth --------------------------------------------------------------------
+
+def _users() -> dict[str, str]:
+    """Configured credentials, or empty if none are set.
+
+    Unset means **no auth at all**, which is only appropriate on a LAN with no
+    reverse proxy in front. The landing page says so rather than leaving it a
+    silent property of the deployment.
+    """
+    return auth.parse_users(os.environ.get("PIX2_USERS", ""))
+
+
+def require_user(
+    credentials: Annotated[HTTPBasicCredentials | None, Depends(_security)],
+) -> str:
+    """Authenticate, unless no users are configured."""
+    users = _users()
+    if not users:
+        return "anonymous"
+    if credentials is None or credentials.username not in users:
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, "not authorised",
+            headers={"WWW-Authenticate": "Basic"})
+    if not auth.verify(users[credentials.username], credentials.password):
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, "not authorised",
+            headers={"WWW-Authenticate": "Basic"})
+    return credentials.username
+
+
+# --- data --------------------------------------------------------------------
+
+def db() -> sqlite3.Connection:
+    """A connection to the index, or a clear error if it has not been built."""
+    if not DB_PATH.is_file():
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            f"index not built — run `pix2 index` (expected at {DB_PATH})")
+    return ix.connect(DB_PATH)
+
+
+# --- pages -------------------------------------------------------------------
+
+_STYLE = """
+:root { color-scheme: dark; --bg:#14161a; --fg:#e7e9ee; --dim:#8b93a3;
+        --line:#272b33; --accent:#6aa3ff; }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5
+       system-ui,-apple-system,Segoe UI,sans-serif; }
+header { padding:14px 20px; border-bottom:1px solid var(--line);
+         display:flex; gap:18px; align-items:baseline; flex-wrap:wrap; }
+h1 { font-size:15px; margin:0; letter-spacing:.02em; }
+a { color:var(--accent); text-decoration:none; }
+a:hover { text-decoration:underline; }
+.dim { color:var(--dim); }
+main { padding:20px; }
+table { border-collapse:collapse; width:100%; max-width:900px; }
+th,td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line); }
+th { color:var(--dim); font-weight:500; font-size:12px;
+     text-transform:uppercase; letter-spacing:.06em; }
+td.num { text-align:right; font-variant-numeric:tabular-nums; }
+.grid { display:grid; gap:6px;
+        grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); }
+.cell { position:relative; aspect-ratio:1; background:#0d0f12; overflow:hidden;
+        border-radius:3px; cursor:pointer; }
+.cell img { width:100%; height:100%; object-fit:cover; display:block; }
+.cell.sel { outline:2px solid var(--accent); outline-offset:-2px; }
+.badge { position:absolute; right:4px; bottom:4px; background:#000a;
+         padding:1px 5px; border-radius:3px; font-size:11px; }
+#viewer { position:fixed; inset:0; background:#000e; display:none;
+          align-items:center; justify-content:center; flex-direction:column; }
+#viewer.on { display:flex; }
+#viewer img { max-width:94vw; max-height:86vh; object-fit:contain; }
+#viewer .meta { padding:10px; color:var(--dim); font-size:12px; }
+.empty { color:var(--dim); padding:40px 0; }
+"""
+
+
+def _page(title: str, body: str, *, crumb: str = "") -> HTMLResponse:
+    return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{title}</title><style>{_STYLE}</style></head><body>
+<header><h1><a href="/">pix2</a></h1><span class="dim">{crumb}</span></header>
+<main>{body}</main></body></html>""")
+
+
+@app.get("/", response_class=HTMLResponse)
+def home(user: Annotated[str, Depends(require_user)]) -> HTMLResponse:
+    """Events, largest first — because that is where the work is."""
+    conn = db()
+    s = ix.summary(conn)
+    rows = ix.events(conn)
+
+    open_note = ("" if _users() else
+                 '<span class="dim">&middot; no auth configured</span>')
+    head = (f'{s["files"]:,} files &middot; {s["events"]} events &middot; '
+            f'{s["unreviewed"]:,} unreviewed &middot; {s["undated"]:,} undated '
+            f'{open_note}')
+
+    if not rows:
+        return _page("pix2", '<p class="empty">Nothing indexed yet.</p>')
+
+    cells = "".join(
+        f'<tr><td><a href="/event/{_q(r["event"])}">{_h(r["event"])}</a></td>'
+        f'<td class="num">{r["n"]:,}</td>'
+        f'<td class="num dim">{r["unreviewed"]:,}</td>'
+        f'<td class="dim">{_h(str(r["first_seen"] or "")[:10])}</td>'
+        f'<td class="dim">{_h(str(r["last_seen"] or "")[:10])}</td></tr>'
+        for r in rows
+    )
+    return _page("pix2", f"""<p class="dim">{head}</p>
+<table><thead><tr><th>Event</th><th class="num">Files</th>
+<th class="num">Unreviewed</th><th>First</th><th>Last</th></tr></thead>
+<tbody>{cells}</tbody></table>""")
+
+
+@app.get("/event/{event}", response_class=HTMLResponse)
+def event_grid(event: str,
+               user: Annotated[str, Depends(require_user)]) -> HTMLResponse:
+    """A grid for one event. Thumbnails only — previews load on demand."""
+    conn = db()
+    rows = ix.files(conn, event=event, limit=2000)
+    if not rows:
+        return _page(event, '<p class="empty">No files.</p>', crumb=_h(event))
+
+    cells = "".join(
+        f'<div class="cell" data-folder="{_h(r["folder"])}" '
+        f'data-name="{_h(r["name"])}" data-date="{_h(str(r["capture_date"] or "no date"))}">'
+        f'<img loading="lazy" src="/thumb/{_q(r["folder"])}/{_q(r["name"])}">'
+        + (f'<span class="badge">{_dur(r["duration"])}</span>'
+           if r["kind"] == "video" else "")
+        + "</div>"
+        for r in rows
+    )
+    return _page(event, f"""
+<p class="dim">{len(rows):,} files &middot; arrow keys to move, Esc to close</p>
+<div class="grid" id="grid">{cells}</div>
+<div id="viewer"><img id="vimg"><div class="meta" id="vmeta"></div></div>
+<script>{_GRID_JS}</script>""", crumb=_h(event))
+
+
+_GRID_JS = """
+const cells=[...document.querySelectorAll('.cell')];
+const viewer=document.getElementById('viewer');
+const vimg=document.getElementById('vimg'), vmeta=document.getElementById('vmeta');
+let i=-1;
+function show(n){
+  if(n<0||n>=cells.length) return;
+  cells[i]?.classList.remove('sel');
+  i=n; const c=cells[i];
+  c.classList.add('sel');
+  c.scrollIntoView({block:'nearest'});
+  if(viewer.classList.contains('on')){
+    vimg.src=`/preview/${encodeURIComponent(c.dataset.folder)}/${encodeURIComponent(c.dataset.name)}`;
+    vmeta.textContent=`${c.dataset.name} — ${c.dataset.date}`;
+  }
+}
+cells.forEach((c,n)=>c.addEventListener('click',()=>{show(n);open_();}));
+function open_(){viewer.classList.add('on');show(i<0?0:i);}
+function close_(){viewer.classList.remove('on');}
+document.addEventListener('keydown',e=>{
+  const cols=Math.max(1,Math.round(document.getElementById('grid').clientWidth/156));
+  if(e.key==='Escape'){close_();return;}
+  if(e.key==='Enter'){viewer.classList.contains('on')?close_():open_();return;}
+  const step={ArrowRight:1,ArrowLeft:-1,ArrowDown:cols,ArrowUp:-cols}[e.key];
+  if(step===undefined) return;
+  e.preventDefault(); show((i<0?0:i)+step);
+});
+viewer.addEventListener('click',close_);
+"""
+
+
+# --- media -------------------------------------------------------------------
+
+@app.get("/thumb/{folder}/{name}")
+def thumb(folder: str, name: str,
+          user: Annotated[str, Depends(require_user)]) -> FileResponse:
+    return _serve(THUMB_DIR, folder, name)
+
+
+@app.get("/preview/{folder}/{name}")
+def preview(folder: str, name: str,
+            user: Annotated[str, Depends(require_user)]) -> FileResponse:
+    return _serve(PREVIEW_DIR, folder, name)
+
+
+def _serve(root: Path, folder: str, name: str) -> FileResponse:
+    """Serve a derived image, refusing anything that escapes its tier.
+
+    The path components come from a URL, so they are untrusted: `..` in either
+    would otherwise read arbitrary files off the share.
+    """
+    target = (root / folder / (name + ".jpg")).resolve()
+    if root.resolve() not in target.parents:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "bad path")
+    if not target.is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "not derived yet")
+    return FileResponse(target, media_type="image/jpeg",
+                        headers={"Cache-Control": "public, max-age=86400"})
+
+
+# --- api ---------------------------------------------------------------------
+
+@app.get("/api/files")
+def api_files(user: Annotated[str, Depends(require_user)],
+              event: Annotated[str | None, Query()] = None,
+              tier: Annotated[str | None, Query()] = None,
+              limit: Annotated[int, Query(le=2000)] = 500,
+              offset: Annotated[int, Query(ge=0)] = 0) -> JSONResponse:
+    rows = ix.files(db(), event=event, tier=tier, limit=limit, offset=offset)
+    return JSONResponse([dict(r) for r in rows])
+
+
+@app.get("/api/events")
+def api_events(user: Annotated[str, Depends(require_user)]) -> JSONResponse:
+    return JSONResponse([dict(r) for r in ix.events(db())])
+
+
+@app.get("/healthz")
+def healthz() -> dict[str, Any]:
+    """Liveness for Container Manager — deliberately unauthenticated."""
+    return {"ok": True, "index": DB_PATH.is_file()}
+
+
+# --- helpers -----------------------------------------------------------------
+
+def _h(text: object) -> str:
+    """Escape for HTML text and attributes."""
+    return (str(text).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def _q(text: object) -> str:
+    from urllib.parse import quote
+
+    return quote(str(text), safe="")
+
+
+def _dur(seconds: object) -> str:
+    try:
+        total = int(float(str(seconds)))
+    except (TypeError, ValueError):
+        return "video"
+    return f"{total // 60}:{total % 60:02d}"

@@ -33,6 +33,11 @@ packages = ["src/pix"]
 
 [dependency-groups]
 dev = [
+    # The app's stack, so its tests run in the dev environment. Deliberately not
+    # a runtime dependency: the CLI never imports it, and the container pins it
+    # in deploy/Dockerfile.
+    "fastapi>=0.115",
+    "httpx>=0.27",
     "pytest>=8.0",
     "pyright>=1.1.380",
     "types-pyyaml>=6.0",

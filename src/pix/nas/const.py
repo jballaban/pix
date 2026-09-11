@@ -55,6 +55,11 @@ PREVIEW_DIR: Path = MASTER_SHARE / "preview"
 #: to decode it, so extracting the metadata at the same time is near-free.
 META_DIR: Path = MASTER_SHARE / "meta"
 
+#: The app's index. Inside the share so it survives container rebuilds — it is
+#: disposable, but rebuilding 62k rows takes minutes and there is no reason to
+#: pay that for a `docker pull`.
+INDEX_DB: Path = MASTER_SHARE / "index" / "index.db"
+
 #: Per-folder download ledger, written during upload. Its first line is a
 #: header describing the source, which is what makes the known-device registry
 #: derivable instead of stored.

@@ -1,0 +1,50 @@
+# pix2 app for Synology Container Manager (spec/nas-app.md §8).
+#
+# Deploying a change is: copy src/ to /volume1/pix2/app/src, restart. No image
+# rebuild, no registry, no push.
+#
+#   cd /volume1/pix2/app && docker compose up -d --build
+#
+services:
+  pix2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: pix2-app:latest
+    container_name: pix2
+    restart: unless-stopped
+
+    volumes:
+      # The application source, bind-mounted so edits do not need a rebuild.
+      - /volume1/pix2/app/src:/app/src:ro
+
+      # The archive. Read-write because the app writes `.xmp` decisions into
+      # master — it is the only writer there besides `upload`. The derived
+      # tiers it only reads.
+      - /volume1/pix2:/volume1/pix2
+
+    environment:
+      # Hashed credentials, never plaintext: `name:salt$$hash;name2:salt$$hash`.
+      # Generate with: pix2 passwd <name>
+      # (`$` is doubled because compose interpolates a single one.)
+      # Leaving this unset means no auth at all — only appropriate on a LAN
+      # with no reverse proxy in front.
+      PIX2_USERS: ""
+      TZ: America/Toronto
+
+    ports:
+      # Bound to the host so DSM's reverse proxy can sit in front of it. Not
+      # published beyond the LAN until auth is configured above.
+      - "8800:8000"
+
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request;urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    # The Atom has four cores and the NAS has other jobs; leave it headroom.
+    mem_limit: 1g
+    cpus: 2.0
