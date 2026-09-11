@@ -168,11 +168,15 @@ button.primary { background:var(--accent); color:#0d0f12; border-color:var(--acc
 .cell.picked img { opacity:.75; }
 .badge { position:absolute; right:4px; bottom:4px; background:#000a;
          padding:1px 5px; border-radius:3px; font-size:11px; }
+/* Out of the way until wanted: 2,000 circles over 2,000 photographs is a page
+   about its own controls. Hover reveals it, and a made choice keeps it. */
 .pick { position:absolute; left:5px; top:5px; width:20px; height:20px; padding:0;
         border-radius:50%; background:#000a; border:1.5px solid #fff9;
-        opacity:.55; z-index:2; }
-.cell:hover .pick { opacity:1; }
+        opacity:0; transition:opacity .08s; z-index:2; }
+.cell:hover .pick, .cell.cur .pick { opacity:1; }
 .cell.picked .pick { opacity:1; background:var(--accent); border-color:var(--accent); }
+/* Touch has no hover, so there the circle is the only way to select at all. */
+@media (hover: none) { .pick { opacity:.55; } }
 .cell.picked .pick::after { content:"\\2713"; color:#0d0f12; font-weight:700;
                             font-size:13px; line-height:17px; }
 /* Tier is an inset ring so it can coexist with the selection outline — the two
