@@ -189,10 +189,81 @@ def meta_path(media: Path) -> Path:
 
 
 def needs_work(media: Path) -> tuple[bool, bool, bool]:
-    """`(needs thumb, needs preview, needs meta)` — what is missing."""
+    """`(needs thumb, needs preview, needs meta)` — what is missing.
+
+    Per-file, so it costs three `stat`s. `pending_files` answers the same
+    question for a whole run with directory listings instead; use that for
+    anything at scale.
+    """
     return (not derived_path(media, THUMB_DIR).is_file(),
             not derived_path(media, PREVIEW_DIR).is_file(),
             not meta_path(media).is_file())
+
+
+def _names_in(folder: Path) -> set[str]:
+    """The filenames directly in `folder`, or empty if it does not exist.
+
+    `os.scandir` rather than `iterdir` so no `stat` is issued per entry — only
+    the names are wanted, and over SMB a stat per derived file is exactly the
+    cost this scan exists to avoid.
+    """
+    try:
+        with os.scandir(folder) as entries:
+            return {e.name for e in entries}
+    except OSError:
+        return set()
+
+
+def pending_files(echo: Callable[[str], None] = lambda _: None) -> list[Path]:
+    """Every master file missing at least one derived artefact.
+
+    **One listing per tier per master folder**, rather than three `stat`s per
+    file. Over SMB that is the difference between four round trips and ~19,000
+    for a single 6,400-file folder — the scan was taking longer than the work.
+    """
+    folders = ([p for p in sorted(MASTER_DIR.iterdir()) if p.is_dir()]
+               if MASTER_DIR.is_dir() else [])
+    if not folders:
+        return []
+
+    scanned = {"n": 0, "found": 0}
+    progress = LiveProgress(
+        status_provider=lambda: (
+            f"scanning {scanned['n']}/{len(folders)} folder(s), "
+            f"{scanned['found']} to do"),
+    )
+
+    pending: list[Path] = []
+    with progress:
+        progress.begin("scan")
+        for folder in folders:
+            thumbs = _names_in(THUMB_DIR / folder.name)
+            previews = _names_in(PREVIEW_DIR / folder.name)
+            metas = _names_in(META_DIR / folder.name)
+
+            # `scandir` again: its `is_file()` is answered from the directory
+            # entry the OS already returned, where `Path.is_file()` would be a
+            # fresh round trip for every one of 6,400 files.
+            try:
+                with os.scandir(folder) as entries:
+                    listing = sorted(entries, key=lambda e: e.name)
+            except OSError:
+                scanned["n"] += 1
+                continue
+
+            for entry in listing:
+                if not entry.is_file():
+                    continue
+                name = entry.name
+                if name == LEDGER_NAME or name.lower().endswith(".xmp"):
+                    continue
+                derived = name + ".jpg"
+                if (derived not in thumbs or derived not in previews
+                        or name + ".json" not in metas):
+                    pending.append(folder / name)
+                    scanned["found"] += 1
+            scanned["n"] += 1
+    return pending
 
 
 def sweep_partials() -> int:
@@ -203,7 +274,12 @@ def sweep_partials() -> int:
     the temps accumulate in the tiers forever. Poster frames go to local scratch
     and are cleaned there too.
     """
-    removed = _reap_dead_scratch()
+    # Reaping a previous run's scratch is routine housekeeping, not evidence of
+    # an interrupted run — counting it here made every run claim it had swept a
+    # partial, forever.
+    _reap_dead_scratch()
+
+    removed = 0
     for root in (THUMB_DIR, PREVIEW_DIR, META_DIR, _scratch()):
         if not root.is_dir():
             continue
@@ -232,7 +308,7 @@ def run_process(*, echo: Callable[[str], None] = lambda _: None) -> ProcessSumma
     if swept:
         echo(f"swept {swept} partial(s) from an interrupted run")
 
-    pending = [p for p in master_files() if any(needs_work(p))]
+    pending = pending_files(echo)
     if not pending:
         echo("nothing to process")
         return summary
