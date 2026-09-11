@@ -56,10 +56,10 @@ def test_no_sidecar_reads_as_no_decision(media: Path) -> None:
 
 
 def test_keeping_something_private_is_still_a_decision(media: Path) -> None:
-    """`private` must create a sidecar. Choosing to show a photograph to
-    nobody is a judgement, and it is not the same state as never having
-    looked at it — which is exactly what having no sidecar means."""
-    decisions.write(media, Decision(audience=(decisions.PRIVATE,)))
+    """An audience with no members must still create a sidecar. Choosing to
+    show a photograph to nobody is a judgement, and it is not the same state as
+    never having looked at it — which is exactly what no sidecar means."""
+    decisions.write(media, Decision(audience=("private",)))
 
     assert decisions.sidecar_path(media).is_file()
     assert decisions.read(media) == Decision(audience=("private",))

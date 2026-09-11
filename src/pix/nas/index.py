@@ -674,8 +674,15 @@ def _combine(clauses: dict[str, tuple[str, dict[str, Any]]],
 
 # --- queries -----------------------------------------------------------------
 
-def events(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+def events(conn: sqlite3.Connection,
+           filters: Filters | None = None) -> list[sqlite3.Row]:
     """Every (year, event) pair, newest year first and biggest event within it.
+
+    **Scoped like everything else.** An event name is information: a list of
+    every trip and birthday in the house, shown to somebody who can open none
+    of the photographs, leaks exactly what the audience model exists to keep.
+    Somebody who has been shared nothing sees an empty page, not a table of
+    counts they cannot click through.
 
     Grouped by year because a library is remembered that way and worked
     through that way — a flat list of every event across twenty-five years is
@@ -688,6 +695,7 @@ def events(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     to `year + event`, and the two halves are genuinely different slices of
     work.
     """
+    where, bound = _where(filters or Filters())
     return list(conn.execute(
         "SELECT COALESCE(year, :undated) AS year, "
         "       COALESCE(event, :none) AS event, COUNT(*) AS n, "
@@ -696,12 +704,13 @@ def events(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         "       SUM(CASE WHEN NOT EXISTS (SELECT 1 FROM file_audience fa "
         "         WHERE fa.folder = files.folder AND fa.name = files.name) "
         "       THEN 1 ELSE 0 END) AS unreviewed "
-        "FROM files GROUP BY year, event "
+        "FROM files " + (f"WHERE {where} " if where else "")
+        + "GROUP BY year, event "
         # On the raw column, not the alias: `NULL = '(undated)'` is NULL,
         # and SQLite sorts NULLs first — which put the undated group at the
         # top of the page instead of the bottom.
         "ORDER BY files.year IS NULL, files.year DESC, n DESC",
-        {"undated": UNDATED, "none": NO_EVENT}
+        {**bound, "undated": UNDATED, "none": NO_EVENT}
     ))
 
 
@@ -807,15 +816,26 @@ def suggest(conn: sqlite3.Connection, column: str,
     The filter on `column` itself is excluded from the scope, or the first band
     would only ever contain the value already being filtered on — which is the
     one option nobody is reaching for.
+
+    The **viewer** restriction is not part of that banding and is never
+    dropped: a dropdown listing every event in the house to somebody who can
+    open none of them tells them exactly what they were not shown.
     """
-    clauses = _clauses(filters or Filters())
+    view = filters or Filters()
+    clauses = _clauses(view)
     clauses.pop(column, None)
-    params: dict[str, Any] = {**_bind(clauses), "limit": limit}
+    seen, seen_params = _scope(view)
+    params: dict[str, Any] = {**_bind(clauses), **seen_params, "limit": limit}
     tally = (f"COUNT(*) AS n, "
              f"SUM(CASE WHEN {_combine(clauses, 'AND')} THEN 1 ELSE 0 END) AS n_all, "
              f"SUM(CASE WHEN {_combine(clauses, 'OR')} THEN 1 ELSE 0 END) AS n_any ")
     order = ("ORDER BY n_all > 0 DESC, n_any > 0 DESC, n DESC, value "
              "LIMIT :limit")
+
+    def visible(*extra: str) -> str:
+        """The WHERE that every suggestion is drawn from."""
+        parts = [p for p in (seen, *extra) if p]
+        return f"WHERE {' AND '.join(parts)} " if parts else ""
 
     if column in ("tag", "audience"):
         table, col = (("file_tags", "tag") if column == "tag"
@@ -823,17 +843,18 @@ def suggest(conn: sqlite3.Connection, column: str,
         sql = (f"SELECT m.{col} AS value, " + tally
                + f"FROM {table} m "
                  "JOIN files ON files.folder = m.folder AND files.name = m.name "
-                 "GROUP BY value " + order)
+               + visible() + "GROUP BY value " + order)
     elif column == "year":
         # Undated files are offered as a year, because *show me the ones with
         # no date* is a real piece of work rather than an absence to hide.
         params["undated"] = UNDATED
         sql = ("SELECT COALESCE(files.year, :undated) AS value, " + tally
-               + "FROM files GROUP BY value " + order)
+               + "FROM files " + visible() + "GROUP BY value " + order)
     elif column in ("event", "kind", "band"):
         sql = (f"SELECT files.{column} AS value, " + tally
-               + f"FROM files WHERE files.{column} IS NOT NULL "
-                 "GROUP BY value " + order)
+               + "FROM files "
+               + visible(f"files.{column} IS NOT NULL")
+               + "GROUP BY value " + order)
     else:
         raise ValueError(f"cannot suggest values for {column!r}")
 
@@ -843,8 +864,10 @@ def suggest(conn: sqlite3.Connection, column: str,
             for r in conn.execute(sql, params)]
 
 
-def summary(conn: sqlite3.Connection) -> sqlite3.Row:
-    """Headline counts for the landing page."""
+def summary(conn: sqlite3.Connection,
+            filters: Filters | None = None) -> sqlite3.Row:
+    """Headline counts for the landing page, scoped to the viewer."""
+    where, bound = _where(filters or Filters())
     return conn.execute(
         "SELECT COUNT(*) AS files, "
         "       COUNT(DISTINCT event) AS events, "
@@ -852,5 +875,5 @@ def summary(conn: sqlite3.Connection) -> sqlite3.Row:
         "         WHERE fa.folder = files.folder AND fa.name = files.name) "
         "       THEN 1 ELSE 0 END) AS unreviewed, "
         "       SUM(CASE WHEN effective_date IS NULL THEN 1 ELSE 0 END) AS undated "
-        "FROM files"
+        "FROM files " + (f"WHERE {where}" if where else ""), bound
     ).fetchone()

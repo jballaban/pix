@@ -229,6 +229,10 @@ button.primary { background:var(--accent); color:#0d0f12; border-color:var(--acc
 .opt:hover, .opt.cur { background:#2a3340; }
 .opt .n { margin-left:auto; color:var(--dim); font-variant-numeric:tabular-nums;
           font-size:12px; }
+/* Three states, the way a file tree shows them: every one, some, none. A
+   selection is not one thing, and a two-state box would have to lie. */
+.opt .box { width:13px; flex:none; text-align:center; color:var(--keep); }
+.opt[data-state="some"] .box { color:var(--top); }
 .opt.new { color:var(--keep); }
 .band { padding:7px 11px 3px; color:var(--dim); font-size:11px;
         text-transform:uppercase; letter-spacing:.07em; }
@@ -248,8 +252,9 @@ button.primary { background:var(--accent); color:#0d0f12; border-color:var(--acc
 .cell.cur { outline:2px solid var(--accent); outline-offset:-2px; z-index:1; }
 .cell.picked { outline:3px solid var(--accent); outline-offset:-3px; z-index:1; }
 .cell.picked img { opacity:.75; }
-.badge { position:absolute; right:4px; bottom:4px; background:#000a;
-         padding:1px 5px; border-radius:3px; font-size:11px; }
+.badge { position:absolute; left:5px; top:5px; margin-left:26px;
+         background:#000a; padding:1px 5px; border-radius:3px;
+         font-size:11px; }
 /* Out of the way until wanted: 2,000 circles over 2,000 photographs is a page
    about its own controls. Hover reveals it, and a made choice keeps it. */
 .pick { position:absolute; left:5px; top:5px; width:20px; height:20px; padding:0;
@@ -267,13 +272,16 @@ button.primary { background:var(--accent); color:#0d0f12; border-color:var(--acc
    and a cull needs both at once. */
 .cell[data-audience]:not([data-audience=""]) {
   box-shadow: inset 0 0 0 3px var(--keep); }
-.who { position:absolute; right:4px; top:4px; max-width:72%; padding:1px 5px;
-       border-radius:3px; background:var(--keep); color:#0d0f12;
+/* Access along the bottom, tags in the corner. Access is the decision that
+   changes what a photograph *is* to the household, so it gets the wider
+   line; a tag is a label and fits in a corner. */
+.who { position:absolute; left:5px; bottom:4px; right:4px; padding:1px 5px;
+       border-radius:3px; background:#000a; color:var(--keep);
        font-size:11px; font-weight:600; overflow:hidden;
        white-space:nowrap; text-overflow:ellipsis; }
-.tags { position:absolute; left:5px; bottom:4px; right:4px; font-size:10px;
-        color:#fff; text-shadow:0 1px 3px #000; overflow:hidden;
-        white-space:nowrap; text-overflow:ellipsis; }
+.tags { position:absolute; right:4px; top:4px; max-width:72%; font-size:10px;
+        padding:1px 5px; border-radius:3px; background:#000a; color:#fff;
+        overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 
 table { border-collapse:collapse; width:100%; max-width:900px; }
 th,td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line); }
@@ -365,8 +373,33 @@ def _whoami(user: Principal | None) -> str:
             '<button>Sign out</button></form>')
 
 
+def filters(
+    user: Annotated[Principal, Depends(require_user)],
+    event: Annotated[str | None, Query()] = None,
+    year: Annotated[str | None, Query()] = None,
+    tag: Annotated[str | None, Query()] = None,
+    audience: Annotated[str | None, Query()] = None,
+    kind: Annotated[str | None, Query()] = None,
+    band: Annotated[str | None, Query()] = None,
+) -> ix.Filters:
+    """The current view, read off the query string.
+
+    In the URL rather than in the page's memory, so a view is a link: shareable,
+    bookmarkable, and survivable across the reload that a bulk edit sometimes
+    wants. It is also what makes the browser's back button mean "the filter I
+    had before", which is the only undo a filter needs.
+
+    `viewer` is **not** among them. It comes from the credentials and rides on
+    every query, so a non-admin cannot widen their own view by editing the
+    address bar — the one thing a URL-shaped filter model must not allow.
+    """
+    return ix.Filters(event=event, year=year, tag=tag, audience=audience,
+                      kind=kind, band=band, viewer=user.scope)
+
+
 @app.get("/", response_class=HTMLResponse)
-def home(user: Annotated[Principal, Depends(require_user)]) -> HTMLResponse:
+def home(user: Annotated[Principal, Depends(require_user)],
+         view: Annotated[ix.Filters, Depends(filters)]) -> HTMLResponse:
     """The library by year, then by event — the two ways anyone looks for a photo.
 
     Every row is a filter: clicking a year opens that year, clicking an event
@@ -374,14 +407,21 @@ def home(user: Annotated[Principal, Depends(require_user)]) -> HTMLResponse:
     rather than a separate way of seeing things.
     """
     conn = db()
-    s = ix.summary(conn)
-    rows = ix.events(conn)
+    s = ix.summary(conn, view)
+    rows = ix.events(conn, view)
 
-    open_note = ("" if not accounts.admin_password_is_initial(store()) else
+    open_note = ("" if not (user.is_admin
+                            and accounts.admin_password_is_initial(store()))
+                 else
                  '<span class="warn">&middot; admin still has its shipped '
                  'password</span>')
-    head = (f'{s["files"]:,} files &middot; {s["unreviewed"]:,} undecided '
-            f'&middot; {s["undated"]:,} undated '
+    # Only an admin sees undecided files at all, so only an admin has a backlog
+    # to report. For anyone else the count is trivially complete, and saying so
+    # would be noise pretending to be progress.
+    backlog = (f'{s["unreviewed"] or 0:,} undecided &middot; '
+               if user.is_admin else "")
+    head = (f'{s["files"] or 0:,} files &middot; {backlog}'
+            f'{s["undated"] or 0:,} undated '
             f'&middot; indexed {_age(ix.built_at(conn))} {open_note}')
 
     if not rows:
@@ -425,30 +465,6 @@ events reviewed</span></h2>
 <tbody>{rows}</tbody></table>"""
 
 
-def filters(
-    user: Annotated[Principal, Depends(require_user)],
-    event: Annotated[str | None, Query()] = None,
-    year: Annotated[str | None, Query()] = None,
-    tag: Annotated[str | None, Query()] = None,
-    audience: Annotated[str | None, Query()] = None,
-    kind: Annotated[str | None, Query()] = None,
-    band: Annotated[str | None, Query()] = None,
-) -> ix.Filters:
-    """The current view, read off the query string.
-
-    In the URL rather than in the page's memory, so a view is a link: shareable,
-    bookmarkable, and survivable across the reload that a bulk edit sometimes
-    wants. It is also what makes the browser's back button mean "the filter I
-    had before", which is the only undo a filter needs.
-
-    `viewer` is **not** among them. It comes from the credentials and rides on
-    every query, so a non-admin cannot widen their own view by editing the
-    address bar — the one thing a URL-shaped filter model must not allow.
-    """
-    return ix.Filters(event=event, year=year, tag=tag, audience=audience,
-                      kind=kind, band=band, viewer=user.scope)
-
-
 #: How many files one grid renders. Enough to hold the largest seeded event
 #: (1,766) in a single page, because paging through a cull loses your place.
 PAGE_LIMIT: int = 2000
@@ -487,7 +503,7 @@ def browse(user: Annotated[Principal, Depends(require_user)],
   <aside id="rail"></aside>
 </div>
 <div id="menu" hidden></div>
-<script>const VIEW={_js(_view_dict(view))},CHIPS={_js(_CHIPS)},FIXED={_js(_FIXED)},EXTRA={_js(_EXTRA)},ADMIN={_js(user.is_admin)},USERS={_js(_audience_names())};</script>
+<script>const VIEW={_js(_view_dict(view))},CHIPS={_js(_chips(user))},FIXED={_js(_FIXED)},EXTRA={_js(_EXTRA)},ADMIN={_js(user.is_admin)},USERS={_js(_audience_names())};</script>
 <script>{_BROWSE_JS}</script>""",
         tools=('<div class="chips" id="chips"></div>'
                '<button id="selall">Select all</button>'),
@@ -512,12 +528,10 @@ def _actions(user: Principal) -> str:
         return ""
     return """<div class="row" id="actions" hidden>
   <span class="count" id="selcount" style="margin:0"></span>
-  <button data-act="share">Add access&hellip;</button>
-  <button data-act="unshare">Remove access&hellip;</button>
+  <button data-act="access">Access&hellip;</button>
+  <button data-act="tags">Tags&hellip;</button>
   <span class="sep"></span>
   <button data-act="event">Event&hellip;</button>
-  <button data-act="tag">Add tag&hellip;</button>
-  <button data-act="untag">Remove tag&hellip;</button>
   <button data-act="date">Date&hellip;</button>
   <span class="sep"></span>
   <button id="selnone">Deselect</button>
@@ -551,14 +565,34 @@ def _view_dict(view: ix.Filters) -> dict[str, str | None]:
     return {name: getattr(view, name) for name in ix.Filters.NAMES}
 
 
-def _audience_names() -> list[str]:
-    """Audiences worth offering before any file has one.
+def _chips(user: Principal) -> tuple[tuple[str, str], ...]:
+    """The filters this person gets.
 
-    Every account and role, plus `private`. Sharing has to be possible on the
-    very first file, and suggestions drawn from existing decisions are empty
-    until somebody has already made one.
+    Access is an administrator's control. Everyone else sees only what has
+    been shared with them, so filtering by who else can see it offers a
+    choice between their whole world and nothing.
     """
-    return sorted({*store().audiences(), decisions.PRIVATE})
+    return tuple((col, label) for col, label in _CHIPS
+                 if col != "audience" or user.is_admin)
+
+
+def _audience_names() -> list[str]:
+    """Who access can be given to: **roles first, then people.**
+
+    In that order because a role is almost always the right answer — sharing
+    with `family` keeps working as the family changes, where naming four
+    people does not. Both are offered, because sometimes one person really is
+    the audience.
+
+    Listed at all because sharing has to be possible on the very first file,
+    before any decision exists to draw a suggestion from. The administrator is
+    never here — it sees everything already, so granting it access is a no-op
+    dressed as a decision.
+    """
+    book = store()
+    roles = sorted(set(book.roles) - {accounts.ADMIN})
+    people = sorted(set(book.users) - {accounts.ADMIN} - set(roles))
+    return [*roles, *people]
 
 
 #: Labels for the filter chips and the fixed vocabularies. Kept server-side so
@@ -668,7 +702,8 @@ async function openMenu(anchorEl,ctx){
                 +'loading…</div>';
   const q=document.getElementById('menuq');
   q.placeholder = ctx.mode!=='set' ? 'Filter…'
-    : ctx.column==='audience' ? 'Pick a person or role'
+    : ctx.as==='access' ? 'Tick who can see these'
+    : ctx.as==='tags' ? 'Tick a tag, or type a new one'
     : 'Type a new name, or pick one below';
   q.oninput=()=>render(q.value);
   q.onkeydown=e=>{
@@ -696,8 +731,11 @@ async function openMenu(anchorEl,ctx){
     // rather than a name, and the configured logins have to be offerable
     // before any file carries them.
     const extra=ctx.mode==='filter'?(EXTRA[ctx.column]||[]):[];
-    const seed=ctx.mode==='set'&&ctx.column==='audience'
-      ? USERS.map(u=>[u,u]) : [];
+    // *Add* offers what is valid to grant; *remove* offers what is actually
+    // there. They differ, and the difference matters: a grant left behind by
+    // a renamed or deleted account names nobody, and seeding the remove list
+    // from the account list would make it unremovable.
+    const seed=ctx.column==='audience' ? USERS.map(u=>[u,u]) : [];
     const have=new Set(opts.map(o=>o.value));
     opts=[...extra,...seed].filter(e=>!have.has(e[0]))
       .map(e=>({value:e[0],label:e[1],n:null,scope:'all'}))
@@ -708,12 +746,28 @@ async function openMenu(anchorEl,ctx){
   function choose(value){
     closeMenu();
     if(ctx.mode==='filter') location.href=url({[ctx.column]:value});
-    // The act, not the column: `untag` and `tag` share a column but do
-    // opposite things, and passing the column made removing a tag add it.
-    else applyToSelection(ctx.as||ctx.column,value);
+    else applyToSelection(ctx.as||ctx.column,value,true);
+  }
+
+  // A checklist, not a list of commands. `some` clears first and then
+  // adds: taking access away is the safer direction, so it is the one that
+  // costs a single click.
+  async function toggle(value,row){
+    const cs=targets();
+    if(!cs.length){say('nothing selected');return;}
+    const field=MULTI[ctx.as][0];
+    const add=shareState(cs,field,value)==='none';
+    await applyToSelection(ctx.as,value,add);
+    mark(row,shareState(targets(),field,value));
+  }
+  function mark(row,state){
+    row.dataset.state=state;
+    const box=row.querySelector('.box');
+    if(box) box.textContent=state==='all'?'\u2713':state==='some'?'\u25cf':'';
   }
   function render(text){
     const t=(text||'').toLowerCase();
+    const checkable=ctx.mode==='set'&&!!MULTI[ctx.as];
     const hits=opts.filter(o=>o.label.toLowerCase().includes(t));
     const list=document.createElement('div');
     list.id='menulist';
@@ -724,12 +778,14 @@ async function openMenu(anchorEl,ctx){
     // Tags are invented as you go; access is not. Somebody who can be given
     // access is an account or a role, made under Accounts — offering to
     // create one here would write a grant that reaches nobody.
-    const invent=ctx.mode==='set'&&ctx.column!=='audience';
+    // Tags are invented as you go; access is not. Somebody who can be given
+    // access is an account or a role, made under Accounts.
+    const invent=ctx.mode==='set'&&ctx.column==='tag';
     if(invent&&typed&&!opts.some(o=>o.label===typed)){
       const o=opt({label:'Add “'+typed+'”',n:null},()=>choose(typed));
       o.classList.add('new'); list.appendChild(o);
     }
-    if(ctx.mode==='set'){
+    if(ctx.mode==='set'&&!checkable){
       list.appendChild(opt({label:'Clear',n:null},()=>choose(null)));
     }
     // Three bands, most relevant first: values already used by what you are
@@ -742,19 +798,26 @@ async function openMenu(anchorEl,ctx){
         const h=document.createElement('div');
         h.className='band'; h.textContent=title; list.appendChild(h);
       }
-      band.forEach(o=>list.appendChild(opt(o,()=>choose(o.value))));
+      band.forEach(o=>list.appendChild(
+        opt(o,()=>choose(o.value),checkable)));
     }
     if(!hits.length&&!typed){
       list.innerHTML='<div class="band">nothing yet</div>';
     }
     menu.querySelector('#menulist').replaceWith(list);
   }
-  function opt(o,fn){
+  function opt(o,fn,checkable){
     const d=document.createElement('div');
     d.className='opt';
-    d.innerHTML=`<span>${esc(o.label)}</span>`
+    d.innerHTML=(checkable?'<span class="box"></span>':'')
+               +`<span>${esc(o.label)}</span>`
                +(o.n!==null&&o.n!==undefined?`<span class="n">${o.n}</span>`:'');
-    d.onclick=fn;
+    if(checkable){
+      mark(d,shareState(targets(),MULTI[ctx.as][0],o.value));
+      d.onclick=e=>{e.stopPropagation();toggle(o.value,d);};
+    }else{
+      d.onclick=fn;
+    }
     return d;
   }
   render('');
@@ -983,26 +1046,41 @@ function drop(gone){
 }
 
 // Which multi-valued field each action edits, and whether it adds or removes.
-const MULTI={tag:['tags','add_tags'], untag:['tags','remove_tags'],
-             share:['audience','add_audience'],
-             unshare:['audience','remove_audience']};
+// Which cell attribute each multi-valued action edits, and the two request
+// fields that add to it and take from it.
+const MULTI={tags:['tags','add_tags','remove_tags'],
+             access:['audience','add_audience','remove_audience']};
+
+function valuesOf(c,field){
+  return c.dataset[field]?c.dataset[field].split('\\n'):[];
+}
+
+// How much of the selection already carries a value: all of it, some of it,
+// or none. The three states Explorer's tree uses, for the same reason — a
+// selection is not one thing, and pretending otherwise means every bulk
+// edit silently overwrites what you could not see.
+function shareState(cs,field,value){
+  const n=cs.filter(c=>valuesOf(c,field).includes(value)).length;
+  return n===0?'none':(n===cs.length?'all':'some');
+}
 
 // Optimistic: the cell changes now and the write follows, because a cull is a
 // rhythm and waiting on SMB between gestures destroys it. A failure puts the
 // old value back rather than leaving the screen claiming something untrue.
-async function applyToSelection(act,value){
+async function applyToSelection(act,value,add){
   const cs=targets();
   if(!cs.length){say('nothing selected');return;}
   const multi=MULTI[act];
-  const body = multi ? {[multi[1]]:[value]} : {[act]:value};
   if(multi&&value===null){say('pick a name');return;}
+  const body = multi ? {[add?multi[1]:multi[2]]:[value]} : {[act]:value};
   const before=multi?cs.map(c=>c.dataset[multi[0]]||''):null;
-  if(multi) cs.forEach(c=>paint(c,multi[0],value,multi[1].startsWith('add')));
+  if(multi) cs.forEach(c=>paint(c,multi[0],value,add));
   const out=await send(cs,body);
   if(out===null&&multi) cs.forEach((c,i)=>{
     c.dataset[multi[0]]=before[i]; repaint(c,multi[0]);
   });
-  if(out!==null&&act==='share') lastShare=value;
+  if(out!==null&&act==='access'&&add) lastShare=value;
+  return out;
 }
 
 // The grid shows tags and audience, so both have to change the moment the
@@ -1064,8 +1142,7 @@ async function send(cs,body){
 // two are not the same word: `unshare` writes the audience field and offers
 // audience values, and using the action name as the column asked the server
 // for a column called `share` — a 400, and an empty list every time.
-const ACT_COLUMN={tag:'tag', untag:'tag', share:'audience',
-                  unshare:'audience', event:'event'};
+const ACT_COLUMN={tags:'tag', access:'audience', event:'event'};
 (actions?[...actions.querySelectorAll('[data-act]')]:[]).forEach(b=>{
   const act=b.dataset.act;
   b.onclick=e=>{e.stopPropagation();openMenu(b, act==='date'
@@ -1083,13 +1160,13 @@ function repeatShare(){
   if(!ADMIN) return;
   if(cur<0&&!picked.size) setCur(0);
   if(!lastShare){
-    const b=actions&&actions.querySelector('[data-act="share"]');
+    const b=actions&&actions.querySelector('[data-act="access"]');
     if(b) b.click();
     return;
   }
   const cs=targets();
   if(!cs.length) return;
-  applyToSelection('share',lastShare);
+  applyToSelection('access',lastShare,true);
   try{localStorage.setItem('pix2.share',lastShare);}catch(e){}
   if(!picked.size&&cur<cells.length-1) setCur(cur+1);
 }
@@ -1330,8 +1407,9 @@ def _under(root: Path, target: Path) -> bool:
 
 
 @app.get("/api/events")
-def api_events(user: Annotated[Principal, Depends(require_user)]) -> JSONResponse:
-    return JSONResponse([dict(r) for r in ix.events(db())])
+def api_events(user: Annotated[Principal, Depends(require_user)],
+               view: Annotated[ix.Filters, Depends(filters)]) -> JSONResponse:
+    return JSONResponse([dict(r) for r in ix.events(db(), view)])
 
 
 class DecideBody(BaseModel):

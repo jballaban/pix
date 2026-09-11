@@ -83,10 +83,6 @@ _IPTC_EXT_NS: str = "http://iptc.org/std/Iptc4xmpExt/2008-02-29/"
 _RDF_NS: str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
 _DC_NS: str = "http://purl.org/dc/elements/1.1/"
 
-#: The audience for a file nobody else should see. Just a name, like any
-#: other — it has no login, so nothing can sign in as it, which is the whole
-#: trick: *keep but share with no one* needs no special state.
-PRIVATE: str = "private"
 
 
 class Unset:

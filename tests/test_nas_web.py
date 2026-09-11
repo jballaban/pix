@@ -639,7 +639,7 @@ def test_the_grid_offers_the_sharing_actions(client: TestClient) -> None:
     outcome through the general mechanism rather than a button that only one
     page could have."""
     html = client.get("/browse?event=Italy%20-%20Sicily").text
-    assert '<button data-act="share"' in html
+    assert '<button data-act="access"' in html
     assert 'id="selall"' in html
 
 
@@ -1041,7 +1041,7 @@ def test_a_viewer_is_offered_no_edit_controls(
     kid = cast(TestClient, household["kid"])
     html = kid.get("/browse").text
 
-    assert '<button data-act="share"' not in html
+    assert '<button data-act="access"' not in html
     assert 'id="actions"' not in html
 
 
@@ -1049,7 +1049,7 @@ def test_the_admin_keeps_the_edit_controls(household: dict[str, object]) -> None
     admin = cast(TestClient, household["admin"])
     html = admin.get("/browse").text
 
-    assert '<button data-act="share"' in html
+    assert '<button data-act="access"' in html
 
 
 def test_granted_nothing_sees_nothing(app_env: dict[str, Path]) -> None:
@@ -1130,13 +1130,13 @@ def test_the_access_list_is_seeded_from_the_accounts(
     app_env: dict[str, Path]
 ) -> None:
     """Sharing has to be possible on the very first file, before any decision
-    exists to draw a suggestion from."""
+    exists to draw a suggestion from — and only real accounts and roles are
+    offered, because a grant to anything else reaches nobody."""
     add_user("james", "pw", ("family",))
     html = sign_in(accounts.ADMIN, "admin").get("/browse").text
 
     assert '"james"' in html
     assert '"family"' in html
-    assert '"private"' in html
 
 
 def test_the_admin_is_never_offered_as_an_audience(
@@ -1152,9 +1152,8 @@ def test_an_action_asks_for_the_column_it_edits(client: TestClient) -> None:
     asked the server for one called `share`, which is a 400 and an empty list."""
     js = client.get("/browse").text
 
-    assert "share:'audience'" in js
-    assert "unshare:'audience'" in js
-    assert "untag:'tag'" in js
+    assert "access:'audience'" in js
+    assert "tags:'tag'" in js
 
 
 def test_the_menu_can_actually_be_hidden(client: TestClient) -> None:
@@ -1170,8 +1169,8 @@ def test_the_filter_is_called_access(client: TestClient) -> None:
     html = client.get("/browse").text
 
     assert '"Access"' in html
-    assert "Add access" in html
-    assert "Remove access" in html
+    assert "Access&hellip;" in html
+    assert "Tags&hellip;" in html
 
 
 # --- layout and the viewer ----------------------------------------------------
@@ -1224,3 +1223,77 @@ def test_access_cannot_be_invented_from_the_menu(client: TestClient) -> None:
     js = client.get("/browse").text
 
     assert "ctx.column!=='audience'" in js
+
+
+# --- metadata is scoped too ---------------------------------------------------
+
+def test_a_viewer_sees_only_events_they_can_open(
+    household: dict[str, object]
+) -> None:
+    """An event name is information. A list of every trip and birthday, shown
+    to somebody who can open none of the photographs, leaks exactly what the
+    audience model exists to keep."""
+    kid = cast(TestClient, household["kid"])
+    admin = cast(TestClient, household["admin"])
+
+    assert len(admin.get("/api/events").json()) >= 1
+    rows = kid.get("/api/events").json()
+    assert all(r["n"] == 1 for r in rows)
+
+
+def test_someone_shared_nothing_sees_an_empty_home(
+    app_env: dict[str, Path], writable: Path
+) -> None:
+    add_user("nobody", "pw")
+
+    assert sign_in("nobody", "pw").get("/api/events").json() == []
+
+
+def test_suggestions_are_scoped_to_the_viewer(
+    household: dict[str, object]
+) -> None:
+    """A dropdown listing every event in the house to somebody who can open
+    none of them tells them exactly what they were not shown."""
+    kid = cast(TestClient, household["kid"])
+    admin = cast(TestClient, household["admin"])
+
+    assert admin.get("/api/suggest?column=event").json() != []
+    for column in ("event", "year", "tag", "kind", "band"):
+        for s in kid.get(f"/api/suggest?column={column}").json():
+            assert s["n"] <= 1, column
+
+
+def test_the_access_filter_is_an_admin_control(
+    household: dict[str, object]
+) -> None:
+    """Everyone else sees only what was shared with them, so filtering by who
+    else can see it offers a choice between their whole world and nothing."""
+    kid = cast(TestClient, household["kid"])
+    admin = cast(TestClient, household["admin"])
+
+    assert '"Access"' in admin.get("/browse").text
+    assert '"Access"' not in kid.get("/browse").text
+
+
+def test_a_grant_naming_nobody_can_still_be_removed(
+    client: TestClient, writable: Path
+) -> None:
+    """A grant left behind by a renamed or deleted account names nobody, and
+    an Access list drawn only from the account list would make it permanent."""
+    client.post("/api/decide", json={"folder": "init_2026", "name": "a.jpg",
+                                     "add_audience": ["ghost"]})
+
+    got = [s["value"] for s in client.get("/api/suggest?column=audience").json()]
+    assert "ghost" in got
+
+    client.post("/api/decide", json={"folder": "init_2026", "name": "a.jpg",
+                                     "remove_audience": ["ghost"]})
+    assert decisions.read(writable / "a.jpg") is None
+
+
+def test_one_menu_shows_the_three_states(client: TestClient) -> None:
+    """A selection is not one thing, and a two-state box would have to lie."""
+    js = client.get("/browse").text
+
+    assert "function shareState" in js
+    assert "'none':(n===cs.length?'all':'some')" in js
