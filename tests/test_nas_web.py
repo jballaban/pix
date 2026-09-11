@@ -149,9 +149,35 @@ def test_derived_images_are_cacheable(client: TestClient) -> None:
 # --- api ---------------------------------------------------------------------
 
 def test_api_events(client: TestClient) -> None:
+    """Grouped by year, so the dated and undated halves of one event are
+    separate rows — each is a different slice of work."""
     rows = client.get("/api/events").json()
-    assert rows[0]["event"] == "Italy - Sicily"
-    assert rows[0]["n"] == 2
+    assert {(r["year"], r["event"], r["n"]) for r in rows} == {
+        ("2026", "Italy - Sicily", 1),
+        ("(undated)", "Italy - Sicily", 1),
+    }
+
+
+def test_the_home_page_groups_by_year(client: TestClient) -> None:
+    """A flat list of every event across twenty-five years is a list nobody
+    can find their place in."""
+    html = client.get("/").text
+    assert 'href="/browse?year=2026"' in html
+    assert "events reviewed" in html
+
+
+def test_an_event_row_links_to_that_year_and_event(
+    client: TestClient
+) -> None:
+    html = client.get("/").text
+    assert "year=2026&amp;event=Italy%20-%20Sicily" in html
+
+
+def test_undated_files_are_reachable(client: TestClient) -> None:
+    """374 of the seeded year have no date; that is a work item, not an
+    absence to leave unlinked."""
+    assert "(undated)" in client.get("/").text
+    assert "b.mp4" in client.get("/browse?year=(undated)").text
 
 
 def test_api_files_filters_by_event(client: TestClient) -> None:

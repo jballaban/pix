@@ -55,6 +55,12 @@ SCHEMA_VERSION: int = 2
 #: and modelling it twice invites the two to disagree.
 UNREVIEWED: str = "new"
 
+#: Stand-ins for a missing value, so the landing page can link to those
+#: groups like any other. A file with no date is a work item of its own —
+#: 374 of them in the seeded year — not something to leave unreachable.
+UNDATED: str = "(undated)"
+NO_EVENT: str = "(none)"
+
 #: Where *small/short*, *medium* and *large/long* fall. One filter whose
 #: meaning follows the file: for a clip the question is length, for a photo
 #: it is weight, and asking it as two controls would mean picking the right
@@ -546,7 +552,8 @@ def _clauses(filters: Filters) -> dict[str, tuple[str, dict[str, Any]]]:
         out["event"] = ("COALESCE(files.event, '(none)') = :f_event",
                         {"f_event": filters.event})
     if filters.year is not None:
-        out["year"] = ("files.year = :f_year", {"f_year": filters.year})
+        out["year"] = ("COALESCE(files.year, :undated) = :f_year",
+                       {"f_year": filters.year, "undated": UNDATED})
     if filters.tag is not None:
         out["tag"] = (
             "EXISTS (SELECT 1 FROM file_tags ft WHERE ft.folder = files.folder "
@@ -582,18 +589,31 @@ def _combine(clauses: dict[str, tuple[str, dict[str, Any]]],
 # --- queries -----------------------------------------------------------------
 
 def events(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """Every event with its file count and date range, largest first.
+    """Every (year, event) pair, newest year first and biggest event within it.
 
-    Ordered by size because that is where the work is: the seeded year has one
-    1,766-file "event" that is really a whole phone dump needing splitting, and
-    it should be the first thing you see.
+    Grouped by year because a library is remembered that way and worked
+    through that way — a flat list of every event across twenty-five years is
+    a list nobody can find their place in. Within a year, by size, because
+    that is where the work is: the seeded year has one 1,766-file event that
+    is really a whole phone dump needing splitting.
+
+    An event spanning New Year appears under **both** years, each with that
+    year's count. That is not a duplicate to be collapsed: the row is a link
+    to `year + event`, and the two halves are genuinely different slices of
+    work.
     """
     return list(conn.execute(
-        "SELECT COALESCE(event, '(none)') AS event, COUNT(*) AS n, "
+        "SELECT COALESCE(year, :undated) AS year, "
+        "       COALESCE(event, :none) AS event, COUNT(*) AS n, "
         "       MIN(effective_date) AS first_seen, "
         "       MAX(effective_date) AS last_seen, "
         "       SUM(CASE WHEN tier IS NULL THEN 1 ELSE 0 END) AS unreviewed "
-        "FROM files GROUP BY event ORDER BY n DESC"
+        "FROM files GROUP BY year, event "
+        # On the raw column, not the alias: `NULL = '(undated)'` is NULL,
+        # and SQLite sorts NULLs first — which put the undated group at the
+        # top of the page instead of the bottom.
+        "ORDER BY files.year IS NULL, files.year DESC, n DESC",
+        {"undated": UNDATED, "none": NO_EVENT}
     ))
 
 
@@ -658,7 +678,13 @@ def suggest(conn: sqlite3.Connection, column: str,
                + "FROM file_tags ft "
                  "JOIN files ON files.folder = ft.folder AND files.name = ft.name "
                  "GROUP BY value " + order)
-    elif column in ("event", "year", "kind", "band"):
+    elif column == "year":
+        # Undated files are offered as a year, because *show me the ones with
+        # no date* is a real piece of work rather than an absence to hide.
+        params["undated"] = UNDATED
+        sql = ("SELECT COALESCE(files.year, :undated) AS value, " + tally
+               + "FROM files GROUP BY value " + order)
+    elif column in ("event", "kind", "band"):
         sql = (f"SELECT files.{column} AS value, " + tally
                + f"FROM files WHERE files.{column} IS NOT NULL "
                  "GROUP BY value " + order)

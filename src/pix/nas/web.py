@@ -197,6 +197,10 @@ th { color:var(--dim); font-weight:500; font-size:12px;
      text-transform:uppercase; letter-spacing:.06em; }
 td.num { text-align:right; font-variant-numeric:tabular-nums; }
 td.done { color:var(--keep); }
+h2.year { font-size:15px; margin:26px 0 8px; display:flex; gap:12px;
+          align-items:baseline; flex-wrap:wrap; }
+h2.year:first-of-type { margin-top:12px; }
+h2.year span { font-size:13px; font-weight:400; }
 .note { color:#ffb4a2; margin:8px 0 0; }
 .empty { color:var(--dim); padding:40px 0; }
 
@@ -221,39 +225,60 @@ def _page(title: str, body: str, *, bar: str = "") -> HTMLResponse:
 
 @app.get("/", response_class=HTMLResponse)
 def home(user: Annotated[str, Depends(require_user)]) -> HTMLResponse:
-    """Events, largest first — because that is where the work is."""
+    """The library by year, then by event — the two ways anyone looks for a photo.
+
+    Every row is a filter: clicking a year opens that year, clicking an event
+    opens that year *and* event. So the landing page is a shortcut into `/browse`
+    rather than a separate way of seeing things.
+    """
     conn = db()
     s = ix.summary(conn)
     rows = ix.events(conn)
 
     open_note = ("" if _users() else
                  '<span class="dim">&middot; no auth configured</span>')
-    # Events reviewed, not files reviewed: pass 2 has a finish condition per
-    # event, and "14 of 22 events" is the reading that tells you whether the
-    # library is getting worked through (§8). A file count never lands.
-    done = sum(1 for r in rows if not r["unreviewed"])
-    head = (f'{s["files"]:,} files &middot; '
-            f'<b>{done} of {len(rows)} events reviewed</b> &middot; '
-            f'{s["unreviewed"]:,} files left &middot; {s["undated"]:,} undated '
+    head = (f'{s["files"]:,} files &middot; {s["unreviewed"]:,} undecided '
+            f'&middot; {s["undated"]:,} undated '
             f'&middot; indexed {_age(ix.built_at(conn))} {open_note}')
 
     if not rows:
         return _page("pix2", '<p class="empty">Nothing indexed yet.</p>')
 
-    cells = "".join(
-        f'<tr><td><a href="/browse?event={_q(r["event"])}">{_h(r["event"])}</a></td>'
+    years: dict[str, list[sqlite3.Row]] = {}
+    for row in rows:
+        years.setdefault(str(row["year"]), []).append(row)
+
+    sections = "".join(_year_section(year, group)
+                       for year, group in years.items())
+    return _page("pix2", f"""<p class="dim">{head}</p>
+<p><a href="/browse">Browse everything &rarr;</a></p>{sections}""")
+
+
+def _year_section(year: str, group: list[sqlite3.Row]) -> str:
+    """One year, with its events and how much of it is done.
+
+    The progress reading is **events**, not files: pass 2 finishes an event at a
+    time, so "14 of 22 events" is what tells you the year is being worked
+    through. A file count never lands (§8).
+    """
+    files_n = sum(int(r["n"]) for r in group)
+    done = sum(1 for r in group if not r["unreviewed"])
+    rows = "".join(
+        f'<tr><td><a href="/browse?year={_q(year)}&amp;event={_q(r["event"])}">'
+        f'{_h(r["event"])}</a></td>'
         f'<td class="num">{r["n"]:,}</td>'
         + ('<td class="num done">done</td>' if not r["unreviewed"] else
            f'<td class="num dim">{r["unreviewed"]:,}</td>')
         + f'<td class="dim">{_h(str(r["first_seen"] or "")[:10])}</td>'
         f'<td class="dim">{_h(str(r["last_seen"] or "")[:10])}</td></tr>'
-        for r in rows
+        for r in group
     )
-    return _page("pix2", f"""<p class="dim">{head}</p>
-<p><a href="/browse">Browse everything &rarr;</a></p>
+    return f"""<h2 class="year"><a href="/browse?year={_q(year)}">{_h(year)}</a>
+<span class="dim">{files_n:,} files &middot; {done} of {len(group)}
+events reviewed</span></h2>
 <table><thead><tr><th>Event</th><th class="num">Files</th>
-<th class="num">Unreviewed</th><th>First</th><th>Last</th></tr></thead>
-<tbody>{cells}</tbody></table>""")
+<th class="num">Undecided</th><th>First</th><th>Last</th></tr></thead>
+<tbody>{rows}</tbody></table>"""
 
 
 def filters(
@@ -403,6 +428,7 @@ function drawChips(){
     b.innerHTML=label+(v?`<span class="val">${esc(labelFor(col,v))}</span>`
                         +'<span class="x">&times;</span>':'');
     b.onclick=e=>{
+      e.stopPropagation();
       if(e.target.classList.contains('x')){location.href=url({[col]:null});return;}
       openMenu(b,{column:col,mode:'filter'});
     };
@@ -421,13 +447,21 @@ function esc(s){return String(s).replace(/[&<>"]/g,c=>(
 // --- the shared menu ---------------------------------------------------------
 let menuCtx=null;
 function closeMenu(){menu.hidden=true;menuCtx=null;}
+// Anywhere outside dismisses. The opener stops propagation and toggles,
+// so clicking the same label again closes rather than reopening — a menu
+// you cannot dismiss with the control that opened it feels stuck.
 document.addEventListener('click',e=>{
-  if(!menu.hidden&&!menu.contains(e.target)&&!e.target.closest('.chip,[data-act]'))
-    closeMenu();
+  if(!menu.hidden&&!menu.contains(e.target)) closeMenu();
 });
+window.addEventListener('resize',closeMenu);
+window.addEventListener('scroll',closeMenu,{passive:true});
+
+menu.addEventListener('click',e=>e.stopPropagation());
 
 async function openMenu(anchorEl,ctx){
-  menuCtx=ctx;
+  const key=ctx.mode+':'+(ctx.column||'')+':'+(ctx.as||'');
+  if(menuCtx&&menuCtx.key===key&&!menu.hidden){closeMenu();return;}
+  ctx.key=key; menuCtx=ctx;
   const r=anchorEl.getBoundingClientRect();
   menu.style.left=Math.min(r.left,window.innerWidth-316)+'px';
   menu.style.top=(r.bottom+window.scrollY+4)+'px';
@@ -667,10 +701,10 @@ async function send(cs,body){
 }
 
 actions.querySelectorAll('[data-act]').forEach(b=>{
-  b.onclick=()=>openMenu(b, b.dataset.act==='date'
+  b.onclick=e=>{e.stopPropagation();openMenu(b, b.dataset.act==='date'
     ? {mode:'date'}
     : {column:b.dataset.act==='untag'?'tag':b.dataset.act,
-       mode:'set', as:b.dataset.act});
+       mode:'set', as:b.dataset.act});};
 });
 actions.querySelectorAll('[data-tier]').forEach(b=>{
   b.onclick=()=>{const cs=targets(); if(cs.length) setTier(cs,b.dataset.tier);};

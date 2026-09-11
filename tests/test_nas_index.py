@@ -624,3 +624,66 @@ def test_an_old_schema_is_dropped_not_migrated(tree: dict[str, Path]) -> None:
 
     conn = ix.connect(tree["db"])
     assert conn.execute("SELECT COUNT(*) FROM files").fetchone()[0] == 0
+
+
+# --- the landing page grouping -----------------------------------------------
+
+def test_events_group_by_year_newest_first(tree: dict[str, Path]) -> None:
+    _record(tree, "init_2026", "new.jpg",
+            {"EXIF:DateTimeOriginal": "2026:01:04 14:51:34",
+             "XMP:EventAuto": "Recent"})
+    _record(tree, "init_2026", "old.jpg",
+            {"EXIF:DateTimeOriginal": "2001:01:04 14:51:34",
+             "XMP:EventAuto": "Ancient"})
+    _build(tree)
+
+    got = [(r["year"], r["event"]) for r in ix.events(ix.connect(tree["db"]))]
+    assert got == [("2026", "Recent"), ("2001", "Ancient")]
+
+
+def test_undated_files_group_last(tree: dict[str, Path]) -> None:
+    """`NULL = '(undated)'` is NULL and SQLite sorts NULLs first, which put the
+    undated group at the top of the page instead of the bottom."""
+    _record(tree, "init_2026", "dated.jpg",
+            {"EXIF:DateTimeOriginal": "2001:01:04 14:51:34"})
+    _record(tree, "init_2026", "undated.jpg", {})
+    _build(tree)
+
+    got = [r["year"] for r in ix.events(ix.connect(tree["db"]))]
+    assert got == ["2001", ix.UNDATED]
+
+
+def test_an_event_spanning_new_year_appears_under_both(
+    tree: dict[str, Path]
+) -> None:
+    """Not a duplicate to collapse: each row links to year + event, and the two
+    halves are genuinely different slices of work."""
+    _record(tree, "init_2026", "dec.jpg",
+            {"EXIF:DateTimeOriginal": "2025:12:31 23:00:00",
+             "XMP:EventAuto": "New Year"})
+    _record(tree, "init_2026", "jan.jpg",
+            {"EXIF:DateTimeOriginal": "2026:01:01 01:00:00",
+             "XMP:EventAuto": "New Year"})
+    _build(tree)
+
+    got = [(r["year"], r["n"]) for r in ix.events(ix.connect(tree["db"]))]
+    assert got == [("2026", 1), ("2025", 1)]
+
+
+def test_the_undated_group_is_reachable_as_a_filter(tree: dict[str, Path]) -> None:
+    _record(tree, "init_2026", "a.jpg", {})
+    _build(tree)
+
+    conn = ix.connect(tree["db"])
+    hits = ix.files(conn, ix.Filters(year=ix.UNDATED))
+    assert [r["name"] for r in hits] == ["a.jpg"]
+
+
+def test_undated_is_offered_as_a_year(tree: dict[str, Path]) -> None:
+    """`show me the ones with no date` is a real piece of work, not an absence
+    to hide — 374 files in the seeded year."""
+    _record(tree, "init_2026", "a.jpg", {})
+    _build(tree)
+
+    got = ix.suggest(ix.connect(tree["db"]), "year")
+    assert [s.value for s in got] == [ix.UNDATED]
