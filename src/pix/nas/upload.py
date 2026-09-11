@@ -27,14 +27,17 @@ import json
 import os
 import shutil
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+from pix.duration import format_duration_compact, format_size
 from pix.ingest import MANIFEST_DIRNAME
 from pix.markers import EXPORT_TMP_SUFFIX
+from pix.progress import LiveProgress
 from pix.nas import ledger, staging as st
 from pix.nas.const import IMPORT_ROOT, LEDGER_NAME, MASTER_DIR
 
@@ -124,17 +127,27 @@ def _upload_one(staging: Path, *, echo: Callable[[str], None]) -> UploadSummary:
          f"{len(already)} already recorded -> {target.name}")
 
     lock = threading.Lock()
+    total_bytes = sum(i.size for i in items)
+    started = time.monotonic()
+
     with ledger_path.open("a", encoding="utf-8") as log:
+        progress = LiveProgress(
+            total=len(items),
+            status_provider=lambda: _status(summary, len(items), total_bytes, started),
+        )
+
         def handle(item: _Item) -> None:
             if item.flat in already:
                 with lock:
                     summary.skipped += 1
+                progress.advance()
                 return
             try:
                 moved = _copy_one(item, target)
             except OSError as e:
                 with lock:
                     summary.failed.append(f"{item.rel}: {e}")
+                progress.advance()
                 return
             with lock:
                 if moved:
@@ -146,9 +159,12 @@ def _upload_one(staging: Path, *, echo: Callable[[str], None]) -> UploadSummary:
                     "rel": item.rel, "root": item.root, "size": item.size,
                     "file": item.flat, "outcome": "kept",
                 })
+            progress.advance()
 
-        with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-            list(pool.map(handle, items))
+        with progress:
+            progress.begin(f"upload {name}")
+            with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+                list(pool.map(handle, items))
 
         with lock:
             for rel, root, size in culled:
@@ -162,6 +178,33 @@ def _upload_one(staging: Path, *, echo: Callable[[str], None]) -> UploadSummary:
         _clear(staging)
         summary.staging_cleared = True
     return summary
+
+
+def _status(summary: "UploadSummary", total_files: int, total_bytes: int,
+            started: float) -> str:
+    """The live body: done, transferred, rate, and an ETA.
+
+    Read **without the lock**, deliberately. It is called from the progress
+    thread once a second as well as from workers, so taking the lock here could
+    deadlock against a worker mid-append — and a display that is momentarily one
+    file stale costs nothing. Int reads are atomic in CPython.
+
+    An ETA is worth the arithmetic here specifically: a single year folder is
+    up to 946GB, so "how long is this going to take" is the question the line
+    exists to answer.
+    """
+    done = summary.copied + summary.skipped + len(summary.failed)
+    sent = summary.bytes_copied
+    elapsed = max(time.monotonic() - started, 0.001)
+    rate = sent / elapsed
+
+    body = f"{done}/{total_files}  {format_size(sent)} of {format_size(total_bytes)}"
+    if rate > 0 and sent > 0:
+        body += f"  {format_size(int(rate))}/s"
+        remaining = total_bytes - sent
+        if remaining > 0:
+            body += f"  ETA {format_duration_compact(remaining / rate)}"
+    return body
 
 
 def _resolve_target(staging: Path, name: str) -> Path:
