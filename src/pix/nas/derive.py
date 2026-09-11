@@ -8,6 +8,12 @@ Two derived tiers, both disposable and never backed up:
 - **preview** (1600px) — what you actually judge a photo by. A thumbnail cannot
   tell you sharp from soft, and serving the full file instead means pushing
   several MB per photo off that Atom while someone pages through an event.
+- **meta** — the probed facts, one JSON per file. Section 4 of the spec accepts
+  that an index rebuild re-probes every media file, which on spinning disks
+  behind an Atom is hours. This makes that cheap instead: `process` is already
+  opening each file to decode it, so extracting its metadata at the same time is
+  near-free, and rebuilding the index becomes a read of small JSON rather than
+  62k media opens.
 
 **Runs desktop-side**, like everything that decodes. The cost is reading the bulk
 of master back over SMB once; the alternative is a second implementation inside
@@ -22,6 +28,7 @@ today.
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import threading
@@ -34,11 +41,14 @@ from typing import Callable, Iterator
 from PIL import Image
 
 from pix import convert  # noqa: F401  # pyright: ignore[reportUnusedImport]
+from pix.exiftool_session import ExifToolSession, ExifToolTimeout
 from pix.duration import format_duration_compact
 from pix.markers import EXPORT_TMP_SUFFIX
 from pix.progress import LiveProgress
 from pix.nas import ledger
-from pix.nas.const import LEDGER_NAME, MASTER_DIR, PREVIEW_DIR, THUMB_DIR
+from pix.nas.const import (
+    LEDGER_NAME, MASTER_DIR, META_DIR, PREVIEW_DIR, THUMB_DIR,
+)
 
 #: Long-edge pixels. Both are regenerable, but regenerating 62k files is an
 #: afternoon, so they are worth getting roughly right rather than discovering
@@ -77,6 +87,7 @@ class ProcessSummary:
 
     thumbs: int = 0
     previews: int = 0
+    metas: int = 0
     skipped: int = 0            # already had both
     unsupported: int = 0        # nothing we know how to render a frame from
     cancelled: bool = False
@@ -84,7 +95,7 @@ class ProcessSummary:
 
     @property
     def made(self) -> int:
-        return self.thumbs + self.previews
+        return self.thumbs + self.previews + self.metas
 
 
 def master_files() -> Iterator[Path]:
@@ -109,10 +120,16 @@ def derived_path(media: Path, root: Path) -> Path:
     return root / media.parent.name / (media.name + ".jpg")
 
 
-def needs_work(media: Path) -> tuple[bool, bool]:
-    """`(needs thumb, needs preview)` — what is missing for this file."""
+def meta_path(media: Path) -> Path:
+    """Where `media`'s probed-facts JSON lives, mirroring master's layout."""
+    return META_DIR / media.parent.name / (media.name + ".json")
+
+
+def needs_work(media: Path) -> tuple[bool, bool, bool]:
+    """`(needs thumb, needs preview, needs meta)` — what is missing."""
     return (not derived_path(media, THUMB_DIR).is_file(),
-            not derived_path(media, PREVIEW_DIR).is_file())
+            not derived_path(media, PREVIEW_DIR).is_file(),
+            not meta_path(media).is_file())
 
 
 def sweep_partials() -> int:
@@ -124,7 +141,7 @@ def sweep_partials() -> int:
     and are cleaned there too.
     """
     removed = 0
-    for root in (THUMB_DIR, PREVIEW_DIR, _scratch()):
+    for root in (THUMB_DIR, PREVIEW_DIR, META_DIR, _scratch()):
         if not root.is_dir():
             continue
         for tmp in root.rglob(f"*{EXPORT_TMP_SUFFIX}*"):
@@ -157,17 +174,23 @@ def run_process(*, echo: Callable[[str], None] = lambda _: None) -> ProcessSumma
         echo("nothing to process")
         return summary
 
-    echo(f"{len(pending)} file(s) need thumbnails or previews")
+    echo(f"{len(pending)} file(s) need thumbnails, previews or metadata")
     lock = threading.Lock()
     started = time.monotonic()
     state: dict[str, int] = {"done": 0, "inflight": 0, "cancelling": 0}
+
+    # One persistent ExifTool process for the whole run — spawning one per file
+    # would cost more than the reads. It is not thread-safe, so it is guarded by
+    # its own lock rather than the summary's.
+    exif = ExifToolSession()
+    exif_lock = threading.Lock()
 
     def handle(media: Path) -> None:
         if state["cancelling"]:
             return
         state["inflight"] += 1
         try:
-            _derive_one(media, summary, lock)
+            _derive_one(media, summary, lock, exif, exif_lock)
         finally:
             state["inflight"] -= 1
             state["done"] += 1
@@ -196,6 +219,7 @@ def run_process(*, echo: Callable[[str], None] = lambda _: None) -> ProcessSumma
                  f"draining {state['inflight']} in flight")
         finally:
             pool.shutdown(wait=True)
+            exif.close()
 
     elapsed = time.monotonic() - started
     echo(f"done in {format_duration_compact(elapsed)}")
@@ -222,7 +246,7 @@ def _status(summary: ProcessSummary, total: int, started: float,
     rate = done / elapsed
 
     body = (f"{done}/{total}  {summary.thumbs} thumb, "
-            f"{summary.previews} preview")
+            f"{summary.previews} preview, {summary.metas} meta")
     if summary.failed:
         body += f", {len(summary.failed)} failed"
     if done and rate > 0:
@@ -233,12 +257,28 @@ def _status(summary: ProcessSummary, total: int, started: float,
     return body
 
 
-def _derive_one(media: Path, summary: ProcessSummary, lock: threading.Lock) -> None:
+def _derive_one(media: Path, summary: ProcessSummary, lock: threading.Lock,
+                exif: ExifToolSession, exif_lock: threading.Lock) -> None:
     """Make whatever `media` is missing."""
-    want_thumb, want_preview = needs_work(media)
-    if not (want_thumb or want_preview):
+    want_thumb, want_preview, want_meta = needs_work(media)
+    if not (want_thumb or want_preview or want_meta):
         with lock:
             summary.skipped += 1
+        return
+
+    # Metadata first, and independently of the image work: a file whose pixels
+    # cannot be decoded still has facts worth recording, and an unsupported
+    # extension is not a reason to know nothing about it.
+    if want_meta:
+        try:
+            if _write_meta(media, exif, exif_lock):
+                with lock:
+                    summary.metas += 1
+        except Exception as e:                # noqa: BLE001
+            with lock:
+                summary.failed.append(f"{media.name}: meta: {type(e).__name__}: {e}")
+
+    if not (want_thumb or want_preview):
         return
 
     ext = media.suffix.lower()
@@ -273,6 +313,48 @@ def _derive_one(media: Path, summary: ProcessSummary, lock: threading.Lock) -> N
     except Exception as e:                    # noqa: BLE001 - one bad file must
         with lock:                            # not stop 62k others
             summary.failed.append(f"{media.name}: {type(e).__name__}: {e}")
+
+
+def _write_meta(media: Path, exif: ExifToolSession,
+                exif_lock: threading.Lock) -> bool:
+    """Write `media`'s probed facts as JSON. True if one was written.
+
+    **Facts, not interpretations** (spec/nas-app.md §4). This records what
+    ExifTool read — `EXIF:DateTimeOriginal`, dimensions, codec — never the
+    effective value after pix's heuristics. Facts cannot go stale, because master
+    files are immutable; interpretations go stale the moment a heuristic
+    improves, and persisting them would resurrect the `_auto` re-derivation
+    treadmill the old architecture had.
+
+    Also records the file's size and mtime, so the index can tell a stale entry
+    from a current one with a `stat` rather than a re-read.
+    """
+    with exif_lock:                          # ExifTool session is not thread-safe
+        try:
+            data = exif.read_metadata(media)
+        except ExifToolTimeout:
+            return False
+    if data is None:
+        return False
+
+    try:
+        stat = media.stat()
+    except OSError:
+        return False
+
+    payload: dict[str, object] = {
+        "file": media.name,
+        "folder": media.parent.name,
+        "size": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+        "exif": data,
+    }
+    dest = meta_path(media)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + EXPORT_TMP_SUFFIX)
+    tmp.write_text(json.dumps(payload, indent=1, default=str), encoding="utf-8")
+    tmp.replace(dest)
+    return True
 
 
 def _resize(source: Path, dest: Path, long_edge: int) -> None:

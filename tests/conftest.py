@@ -49,3 +49,43 @@ def patched_hash_cache() -> dict[Path, str | None]:
     like the cache dict.
     """
     return {}
+
+
+@pytest.fixture(autouse=True)
+def _isolate_nas_paths(  # pyright: ignore[reportUnusedFunction]
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No test may read or write the real NAS share or the real staging drive.
+
+    The `pix.nas` modules bind their roots at import time
+    (`from ... import MASTER_DIR`), so each module holds its own reference and a
+    test has to patch every one it touches. That is a trap: adding a new tier
+    means every existing fixture is silently wrong, and the failure mode is
+    writing into the live archive rather than an error.
+
+    This ran into reality — a `META_DIR` added without updating two fixtures put
+    test folders on the production share. So rather than trusting fixtures to
+    keep up, any module attribute pointing under a real root is redirected to a
+    per-test sandbox. Tests that patch explicitly still win; they simply no
+    longer *have* to.
+    """
+    from pix.nas import const
+    from pix.nas import derive, device_import, folder_import, ledger, upload
+
+    real_roots = (const.MASTER_SHARE, const.LOCAL_ROOT)
+    sandbox = tmp_path / "_nas_sandbox"
+
+    def under_real_root(value: Path) -> bool:
+        for root in real_roots:
+            try:
+                value.relative_to(root)
+                return True
+            except ValueError:
+                continue
+        return value in real_roots
+
+    for module in (const, derive, device_import, folder_import, ledger, upload):
+        for name, value in list(vars(module).items()):
+            if isinstance(value, Path) and under_real_root(value):
+                monkeypatch.setattr(module, name, sandbox / name.lower(),
+                                    raising=False)

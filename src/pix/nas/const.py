@@ -49,6 +49,12 @@ RENDER_DIR: Path = MASTER_SHARE / "render"
 THUMB_DIR: Path = MASTER_SHARE / "thumb"
 PREVIEW_DIR: Path = MASTER_SHARE / "preview"
 
+#: Probed facts, one JSON per master file. Derived like the rest — but it is what
+#: makes the app's index cheap to rebuild: reading these is minutes where
+#: re-probing 62k media files is hours. `process` is already opening every file
+#: to decode it, so extracting the metadata at the same time is near-free.
+META_DIR: Path = MASTER_SHARE / "meta"
+
 #: Per-folder download ledger, written during upload. Its first line is a
 #: header describing the source, which is what makes the known-device registry
 #: derivable instead of stored.

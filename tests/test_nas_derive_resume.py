@@ -24,6 +24,7 @@ def tiers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
     monkeypatch.setattr(derive, "MASTER_DIR", master)
     monkeypatch.setattr(derive, "THUMB_DIR", thumb)
     monkeypatch.setattr(derive, "PREVIEW_DIR", preview)
+    monkeypatch.setattr(derive, "META_DIR", share / "meta")
     monkeypatch.setattr(derive, "_scratch", lambda: tmp_path / "scratch")
     monkeypatch.setattr(ledger, "MASTER_SHARE", share)
     monkeypatch.setattr(ledger, "MASTER_DIR", master)
@@ -54,7 +55,7 @@ def test_cancel_then_restart_completes_the_rest(
     monkeypatch.setattr(derive, "_resize", interrupt_partway)
     first = derive.run_process()
     assert first.cancelled is True
-    assert first.made < 24                      # 12 files x 2 tiers
+    assert first.made < 36                      # 12 files x 3 tiers
 
     monkeypatch.setattr(derive, "_resize", real)
     second = derive.run_process()
@@ -85,7 +86,7 @@ def test_restart_does_not_redo_finished_work(
     monkeypatch.setattr(derive, "_resize", real)
     second = derive.run_process()
 
-    assert first.made + second.made == 12       # each derived exactly once
+    assert first.made + second.made == 18       # 6 files x 3 tiers, each once
 
 
 def test_partials_are_swept_on_the_next_run(tiers: dict[str, Path]) -> None:

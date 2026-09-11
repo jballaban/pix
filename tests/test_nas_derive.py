@@ -20,6 +20,7 @@ def tiers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
     monkeypatch.setattr(derive, "MASTER_DIR", master)
     monkeypatch.setattr(derive, "THUMB_DIR", thumb)
     monkeypatch.setattr(derive, "PREVIEW_DIR", preview)
+    monkeypatch.setattr(derive, "META_DIR", share / "meta")
     monkeypatch.setattr(ledger, "MASTER_SHARE", share)
     monkeypatch.setattr(ledger, "MASTER_DIR", master)
     return {"master": master, "thumb": thumb, "preview": preview}
