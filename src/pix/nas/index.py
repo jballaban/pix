@@ -17,6 +17,12 @@ Two rules from §4 shape it:
 
 Built from the **meta tier** rather than the media, which is the whole reason
 `process` writes it: rebuilding reads small JSON instead of opening every file.
+
+Two ways in, and the difference matters. `build` replaces everything, and is what
+`pix2 index` and the tail of `pix2 process` run: the file *set* changes only when
+ingest runs, so recomputing it wholesale is both correct and rare. `refresh`
+rewrites a single row, and is what a curation write runs — because reading 62k
+records to record one decision is not a UI anyone uses twice.
 """
 
 from __future__ import annotations
@@ -28,7 +34,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator, cast
 
+from pix.nas import decisions
 from pix.nas.const import MASTER_DIR, META_DIR
+from pix.nas.decisions import Decision
 
 SCHEMA_VERSION: int = 1
 
@@ -92,13 +100,29 @@ def connect(db_path: Path) -> sqlite3.Connection:
 def open_ro(db_path: Path) -> sqlite3.Connection:
     """Open the index **read-only**, without creating or migrating anything.
 
-    The app is a reader: only `pix2 index` builds. `connect` writes schema and a
+    Every browsing request takes this connection. `connect` writes schema and a
     version row, which fails outright on a read-only mount and — worse, where
-    the mount is writable — would let the app quietly mutate a cache it does not
-    own. Read-only is the honest shape, and it makes the mistake impossible
-    rather than merely unlikely.
+    the mount is writable — would let a page it does not own quietly mutate the
+    projection. Read-only is the honest shape for a reader, and it makes the
+    mistake impossible rather than merely unlikely.
     """
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True,
+                           check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def open_rw(db_path: Path) -> sqlite3.Connection:
+    """Open an **existing** index for writing single rows.
+
+    The narrow exception to "the app is a reader". `sidecar first, index
+    follows` (spec §4) means the app updates the row for a file whose decision
+    it just wrote — which is a projection catching up with the record, not the
+    app becoming a second source of truth. It still never *builds*: `mode=rw`
+    rather than `rwc` fails on a missing file instead of creating an empty index
+    that would read as "the archive is gone".
+    """
+    conn = sqlite3.connect(f"file:{db_path}?mode=rw", uri=True,
                            check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
@@ -109,9 +133,10 @@ def build(db_path: Path, *, echo: Callable[[str], None] = lambda _: None,
           master_dir: Path | None = None) -> IndexStats:
     """Rebuild the index from the meta tier and master's decision sidecars.
 
-    A full rebuild rather than an incremental one: the input is ~5KB per file,
-    so even 62k files is a small read, and a rebuild that is always correct beats
-    an incremental path that can drift from a record it does not own.
+    Wholesale, because this is the path that discovers **which files exist** —
+    and that only changes when ingest runs, so it is the rare operation. The
+    input is ~5KB per file, so even 62k is a small read. Changing a decision
+    takes `refresh` instead.
     """
     meta_root = meta_dir if meta_dir is not None else META_DIR
     master_root = master_dir if master_dir is not None else MASTER_DIR
@@ -123,22 +148,13 @@ def build(db_path: Path, *, echo: Callable[[str], None] = lambda _: None,
     try:
         with conn:
             conn.execute("DELETE FROM files")
-            for folder, sidecars in _folders(meta_root, master_root):
+            for folder, decided in _folders(meta_root, master_root):
                 for record in _records(meta_root / folder):
-                    row = _row(folder, record, sidecars)
+                    row = _row(folder, record, decided)
                     if row is None:
                         stats.skipped.append(f"{folder}: unreadable record")
                         continue
-                    conn.execute(
-                        "INSERT OR REPLACE INTO files "
-                        "(folder, name, size, mtime_ns, kind, capture_date, "
-                        " camera, width, height, duration, event, tier, "
-                        " date_override, has_sidecar) "
-                        "VALUES (:folder, :name, :size, :mtime_ns, :kind, "
-                        " :capture_date, :camera, :width, :height, :duration, "
-                        " :event, :tier, :date_override, :has_sidecar)",
-                        row,
-                    )
+                    conn.execute(_INSERT, row)
                     stats.files += 1
                     if row["capture_date"]:
                         stats.with_date += 1
@@ -153,6 +169,51 @@ def build(db_path: Path, *, echo: Callable[[str], None] = lambda _: None,
         stats.events = len(events)
 
     return stats
+
+
+_INSERT: str = (
+    "INSERT OR REPLACE INTO files "
+    "(folder, name, size, mtime_ns, kind, capture_date, camera, width, height, "
+    " duration, event, tier, date_override, has_sidecar) "
+    "VALUES (:folder, :name, :size, :mtime_ns, :kind, :capture_date, :camera, "
+    " :width, :height, :duration, :event, :tier, :date_override, :has_sidecar)"
+)
+
+
+def refresh(conn: sqlite3.Connection, folder: str, name: str, *,
+            meta_dir: Path | None = None,
+            master_dir: Path | None = None) -> bool:
+    """Re-read one file's facts and decision, and rewrite just its row.
+
+    This is what makes curation usable. A full rebuild reads every record in the
+    meta tier — minutes over SMB for 62k files — which is fine as an occasional
+    maintenance step and absurd as the cost of tiering one photo. So a decision
+    write updates the one row it changed.
+
+    **Row-level only, deliberately.** It re-derives from the same two inputs a
+    rebuild uses, so it cannot invent a value a rebuild would not produce, and
+    it never removes or adds rows — the set of files is `process`'s business.
+    Drift stays in one direction: the index can be behind, never wrong.
+
+    Returns False when there are no probed facts for the file, which means it
+    has not been processed and has no row to catch up. The sidecar is still the
+    record; `pix2 index` picks it up once `process` has run.
+    """
+    meta_root = meta_dir if meta_dir is not None else META_DIR
+    master_root = master_dir if master_dir is not None else MASTER_DIR
+
+    record = _record(meta_root / folder / f"{name}.json")
+    if record is None:
+        return False
+    media = master_root / folder / name
+    decided = ({name: decisions.read(media)}
+               if decisions.sidecar_path(media).is_file() else {})
+    row = _row(folder, record, decided)
+    if row is None:
+        return False
+    with conn:
+        conn.execute(_INSERT, row)
+    return True
 
 
 def built_at(conn: sqlite3.Connection) -> float | None:
@@ -174,22 +235,33 @@ def built_at(conn: sqlite3.Connection) -> float | None:
         return None
 
 
-def _folders(meta_root: Path, master_root: Path) -> Iterator[tuple[str, set[str]]]:
-    """Each master folder present in the meta tier, with its sidecar names.
+def _folders(
+    meta_root: Path, master_root: Path
+) -> Iterator[tuple[str, dict[str, Decision | None]]]:
+    """Each master folder in the meta tier, with the decisions made in it.
 
-    Sidecars are listed **once per folder** rather than stat-ed per file: over
-    SMB that is the difference between one round trip and tens of thousands.
+    Sidecars are **listed once per folder** rather than stat-ed per file: over
+    SMB that is one round trip against tens of thousands. Only the sidecars that
+    actually exist are then opened, which in the steady state is a small
+    fraction — a file has no sidecar until a human decides something about it.
     """
     if not meta_root.is_dir():
         return
     for folder in sorted(p for p in meta_root.iterdir() if p.is_dir()):
-        sidecars: set[str] = set()
+        master_folder = master_root / folder.name
+        decided: dict[str, Decision | None] = {}
         try:
-            sidecars = {p.name for p in (master_root / folder.name).iterdir()
-                        if p.name.lower().endswith(".xmp")}
+            sidecars = [p.name for p in master_folder.iterdir()
+                        if p.name.lower().endswith(".xmp")]
         except OSError:
-            pass
-        yield folder.name, sidecars
+            sidecars = []
+        for sidecar in sidecars:
+            media = master_folder / sidecar[: -len(".xmp")]
+            # Keyed by presence, valued by content: a sidecar that will not
+            # parse still counts as one. Master is the record, so a damaged file
+            # there has to stay visible rather than reading as "never decided".
+            decided[media.name] = decisions.read(media)
+        yield folder.name, decided
 
 
 def _records(folder: Path) -> Iterator[dict[str, Any]]:
@@ -201,16 +273,22 @@ def _records(folder: Path) -> Iterator[dict[str, Any]]:
     for path in paths:
         if path.suffix.lower() != ".json":
             continue
-        try:
-            parsed: object = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if isinstance(parsed, dict):
-            yield parsed  # type: ignore[misc]
+        record = _record(path)
+        if record is not None:
+            yield record
+
+
+def _record(path: Path) -> dict[str, Any] | None:
+    """One metadata record, or None if it is missing or unreadable."""
+    try:
+        parsed: object = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return cast("dict[str, Any]", parsed) if isinstance(parsed, dict) else None
 
 
 def _row(folder: str, record: dict[str, Any],
-         sidecars: set[str]) -> dict[str, Any] | None:
+         decided: dict[str, Decision | None]) -> dict[str, Any] | None:
     """Flatten one metadata record into an index row."""
     name = record.get("file")
     if not isinstance(name, str) or not name:
@@ -224,6 +302,11 @@ def _row(folder: str, record: dict[str, Any],
             else "image" if suffix in _IMAGE_EXTS else "other")
 
     width, height = _dimensions(exif_map)
+    # Read-through, field by field: a `.xmp` decision wins, and where it is
+    # silent the tag already embedded in the legacy file is the inherited value
+    # (spec §4). Per-field rather than whole-record, so tiering a photo does not
+    # hide the event it inherited.
+    decision = decided.get(name)
     return {
         "folder": folder,
         "name": name,
@@ -235,12 +318,13 @@ def _row(folder: str, record: dict[str, Any],
         "width": width,
         "height": height,
         "duration": _duration(exif_map),
-        # Read-through: the embedded tag is the inherited value, and a `.xmp`
-        # decision would override it once one exists (spec §4).
-        "event": _tag(exif_map, "EventOverride") or _tag(exif_map, "EventAuto"),
-        "tier": _tag(exif_map, "Tier"),
-        "date_override": _tag(exif_map, "DateOverride"),
-        "has_sidecar": 1 if f"{name}.xmp" in sidecars else 0,
+        "event": ((decision.event if decision else None)
+                  or _tag(exif_map, "EventOverride")
+                  or _tag(exif_map, "EventAuto")),
+        "tier": (decision.tier if decision else None) or _tag(exif_map, "Tier"),
+        "date_override": ((decision.date_override if decision else None)
+                          or _tag(exif_map, "DateOverride")),
+        "has_sidecar": 1 if name in decided else 0,
     }
 
 

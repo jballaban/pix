@@ -8,11 +8,14 @@ built from the meta tier rather than the media, which is the whole reason
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
 
+from pix.nas import decisions
 from pix.nas import index as ix
+from pix.nas.decisions import Decision
 
 
 @pytest.fixture
@@ -255,3 +258,152 @@ def test_build_records_when_it_ran(tree: dict[str, Path]) -> None:
 
     assert stamp is not None
     assert abs(_t.time() - stamp) < 60
+
+
+# --- incremental refresh -----------------------------------------------------
+
+def _decide(tree: dict[str, Path], folder: str, name: str,
+            decision: Decision) -> None:
+    d = tree["master"] / folder
+    d.mkdir(parents=True, exist_ok=True)
+    (d / name).write_bytes(b"original bytes")
+    decisions.write(d / name, decision)
+
+
+def _refresh(tree: dict[str, Path], conn: sqlite3.Connection,
+             folder: str, name: str) -> bool:
+    return ix.refresh(conn, folder, name, meta_dir=tree["meta"],
+                      master_dir=tree["master"])
+
+
+def test_refresh_picks_up_a_new_decision(tree: dict[str, Path]) -> None:
+    """The point of it: tiering one photo must not cost a 62k-record rebuild."""
+    _record(tree, "init_2026", "a.jpg", {})
+    _build(tree)
+    _decide(tree, "init_2026", "a.jpg", Decision(tier="top", event="Sicily"))
+
+    conn = ix.connect(tree["db"])
+    assert _refresh(tree, conn, "init_2026", "a.jpg") is True
+
+    row = conn.execute("SELECT * FROM files").fetchone()
+    assert (row["tier"], row["event"], row["has_sidecar"]) == ("top", "Sicily", 1)
+
+
+def test_refresh_touches_only_its_own_row(tree: dict[str, Path]) -> None:
+    _record(tree, "init_2026", "a.jpg", {"XMP:EventAuto": "inherited"})
+    _record(tree, "init_2026", "b.jpg", {"XMP:EventAuto": "inherited"})
+    _build(tree)
+    _decide(tree, "init_2026", "a.jpg", Decision(tier="top"))
+
+    conn = ix.connect(tree["db"])
+    _refresh(tree, conn, "init_2026", "a.jpg")
+
+    rows = {r["name"]: (r["tier"], r["event"])
+            for r in conn.execute("SELECT * FROM files")}
+    assert rows == {"a.jpg": ("top", "inherited"), "b.jpg": (None, "inherited")}
+
+
+def test_refresh_keeps_the_inherited_event_a_decision_is_silent_about(
+    tree: dict[str, Path]
+) -> None:
+    """Read-through is per-field: tiering a photo must not hide the event it
+    inherited from its embedded legacy tags."""
+    _record(tree, "init_2026", "a.jpg", {"XMP:EventAuto": "Italy - Sicily"})
+    _build(tree)
+    _decide(tree, "init_2026", "a.jpg", Decision(tier="photo"))
+
+    conn = ix.connect(tree["db"])
+    _refresh(tree, conn, "init_2026", "a.jpg")
+
+    row = conn.execute("SELECT * FROM files").fetchone()
+    assert (row["tier"], row["event"]) == ("photo", "Italy - Sicily")
+
+
+def test_refresh_clears_a_withdrawn_decision(tree: dict[str, Path]) -> None:
+    _record(tree, "init_2026", "a.jpg", {})
+    _decide(tree, "init_2026", "a.jpg", Decision(tier="top"))
+    _build(tree)
+
+    decisions.write(tree["master"] / "init_2026" / "a.jpg", Decision())
+    conn = ix.connect(tree["db"])
+    _refresh(tree, conn, "init_2026", "a.jpg")
+
+    row = conn.execute("SELECT * FROM files").fetchone()
+    assert (row["tier"], row["has_sidecar"]) == (None, 0)
+
+
+def test_refresh_keeps_the_probed_facts(tree: dict[str, Path]) -> None:
+    """A decision write must not blank the facts the row already carried."""
+    _record(tree, "init_2026", "a.jpg",
+            {"EXIF:DateTimeOriginal": "2026:01:04 14:51:34",
+             "EXIF:Model": "iPhone 17 Pro"})
+    _build(tree)
+    _decide(tree, "init_2026", "a.jpg", Decision(tier="top"))
+
+    conn = ix.connect(tree["db"])
+    _refresh(tree, conn, "init_2026", "a.jpg")
+
+    row = conn.execute("SELECT * FROM files").fetchone()
+    assert row["capture_date"] == "2026:01:04 14:51:34"
+    assert row["camera"] == "iPhone 17 Pro"
+
+
+def test_refresh_reports_a_file_with_no_probed_facts(tree: dict[str, Path]) -> None:
+    """No meta record means `process` has not run for it — there is no row to
+    catch up, and inventing one would put a file in the index that the next
+    rebuild removes."""
+    _build(tree)
+    _decide(tree, "init_2026", "ghost.jpg", Decision(tier="top"))
+
+    conn = ix.connect(tree["db"])
+    assert _refresh(tree, conn, "init_2026", "ghost.jpg") is False
+    assert conn.execute("SELECT COUNT(*) FROM files").fetchone()[0] == 0
+
+
+def test_refresh_never_adds_or_removes_rows(tree: dict[str, Path]) -> None:
+    """The file set is `process`'s business; refresh only ever restates a row."""
+    _record(tree, "init_2026", "a.jpg", {})
+    _record(tree, "init_2026", "b.jpg", {})
+    _build(tree)
+    _decide(tree, "init_2026", "a.jpg", Decision(tier="top"))
+
+    conn = ix.connect(tree["db"])
+    _refresh(tree, conn, "init_2026", "a.jpg")
+
+    assert conn.execute("SELECT COUNT(*) FROM files").fetchone()[0] == 2
+
+
+def test_a_rebuild_agrees_with_a_refresh(tree: dict[str, Path]) -> None:
+    """The two paths read the same inputs, so they must not be able to diverge —
+    otherwise a rebuild silently undoes a decision."""
+    _record(tree, "init_2026", "a.jpg", {"XMP:EventAuto": "inherited"})
+    _build(tree)
+    _decide(tree, "init_2026", "a.jpg",
+            Decision(tier="top", date_override="2015-03-15-11:52:56"))
+
+    conn = ix.connect(tree["db"])
+    _refresh(tree, conn, "init_2026", "a.jpg")
+    after_refresh = dict(conn.execute("SELECT * FROM files").fetchone())
+    conn.close()
+
+    _build(tree)
+    conn = ix.connect(tree["db"])
+    assert dict(conn.execute("SELECT * FROM files").fetchone()) == after_refresh
+
+
+# --- opening -----------------------------------------------------------------
+
+def test_open_ro_refuses_to_write(tree: dict[str, Path]) -> None:
+    _record(tree, "init_2026", "a.jpg", {})
+    _build(tree)
+
+    conn = ix.open_ro(tree["db"])
+    with pytest.raises(sqlite3.OperationalError):
+        conn.execute("DELETE FROM files")
+
+
+def test_open_rw_will_not_create_an_index(tree: dict[str, Path]) -> None:
+    """`rwc` would conjure an empty index, which reads as 'the archive is gone'
+    rather than 'nobody built one yet'."""
+    with pytest.raises(sqlite3.OperationalError):
+        ix.open_rw(tree["db"]).execute("SELECT 1 FROM files")

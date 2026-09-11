@@ -1,8 +1,9 @@
 """The browse app (spec/nas-app.md §8).
 
 It reads the index and serves the derived tiers. It never decodes anything —
-`process` already made everything it displays — and in this first cut it never
-writes anything either.
+`process` already made everything it displays. The one thing it writes is
+curation decisions: an `.xmp` beside the master file, then that file's index row
+— sidecar first, index follows.
 """
 
 from __future__ import annotations
@@ -14,8 +15,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from pix.nas import auth
+from pix.nas import decisions
 from pix.nas import index as ix
 from pix.nas import web
+from pix.nas.decisions import Decision
 
 
 @pytest.fixture
@@ -269,3 +272,147 @@ def test_age_is_rendered_in_words() -> None:
 def test_an_index_without_a_timestamp_still_renders() -> None:
     """Older index files predate the built_at row; they must not 500."""
     assert web._age(None) == "at an unknown time"
+
+
+# --- curation ----------------------------------------------------------------
+
+@pytest.fixture
+def writable(app_env: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Master with the real files a decision attaches to, and the tier roots the
+    endpoint resolves against."""
+    m = app_env["share"] / "master" / "init_2026"
+    m.mkdir(parents=True, exist_ok=True)
+    (m / "a.jpg").write_bytes(b"\xff\xd8original")
+    monkeypatch.setattr(web, "MASTER_DIR", app_env["share"] / "master")
+    monkeypatch.setattr(web, "META_DIR", app_env["share"] / "meta")
+    return m
+
+
+def test_a_decision_writes_a_sidecar_and_updates_the_row(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    r = client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "tier": "top"})
+
+    assert r.status_code == 200
+    assert r.json()["tier"] == "top"
+    assert r.json()["indexed"] is True
+    assert decisions.read(writable / "a.jpg") == Decision(tier="top")
+
+    conn = ix.open_ro(app_env["db"])
+    row = conn.execute("SELECT * FROM files WHERE name = 'a.jpg'").fetchone()
+    assert (row["tier"], row["has_sidecar"]) == ("top", 1)
+
+
+def test_the_index_follows_rather_than_leads(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """Sidecar first (§4): the row must never carry a decision that is not on
+    disk, so a refresh failure still leaves the record written."""
+    conn = ix.open_ro(app_env["db"])
+    before = conn.execute("SELECT tier FROM files WHERE name = 'a.jpg'").fetchone()
+    conn.close()
+    assert before["tier"] is None
+
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "event": "Sicily Trip"})
+
+    assert decisions.read(writable / "a.jpg") == Decision(event="Sicily Trip")
+
+
+def test_omitting_a_field_leaves_it_alone(client: TestClient,
+                                          writable: Path) -> None:
+    """One-field gestures are the whole UI; a whole-record write would erase the
+    rest of what had been decided."""
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "event": "Sicily Trip"})
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "tier": "top"})
+
+    assert decisions.read(writable / "a.jpg") == Decision(
+        tier="top", event="Sicily Trip")
+
+
+def test_null_clears_where_omission_does_not(client: TestClient,
+                                             writable: Path) -> None:
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "tier": "top",
+        "event": "Sicily Trip"})
+    r = client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "event": None})
+
+    assert r.json()["event"] is None
+    assert decisions.read(writable / "a.jpg") == Decision(tier="top")
+
+
+def test_clearing_everything_marks_it_unreviewed_again(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "tier": "top"})
+    r = client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "tier": None})
+
+    assert r.json()["has_sidecar"] is False
+    assert not decisions.sidecar_path(writable / "a.jpg").exists()
+
+    conn = ix.open_ro(app_env["db"])
+    row = conn.execute("SELECT * FROM files WHERE name = 'a.jpg'").fetchone()
+    assert (row["tier"], row["has_sidecar"]) == (None, 0)
+
+
+def test_an_unknown_tier_is_rejected(client: TestClient, writable: Path) -> None:
+    r = client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "tier": "five-stars"})
+
+    assert r.status_code == 400
+    assert not decisions.sidecar_path(writable / "a.jpg").exists()
+
+
+def test_traversal_cannot_drop_a_sidecar_off_the_tier(
+    client: TestClient, writable: Path, tmp_path: Path
+) -> None:
+    """Body components are as untrusted as URL ones, and this endpoint writes."""
+    r = client.post("/api/decide", json={
+        "folder": "../../..", "name": "escape.jpg", "tier": "top"})
+
+    assert r.status_code == 400
+    assert list(tmp_path.rglob("escape.jpg.xmp")) == []
+
+
+def test_a_file_not_in_master_is_refused(client: TestClient,
+                                         writable: Path) -> None:
+    r = client.post("/api/decide", json={
+        "folder": "init_2026", "name": "nothere.jpg", "tier": "top"})
+
+    assert r.status_code == 404
+
+
+def test_a_sidecar_is_not_a_decidable_file(client: TestClient,
+                                           writable: Path) -> None:
+    decisions.write(writable / "a.jpg", Decision(tier="top"))
+    r = client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg.xmp", "tier": "photo"})
+
+    assert r.status_code == 400
+    assert not (writable / "a.jpg.xmp.xmp").exists()
+
+
+def test_deciding_needs_the_same_auth_as_browsing(
+    app_env: dict[str, Path], writable: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The write endpoint must not be the hole in the auth wall."""
+    monkeypatch.setenv("PIX2_USERS", f"james:{auth.hash_password('pw')}")
+    client = TestClient(web.app)
+
+    r = client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "tier": "top"})
+
+    assert r.status_code == 401
+    assert not decisions.sidecar_path(writable / "a.jpg").exists()
+
+
+def test_there_is_no_reindex_endpoint(client: TestClient) -> None:
+    """A rebuild reads ~62k records and would block the single worker for
+    minutes, at the request of anyone holding the URL."""
+    assert client.post("/api/reindex").status_code == 404

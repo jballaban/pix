@@ -139,9 +139,13 @@ curl http://<nas>:8800/healthz
 - **The index is disposable.** It lives in the share so it survives container
   rebuilds — 62k rows take minutes to rebuild and there is no reason to pay that
   for an image swap — but losing it costs only a `pix2 index`.
-- **The app never writes the index.** It opens it read-only; only `pix2 index`
-  builds it.
+- **The app never *builds* the index.** Browsing opens it read-only. A curation
+  write updates the single row whose decision changed — sidecar first, index
+  follows — and that is the only write it makes. Rebuilding stays `pix2 index`,
+  on the desktop, where reading 62k records is not blocking anyone's page load.
 - **One uvicorn worker.** SQLite is opened per request and the index is
   read-mostly, so concurrency buys nothing and costs memory the NAS has not got
   spare.
-- **The app writes nothing yet.** This first cut browses; curation comes next.
+- **The app writes `.xmp` decision sidecars into master, and nothing else
+  there.** Original bytes are never touched. That is why the mount is
+  read/write, and it is the only reason it needs to be.

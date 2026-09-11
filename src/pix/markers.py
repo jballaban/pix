@@ -39,6 +39,7 @@ ORGANIZE_TMP_SUFFIX: str = ".__organize_tmp__"  # <line-id>.__organize_tmp__
 ROTATE_INFIX: str = ".__rot__"                  # <stem>.__rot__<.ext>
 IMPORT_TMP_SUFFIX: str = ".__import__"          # <name>.__import__ (partial download)
 EXPORT_TMP_SUFFIX: str = ".__export__"          # <name>.__export__ (partial delivery copy)
+SIDECAR_TMP_SUFFIX: str = ".__xmp__"            # <name>.xmp.__xmp__ (partial decision sidecar)
 
 # ExifTool's own atomic-write temp — external (ExifTool names it), does NOT
 # match PIX_MARKER_GLOB; a sync client needs this separate rule.

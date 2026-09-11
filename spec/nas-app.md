@@ -231,6 +231,27 @@ are computed live from facts plus decisions.
 Standard XMP fields stay standard, so Lightroom and Bridge read any date
 override; the pix-namespace properties they simply ignore.
 
+#### Serialization
+
+An XMP packet in RDF attribute form, using the **`pix` namespace already
+registered for ExifTool** in `exiftool_config.cfg` (`http://pix.local/`).
+Reusing it rather than minting a new one is what makes the read-through
+symmetric: `pix:EventOverride` means the same thing whether it came from a
+sidecar or from the tags embedded in a legacy file, so the index treats the
+two as one cascade instead of two vocabularies it has to reconcile.
+
+| decision | pix property | also written as |
+|---|---|---|
+| event | `pix:EventOverride` | `Iptc4xmpExt:Event` |
+| date override | `pix:DateOverride` | `photoshop:DateCreated` (ISO 8601) |
+| tier | `pix:Tier` | — nothing standard means this; `rating` was dropped |
+
+Written temp-then-rename, so a kill mid-write cannot leave a half-written
+packet that parses as a decision nobody made. A sidecar that exists but will
+not parse reads as *no decision* while still counting as a sidecar — master
+is the record, so damage there has to stay visible rather than looking like
+"never reviewed".
+
 ### The index
 
 The app needs a queryable index — you cannot scan master for every UI filter. It
@@ -244,6 +265,13 @@ It recreates the single database this architecture exists to avoid, and breaks
 - **Authority order: sidecar first, index follows.** Write the sidecar; only on
   success update the index. Drift then only ever means "the index is behind,"
   which a rescan fixes — never "the record is wrong."
+- **Two write paths, and the difference is the file set.** A *rebuild* is what
+  discovers which files exist, so it is wholesale and belongs to ingest —
+  `pix2 index`, and the tail of `pix2 process`. A *refresh* rewrites the single
+  row whose decision just changed, and is what the app runs: reading 62k records
+  to record one tiering is not an interface anyone uses twice. A refresh
+  re-derives from the same two inputs a rebuild uses and never adds or removes
+  rows, so the two cannot disagree — a later rebuild can only confirm it.
 - **Staleness detection is the existing `(size, mtime_ns)` stat comparison**, the
   same key `cache.db` already uses.
 
@@ -1098,9 +1126,10 @@ the sidecar/index model — [§4](#4-metadata--xmp-sidecars); seeding — [§14]
   frame-accurate one costs nothing extra since the delivery encode is happening
   anyway. Identity is unaffected either way: the original's content hash never
   changes.
-- **`tier` and the probed facts as stored XMP** — namespace and serialization are
-  unspecified, as is whether `tier` is baked into delivery copies (nothing reads
-  it there, but it costs nothing and aids debugging).
+- **Whether `tier` is baked into delivery copies.** The sidecar serialization
+  itself is settled ([§4](#4-metadata--xmp-sidecars)); what is still open is
+  whether the delivery copy carries the tier that selected it. Nothing reads it
+  there, but it costs nothing and aids debugging.
 - **Where dedupe judgments live.** "These two are the same shot" is a human
   decision, so by the rule above it belongs in master — but it is inherently about
   a *pair*, and a per-file sidecar is an awkward home for it.

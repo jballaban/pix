@@ -9,26 +9,32 @@ Deliberately no frontend build step. A keyboard-driven grid needs a page and som
 JavaScript, not a toolchain — and a build pipeline is the part most likely to rot
 between the day it works and the day you next touch it.
 
-This first cut **browses only**. Curation writes `.xmp` decisions into master and
-is the next step; nothing here writes anything.
+**The one thing it writes is decisions.** A curation write puts an `.xmp` beside
+the master file and then updates that file's index row — sidecar first, index
+follows (§4). It never rewrites master bytes, and it never rebuilds the index:
+a rebuild reads ~62k records, which would block the single worker for minutes at
+the request of anyone holding the URL.
 """
 
 from __future__ import annotations
 
 import os
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from pydantic import BaseModel
 
 from pix.nas import auth
+from pix.nas import decisions
 from pix.nas import index as ix
 from pix.nas.const import (
-    INDEX_DB, MASTER_DIR, PREVIEW_DIR, RENDER_DIR, THUMB_DIR,
+    INDEX_DB, MASTER_DIR, META_DIR, PREVIEW_DIR, RENDER_DIR, THUMB_DIR,
 )
 
 #: Re-exported so the CLI and tests have one name for it.
@@ -36,6 +42,11 @@ DB_PATH: Path = INDEX_DB
 
 app: FastAPI = FastAPI(title="pix2", docs_url=None, redoc_url=None)
 _security = HTTPBasic(auto_error=False)
+
+#: Serializes decision writes. Spec §8 makes last-write-wins the conflict policy
+#: and leans on exactly this to keep it a *policy* question: two people tiering
+#: the same photo pick a winner, they never interleave into a corrupt sidecar.
+_write_lock: threading.Lock = threading.Lock()
 
 
 # --- auth --------------------------------------------------------------------
@@ -296,6 +307,94 @@ def api_files(user: Annotated[str, Depends(require_user)],
 @app.get("/api/events")
 def api_events(user: Annotated[str, Depends(require_user)]) -> JSONResponse:
     return JSONResponse([dict(r) for r in ix.events(db())])
+
+
+class DecideBody(BaseModel):
+    """A curation decision about one master file.
+
+    Every field is optional *and* nullable, and the two mean different things:
+    omitting `event` leaves it alone, sending `null` clears it. Without that
+    distinction a one-field UI gesture — tier this photo — would silently erase
+    whatever else had been decided about it, so the wire format has to carry it.
+    """
+
+    folder: str
+    name: str
+    tier: str | None = None
+    event: str | None = None
+    date_override: str | None = None
+
+
+@app.post("/api/decide")
+def api_decide(user: Annotated[str, Depends(require_user)],
+               body: Annotated[DecideBody, Body()]) -> JSONResponse:
+    """Write a decision to master, then bring its index row up to date.
+
+    **Sidecar first, index follows** (§4). If the sidecar write fails nothing
+    happened; if the index update fails the decision still stands and a
+    `pix2 index` catches up — drift is only ever "the index is behind", never
+    "the record is wrong". `indexed` in the response says which happened.
+    """
+    media = _master_file(body.folder, body.name)
+    sent = body.model_fields_set
+    with _write_lock:
+        try:
+            decision = decisions.apply(
+                media,
+                tier=body.tier if "tier" in sent else decisions.UNSET,
+                event=body.event if "event" in sent else decisions.UNSET,
+                date_override=(body.date_override if "date_override" in sent
+                               else decisions.UNSET),
+            )
+        except decisions.DecisionError as e:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
+        except OSError as e:
+            raise HTTPException(
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                f"could not write the sidecar: {e}") from e
+
+        indexed = False
+        if DB_PATH.is_file():
+            conn = ix.open_rw(DB_PATH)
+            try:
+                # Passed rather than left to the index's own constants, so
+                # the path the decision was written to and the path the row is
+                # rebuilt from are the same one.
+                indexed = ix.refresh(conn, body.folder, body.name,
+                                     meta_dir=META_DIR, master_dir=MASTER_DIR)
+            except sqlite3.Error:
+                indexed = False
+            finally:
+                conn.close()
+
+    return JSONResponse({
+        "folder": body.folder,
+        "name": body.name,
+        "tier": decision.tier,
+        "event": decision.event,
+        "date_override": decision.date_override,
+        "has_sidecar": not decision.is_empty(),
+        "indexed": indexed,
+    })
+
+
+def _master_file(folder: str, name: str) -> Path:
+    """Resolve a master path from untrusted URL/body components.
+
+    Same guard as `_serve`, and needed more here because this one writes: `..`
+    in either component would otherwise drop an `.xmp` anywhere on the share.
+    A sidecar is refused as a target too — decisions are about media, and
+    `a.jpg.xmp.xmp` is nobody's intent.
+    """
+    target = (MASTER_DIR / folder / name).resolve()
+    if MASTER_DIR.resolve() not in target.parents:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "bad path")
+    if name.lower().endswith(".xmp"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "that is a sidecar, not a file")
+    if not target.is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "not in master")
+    return target
 
 
 @app.get("/healthz")
