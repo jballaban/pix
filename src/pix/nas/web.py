@@ -440,6 +440,7 @@ h2.year span { font-size:13px; font-weight:400; }
                   width:0; transition:width .12s linear; }
 #working .tally { color:var(--dim); font-size:13px;
                   font-variant-numeric:tabular-nums; }
+#working button { margin-top:4px; }
 
 #viewer { position:fixed; inset:0; background:#000e; display:none; z-index:30; }
 #viewer.on { display:flex; }
@@ -716,6 +717,7 @@ def browse(user: Annotated[Principal, Depends(require_user)],
   <div class="what" id="workwhat"></div>
   <div class="bar"><i id="workbar"></i></div>
   <div class="tally" id="worktally"></div>
+  <button id="workstop">Stop</button>
 </div>""",
         tools='<div class="chips" id="chips"></div>',
         rows=_actions(user),
@@ -1714,7 +1716,13 @@ async function applyToSelection(act,value,add){
   const multi=MULTI[act];
   if(multi&&value===null){say('pick a name');return;}
   const body = multi ? {[add?multi[1]:multi[2]]:[value]} : {[act]:value};
-  const before=multi?cs.map(c=>c.dataset[multi[0]]||''):null;
+  // Everything each cell said before, so the ones that never got written can
+  // be put back. All four fields rather than the one being edited: it costs
+  // nothing and means the restore cannot be wrong about which was in play.
+  const before=cs.map(c=>({tags:c.dataset.tags||'',
+                           audience:c.dataset.audience||'',
+                           event:c.dataset.event||'',
+                           deleted:c.dataset.deleted||''}));
   if(multi) cs.forEach(c=>paint(c,multi[0],value,add));
   else if(act==='event') cs.forEach(c=>{c.dataset.event=value||'';});
   // Under `Including deleted` a restored file stays on screen, so the cross
@@ -1725,8 +1733,17 @@ async function applyToSelection(act,value,add){
     c.classList.toggle('gone',!!value);
   });
   const out=await send(cs,body,actLabel(act,value,add));
-  if(out===null&&multi) cs.forEach((c,i)=>{
-    c.dataset[multi[0]]=before[i]; repaint(c,multi[0]);
+  // Only the tail. A write that stops half way — cancelled, or a share that
+  // dropped — has really written the first part, and painting all of it back
+  // would leave the screen denying what is on disk. The cells that were
+  // written keep what they now say; the rest go back to what they said.
+  const wrote=out?out.done:0;
+  cs.slice(wrote).forEach((c,i)=>{
+    const was=before[wrote+i];
+    c.dataset.tags=was.tags; c.dataset.audience=was.audience;
+    c.dataset.event=was.event; c.dataset.deleted=was.deleted;
+    c.classList.toggle('gone',!!was.deleted);
+    repaint(c,'tags'); repaint(c,'audience');
   });
   return out;
 }
@@ -1782,10 +1799,16 @@ const working=document.getElementById('working');
 const workWhat=document.getElementById('workwhat');
 const workBar=document.getElementById('workbar');
 const workTally=document.getElementById('worktally');
+const workStop=document.getElementById('workstop');
 const TAKEOVER_MS=180;
 let workTimer=null;
+// Asked for, not done yet. A write is a run of requests and this is checked
+// between them, never inside one — see `send`.
+let stopping=false;
 
 function workOpen(label,total){
+  stopping=false;
+  if(workStop) workStop.disabled=false;
   if(workWhat) workWhat.innerHTML=label;
   workProgress(0,total);
   clearTimeout(workTimer);
@@ -1813,6 +1836,19 @@ function workClose(){
   if(working) working.classList.remove('on');
 }
 
+// Stopping is a decision about the rest of the work, not about the request in
+// flight. That one has already reached the server and its files are either
+// written or not; tearing it up here would lose the log entry saying which,
+// and the whole point of stopping is to be able to go to History and put back
+// exactly what did land.
+function stopWork(){
+  if(!busy||stopping) return;
+  stopping=true;
+  if(workStop) workStop.disabled=true;
+  if(workTally) workTally.textContent='finishing the files already sent…';
+}
+if(workStop) workStop.onclick=e=>{e.stopPropagation();stopWork();};
+
 // The takeover says the word the control you pressed says — read off the
 // button itself rather than kept as a second vocabulary for the same four
 // actions, which would be free to drift from the one on screen.
@@ -1832,8 +1868,12 @@ async function send(cs,body,label){
   if(busy){say('still writing…');return null;}
   busy=true; say('');
   workOpen(label||'Writing', cs.length);
-  let done=0, failed=0, gone=[], total=null, binned=null;
+  let done=0, failed=0, gone=[], total=null, binned=null, trouble=null;
   for(let s=0;s<cs.length;s+=CHUNK){
+    // Checked between requests, never inside one. The chunk in flight is
+    // allowed to finish so that the server records what it wrote, which is
+    // what History then has to offer back.
+    if(stopping) break;
     const batch=cs.slice(s,s+CHUNK);
     try{
       // The filters ride along so the server can say which files left the
@@ -1851,13 +1891,13 @@ async function send(cs,body,label){
       if(out.total!==null&&out.total!==undefined) total=out.total;
       if(out.binned!==null&&out.binned!==undefined) binned=out.binned;
     }catch(e){
-      busy=false; workClose();
-      say(`stopped after ${done} of ${cs.length}: ${e.message}`,true);
-      return null;
+      trouble=e.message;
+      break;
     }
     done+=batch.length;
     workProgress(done,cs.length);
   }
+  const stopped=stopping;
   busy=false; workClose();
   drawSel();
   cs.forEach(c=>details.delete(c.dataset.folder+'\\n'+c.dataset.name));
@@ -1865,10 +1905,17 @@ async function send(cs,body,label){
   drop(gone);
   if(total!==null&&countEl) countEl.textContent=`${total.toLocaleString()} files`;
   drawBin(binned);
-  if(failed) say(`${failed} file(s) could not be written`,true);
+  if(trouble) say(`stopped after ${done} of ${cs.length}: ${trouble}`,true);
+  else if(stopped) say(`stopped — ${done.toLocaleString()} of `
+                      +`${cs.length.toLocaleString()} written. `
+                      +`History has what landed.`,true);
+  else if(failed) say(`${failed} file(s) could not be written`,true);
   else if(gone.length) say(`${gone.length} file(s) no longer match — removed`);
   else say('');
-  return true;
+  // How many were actually written, so the caller can put back the ones that
+  // were not. It used to report only pass or fail, and a failure half way
+  // undid the half that had already been recorded.
+  return {done};
 }
 
 // What each action edits, and which column its suggestions come from. The
@@ -1965,6 +2012,7 @@ document.addEventListener('keydown',e=>{
   if(e.key==='Escape'){
     // Dismissal rather than navigation. A full-screen viewer with no key out
     // is a trap, even though clicking beside the picture also closes it.
+    if(busy){stopWork();return;}
     if(viewer.classList.contains('on')) closeViewer();
     else if(!menu.hidden) closeMenu();
     return;

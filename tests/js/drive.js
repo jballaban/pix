@@ -91,7 +91,7 @@ const actBtn = name => actions.querySelectorAll('[data-act]')
 for (const id of ['menu', 'chips', 'selcount', 'count', 'note', 'viewer',
                   'vimg', 'vvid', 'vmeta', 'rail', 'railtoggle', 'viewclose',
                   'working', 'workwhat', 'workbar', 'worktally',
-                  'bincount']) mk(id);
+                  'workstop', 'bincount']) mk(id);
 const stage = new El('div');
 stage.className = 'stage';
 document.byId.viewer.appendChild(stage);
@@ -118,8 +118,14 @@ const calls = [];
 let dropping = [];
 // What the server says is waiting in the bin after a write.
 let binned = 0;
+// Pressed while a write is running, to check it stops between chunks.
+let stopAfter = null;
 const fetch = async (url, opts) => {
   calls.push({ url, body: opts && opts.body });
+  if (stopAfter !== null && url.startsWith('/api/decide')
+      && calls.filter(c => c.url.startsWith('/api/decide')).length >= stopAfter) {
+    document.byId.workstop.click();
+  }
   if (url.startsWith('/api/suggest')) {
     return { ok: true, json: async () => [{ value: 'ghost', n: 1, scope: 'all' }] };
   }
@@ -720,6 +726,51 @@ function arrow(key, opts) {
           'moved to ' + col[2].getBoundingClientRect().top);
     check('by scrolling back up, not by luck', scrolled === 50,
           String(scrolled));
+  }
+
+  // A big write can be stopped part way. Tagging four hundred files by mistake
+  // and having to watch it finish is the thing this exists for — stop it, then
+  // put back what actually landed from History.
+  {
+    const room = mk('stoproom');
+    const many = [];
+    for (let i = 0; i < 250; i++) many.push(cell('m' + i + '.jpg', ''));
+    many.forEach(c => room.appendChild(c));
+    document.querySelectorAll = sel => (sel === '.cell' ? many
+                                      : sel === '.group' ? []
+                                      : sel === '.stage' ? [stage] : realQsa(sel));
+    new Function(
+      'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
+      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
+      'GRID_GROUPS', 'GROUPING', 'setTimeout', js,
+    )(document, window, fetch, localStorage, location, confirm,
+      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
+      GRID_GROUPS, GROUPING, fn => fn());
+
+    document.byId.selall.click();          // all 250
+    const n = calls.length;
+    stopAfter = 1;                          // stop once the first chunk is away
+    actBtn('tags').click();
+    await settle(); await settle();
+    const menu2 = document.byId.menu;
+    const rows = menu2.querySelectorAll('.opt');
+    const names = rows.map(
+      o => (o.innerHTML.match(/<span>([^<]*)<\/span>/) || [])[1]);
+    rows[names.indexOf('ghost')].click();
+    for (let i = 0; i < 12; i++) await settle();
+    stopAfter = null;
+
+    const sent = calls.slice(n).filter(c => c.url.startsWith('/api/decide'));
+    check('it stops part way rather than running to the end',
+          sent.length > 0 && sent.length < 3, String(sent.length));
+    check('the files it had already written keep the tag',
+          many[0].dataset.tags.includes('ghost'), many[0].dataset.tags);
+    check('and the ones it never reached are left alone',
+          !many[249].dataset.tags.includes('ghost'), many[249].dataset.tags);
+    check('the takeover is down', !document.byId.working.classList.contains('on'));
+    check('and it says where it got to',
+          /stopped/.test(document.byId.note.textContent),
+          document.byId.note.textContent);
   }
 
   if (failures.length) {
