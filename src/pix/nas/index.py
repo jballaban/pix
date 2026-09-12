@@ -184,12 +184,17 @@ class Filters:
     #: anything shared with either, and a share is just a name either way.
     viewer: frozenset[str] | None = None
 
-    #: Show the soft-deleted **instead of** the living, rather than as well.
-    #: Not a filter either, and for a stronger reason than `viewer`: a deleted
-    #: file is one somebody said should be gone, and the ordinary grid must
-    #: never be one URL parameter away from showing it again. The only caller
-    #: that sets this is the admin page whose whole subject is the deleted.
-    deleted: bool = False
+    #: Which side of the deletion line to show. `None` — the default, and what
+    #: everyone other than an administrator ever gets — is the living only.
+    #: `only` is the bin; `with` shows both, which is the view where marking
+    #: the deleted ones on the thumbnail earns its keep.
+    #:
+    #: It *is* a filter, unlike `viewer`: an administrator turns it on and off
+    #: from the bar and it belongs in the URL like the rest. What is not
+    #: negotiable is the default and who may change it — `web.filters` ignores
+    #: the parameter entirely for a non-admin, so the ordinary grid cannot be
+    #: talked into showing what somebody said should be gone.
+    deleted: str | None = None
 
     #: Every filterable column, in the order the top bar shows them. `viewer`
     #: is deliberately absent.
@@ -674,6 +679,10 @@ def _where(filters: Filters) -> tuple[str, dict[str, Any]]:
     """Everything a listing must satisfy: the filters, the viewer scope, and
     which side of the deletion line the caller is on.
 
+    Three states, and the **default is the safe one**: anything that is not
+    explicitly asking for the deleted gets the living, so a caller that knows
+    nothing about deletion cannot accidentally list it.
+
     The deletion clause is added **here**, in the one place every query
     already passes through, rather than at each call site. `files`, `count`,
     `events`, `suggest` and the year listing would each have had to remember
@@ -682,7 +691,10 @@ def _where(filters: Filters) -> tuple[str, dict[str, Any]]:
     """
     clauses = _clauses(filters)
     parts = [sql for sql, _ in clauses.values()]
-    parts.append("files.deleted = 1" if filters.deleted else "files.deleted = 0")
+    if filters.deleted == "only":
+        parts.append("files.deleted = 1")
+    elif filters.deleted != "with":
+        parts.append("files.deleted = 0")
     params = _bind(clauses)
     scope, scope_params = _scope(filters)
     if scope:

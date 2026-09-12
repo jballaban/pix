@@ -172,7 +172,7 @@ def db() -> sqlite3.Connection:
 
 _STYLE = """
 :root { color-scheme: dark; --bg:#14161a; --fg:#e7e9ee; --dim:#8b93a3;
-        --line:#272b33; --accent:#6aa3ff; --keep:#56c16a; --top:#e3b341;
+        --line:#272b33; --accent:#6aa3ff; --keep:#56c16a; --top:#e3b341; --gone:#e06c5a;
         --panel:#1b1e24; }
 * { box-sizing: border-box; }
 body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5
@@ -317,6 +317,20 @@ h3.group[data-state="some"] .grppick { background:var(--top);
         opacity:0; transition:opacity .08s; z-index:2; }
 .cell:hover .pick { opacity:1; }
 .cell.picked .pick { opacity:1; background:var(--accent); border-color:var(--accent); }
+/* Deleted, and only ever on screen because an administrator asked to see
+   them — so this does not need to be subtle, it needs to be unmistakable
+   beside a living file. The picture is drained and dimmed rather than merely
+   badged: at a glance down a grid the corner marks are what every other fact
+   already uses, and all four corners are taken.
+   The cross sits where the select circle does and gets out of its way on
+   hover, so the two never argue over the same 20 pixels. */
+.cell.gone img { opacity:.32; filter:grayscale(1); }
+.cell.gone::after { content:"¹5"; position:absolute; left:5px; top:2px;
+                    color:var(--gone); font-size:17px; font-weight:700;
+                    line-height:20px; text-shadow:0 1px 3px #000d;
+                    pointer-events:none; transition:opacity .08s; }
+.cell.gone:hover::after { opacity:0; }
+.bin-link { color:var(--gone); font-weight:600; }
 /* Touch has no hover, so there the circle is the only way to select at all. */
 @media (hover: none) { .pick { opacity:.55; } }
 .cell.picked .pick::after { content:"\\2713"; color:#0d0f12; font-weight:700;
@@ -460,13 +474,43 @@ def _whoami(user: Principal | None) -> str:
     """
     if user is None:
         return '<a class="who-link" href="/login">Sign in</a>'
-    manage = ('<a class="who-link" href="/deleted">Deleted</a>'
-              '<a class="who-link" href="/history">History</a>'
+    manage = (f'{_bin_link()}<a class="who-link" href="/history">History</a>'
               '<a class="who-link" href="/accounts">Accounts</a>'
               if user.is_admin else "")
     return (f'<span class="who-link dim">{_h(user.name)}</span>{manage}'
             '<form method="post" action="/logout" class="who-link">'
             '<button>Sign out</button></form>')
+
+
+def _bin_link() -> str:
+    """*8 deleted* — a standing count, and the way to go and deal with them.
+
+    Deleting is meant to be cheap, which means files accumulate in a state
+    nobody is looking at. A link called "Deleted" says nothing about whether
+    there is anything to do; a number says there are eight, and says it on
+    every page until they are gone.
+
+    It clears the other filters rather than adding to them. Arriving at
+    *8 deleted* and being shown two because last week's event filter was still
+    on would be the count lying, which is the one thing it cannot do.
+
+    Silent at zero: an empty bin is not news, and a nag that is always there
+    stops being read.
+    """
+    try:
+        conn = db()
+    except HTTPException:
+        return ""
+    try:
+        n = ix.count(conn, ix.Filters(deleted="only"))
+    except sqlite3.Error:
+        return ""
+    finally:
+        conn.close()
+    if not n:
+        return ""
+    return (f'<a class="who-link bin-link" href="/browse?deleted=only">'
+            f'{n:,} deleted</a>')
 
 
 def filters(
@@ -477,6 +521,7 @@ def filters(
     audience: Annotated[str | None, Query()] = None,
     kind: Annotated[str | None, Query()] = None,
     band: Annotated[str | None, Query()] = None,
+    deleted: Annotated[str | None, Query()] = None,
 ) -> ix.Filters:
     """The current view, read off the query string.
 
@@ -488,9 +533,17 @@ def filters(
     `viewer` is **not** among them. It comes from the credentials and rides on
     every query, so a non-admin cannot widen their own view by editing the
     address bar — the one thing a URL-shaped filter model must not allow.
+
+    `deleted` is in the URL like any other filter, but it is **dropped for a
+    non-admin** rather than merely hidden from their bar. Hiding the chip
+    stops it being offered; this is what stops it being asked for. Anything
+    but the two known words is dropped too, so a typo reads as the default
+    rather than as some third thing.
     """
     return ix.Filters(event=event, year=year, tag=tag, audience=audience,
-                      kind=kind, band=band, viewer=user.scope)
+                      kind=kind, band=band, viewer=user.scope,
+                      deleted=(deleted if user.is_admin
+                               and deleted in ("only", "with") else None))
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -609,7 +662,7 @@ def browse(user: Annotated[Principal, Depends(require_user)],
         tools=('<div class="chips" id="chips"></div>'
                '<button id="selall">Select all</button>'
                '<button id="selnone">Deselect</button>'),
-        rows=_actions(user),
+        rows=_actions(user, showing_deleted=view.deleted is not None),
         script=(
             f"<script>const VIEW={_js(_view_dict(view))},"
             f"CHIPS={_js(_chips(user))},FIXED={_js(_FIXED)},"
@@ -627,7 +680,7 @@ def browse(user: Annotated[Principal, Depends(require_user)],
         user=user)
 
 
-def _actions(user: Principal) -> str:
+def _actions(user: Principal, *, showing_deleted: bool = False) -> str:
     """The edit bar — admin only.
 
     Not merely hidden: the endpoints refuse a non-admin outright. This is so
@@ -636,7 +689,15 @@ def _actions(user: Principal) -> str:
     """
     if not user.is_admin:
         return ""
-    return """<div class="row" id="actions">
+    # Restore and Purge appear only where they mean something. They are not
+    # greyed like the rest, because "disabled until you select something" and
+    # "absent unless you are looking at deleted files" are different statements
+    # and running them together would say neither.
+    bin_acts = ("" if not showing_deleted else
+                '<span class="sep"></span>'
+                '<button data-act="restore">Restore</button>'
+                '<button data-act="purge" class="danger">Purge&hellip;</button>')
+    return f"""<div class="row" id="actions">
   <span class="count" id="selcount" style="margin:0"></span>
   <button data-act="access">Access&hellip;</button>
   <button data-act="tags">Tags&hellip;</button>
@@ -644,7 +705,7 @@ def _actions(user: Principal) -> str:
   <button data-act="event">Event&hellip;</button>
   <button data-act="date">Date&hellip;</button>
   <span class="sep"></span>
-  <button data-act="delete" class="danger">Delete</button>
+  <button data-act="delete" class="danger">Delete</button>{bin_acts}
 </div>"""
 
 
@@ -797,12 +858,14 @@ def _cell(row: sqlite3.Row) -> str:
     # page as one unsplittable blob.
     nl = chr(10)
     return (
-        f'<div class="cell" data-folder="{_h(row["folder"])}" '
+        f'<div class="cell{" gone" if row["deleted"] else ""}" '
+        f'data-folder="{_h(row["folder"])}" '
         f'data-name="{_h(row["name"])}" data-kind="{_h(row["kind"])}" '
         f'data-audience="{_h(nl.join(shared))}" '
         f'data-event="{_h(row["event"] or "")}" '
         f'data-tags="{_h(nl.join(tags))}" '
-        f'data-date="{_h(str(row["effective_date"] or "no date"))}">'
+        f'data-date="{_h(str(row["effective_date"] or "no date"))}" '
+        f'data-deleted="{"1" if row["deleted"] else ""}">'
         f'<img loading="lazy" src="/thumb/{_q(row["folder"])}/{_q(row["name"])}">'
         f'<button class="pick" aria-label="select"></button>'
         + (f'<span class="badge">{_dur(row["duration"])}</span>'
@@ -824,7 +887,7 @@ def _chips(user: Principal) -> tuple[tuple[str, str], ...]:
     choice between their whole world and nothing.
     """
     return tuple((col, label) for col, label in _CHIPS
-                 if col != "audience" or user.is_admin)
+                 if col not in ("audience", "deleted") or user.is_admin)
 
 
 def _group_names() -> list[str]:
@@ -857,6 +920,7 @@ def _audience_names() -> list[str]:
 _CHIPS: tuple[tuple[str, str], ...] = (
     ("event", "Event"), ("year", "Year"), ("tag", "Tag"),
     ("audience", "Access"), ("kind", "Type"), ("band", "Size"),
+    ("deleted", "Deleted"),
 )
 
 #: Complete vocabularies — these columns cannot hold anything else.
@@ -864,6 +928,9 @@ _FIXED: dict[str, tuple[tuple[str, str], ...]] = {
     "kind": (("image", "Photos"), ("video", "Video"), ("other", "Other")),
     "band": (("small", "Small / short"), ("medium", "Medium"),
              ("large", "Large / long")),
+    # Off is the third value and has no entry: clearing the chip is what says
+    # *the living*, the same gesture as clearing any other filter.
+    "deleted": (("only", "Only deleted"), ("with", "Including deleted")),
 }
 
 #: How the grid can be cut up, and what to call each choice.
@@ -1515,6 +1582,13 @@ async function applyToSelection(act,value,add){
   const before=multi?cs.map(c=>c.dataset[multi[0]]||''):null;
   if(multi) cs.forEach(c=>paint(c,multi[0],value,add));
   else if(act==='event') cs.forEach(c=>{c.dataset.event=value||'';});
+  // Under `Including deleted` a restored file stays on screen, so the cross
+  // has to go the moment the decision does. Under `Only deleted` it leaves
+  // instead, and `drop` takes the cell with it.
+  else if(act==='deleted') cs.forEach(c=>{
+    c.dataset.deleted=value?'1':'';
+    c.classList.toggle('gone',!!value);
+  });
   const out=await send(cs,body,actLabel(act,value,add));
   if(out===null&&multi) cs.forEach((c,i)=>{
     c.dataset[multi[0]]=before[i]; repaint(c,multi[0]);
@@ -1598,6 +1672,10 @@ function workClose(){
 // button itself rather than kept as a second vocabulary for the same four
 // actions, which would be free to drift from the one on screen.
 function actLabel(act,value,add){
+  // `deleted` is the one action whose button is not named after its field:
+  // one flag, two controls, and the word for it depends on which way it is
+  // going.
+  if(act==='deleted') return value?'Delete':'Restore';
   const b=actions&&actions.querySelector('[data-act="'+act+'"]');
   const word=esc(b?b.textContent.replace(/\\u2026|\\.\\.\\./,'').trim():act);
   if(!value) return word+' &mdash; clearing';
@@ -1656,6 +1734,8 @@ const ACT_COLUMN={tags:'tag', access:'audience', event:'event'};
   b.onclick=e=>{
     e.stopPropagation();
     if(act==='delete'){closeMenu();deleteSelection();return;}
+    if(act==='restore'){closeMenu();applyToSelection('deleted',false);return;}
+    if(act==='purge'){closeMenu();purgeSelection();return;}
     openMenu(b, act==='date'
       ? {mode:'date'}
       : {column:ACT_COLUMN[act]||act, mode:'set', as:act});};
@@ -1675,7 +1755,49 @@ function deleteSelection(){
   if(!cs.length){say('nothing selected');return;}
   const what=cs.length===1?'this file':`these ${cs.length.toLocaleString()} files`;
   if(!confirm(`Are you sure you want to delete ${what}?`)) return;
-  send(cs,{deleted:true},'Delete');
+  applyToSelection('deleted',true);
+}
+
+// The end of a file, so the question names the thing that cannot be taken
+// back rather than asking politely. It goes to its own endpoint: purging is
+// not a decision about a photograph, it is the end of one, and a shape
+// `decide` could accept would make it one field of a routine edit.
+async function purgeSelection(){
+  const cs=targets();
+  if(!cs.length){say('nothing selected');return;}
+  const what=cs.length===1?'1 file':`${cs.length.toLocaleString()} files`;
+  if(!confirm(`Permanently destroy ${what}? The originals and everything `
+             +`made from them are removed. This cannot be undone.`)) return;
+  if(busy){say('still writing…');return;}
+  busy=true; say(''); workOpen('Purge', cs.length);
+  let purged=0, failed=0, gone=[], total=null;
+  try{
+    for(let s0=0;s0<cs.length;s0+=CHUNK){
+      const batch=cs.slice(s0,s0+CHUNK);
+      const p=new URLSearchParams();
+      for(const [k,v] of Object.entries(VIEW)) if(v) p.set(k,v);
+      const r=await fetch('/api/purge?'+p,{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          files:batch.map(c=>({folder:c.dataset.folder,name:c.dataset.name}))})});
+      if(!r.ok) throw new Error((await r.text()).slice(0,200));
+      const out=await r.json();
+      purged+=out.purged; failed+=out.failed.length;
+      gone=gone.concat(out.dropped||[]);
+      if(out.total!==null&&out.total!==undefined) total=out.total;
+      workProgress(Math.min(s0+batch.length,cs.length),cs.length);
+    }
+  }catch(e){
+    busy=false; workClose();
+    say(`stopped after ${purged} of ${cs.length}: ${e.message}`,true);
+    return;
+  }
+  busy=false; workClose();
+  touched=true;
+  drop(gone);
+  if(total!==null&&countEl) countEl.textContent=`${total.toLocaleString()} files`;
+  if(failed) say(`${failed} file(s) could not be purged`,true);
+  else say(`${purged.toLocaleString()} file(s) destroyed`);
 }
 
 // --- keyboard ----------------------------------------------------------------
@@ -2080,6 +2202,76 @@ class Target(BaseModel):
 
     folder: str
     name: str
+
+
+class PurgeBody(BaseModel):
+    """Which files to destroy. Deliberately not a shape `decide` could take:
+    purging is not a decision, it is the end of one."""
+
+    files: list[Target]
+
+
+@app.post("/api/purge")
+def api_purge(user: Annotated[Principal, Depends(require_admin)],
+              view: Annotated[ix.Filters, Depends(filters)],
+              body: Annotated[PurgeBody, Body()]) -> JSONResponse:
+    """Destroy files outright. There is no undo for this one.
+
+    **Every file must already be soft-deleted**, and that is checked here per
+    file rather than trusted from the page. The page only offers Purge while
+    the deleted filter is on, but this endpoint is reachable without it, and
+    this check is the only thing standing between a URL and an original nobody
+    ever said should go. A file that is not deleted is reported as failed, not
+    skipped quietly — asking to purge a living file is a mistake worth hearing
+    about.
+    """
+    if not body.files:
+        return JSONResponse({"purged": 0, "failed": [], "dropped": [],
+                             "total": None})
+    if len(body.files) > BULK_LIMIT:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"{len(body.files)} files in one request — send at most {BULK_LIMIT}")
+
+    purged = 0
+    failed: list[dict[str, str]] = []
+    gone: list[dict[str, str]] = []
+    conn = ix.open_rw(DB_PATH) if DB_PATH.is_file() else None
+    try:
+        for target in body.files:
+            try:
+                media = _master_file(target.folder, target.name)
+            except HTTPException as e:
+                failed.append({"folder": target.folder, "name": target.name,
+                               "error": str(e.detail)})
+                continue
+            current = decisions.read(media)
+            if current is None or not current.deleted:
+                failed.append({"folder": target.folder, "name": target.name,
+                               "error": "not deleted — delete it first"})
+                continue
+            with _write_lock:
+                removed = destroy_mod.destroy(media, conn=conn,
+                                              folder=target.folder,
+                                              name=target.name)
+            if removed.nothing():
+                failed.append({"folder": target.folder, "name": target.name,
+                               "error": "nothing could be removed"})
+                continue
+            purged += 1
+            gone.append({"folder": target.folder, "name": target.name})
+        total = ix.count(conn, view) if conn is not None else None
+    finally:
+        if conn is not None:
+            conn.close()
+
+    if purged:
+        # No `Before` rows, so History shows it as something that happened and
+        # offers no revert. A revert that silently did nothing is worse.
+        history.record(user.name, f"purged {purged} file"
+                       + ("s" if purged != 1 else ""), [])
+    return JSONResponse({"purged": purged, "failed": failed,
+                         "dropped": gone, "total": total})
 
 
 class DecideBulkBody(BaseModel):
@@ -2496,144 +2688,6 @@ def _safe_next(target: str) -> str:
 
 
 # --- accounts -----------------------------------------------------------------
-
-# --- deleted ------------------------------------------------------------------
-
-_DELETED_CSS = """
-.bin { display:grid; gap:10px;
-       grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); }
-.bin .item { display:flex; gap:10px; align-items:center; background:#14161a;
-             border:1px solid var(--line); border-radius:4px; padding:8px; }
-.bin img { width:64px; height:64px; object-fit:cover; border-radius:3px;
-           background:#0d0f12; flex:none; }
-.bin .what { min-width:0; flex:1; }
-.bin .nm { overflow-wrap:anywhere; }
-.bin .where { color:var(--dim); font-size:12px; overflow-wrap:anywhere; }
-.bin form { display:inline; }
-.bin button { margin:4px 4px 0 0; }
-"""
-
-
-@app.get("/deleted", response_class=HTMLResponse)
-def deleted_page(user: Annotated[Principal, Depends(require_admin)],
-                 msg: Annotated[str, Query()] = "") -> HTMLResponse:
-    """What has been deleted, and the only place it can be destroyed.
-
-    Admin-only for the reason the whole split exists: deleting is a curator's
-    judgement and is meant to be cheap, so it has to be undoable by whoever
-    made it. Destroying is neither, and putting it on a page you have to go
-    to — rather than in the bar where the curating happens — is most of what
-    keeps the two apart.
-    """
-    conn = db()
-    rows = ix.files(conn, ix.Filters(deleted=True), limit=PAGE_LIMIT)
-    note = f'<p class="note">{_h(msg)}</p>' if msg else ""
-    if not rows:
-        return _page("Deleted", f'{note}<p class="empty">Nothing is deleted.</p>',
-                     user=user)
-
-    items = "".join(_bin_item(r) for r in rows)
-    return _page("Deleted", f"""{note}
-<p class="dim">{len(rows):,} deleted. <b>Restore</b> puts a file back where it
-was, with everything else it said intact. <b>Destroy</b> removes the original
-and everything derived from it, and cannot be undone — the only copy left
-would be a backup.</p>
-<div class="bin">{items}</div>""",
-        script=f"<style>{_DELETED_CSS}</style>", user=user)
-
-
-def _bin_item(row: sqlite3.Row) -> str:
-    """One deleted file: enough to recognise it before destroying it.
-
-    The thumbnail is the point. A filename is not how anybody knows which
-    photograph this is, and *destroy* is exactly the button that must not be
-    pressed against the wrong one.
-    """
-    folder, name = row["folder"], row["name"]
-    where = row["event"] or "no event"
-    hidden = (f'<input type="hidden" name="folder" value="{_h(folder)}">'
-              f'<input type="hidden" name="name" value="{_h(name)}">')
-    return (
-        f'<div class="item">'
-        f'<img src="/thumb/{_q(folder)}/{_q(name)}" alt="" loading="lazy">'
-        f'<div class="what">'
-        f'<div class="nm">{_h(name)}</div>'
-        f'<div class="where">{_h(where)} &middot; {_h(row["year"] or "undated")}'
-        f'</div>'
-        f'<form method="post" action="/deleted/restore">{hidden}'
-        f'<button>Restore</button></form>'
-        f'<form method="post" action="/deleted/destroy" '
-        f'onsubmit="return confirm(\'Destroy {_h(name)} for good?'
-        f' This cannot be undone.\')">{hidden}'
-        f'<button class="danger">Destroy</button></form>'
-        f'</div></div>')
-
-
-@app.post("/deleted/restore")
-async def deleted_restore(
-    request: Request,
-    user: Annotated[Principal, Depends(require_admin)],
-) -> Response:
-    """Put one file back — the same write the grid would make, recorded the same."""
-    folder, name = await _bin_target(request)
-    was, _, _ = _decide(folder, name, _Change(deleted=False))
-    history.record(user.name, f"restored {name}",
-                   [history.Before(folder, name, was)])
-    return RedirectResponse(f"/deleted?msg={quote(name + ' is back')}",
-                            status_code=303)
-
-
-@app.post("/deleted/destroy")
-async def deleted_destroy(
-    request: Request,
-    user: Annotated[Principal, Depends(require_admin)],
-) -> Response:
-    """Remove one file from every tier. There is no undo for this one.
-
-    Refused unless the file is **already soft-deleted**. The page only offers
-    it for files that are, so this is not defence against the UI — it is
-    defence against this URL being reached any other way, which is the only
-    way an original gets destroyed without somebody having first decided it
-    should go.
-    """
-    folder, name = await _bin_target(request)
-    media = _master_file(folder, name)
-    current = decisions.read(media)
-    if current is None or not current.deleted:
-        return RedirectResponse(
-            "/deleted?msg=" + quote(f"{name} is not deleted — "
-                                    "delete it first, then destroy it"),
-            status_code=303)
-
-    conn = ix.open_rw(DB_PATH) if DB_PATH.is_file() else None
-    try:
-        gone = destroy_mod.destroy(media, conn=conn, folder=folder, name=name)
-    finally:
-        if conn is not None:
-            conn.close()
-
-    # Recorded with no `Before`, so it appears in History as something that
-    # happened and offers no revert. A revert that silently did nothing would
-    # be worse than none at all.
-    history.record(user.name,
-                   (f"destroyed {name} — original, sidecar and "
-                    f"{gone.derived} derived file(s)"), [])
-    said = (f"{name} is gone" if gone.master else
-            f"{name} could not be removed — nothing was destroyed"
-            if gone.nothing() else
-            f"{name} was only partly removed; try again")
-    return RedirectResponse(f"/deleted?msg={quote(said)}", status_code=303)
-
-
-async def _bin_target(request: Request) -> tuple[str, str]:
-    """The file one of these forms names, refusing anything outside master."""
-    form = await _form(request)
-    folder, name = form.get("folder", ""), form.get("name", "")
-    if not folder or not name:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "no file named")
-    _master_file(folder, name)     # raises if it escapes master
-    return folder, name
-
 
 _ACCOUNTS_CSS = """
 .acct td input, .acct td select { background:#14161a; color:var(--fg);
