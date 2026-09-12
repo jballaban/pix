@@ -42,6 +42,7 @@ from pix import datestr
 from pix.nas import accounts
 from pix.nas import auth
 from pix.nas import decisions
+from pix.nas import destroy as destroy_mod
 from pix.nas import history
 from pix.nas import index as ix
 from pix.nas.const import (
@@ -458,7 +459,8 @@ def _whoami(user: Principal | None) -> str:
     """
     if user is None:
         return '<a class="who-link" href="/login">Sign in</a>'
-    manage = ('<a class="who-link" href="/history">History</a>'
+    manage = ('<a class="who-link" href="/deleted">Deleted</a>'
+              '<a class="who-link" href="/history">History</a>'
               '<a class="who-link" href="/accounts">Accounts</a>'
               if user.is_admin else "")
     return (f'<span class="who-link dim">{_h(user.name)}</span>{manage}'
@@ -2485,6 +2487,144 @@ def _safe_next(target: str) -> str:
 
 
 # --- accounts -----------------------------------------------------------------
+
+# --- deleted ------------------------------------------------------------------
+
+_DELETED_CSS = """
+.bin { display:grid; gap:10px;
+       grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); }
+.bin .item { display:flex; gap:10px; align-items:center; background:#14161a;
+             border:1px solid var(--line); border-radius:4px; padding:8px; }
+.bin img { width:64px; height:64px; object-fit:cover; border-radius:3px;
+           background:#0d0f12; flex:none; }
+.bin .what { min-width:0; flex:1; }
+.bin .nm { overflow-wrap:anywhere; }
+.bin .where { color:var(--dim); font-size:12px; overflow-wrap:anywhere; }
+.bin form { display:inline; }
+.bin button { margin:4px 4px 0 0; }
+"""
+
+
+@app.get("/deleted", response_class=HTMLResponse)
+def deleted_page(user: Annotated[Principal, Depends(require_admin)],
+                 msg: Annotated[str, Query()] = "") -> HTMLResponse:
+    """What has been deleted, and the only place it can be destroyed.
+
+    Admin-only for the reason the whole split exists: deleting is a curator's
+    judgement and is meant to be cheap, so it has to be undoable by whoever
+    made it. Destroying is neither, and putting it on a page you have to go
+    to — rather than in the bar where the curating happens — is most of what
+    keeps the two apart.
+    """
+    conn = db()
+    rows = ix.files(conn, ix.Filters(deleted=True), limit=PAGE_LIMIT)
+    note = f'<p class="note">{_h(msg)}</p>' if msg else ""
+    if not rows:
+        return _page("Deleted", f'{note}<p class="empty">Nothing is deleted.</p>',
+                     user=user)
+
+    items = "".join(_bin_item(r) for r in rows)
+    return _page("Deleted", f"""{note}
+<p class="dim">{len(rows):,} deleted. <b>Restore</b> puts a file back where it
+was, with everything else it said intact. <b>Destroy</b> removes the original
+and everything derived from it, and cannot be undone — the only copy left
+would be a backup.</p>
+<div class="bin">{items}</div>""",
+        script=f"<style>{_DELETED_CSS}</style>", user=user)
+
+
+def _bin_item(row: sqlite3.Row) -> str:
+    """One deleted file: enough to recognise it before destroying it.
+
+    The thumbnail is the point. A filename is not how anybody knows which
+    photograph this is, and *destroy* is exactly the button that must not be
+    pressed against the wrong one.
+    """
+    folder, name = row["folder"], row["name"]
+    where = row["event"] or "no event"
+    hidden = (f'<input type="hidden" name="folder" value="{_h(folder)}">'
+              f'<input type="hidden" name="name" value="{_h(name)}">')
+    return (
+        f'<div class="item">'
+        f'<img src="/thumb/{_q(folder)}/{_q(name)}" alt="" loading="lazy">'
+        f'<div class="what">'
+        f'<div class="nm">{_h(name)}</div>'
+        f'<div class="where">{_h(where)} &middot; {_h(row["year"] or "undated")}'
+        f'</div>'
+        f'<form method="post" action="/deleted/restore">{hidden}'
+        f'<button>Restore</button></form>'
+        f'<form method="post" action="/deleted/destroy" '
+        f'onsubmit="return confirm(\'Destroy {_h(name)} for good?'
+        f' This cannot be undone.\')">{hidden}'
+        f'<button class="danger">Destroy</button></form>'
+        f'</div></div>')
+
+
+@app.post("/deleted/restore")
+async def deleted_restore(
+    request: Request,
+    user: Annotated[Principal, Depends(require_admin)],
+) -> Response:
+    """Put one file back — the same write the grid would make, recorded the same."""
+    folder, name = await _bin_target(request)
+    was, _, _ = _decide(folder, name, _Change(deleted=False))
+    history.record(user.name, f"restored {name}",
+                   [history.Before(folder, name, was)])
+    return RedirectResponse(f"/deleted?msg={quote(name + ' is back')}",
+                            status_code=303)
+
+
+@app.post("/deleted/destroy")
+async def deleted_destroy(
+    request: Request,
+    user: Annotated[Principal, Depends(require_admin)],
+) -> Response:
+    """Remove one file from every tier. There is no undo for this one.
+
+    Refused unless the file is **already soft-deleted**. The page only offers
+    it for files that are, so this is not defence against the UI — it is
+    defence against this URL being reached any other way, which is the only
+    way an original gets destroyed without somebody having first decided it
+    should go.
+    """
+    folder, name = await _bin_target(request)
+    media = _master_file(folder, name)
+    current = decisions.read(media)
+    if current is None or not current.deleted:
+        return RedirectResponse(
+            "/deleted?msg=" + quote(f"{name} is not deleted — "
+                                    "delete it first, then destroy it"),
+            status_code=303)
+
+    conn = ix.open_rw(DB_PATH) if DB_PATH.is_file() else None
+    try:
+        gone = destroy_mod.destroy(media, conn=conn, folder=folder, name=name)
+    finally:
+        if conn is not None:
+            conn.close()
+
+    # Recorded with no `Before`, so it appears in History as something that
+    # happened and offers no revert. A revert that silently did nothing would
+    # be worse than none at all.
+    history.record(user.name,
+                   (f"destroyed {name} — original, sidecar and "
+                    f"{gone.derived} derived file(s)"), [])
+    said = (f"{name} is gone" if gone.master else
+            f"{name} could not be removed — nothing was destroyed"
+            if gone.nothing() else
+            f"{name} was only partly removed; try again")
+    return RedirectResponse(f"/deleted?msg={quote(said)}", status_code=303)
+
+
+async def _bin_target(request: Request) -> tuple[str, str]:
+    """The file one of these forms names, refusing anything outside master."""
+    form = await _form(request)
+    folder, name = form.get("folder", ""), form.get("name", "")
+    if not folder or not name:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "no file named")
+    _master_file(folder, name)     # raises if it escapes master
+    return folder, name
+
 
 _ACCOUNTS_CSS = """
 .acct td input, .acct td select { background:#14161a; color:var(--fg);

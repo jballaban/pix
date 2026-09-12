@@ -120,6 +120,112 @@ def test_a_deletion_is_undone_by_the_ordinary_revert(
     assert "a.jpg" in client.get("/browse?event=Italy%20-%20Sicily").text
 
 
+def test_the_deleted_page_lists_only_the_deleted(
+    client: TestClient, writable: Path
+) -> None:
+    """The bin is the one view where `deleted` is the subject rather than the
+    thing being hidden."""
+    assert "Nothing is deleted" in client.get("/deleted").text
+
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "deleted": True})
+
+    page = client.get("/deleted").text
+    assert "a.jpg" in page
+    assert "b.mp4" not in page, "a living file appeared in the bin"
+
+
+def test_only_an_admin_sees_the_bin(
+    client: TestClient, sign_in: "Callable[[str, str], TestClient]"
+) -> None:
+    """Destroying is the one irreversible act, so the page holding it is not
+    somewhere an ordinary curator can arrive."""
+    client.post("/accounts/save", data={"name": "kid", "password": "pw"})
+
+    kid = sign_in("kid", "pw")
+    assert kid.get("/deleted").status_code in (401, 403)
+    assert kid.post("/deleted/destroy", data={
+        "folder": "init_2026", "name": "a.jpg"}).status_code in (401, 403)
+
+
+def test_restoring_from_the_bin_puts_the_file_back(
+    client: TestClient, writable: Path
+) -> None:
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "event": "Sicily Trip",
+        "deleted": True})
+
+    r = client.post("/deleted/restore",
+                    data={"folder": "init_2026", "name": "a.jpg"},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    assert decisions.read(writable / "a.jpg") == Decision(event="Sicily Trip")
+    assert "a.jpg" in client.get("/browse?event=Sicily%20Trip").text
+
+
+def test_destroying_refuses_a_file_that_was_never_deleted(
+    client: TestClient, writable: Path
+) -> None:
+    """The order is decide, then destroy. Without this the URL alone would
+    remove an original nobody had said should go — which is the whole reason
+    the two halves are separate."""
+    r = client.post("/deleted/destroy",
+                    data={"folder": "init_2026", "name": "a.jpg"},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    assert "not%20deleted" in r.headers["location"], r.headers["location"]
+    assert (writable / "a.jpg").is_file(), "an undeleted original was destroyed"
+
+
+def test_destroying_removes_the_original_and_everything_derived(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """The irreversible one. Everything this file occupies has to go, or the
+    archive keeps thumbnails of a photograph it no longer has."""
+    from pix.nas import destroy as destroy_mod
+
+    share = app_env["share"]
+    for tier, suffix in (("thumb", ".jpg"), ("preview", ".jpg"),
+                         ("meta", ".json")):
+        d = share / tier / "init_2026"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / ("a.jpg" + suffix)).write_bytes(b"derived")
+
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "deleted": True})
+    assert decisions.sidecar_path(writable / "a.jpg").is_file()
+
+    r = client.post("/deleted/destroy",
+                    data={"folder": "init_2026", "name": "a.jpg"},
+                    follow_redirects=False)
+    assert r.status_code == 303
+
+    assert not (writable / "a.jpg").exists(), "the original survived"
+    assert not decisions.sidecar_path(writable / "a.jpg").exists()
+    for path in destroy_mod.targets(writable / "a.jpg"):
+        assert not path.exists(), path
+
+    # Gone from the index too, or the grid offers a photograph that is not there.
+    assert not [f for f in client.get("/api/files").json()
+                if f["name"] == "a.jpg"]
+    assert "a.jpg" not in client.get("/deleted").text
+
+
+def test_destroying_is_recorded_but_offers_no_revert(
+    client: TestClient, writable: Path
+) -> None:
+    """It has to appear in History — *what happened to that photograph* is a
+    real question — without offering an undo that could not work."""
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "deleted": True})
+    client.post("/deleted/destroy",
+                data={"folder": "init_2026", "name": "a.jpg"})
+
+    op = history.recent(1)[0]
+    assert "destroyed a.jpg" in op.summary, op.summary
+    assert not op.files, "a destroy that offers files to put back"
+
+
 def test_every_page_says_which_version_it_is(client: TestClient) -> None:
     """The CLI prints it on every run so dev and tester stay aligned; the app
     had no equivalent, and a stale browser tab was indistinguishable from a
