@@ -1806,6 +1806,12 @@ let workTimer=null;
 // between them, never inside one — see `send`.
 let stopping=false;
 
+// Enough to tell one gesture from another in the log; it never leaves this
+// session and nothing is decided by it.
+function newBatch(){
+  return Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,8);
+}
+
 function workOpen(label,total){
   stopping=false;
   if(workStop) workStop.disabled=false;
@@ -1868,13 +1874,16 @@ async function send(cs,body,label){
   if(busy){say('still writing…');return null;}
   busy=true; say('');
   workOpen(label||'Writing', cs.length);
+  // One id for the whole gesture. The chunking below is about keeping each
+  // request short; the log should not learn about it.
+  const batch=newBatch();
   let done=0, failed=0, gone=[], total=null, binned=null, trouble=null;
   for(let s=0;s<cs.length;s+=CHUNK){
     // Checked between requests, never inside one. The chunk in flight is
     // allowed to finish so that the server records what it wrote, which is
     // what History then has to offer back.
     if(stopping) break;
-    const batch=cs.slice(s,s+CHUNK);
+    const chunk=cs.slice(s,s+CHUNK);
     try{
       // The filters ride along so the server can say which files left the
       // view; it owns the matching rules, and a second copy here would drift.
@@ -1882,8 +1891,8 @@ async function send(cs,body,label){
       for(const [k,v] of Object.entries(VIEW)) if(v) p.set(k,v);
       const r=await fetch('/api/decide/bulk?'+p,{method:'POST',
         headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({...body,
-          files:batch.map(c=>({folder:c.dataset.folder,name:c.dataset.name}))})});
+        body:JSON.stringify({...body, batch,
+          files:chunk.map(c=>({folder:c.dataset.folder,name:c.dataset.name}))})});
       if(!r.ok) throw new Error((await r.text()).slice(0,200));
       const out=await r.json();
       failed+=out.failed.length;
@@ -1894,7 +1903,7 @@ async function send(cs,body,label){
       trouble=e.message;
       break;
     }
-    done+=batch.length;
+    done+=chunk.length;
     workProgress(done,cs.length);
   }
   const stopped=stopping;
@@ -1964,23 +1973,25 @@ async function purgeSelection(){
              +`made from them are removed. This cannot be undone.`)) return;
   if(busy){say('still writing…');return;}
   busy=true; say(''); workOpen('Purge', cs.length);
+  const batch=newBatch();
   let purged=0, failed=0, gone=[], total=null, binned=null;
   try{
     for(let s0=0;s0<cs.length;s0+=CHUNK){
-      const batch=cs.slice(s0,s0+CHUNK);
+      if(stopping) break;
+      const chunk=cs.slice(s0,s0+CHUNK);
       const p=new URLSearchParams();
       for(const [k,v] of Object.entries(VIEW)) if(v) p.set(k,v);
       const r=await fetch('/api/purge?'+p,{method:'POST',
         headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({
-          files:batch.map(c=>({folder:c.dataset.folder,name:c.dataset.name}))})});
+        body:JSON.stringify({batch,
+          files:chunk.map(c=>({folder:c.dataset.folder,name:c.dataset.name}))})});
       if(!r.ok) throw new Error((await r.text()).slice(0,200));
       const out=await r.json();
       purged+=out.purged; failed+=out.failed.length;
       gone=gone.concat(out.dropped||[]);
       if(out.total!==null&&out.total!==undefined) total=out.total;
       if(out.binned!==null&&out.binned!==undefined) binned=out.binned;
-      workProgress(Math.min(s0+batch.length,cs.length),cs.length);
+      workProgress(Math.min(s0+chunk.length,cs.length),cs.length);
     }
   }catch(e){
     busy=false; workClose();
@@ -2384,7 +2395,7 @@ def api_decide(user: Annotated[Principal, Depends(require_admin)],
     "the record is wrong". `indexed` in the response says which happened.
     """
     was, decision, indexed = _decide(body.folder, body.name, _change(body))
-    history.record(user.name, _summary(_change(body), 1),
+    history.record(user.name, _summary(_change(body)),
                    [history.Before(body.folder, body.name, was)])
     return JSONResponse({
         "folder": body.folder,
@@ -2410,6 +2421,7 @@ class PurgeBody(BaseModel):
     purging is not a decision, it is the end of one."""
 
     files: list[Target]
+    batch: str | None = None
 
 
 @app.post("/api/purge")
@@ -2471,8 +2483,10 @@ def api_purge(user: Annotated[Principal, Depends(require_admin)],
     if purged:
         # No `Before` rows, so History shows it as something that happened and
         # offers no revert. A revert that silently did nothing is worse.
-        history.record(user.name, f"purged {purged} file"
-                       + ("s" if purged != 1 else ""), [])
+        # No `Before` rows — there is nothing to put back — but it still did
+        # something to a number of files, so it carries its own count.
+        history.record(user.name, "purged {n}", [], count=purged,
+                       batch=body.batch)
     return JSONResponse({"purged": purged, "failed": failed,
                          "dropped": gone, "total": total, "binned": binned})
 
@@ -2493,6 +2507,9 @@ class DecideBulkBody(BaseModel):
     """
 
     files: list[Target]
+    #: Ties the chunks of one gesture together in the log. Chunking is a fact
+    #: about the transport, and without this it read as several edits.
+    batch: str | None = None
     event: str | None = None
     date_override: str | None = None
     tags: list[str] | None = None
@@ -2581,7 +2598,7 @@ def api_decide_bulk(user: Annotated[Principal, Depends(require_admin)],
     # against whatever the file says *now*, and now may already have moved —
     # which is the whole reason somebody is reverting.
     if undo:
-        history.record(user.name, _summary(change, len(undo)), undo)
+        history.record(user.name, _summary(change), undo, batch=body.batch)
     return JSONResponse({"written": written, "indexed": indexed,
                          "failed": failed, "dropped": dropped,
                          "total": total, "binned": binned})
@@ -2696,14 +2713,18 @@ def _decide(folder: str, name: str, change: _Change,
     return was, decision, indexed
 
 
-def _summary(change: _Change, n: int) -> str:
+def _summary(change: _Change) -> str:
     """What an operation did, in the words a person would use.
 
     Read months later off a list, so it says the value and the count — "gave
     family access to 312 files" is a thing you can recognise as the mistake
     you are looking for; "bulk edit" is not.
+
+    The count is left as `{n}` for the log to fill in. A bulk edit arrives as
+    several requests and no single one of them knows the total; only the reader,
+    once it has put them back together, does.
     """
-    files = f"{n} file" + ("s" if n != 1 else "")
+    files = "{n}"
     if change.add_audience:
         return f"gave {', '.join(change.add_audience)} access to {files}"
     if change.remove_audience:

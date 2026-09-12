@@ -100,7 +100,20 @@ def test_previous_values_are_stored_in_full(log: Path) -> None:
     line = json.loads(log.read_text(encoding="utf-8").strip())
     assert line["files"][0]["before"] == {
         "event": "Sicily", "date_override": "1987-*-*-*:*:*",
-        "tags": ["beach"], "audience": ["kid"]}
+        "tags": ["beach"], "audience": ["kid"], "deleted": False}
+
+
+def test_a_deletion_is_part_of_what_was_there_before(log: Path) -> None:
+    """It is a decision like the other four, so an edit made to a file that was
+    already deleted has to remember that. Without it a revert would quietly
+    bring the file back — restoring something nobody asked to restore."""
+    history.record("admin", "x", [
+        Before("f", "a.jpg", Decision(event="Sicily", deleted=True))])
+
+    line = json.loads(log.read_text(encoding="utf-8").strip())
+    assert line["files"][0]["before"]["deleted"] is True
+    assert history.recent()[0].files[0].decision == Decision(
+        event="Sicily", deleted=True)
 
 
 # --- through the app ----------------------------------------------------------
@@ -272,3 +285,75 @@ def test_a_file_deleted_since_is_reported_not_fatal(
 
 def test_the_history_link_is_in_the_header(curating: TestClient) -> None:
     assert 'href="/history"' in curating.get("/browse").text
+
+
+# --- one gesture, one entry ---------------------------------------------------
+
+def test_the_chunks_of_one_edit_are_one_operation(log: Path) -> None:
+    """Naming an event across four hundred files went out as four requests and
+    came back as four identical lines in the log — so putting it back meant
+    reverting each of them, and reading it meant working out that four entries
+    saying the same thing were one thing."""
+    for part in range(3):
+        history.record("admin", "set the event on {n} to Misc",
+                       [Before("f", f"{part}-{i}.jpg", None) for i in range(100)],
+                       batch="one-gesture")
+
+    ops = history.recent()
+    assert len(ops) == 1, [op.summary for op in ops]
+    assert ops[0].summary == "set the event on 300 files to Misc"
+    assert len(ops[0].files) == 300
+    # And reverting it reaches every one of them, not the first hundred.
+    whole = history.get("one-gesture")
+    assert whole is not None
+    assert len(whole.files) == 300
+
+
+def test_a_gesture_survives_somebody_else_working_at_the_same_time(
+    log: Path
+) -> None:
+    """Two curators interleave their lines. A gesture is still one gesture when
+    somebody else's landed in the middle of it, so the grouping is by id rather
+    than by which lines happen to be next to each other."""
+    history.record("james", "tagged {n} beach",
+                   [Before("f", "a.jpg", None)], batch="mine")
+    history.record("lola", "gave family access to {n}",
+                   [Before("f", "z.jpg", None)], batch="theirs")
+    history.record("james", "tagged {n} beach",
+                   [Before("f", "b.jpg", None)], batch="mine")
+
+    ops = {op.id: op for op in history.recent()}
+    assert len(ops) == 2, [op.summary for op in history.recent()]
+    assert len(ops["mine"].files) == 2
+    assert ops["mine"].summary == "tagged 2 files beach"
+    assert ops["theirs"].summary == "gave family access to 1 file"
+
+
+def test_an_operation_that_offers_nothing_back_still_counts_itself(
+    log: Path
+) -> None:
+    """A purge records no previous values — there are none — but it still did
+    something to a number of files, and the log has to say how many."""
+    history.record("admin", "purged {n}", [], count=100, batch="p")
+    history.record("admin", "purged {n}", [], count=42, batch="p")
+
+    ops = history.recent()
+    assert len(ops) == 1
+    assert ops[0].summary == "purged 142 files"
+    assert ops[0].files == ()
+
+
+def test_lines_written_before_any_of_this_still_read(log: Path) -> None:
+    """The log is the record. A format that stopped reading what it had already
+    written would be a format that lost it."""
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text(
+        '{"id":"old","when":1,"who":"admin","summary":"tagged 3 files beach",'
+        '"files":[{"folder":"f","name":"a.jpg","before":null}]}\n',
+        encoding="utf-8")
+
+    ops = history.recent()
+    assert len(ops) == 1
+    # No placeholder and no count of its own: it says what it always said.
+    assert ops[0].summary == "tagged 3 files beach"
+    assert ops[0].n == 1

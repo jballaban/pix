@@ -67,20 +67,37 @@ class Operation:
     #: Set when this operation undid another, so the page can say so and a
     #: reverted operation is not offered for reverting twice.
     reverts: str | None = None
+    #: How many files it touched. Usually `len(files)`, but a purge records
+    #: none — there is nothing to put back — and still did something to a
+    #: number of them.
+    n: int = 0
 
 
 def record(who: str, summary: str, files: list[Before], *,
-           reverts: str | None = None,
+           reverts: str | None = None, batch: str | None = None,
+           count: int | None = None,
            path: Path | None = None) -> Operation:
     """Append one operation to the log and return it.
 
     Never raises for a logging failure: losing the ability to undo is bad, and
     failing the write the curator actually asked for because the *log* could not
     be written would be worse.
+
+    `batch` makes several appends **one operation**. A bulk edit is chunked
+    into requests of a hundred so that each one stays short, and that is a fact
+    about the transport which had been leaking into the log: naming an event
+    across four hundred files read as four identical entries, and putting it
+    back meant reverting each of them. Sharing an id groups them on the way out
+    without giving up the append-only write, where a crash costs one line.
+
+    `count` is for operations that touch files they cannot offer back — a purge
+    has no previous value to record, but it still did something to a number of
+    files.
     """
-    op = Operation(id=f"{int(time.time())}-{secrets.token_hex(3)}",
+    op = Operation(id=batch or f"{int(time.time())}-{secrets.token_hex(3)}",
                    when=time.time(), who=who, summary=summary,
-                   files=tuple(files), reverts=reverts)
+                   files=tuple(files), reverts=reverts,
+                   n=len(files) if count is None else count)
     target = path if path is not None else OPERATIONS_FILE
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -104,11 +121,27 @@ def recent(limit: int = RECENT, *, path: Path | None = None) -> list[Operation]:
         lines = target.read_text(encoding="utf-8").splitlines()
     except OSError:
         return []
+
+    # Grouped by id rather than by adjacency: two curators working at once
+    # interleave their lines, and a gesture is still one gesture when somebody
+    # else's landed in the middle of it.
+    merged: dict[str, dict[str, Any]] = {}
+    for line in lines:
+        data = _parse(line)
+        if data is None:
+            continue
+        first = merged.get(data["id"])
+        if first is None:
+            merged[data["id"]] = data
+            continue
+        first["files"].extend(data["files"])
+        first["n"] += data["n"]
+
     out: list[Operation] = []
-    for line in reversed(lines):
+    for data in reversed(list(merged.values())):
         if len(out) >= limit:
             break
-        op = _from_json(line)
+        op = _build(data)
         if op is not None:
             out.append(op)
     return out
@@ -132,7 +165,7 @@ def undone(ops: list[Operation]) -> set[str]:
 def _to_json(op: Operation) -> dict[str, Any]:
     return {
         "id": op.id, "when": round(op.when, 3), "who": op.who,
-        "summary": op.summary,
+        "summary": op.summary, "n": op.n,
         "reverts": op.reverts,
         "files": [{"folder": b.folder, "name": b.name,
                    "before": _decision_json(b.decision)} for b in op.files],
@@ -143,10 +176,25 @@ def _decision_json(decision: Decision | None) -> dict[str, Any] | None:
     if decision is None:
         return None
     return {"event": decision.event, "date_override": decision.date_override,
-            "tags": list(decision.tags), "audience": list(decision.audience)}
+            "tags": list(decision.tags), "audience": list(decision.audience),
+            "deleted": decision.deleted}
 
 
-def _from_json(line: str) -> Operation | None:
+def _render(summary: str, n: int) -> str:
+    """Fill in how many files an operation touched.
+
+    Stored with a `{n}` where the count goes, because a bulk edit arrives as
+    several requests and only the reader knows the total. Anything written
+    without a placeholder — a purge, a revert — comes back as it was written,
+    which is also what makes every line recorded before this still read.
+    """
+    if "{n}" not in summary:
+        return summary
+    return summary.replace("{n}", f"{n:,} file" + ("s" if n != 1 else ""))
+
+
+def _parse(line: str) -> dict[str, Any] | None:
+    """One log line as plain data, ready to be merged with its siblings."""
     try:
         raw: object = json.loads(line)
     except ValueError:
@@ -154,19 +202,31 @@ def _from_json(line: str) -> Operation | None:
     if not isinstance(raw, dict):
         return None
     data = cast("dict[str, Any]", raw)
-    files: list[Before] = []
+    if not data.get("id"):
+        return None
     raw_files: object = data.get("files")
-    for entry in cast("list[Any]", raw_files or []):
-        if not isinstance(entry, dict):
-            continue
+    kept: list[dict[str, Any]] = [
+        cast("dict[str, Any]", f) for f in cast("list[Any]", raw_files or [])
+        if isinstance(f, dict)]
+    data["files"] = kept
+    # Absent in anything written before operations counted their own files.
+    data["n"] = int(data.get("n") or len(kept))
+    return data
+
+
+def _build(data: dict[str, Any]) -> Operation | None:
+    files: list[Before] = []
+    for entry in cast("list[Any]", data.get("files") or []):
         item = cast("dict[str, Any]", entry)
         files.append(Before(folder=str(item.get("folder") or ""),
                             name=str(item.get("name") or ""),
                             decision=_decision_from(item.get("before"))))
     try:
+        n = int(data.get("n") or len(files))
         return Operation(id=str(data["id"]), when=float(data.get("when") or 0),
                          who=str(data.get("who") or ""),
-                         summary=str(data.get("summary") or ""),
+                         summary=_render(str(data.get("summary") or ""), n),
+                         n=n,
                          files=tuple(files),
                          reverts=(str(data["reverts"])
                                   if data.get("reverts") else None))
@@ -184,4 +244,7 @@ def _decision_from(raw: object) -> Decision | None:
                        if d.get("date_override") else None),
         tags=tuple(str(t) for t in cast("list[Any]", d.get("tags") or [])),
         audience=tuple(str(a) for a in cast("list[Any]", d.get("audience") or [])),
+        # Absent in anything written before deletion existed, which reads as
+        # not deleted — which is what those files were.
+        deleted=bool(d.get("deleted")),
     )
