@@ -1107,3 +1107,76 @@ def test_a_file_with_nothing_behind_it_is_not_a_stack(
     conn = ix.connect(tree["db"])
 
     assert ix.files(conn)[0]["behind"] == 0
+
+
+# --- hidden means hidden everywhere -------------------------------------------
+
+def test_a_stacked_file_never_reaches_a_filter(tree: dict[str, Path]) -> None:
+    """Stack a photograph from the 1st behind one from the 2nd and the 1st is
+    gone — not merely from the grid, but from the dates you can ask for. A file
+    that can be filtered back into view is one that came out of its stack."""
+    _dated(tree, "jan1.jpg", "2026:01:01 10:00:00", "Trip")
+    _dated(tree, "jan2.jpg", "2026:01:02 10:00:00", "Trip")
+    _stacked(tree, "jan1.jpg", "f/jan2.jpg")
+    _build(tree)
+    conn = ix.connect(tree["db"])
+
+    assert ix.files(conn, ix.Filters(date="2026-01-01")) == []
+    assert ix.count(conn, ix.Filters(date="2026-01-01")) == 0
+    # And the 1st is not offered as a day to filter by at all.
+    days = [s.value for s in ix.suggest(conn, "date", ix.Filters(date="2026-01"))]
+    assert days == ["2026-01-02"], days
+
+
+def test_a_dropdown_offers_nothing_the_grid_will_not_show(
+    tree: dict[str, Path]
+) -> None:
+    """A tag carried only by a hidden file was offered as a filter, and
+    clicking it gave an empty grid. The dropdowns took their own path to the
+    library and answered with files the grid would never show."""
+    _dated(tree, "shown.jpg", "2026:01:02 10:00:00")
+    _dated(tree, "hidden.jpg", "2026:01:01 10:00:00")
+    _sidecar(tree, "f", "hidden.jpg")
+    decisions.write(tree["master"] / "f" / "hidden.jpg",
+                    Decision(stacked_under="f/shown.jpg", tags=("beach",)))
+    _build(tree)
+    conn = ix.connect(tree["db"])
+
+    assert [s.value for s in ix.suggest(conn, "tag")] == []
+    assert [(s.value, s.n) for s in ix.suggest(conn, "date")] == [("2026", 1)]
+
+
+def test_a_deleted_file_is_hidden_from_the_dropdowns_too(
+    tree: dict[str, Path]
+) -> None:
+    """The same hole, found by asking the same question of the other state a
+    file can be in. One place decides what is in the library now."""
+    _dated(tree, "live.jpg", "2026:01:02 10:00:00")
+    _dated(tree, "gone.jpg", "2026:01:01 10:00:00")
+    _sidecar(tree, "f", "gone.jpg")
+    decisions.write(tree["master"] / "f" / "gone.jpg",
+                    Decision(deleted=True, tags=("beach",)))
+    _build(tree)
+    conn = ix.connect(tree["db"])
+
+    assert [s.value for s in ix.suggest(conn, "tag")] == []
+    assert [(s.value, s.n) for s in ix.suggest(conn, "date")] == [("2026", 1)]
+    # And in the bin, it is the living one that is not offered.
+    binned = ix.Filters(deleted="only")
+    assert [s.value for s in ix.suggest(conn, "tag", binned)] == ["beach"]
+
+
+def test_opening_a_stack_still_offers_what_is_in_it(
+    tree: dict[str, Path]
+) -> None:
+    """Hidden is about the ordinary view, not about the stack itself."""
+    _dated(tree, "top.jpg", "2026:01:02 10:00:00")
+    _dated(tree, "behind.jpg", "2026:01:01 10:00:00")
+    _sidecar(tree, "f", "behind.jpg")
+    decisions.write(tree["master"] / "f" / "behind.jpg",
+                    Decision(stacked_under="f/top.jpg", tags=("beach",)))
+    _build(tree)
+    conn = ix.connect(tree["db"])
+
+    inside = ix.Filters(within="f/top.jpg")
+    assert [s.value for s in ix.suggest(conn, "tag", inside)] == ["beach"]

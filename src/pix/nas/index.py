@@ -781,21 +781,40 @@ def _where(filters: Filters) -> tuple[str, dict[str, Any]]:
     is the single way this feature can fail that a curator would not forgive.
     """
     clauses = _clauses(filters)
-    parts = [sql for sql, _ in clauses.values()]
-    if filters.deleted == "only":
-        parts.append("files.deleted = 1")
-    elif filters.deleted != "with":
-        parts.append("files.deleted = 0")
-    # A file stacked behind another does not appear on its own — that is what
-    # stacking is. Opening one stack is the exception, and says which.
-    if not filters.within:
-        parts.append("files.stacked_under IS NULL")
+    parts = [sql for sql, _ in clauses.values()] + _always(filters)
     params = _bind(clauses)
     scope, scope_params = _scope(filters)
     if scope:
         parts.append(scope)
         params.update(scope_params)
     return (" AND ".join(parts), params)
+
+
+def _always(filters: Filters) -> list[str]:
+    """What is in the library at all, whatever is being asked about it.
+
+    Two states take a file out of the ordinary view and neither is a filter:
+    deleted, and stacked behind another. They are not optional, not banded, and
+    not something a question can decline to apply — so they are not in
+    `_clauses` with the filters, and every query has to carry them.
+
+    Which is why they live here rather than in `_where`. `_where` is the grid's
+    path; the dropdowns take their own, and had been answering with files the
+    grid would never show. A tag carried only by a deleted file was offered as
+    a filter, and clicking it gave an empty grid. A date whose only photograph
+    was stacked behind another was counted twice over — once for the file you
+    can see and once for the one you cannot.
+    """
+    out: list[str] = []
+    if filters.deleted == "only":
+        out.append("files.deleted = 1")
+    elif filters.deleted != "with":
+        out.append("files.deleted = 0")
+    # A file stacked behind another does not appear on its own — that is what
+    # stacking is. Opening one stack is the exception, and says which.
+    if not filters.within:
+        out.append("files.stacked_under IS NULL")
+    return out
 
 
 def _bind(clauses: dict[str, tuple[str, dict[str, Any]]]) -> dict[str, Any]:
@@ -1070,8 +1089,13 @@ def suggest(conn: sqlite3.Connection, column: str,
              "n_all > 0 DESC, n_any > 0 DESC, n DESC, value LIMIT :limit")
 
     def visible(*extra: str) -> str:
-        """The WHERE that every suggestion is drawn from."""
-        parts = [p for p in (seen, *extra) if p]
+        """The WHERE that every suggestion is drawn from.
+
+        `_always` included, or a dropdown offers values that no listing will
+        ever show: the deleted and the stacked are not part of the library a
+        filter can reach.
+        """
+        parts = [p for p in (seen, *extra, *_always(view)) if p]
         return f"WHERE {' AND '.join(parts)} " if parts else ""
 
     if column in ("tag", "audience"):
