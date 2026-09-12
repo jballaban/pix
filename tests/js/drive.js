@@ -132,8 +132,12 @@ const fetch = async (url, opts) => {
 };
 const localStorage = { getItem: () => null, setItem: () => {} };
 const listeners = {};
+// Enough of a viewport to check scroll anchoring: `scrolled` is how far down
+// the page is, and the test grid's rectangles are computed from it.
+let scrolled = 0;
 const window = {
   innerWidth: 1400, scrollY: 0,
+  scrollBy: (_x, y) => { scrolled += y; window.scrollY = scrolled; },
   addEventListener: (t, fn) => ((listeners[t] ||= []).push(fn)),
 };
 const location = { href: '/browse' };
@@ -662,6 +666,60 @@ function arrow(key, opts) {
           shelf[3].classList.contains('cur') ? 'opened the one below it'
                                             : 'opened neither');
     stage.click();
+  }
+
+  // Working through the files at the top of the screen takes them from above
+  // you, and everything left slides up — which reads as the page scrolling
+  // down on its own, and loses the place you had got to.
+  //
+  // The stub does no layout, so it is given one: a column of 100px cells whose
+  // position follows where they actually sit, and a window that really moves
+  // when the page scrolls it.
+  {
+    const room = mk('scrollroom');
+    const col = [];
+    for (let i = 0; i < 6; i++) col.push(cell('c' + i + '.jpg', ''));
+    col.forEach(c => {
+      room.appendChild(c);
+      Object.defineProperty(c, '_rect', {
+        get() {
+          const i = room.children.indexOf(c);
+          return { left: 0, top: i * 100 - scrolled, width: 100, height: 100 };
+        },
+      });
+    });
+    document.querySelectorAll = sel => (sel === '.cell' ? col
+                                      : sel === '.group' ? []
+                                      : sel === '.stage' ? [stage] : realQsa(sel));
+    new Function(
+      'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
+      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
+      'GRID_GROUPS', 'GROUPING', 'setTimeout', js,
+    )(document, window, fetch, localStorage, location, confirm,
+      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
+      GRID_GROUPS, GROUPING, fn => fn());
+
+    // Scrolled a couple of rows down: c2 straddles the top of the screen.
+    scrolled = 250;
+    const before = col[2].getBoundingClientRect().top;
+    check('the anchor starts where the test says', before === -50,
+          String(before));
+
+    // Process the two above it, the way you work down a grid.
+    col[0].querySelector('.pick').click();
+    col[1].querySelector('.pick').click();
+    dropping = [{ folder: 'f', name: 'c0.jpg' }, { folder: 'f', name: 'c1.jpg' }];
+    actBtn('delete').click();
+    await settle(); await settle();
+    dropping = [];
+
+    check('both left the grid',
+          !room.children.includes(col[0]) && !room.children.includes(col[1]));
+    check('and what was on screen is still where it was',
+          col[2].getBoundingClientRect().top === before,
+          'moved to ' + col[2].getBoundingClientRect().top);
+    check('by scrolling back up, not by luck', scrolled === 50,
+          String(scrolled));
   }
 
   if (failures.length) {

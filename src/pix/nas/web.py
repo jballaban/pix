@@ -1616,6 +1616,18 @@ function drop(gone){
   const at=cells[cur];
   const leaving=cells.filter(
     c=>keys.has(c.dataset.folder+'\\n'+c.dataset.name));
+  // Work through the files at the top of the screen and they vanish from
+  // above you: the grid shortens over your head and everything left slides up,
+  // which reads as the page having scrolled down on its own. So a survivor is
+  // measured before and after, and the scroll corrected by the difference —
+  // which puts the work you had *not* done yet back where you left it.
+  //
+  // Anchored to an element rather than to a count of rows, because how much
+  // height leaves depends on where the gaps fall and how many cells fit a row,
+  // neither of which this knows and both of which change with the window.
+  const anchorCell=cells.find(
+    c=>!leaving.includes(c)&&c.getBoundingClientRect().bottom>0);
+  const wasAt=anchorCell?anchorCell.getBoundingClientRect().top:null;
   leaving.forEach(c=>{picked.delete(c); c.remove();});
   const was=cells.indexOf(at);
   cells=cells.filter(c=>!leaving.includes(c));
@@ -1632,6 +1644,14 @@ function drop(gone){
     setCur(cells.includes(at)?cells.indexOf(at):Math.max(0,was), true);
   if(!cells.length&&grid) grid.innerHTML=
     '<p class="empty">Nothing matches these filters any more.</p>';
+  // After every change to the grid, the headings `resection` took away
+  // included. Skipped while the viewer is open: it is full-screen, the grid
+  // behind it is not what anybody is looking at, and `setCur` has already
+  // scrolled to the file on show.
+  if(wasAt!==null&&anchorCell&&!viewer.classList.contains('on')){
+    const nowAt=anchorCell.getBoundingClientRect().top;
+    if(nowAt!==wasAt) window.scrollBy(0,nowAt-wasAt);
+  }
   drawSel();
 }
 
