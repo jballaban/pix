@@ -62,14 +62,34 @@ const cells = [cell('a.jpg', 'ghost'), cell('b.jpg', '')];
 cells.forEach(c => grid.appendChild(c));
 
 const actions = mk('actions');
-for (const act of ['access', 'tags', 'event', 'date', 'delete']) {
-  const b = new El('button');
-  b.dataset.act = act;
-  actions.appendChild(b);
+// A tri-state tick, a count, and two sets of actions — one per side of the
+// deletion line, each shown only when the selection holds files it applies to.
+const tick = new El('button');
+tick.id = 'selall';
+tick.className = 'tick';
+document.byId.selall = tick;
+actions.appendChild(tick);
+function actGroup(side, names) {
+  const g = new El('span');
+  g.className = 'grp';
+  g.dataset.side = side;
+  g.hidden = true;
+  for (const act of names) {
+    const b = new El('button');
+    b.dataset.act = act;
+    g.appendChild(b);
+  }
+  actions.appendChild(g);
+  return g;
 }
+const liveActs = actGroup('live', ['access', 'tags', 'event', 'date', 'delete']);
+const goneActs = actGroup('gone', ['restore', 'purge']);
+// Buttons are nested in their group now, so they are found by walking rather
+// than by looking at the row's own children.
+const actBtn = name => actions.querySelectorAll('[data-act]')
+                              .find(b => b.dataset.act === name);
 for (const id of ['menu', 'chips', 'selcount', 'count', 'note', 'viewer',
                   'vimg', 'vvid', 'vmeta', 'rail', 'railtoggle', 'viewclose',
-                  'selall', 'selnone',
                   'working', 'workwhat', 'workbar', 'worktally']) mk(id);
 const stage = new El('div');
 stage.className = 'stage';
@@ -127,7 +147,12 @@ const USERS = ['family', 'james'];
 const GROUPS = ['family'];
 const USUAL = 'family';
 
-const tick = () => new Promise(r => setImmediate(r));
+const settle = () => new Promise(r => setImmediate(r));
+// The control selects everything when nothing is ticked and clears otherwise,
+// so pressing it blindly to "reset" would do the opposite half the time.
+function deselect() {
+  if (document.byId.selcount.textContent !== '0 selected') tick.click();
+}
 const keys = {};
 function arrow(key, opts) {
   (keys.keydown || []).forEach(fn => fn(Object.assign(
@@ -147,26 +172,24 @@ function arrow(key, opts) {
     process.exit(1);
   }
 
-  // The actions are always on screen, greyed until there is something for
-  // them to do. A row that came and went moved the whole grid under the
-  // pointer the moment you ticked the first thumbnail.
-  const actButtons = () => actions.children.filter(b => b.dataset.act);
-  check('the actions are on screen with nothing selected',
-        actions.hidden === false);
-  check('and disabled until something is',
-        actButtons().every(b => b.disabled));
+  // The row is always there — it carries the count and the tick — but an
+  // action is on screen only when the selection holds files it applies to.
+  check('the row is on screen with nothing selected', actions.hidden === false);
+  check('but neither set of actions is',
+        liveActs.hidden === true && goneActs.hidden === true);
 
   cells[1].querySelector('.pick').click();
-  check('selecting enables the actions',
-        actButtons().every(b => !b.disabled));
+  check('selecting a living file offers the living actions',
+        liveActs.hidden === false, 'live group still hidden');
+  check('and not the ones for deleted files', goneActs.hidden === true);
   check('selection is counted',
         document.byId.selcount.textContent === '1 selected',
         document.byId.selcount.textContent);
 
   // Opening Access lists both the accounts and whatever is already there.
-  const access = actions.children.find(b => b.dataset.act === 'access');
+  const access = actBtn('access');
   access.click();
-  await tick(); await tick();
+  await settle(); await settle();
   const menu = document.byId.menu;
   check('the access menu opens', menu.hidden === false);
   const opts = menu.querySelectorAll('.opt');
@@ -178,7 +201,7 @@ function arrow(key, opts) {
   // Ticking one issues an add for the selection.
   const before = calls.length;
   opts[labels.indexOf('james')].click();
-  await tick(); await tick();
+  await settle(); await settle();
   const sent = calls.slice(before).filter(c => c.url.startsWith('/api/decide'));
   check('ticking sends one write', sent.length === 1, String(sent.length));
   if (sent.length) {
@@ -210,7 +233,7 @@ function arrow(key, opts) {
         document.byId.selcount.textContent === '1 selected',
         document.byId.selcount.textContent);
   cells[0].click();
-  await tick();
+  await settle();
   check('clicking a photo opens the viewer',
         document.byId.viewer.classList.contains('on'));
   check('and the selection it was opened over survives',
@@ -233,9 +256,9 @@ function arrow(key, opts) {
   // With nothing selected the viewer still gives the actions something to
   // apply to, and paging carries that one along — otherwise S would write to
   // a photograph that had gone off screen.
-  document.byId.selnone.click();
+  deselect();
   cells[0].click();
-  await tick();
+  await settle();
   check('opening with nothing selected selects what you opened',
         cells[0].classList.contains('picked'),
         document.byId.selcount.textContent);
@@ -251,7 +274,7 @@ function arrow(key, opts) {
   // none, and the actions quietly applying to it anyway.
   // From a clean selection: looking at a photograph no longer clears one, so
   // what the viewer left ticked would otherwise still be ticked here.
-  document.byId.selnone.click();
+  deselect();
   cells[0].querySelector('.pick').click();
   check('ticking one selects it',
         document.byId.selcount.textContent === '1 selected',
@@ -262,12 +285,12 @@ function arrow(key, opts) {
         document.byId.selcount.textContent);
   {
     const n = calls.length;
-    const acc = actions.children.find(b => b.dataset.act === 'access');
+    const acc = actBtn('access');
     acc.click();
-    await tick(); await tick();
+    await settle(); await settle();
     const rows = menu.querySelectorAll('.opt');
     if (rows.length) rows[0].click();
-    await tick(); await tick();
+    await settle(); await settle();
     check('nothing is changed with nothing selected',
           !calls.slice(n).some(c => c.url.startsWith('/api/decide')));
     grid.click();
@@ -277,7 +300,7 @@ function arrow(key, opts) {
   // key that moved a cursor which was also a selection is what kept inventing
   // selections nobody had made.
   document.byId.grid.click();
-  document.byId.selnone.click();
+  deselect();
   const at = cells.findIndex(c => c.classList.contains('cur'));
   arrow('ArrowRight'); arrow('ArrowDown'); arrow('ArrowUp');
   check('arrows do not move the cursor in the grid',
@@ -290,9 +313,9 @@ function arrow(key, opts) {
   cells[0].querySelector('.pick').click();
 
   // The date menu opens on what the files actually say.
-  const date = actions.children.find(b => b.dataset.act === 'date');
+  const date = actBtn('date');
   date.click();
-  await tick();
+  await settle();
   const dy = document.byId.dy;
   check('the date menu prefills the year', dy && dy.attrs.value === '2026',
         dy ? String(dy.attrs.value) : 'no year box');
@@ -304,27 +327,23 @@ function arrow(key, opts) {
   if (clr) {
     const n = calls.length;
     clr.click();
-    await tick(); await tick();
+    await settle(); await settle();
     check('clearing the date sends a write',
           calls.slice(n).some(c => c.url.startsWith('/api/decide')));
   }
 
-  // Once something has been changed, the button offers to finish.
-  const doneBtn = document.byId.selnone;
-  check('the button offers Done after an edit',
-        doneBtn.textContent === 'Done', doneBtn.textContent);
 
   // Delete writes `deleted` like any other decision. There is no value to
   // pick, so it asks instead of opening a menu — and a soft delete is undone
   // from History, which is why a confirm is enough ceremony for it.
-  document.byId.selnone.click();
+  deselect();
   cells[0].querySelector('.pick').click();
   {
     const n = calls.length;
-    const del = actions.children.find(b => b.dataset.act === 'delete');
+    const del = actBtn('delete');
     check('there is a delete action', !!del);
     del.click();
-    await tick(); await tick();
+    await settle(); await settle();
     check('deleting opens no menu', menu.hidden === true);
     const sent = calls.slice(n).filter(c => c.url.startsWith('/api/decide'));
     check('deleting sends one write', sent.length === 1, String(sent.length));
@@ -338,8 +357,68 @@ function arrow(key, opts) {
     }
   }
 
+  // A mixed selection offers both sets, and each acts only on the files it
+  // means. This is the whole reason the sides follow the selection rather than
+  // the filter: under `Including deleted` a day holds both kinds.
+  //
+  // `deleted` is read off the cell each time, so marking one is enough — no
+  // second copy of the script, which would leave two sets of handlers writing
+  // to the same row and neither of them right. The state is set explicitly
+  // because the delete above left `a.jpg` marked: that write paints the cell
+  // immediately, which is the behaviour, not a leak.
+  {
+    deselect();
+    cells[0].dataset.deleted = '';
+    cells[0].classList.remove('gone');
+    cells[1].dataset.deleted = '1';
+
+    cells[1].querySelector('.pick').click();
+    check('a deleted file offers restore and purge', goneActs.hidden === false);
+    check('and not the actions for living files', liveActs.hidden === true);
+
+    cells[0].querySelector('.pick').click();
+    check('a mixed selection offers both',
+          liveActs.hidden === false && goneActs.hidden === false);
+
+    // Purge first: it is the side that would otherwise be contaminated by the
+    // delete below, which marks its file deleted the moment it is pressed.
+    const m = calls.length;
+    actBtn('purge').click();
+    await settle(); await settle();
+    const purges = calls.slice(m).filter(c => c.url.startsWith('/api/purge'));
+    check('purging goes to its own endpoint', purges.length === 1,
+          String(purges.length));
+    if (purges.length) {
+      const body = JSON.parse(purges[0].body);
+      check('and names only the deleted file',
+            body.files.length === 1 && body.files[0].name === 'b.jpg',
+            purges[0].body);
+    }
+
+    // Delete is the other side, and takes only the living file.
+    const n = calls.length;
+    actBtn('delete').click();
+    await settle(); await settle();
+    const sent = calls.slice(n).filter(c => c.url.startsWith('/api/decide'));
+    check('deleting a mixed selection sends one write', sent.length === 1,
+          String(sent.length));
+    if (sent.length) {
+      const body = JSON.parse(sent[0].body);
+      check('naming only the living file',
+            body.files.length === 1 && body.files[0].name === 'a.jpg',
+            sent[0].body);
+    }
+    check('and the file it deleted now shows as deleted',
+          cells[0].classList.contains('gone'));
+
+    cells[0].dataset.deleted = '';
+    cells[0].classList.remove('gone');
+    cells[1].dataset.deleted = '';
+    deselect();
+  }
+
   // The heading selects its whole section, and says so with three states.
-  document.byId.selnone.click();
+  deselect();
   heading.querySelector('.grppick').click();
   check('a heading selects its section',
         document.byId.selcount.textContent === '2 selected',
@@ -352,7 +431,7 @@ function arrow(key, opts) {
 
   // A crumb's name opens the grouping menu for that level.
   crumb.querySelector('.grpname').click();
-  await tick();
+  await settle();
   check('a crumb offers groupings', !menu.hidden);
   const groupRows = menu.querySelectorAll('.opt')
     .map(o => (o.innerHTML.match(/<span>([^<]*)<\/span>/) || [])[1]);
@@ -368,7 +447,7 @@ function arrow(key, opts) {
 
   // `+` on a heading adds a level *inside* it rather than replacing it.
   addBtn.click();
-  await tick();
+  await settle();
   {
     const rows = menu.querySelectorAll('.opt');
     const labels = rows.map(
@@ -424,14 +503,14 @@ function arrow(key, opts) {
     s2[0].querySelector('.pick').click();
     dropping = [{ folder: 'f', name: 's1a.jpg' },
                 { folder: 'f', name: 's2a.jpg' }];
-    const acc = actions.children.find(b => b.dataset.act === 'access');
+    const acc = actBtn('access');
     acc.click();
-    await tick(); await tick();
+    await settle(); await settle();
     const rows = menu.querySelectorAll('.opt');
     const names = rows.map(
       o => (o.innerHTML.match(/<span>([^<]*)<\/span>/) || [])[1]);
     rows[names.indexOf('james')].click();
-    await tick(); await tick();
+    await settle(); await settle();
     dropping = [];
 
     check('a section that loses a file recounts',
@@ -452,8 +531,8 @@ function arrow(key, opts) {
     // nothing to act on; it used to sit open over a grid it could not touch.
     check('the menu closes when what it acted on has gone',
           menu.hidden === true);
-    check('and the actions go back to disabled',
-          actButtons().every(b => b.disabled));
+    check('and both sets of actions go away with it',
+          liveActs.hidden === true && goneActs.hidden === true);
     check('the takeover reported progress',
           document.byId.worktally.textContent === '2 of 2 files',
           document.byId.worktally.textContent);

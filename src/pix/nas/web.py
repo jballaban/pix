@@ -297,6 +297,18 @@ h3.group[data-state="all"] .grppick { background:var(--accent);
   border-color:var(--accent); }
 h3.group[data-state="some"] .grppick { background:var(--top);
   border-color:var(--top); }
+/* The same control as a section heading's, for the same job one level up:
+   none, some, all. It replaces a *Select all* and a *Deselect* that were two
+   buttons for one question, and were in the top bar rather than beside the
+   count they were about. */
+.tick { margin:0; padding:0; width:16px; height:16px; flex:none;
+        border-radius:50%; background:transparent;
+        border:1.5px solid var(--dim); }
+#actions[data-state="all"] .tick { background:var(--accent);
+  border-color:var(--accent); }
+#actions[data-state="some"] .tick { background:var(--top);
+  border-color:var(--top); }
+#actions .grp { display:flex; gap:9px; align-items:center; }
 .cell { position:relative; aspect-ratio:1; background:#0d0f12; overflow:hidden;
         border-radius:3px; cursor:pointer; }
 .cell img { width:100%; height:100%; object-fit:cover; display:block; }
@@ -659,10 +671,8 @@ def browse(user: Annotated[Principal, Depends(require_user)],
   <div class="bar"><i id="workbar"></i></div>
   <div class="tally" id="worktally"></div>
 </div>""",
-        tools=('<div class="chips" id="chips"></div>'
-               '<button id="selall">Select all</button>'
-               '<button id="selnone">Deselect</button>'),
-        rows=_actions(user, showing_deleted=view.deleted is not None),
+        tools='<div class="chips" id="chips"></div>',
+        rows=_actions(user),
         script=(
             f"<script>const VIEW={_js(_view_dict(view))},"
             f"CHIPS={_js(_chips(user))},FIXED={_js(_FIXED)},"
@@ -680,32 +690,42 @@ def browse(user: Annotated[Principal, Depends(require_user)],
         user=user)
 
 
-def _actions(user: Principal, *, showing_deleted: bool = False) -> str:
+def _actions(user: Principal) -> str:
     """The edit bar — admin only.
 
     Not merely hidden: the endpoints refuse a non-admin outright. This is so
     the page does not offer a control that would fail, which reads as
     brokenness rather than as policy.
+
+    **Two sets, shown by what is selected rather than by what is filtered.**
+    A deleted file cannot be deleted again and a living one cannot be
+    restored, so offering either would be offering a button that does nothing.
+    Which of them is on screen follows the selection, not the `deleted` chip:
+    with *Including deleted* on, a selection can hold both kinds, and then
+    both sets are offered and each acts only on the files it means.
+
+    The row itself is always here. It carries the count and the tick, so it
+    has something to say with nothing selected — and a row that came and went
+    would move the whole grid under the pointer on the first click.
     """
     if not user.is_admin:
         return ""
-    # Restore and Purge appear only where they mean something. They are not
-    # greyed like the rest, because "disabled until you select something" and
-    # "absent unless you are looking at deleted files" are different statements
-    # and running them together would say neither.
-    bin_acts = ("" if not showing_deleted else
-                '<span class="sep"></span>'
-                '<button data-act="restore">Restore</button>'
-                '<button data-act="purge" class="danger">Purge&hellip;</button>')
-    return f"""<div class="row" id="actions">
+    return """<div class="row" id="actions">
+  <button id="selall" class="tick" title="Select all"></button>
   <span class="count" id="selcount" style="margin:0"></span>
-  <button data-act="access">Access&hellip;</button>
-  <button data-act="tags">Tags&hellip;</button>
-  <span class="sep"></span>
-  <button data-act="event">Event&hellip;</button>
-  <button data-act="date">Date&hellip;</button>
-  <span class="sep"></span>
-  <button data-act="delete" class="danger">Delete</button>{bin_acts}
+  <span class="grp" data-side="live" hidden>
+    <button data-act="access">Access&hellip;</button>
+    <button data-act="tags">Tags&hellip;</button>
+    <span class="sep"></span>
+    <button data-act="event">Event&hellip;</button>
+    <button data-act="date">Date&hellip;</button>
+    <span class="sep"></span>
+    <button data-act="delete" class="danger">Delete</button>
+  </span>
+  <span class="grp" data-side="gone" hidden>
+    <button data-act="restore">Restore</button>
+    <button data-act="purge" class="danger">Purge&hellip;</button>
+  </span>
 </div>"""
 
 
@@ -1267,15 +1287,12 @@ function setCur(n,keep){
     picked.forEach(c=>c.classList.remove('picked'));
     picked.clear();
     togglePick(cur,true);
-    touched=false;
     drawSel();
   }
   if(viewer.classList.contains('on')) load(cells[cur]);
 }
 function togglePick(n,on){
   const c=cells[n]; if(!c) return;
-  // A changed selection is a fresh one; the old edits were to other files.
-  touched=false;
   if(on===undefined) on=!picked.has(c);
   on?picked.add(c):picked.delete(c);
   c.classList.toggle('picked',on);
@@ -1285,18 +1302,9 @@ function range(a,b){
   for(let n=lo;n<=hi;n++) togglePick(n,true);
 }
 function clearPicks(){picked.forEach(c=>c.classList.remove('picked'));
-                      picked.clear(); touched=false; drawSel();}
-// Whether this selection has been edited yet. The button says *Deselect*
-// while nothing has happened and *Done* once something has, because a
-// selection that survives its own edit looks like an edit that did not take.
-let touched=false;
+                      picked.clear(); drawSel();}
 function drawSel(){
   drawGroupPicks();
-  const done=document.getElementById('selnone');
-  if(done){
-    done.textContent = touched&&picked.size ? 'Done' : 'Deselect';
-    done.classList.toggle('primary', touched&&picked.size>0);
-  }
   if(!actions) return;
   // A menu that acts on the selection has nothing left to act on once the
   // selection is empty — which is exactly where a write that pushes every
@@ -1305,11 +1313,17 @@ function drawSel(){
   // rather than the selection, so they are left alone.
   if(!picked.size&&menuCtx&&(menuCtx.mode==='set'||menuCtx.mode==='date'))
     closeMenu();
-  // Disabled rather than hidden. A row that comes and goes with the selection
-  // moves the whole grid under the pointer every time you tick the first
-  // thumbnail, and hides what the page can even do from anyone who has not
-  // selected something yet.
-  for(const b of actions.querySelectorAll('[data-act]')) b.disabled=!picked.size;
+  // Each set is on screen exactly when the selection holds files it applies
+  // to. Not greyed: an action that is absent says *not for these files*,
+  // where a greyed one says *not yet* — and with a mixed selection both are
+  // present and neither is waiting for anything.
+  const live=targetsOn('live').length, dead=targetsOn('gone').length;
+  for(const g of actions.querySelectorAll('.grp'))
+    g.hidden = !(g.dataset.side==='gone'?dead:live);
+  // The tick wears the three states of what it would do: nothing selected and
+  // it selects everything, anything selected and it clears.
+  actions.dataset.state = !picked.size ? 'none'
+    : picked.size===cells.length ? 'all' : 'some';
   if(selcount) selcount.textContent = `${picked.size} selected`;
 }
 cells.forEach((c,n)=>{
@@ -1330,10 +1344,16 @@ cells.forEach((c,n)=>{
     anchor=n; openViewer(n);
   });
 });
-document.getElementById('selall').onclick=()=>{
-  cells.forEach((_,n)=>togglePick(n,true)); drawSel();};
-const selnone=document.getElementById('selnone');
-if(selnone) selnone.onclick=clearPicks;
+// One control for one question. Empty, it selects everything; otherwise it
+// clears — which is what both *Select all* and *Deselect* were for, and it
+// sits beside the count it is about rather than up in the filter bar.
+const selall=document.getElementById('selall');
+if(selall) selall.onclick=e=>{
+  e.stopPropagation();
+  if(picked.size){clearPicks();return;}
+  cells.forEach((_,n)=>togglePick(n,true));
+  drawSel();
+};
 
 // --- viewer ------------------------------------------------------------------
 function load(c){
@@ -1510,6 +1530,25 @@ function targets(){
   return [...picked];
 }
 
+// Which kind of file an action is about. A deleted file cannot be deleted
+// again and a living one cannot be restored, so every action has a side and
+// acts only on that side of the selection. Select a day that holds both and
+// Delete takes the living ones while Purge takes the deleted ones — each does
+// what it says to the files it means, rather than refusing the whole gesture
+// because the selection was not pure.
+const ACT_SIDE={access:'live', tags:'live', event:'live', date:'live',
+                delete:'live', restore:'gone', purge:'gone'};
+function gone(c){ return !!c.dataset.deleted; }
+function sideOf(act,value){
+  // One flag, two buttons: deleting is something you do to a living file and
+  // restoring to a deleted one, so the field name alone cannot say which.
+  if(act==='deleted') return value?'live':'gone';
+  return ACT_SIDE[act]||'live';
+}
+function targetsOn(side){
+  return [...picked].filter(c=>side==='gone'?gone(c):!gone(c));
+}
+
 // A file that no longer matches the filters leaves the grid. Keeping it on
 // screen would be showing a view that is no longer true, and the next click
 // would act on a photograph the filters say is somewhere else.
@@ -1574,7 +1613,7 @@ function currentValues(cs,field){
 // rhythm and waiting on SMB between gestures destroys it. A failure puts the
 // old value back rather than leaving the screen claiming something untrue.
 async function applyToSelection(act,value,add){
-  const cs=targets();
+  const cs=targetsOn(sideOf(act,value));
   if(!cs.length){say('nothing selected');return;}
   const multi=MULTI[act];
   if(multi&&value===null){say('pick a name');return;}
@@ -1713,7 +1752,7 @@ async function send(cs,body,label){
     workProgress(done,cs.length);
   }
   busy=false; workClose();
-  touched=true; drawSel();
+  drawSel();
   cs.forEach(c=>details.delete(c.dataset.folder+'\\n'+c.dataset.name));
   if(viewer.classList.contains('on')&&cells[cur]) fill(cells[cur]);
   drop(gone);
@@ -1751,7 +1790,7 @@ const ACT_COLUMN={tags:'tag', access:'audience', event:'event'};
 // keeps its promise rather than a caveat on it. Answering "are you sure?" with
 // "well, sort of" invites a yes that was never really given.
 function deleteSelection(){
-  const cs=targets();
+  const cs=targetsOn('live');
   if(!cs.length){say('nothing selected');return;}
   const what=cs.length===1?'this file':`these ${cs.length.toLocaleString()} files`;
   if(!confirm(`Are you sure you want to delete ${what}?`)) return;
@@ -1763,7 +1802,7 @@ function deleteSelection(){
 // not a decision about a photograph, it is the end of one, and a shape
 // `decide` could accept would make it one field of a routine edit.
 async function purgeSelection(){
-  const cs=targets();
+  const cs=targetsOn('gone');
   if(!cs.length){say('nothing selected');return;}
   const what=cs.length===1?'1 file':`${cs.length.toLocaleString()} files`;
   if(!confirm(`Permanently destroy ${what}? The originals and everything `
@@ -1793,7 +1832,6 @@ async function purgeSelection(){
     return;
   }
   busy=false; workClose();
-  touched=true;
   drop(gone);
   if(total!==null&&countEl) countEl.textContent=`${total.toLocaleString()} files`;
   if(failed) say(`${failed} file(s) could not be purged`,true);

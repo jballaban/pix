@@ -1364,12 +1364,16 @@ def test_the_identity_controls_sit_top_right(client: TestClient) -> None:
 def test_select_all_is_reachable_with_nothing_selected(
     client: TestClient
 ) -> None:
-    """It moved up beside the filters; leaving it on the selection row would
-    have made selecting everything impossible until something was selected."""
+    """The same requirement as before, met a different way. It used to sit up
+    beside the filters because the selection row came and went; now the row is
+    always on screen — it carries the count and the tick — and only the actions
+    within it appear and disappear. So the tick is reachable with nothing
+    selected, which is the one moment it is needed most."""
     html = client.get("/browse").text
-    header = html[:html.index('id="actions"')]
+    row = html[html.index('id="actions"'):]
 
-    assert 'id="selall"' in header
+    assert 'id="selall"' in row
+    assert 'id="actions"' in html and 'id="actions" hidden' not in html
 
 
 def test_the_admin_is_not_badged(client: TestClient) -> None:
@@ -1490,7 +1494,7 @@ def test_every_element_the_script_looks_up_exists(client: TestClient) -> None:
 
     for wanted in ("grid", "menu", "chips", "actions", "selcount", "count",
                    "note", "viewer", "vimg", "vvid", "vmeta", "rail",
-                   "railtoggle", "viewclose", "selall", "selnone"):
+                   "railtoggle", "viewclose", "selall"):
         assert f'id="{wanted}"' in html, wanted
 
 
