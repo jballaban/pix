@@ -147,9 +147,18 @@ function arrow(key, opts) {
     process.exit(1);
   }
 
-  // Selecting reveals the action row.
+  // The actions are always on screen, greyed until there is something for
+  // them to do. A row that came and went moved the whole grid under the
+  // pointer the moment you ticked the first thumbnail.
+  const actButtons = () => actions.children.filter(b => b.dataset.act);
+  check('the actions are on screen with nothing selected',
+        actions.hidden === false);
+  check('and disabled until something is',
+        actButtons().every(b => b.disabled));
+
   cells[1].querySelector('.pick').click();
-  check('selecting shows the actions', actions.hidden === false);
+  check('selecting enables the actions',
+        actButtons().every(b => !b.disabled));
   check('selection is counted',
         document.byId.selcount.textContent === '1 selected',
         document.byId.selcount.textContent);
@@ -415,6 +424,12 @@ function arrow(key, opts) {
           document.byId.selcount.textContent);
     check('and the survivor is not ticked on the way past',
           !s1[1].classList.contains('picked'));
+    // Nothing is selected any more, so a menu that acts on a selection has
+    // nothing to act on; it used to sit open over a grid it could not touch.
+    check('the menu closes when what it acted on has gone',
+          menu.hidden === true);
+    check('and the actions go back to disabled',
+          actButtons().every(b => b.disabled));
     check('the takeover reported progress',
           document.byId.worktally.textContent === '2 of 2 files',
           document.byId.worktally.textContent);

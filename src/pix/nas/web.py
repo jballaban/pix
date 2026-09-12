@@ -630,7 +630,7 @@ def _actions(user: Principal) -> str:
     """
     if not user.is_admin:
         return ""
-    return """<div class="row" id="actions" hidden>
+    return """<div class="row" id="actions">
   <span class="count" id="selcount" style="margin:0"></span>
   <button data-act="access">Access&hellip;</button>
   <button data-act="tags">Tags&hellip;</button>
@@ -1218,7 +1218,18 @@ function drawSel(){
     done.classList.toggle('primary', touched&&picked.size>0);
   }
   if(!actions) return;
-  actions.hidden = picked.size===0;
+  // A menu that acts on the selection has nothing left to act on once the
+  // selection is empty — which is exactly where a write that pushes every
+  // file out of the view leaves it, and it sat there open over a grid it
+  // could no longer touch. Filter and grouping menus are about the view
+  // rather than the selection, so they are left alone.
+  if(!picked.size&&menuCtx&&(menuCtx.mode==='set'||menuCtx.mode==='date'))
+    closeMenu();
+  // Disabled rather than hidden. A row that comes and goes with the selection
+  // moves the whole grid under the pointer every time you tick the first
+  // thumbnail, and hides what the page can even do from anyone who has not
+  // selected something yet.
+  for(const b of actions.querySelectorAll('[data-act]')) b.disabled=!picked.size;
   if(selcount) selcount.textContent = `${picked.size} selected`;
 }
 cells.forEach((c,n)=>{
