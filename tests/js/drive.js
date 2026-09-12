@@ -69,7 +69,8 @@ for (const act of ['access', 'tags', 'event', 'date']) {
 }
 for (const id of ['menu', 'chips', 'selcount', 'count', 'note', 'viewer',
                   'vimg', 'vvid', 'vmeta', 'rail', 'railtoggle', 'viewclose',
-                  'selall', 'selnone']) mk(id);
+                  'selall', 'selnone',
+                  'working', 'workwhat', 'workbar', 'worktally']) mk(id);
 const stage = new El('div');
 stage.className = 'stage';
 document.byId.viewer.appendChild(stage);
@@ -404,6 +405,11 @@ function arrow(key, opts) {
           document.byId.selcount.textContent);
     check('and the survivor is not ticked on the way past',
           !s1[1].classList.contains('picked'));
+    check('the takeover reported progress',
+          document.byId.worktally.textContent === '2 of 2 files',
+          document.byId.worktally.textContent);
+    check('and is down once the write is done',
+          !document.byId.working.classList.contains('on'));
   }
 
   if (failures.length) {

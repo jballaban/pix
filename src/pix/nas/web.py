@@ -356,6 +356,23 @@ h2.year span { font-size:13px; font-weight:400; }
 .who-link button { padding:3px 9px; margin:0; }
 .empty { color:var(--dim); padding:40px 0; }
 
+/* A write of hundreds of sidecars over SMB is seconds, and the only thing
+   that said so was a 12px note in the corner that appeared *after* the first
+   hundred had already been written. So the screen stops answering instead.
+   Above the viewer, because S starts a write from inside it. */
+#working { position:fixed; inset:0; z-index:40; background:#0d0f12ee;
+           display:none; flex-direction:column; align-items:center;
+           justify-content:center; gap:15px; }
+#working.on { display:flex; }
+#working .what { font-size:17px; }
+#working .what b { color:var(--accent); font-weight:600; }
+#working .bar { width:min(420px,70vw); height:6px; border-radius:3px;
+                background:#222833; overflow:hidden; }
+#working .bar i { display:block; height:100%; background:var(--accent);
+                  width:0; transition:width .12s linear; }
+#working .tally { color:var(--dim); font-size:13px;
+                  font-variant-numeric:tabular-nums; }
+
 #viewer { position:fixed; inset:0; background:#000e; display:none; z-index:30; }
 #viewer.on { display:flex; }
 .stage { flex:1; min-width:0; display:flex; flex-direction:column;
@@ -568,7 +585,12 @@ def browse(user: Annotated[Principal, Depends(require_user)],
   <button id="railtoggle" title="Details (I)">Details</button>
   <aside id="rail"></aside>
 </div>
-<div id="menu" hidden></div>""",
+<div id="menu" hidden></div>
+<div id="working">
+  <div class="what" id="workwhat"></div>
+  <div class="bar"><i id="workbar"></i></div>
+  <div class="tally" id="worktally"></div>
+</div>""",
         tools=('<div class="chips" id="chips"></div>'
                '<button id="selall">Select all</button>'
                '<button id="selnone">Deselect</button>'),
@@ -1434,7 +1456,7 @@ async function applyToSelection(act,value,add){
   const before=multi?cs.map(c=>c.dataset[multi[0]]||''):null;
   if(multi) cs.forEach(c=>paint(c,multi[0],value,add));
   else if(act==='event') cs.forEach(c=>{c.dataset.event=value||'';});
-  const out=await send(cs,body);
+  const out=await send(cs,body,actLabel(act,value,add));
   if(out===null&&multi) cs.forEach((c,i)=>{
     c.dataset[multi[0]]=before[i]; repaint(c,multi[0]);
   });
@@ -1473,9 +1495,62 @@ function repaint(c,field){
   el.innerHTML=list.map(v=>`<i title="${esc(v)}">${esc(v)}</i>`).join('');
 }
 
-async function send(cs,body){
+// --- the takeover ------------------------------------------------------------
+// Hundreds of sidecars over SMB is seconds of writing, and the only thing that
+// ever said so was a 12px note in the corner — which appeared *after* the first
+// hundred had already been written, and not at all below that. Between the
+// click and the first reply the page looked idle and finished.
+//
+// So the screen stops answering. Nothing underneath is live while it is up,
+// because the grid is mid-change: cells are about to leave it and their
+// counts are about to be wrong, and a click into that is a decision taken
+// against a view that has already stopped being true.
+//
+// **Painted on a delay, not on the click.** Most writes are one file and come
+// back inside the threshold, and a full-screen takeover flashing on every S
+// press would wreck exactly the cull rhythm that the optimistic write exists
+// to protect. If a single file does stall, the delay expires and the takeover
+// is simply the truth.
+const working=document.getElementById('working');
+const workWhat=document.getElementById('workwhat');
+const workBar=document.getElementById('workbar');
+const workTally=document.getElementById('worktally');
+const TAKEOVER_MS=180;
+let workTimer=null;
+
+function workOpen(label,total){
+  if(workWhat) workWhat.innerHTML=label;
+  workProgress(0,total);
+  clearTimeout(workTimer);
+  workTimer=setTimeout(()=>{if(working) working.classList.add('on');},
+                       TAKEOVER_MS);
+}
+function workProgress(done,total){
+  if(workBar) workBar.style.width=(total?Math.round(done/total*100):0)+'%';
+  if(workTally) workTally.textContent=
+    `${done.toLocaleString()} of ${total.toLocaleString()} `+
+    (total===1?'file':'files');
+}
+function workClose(){
+  clearTimeout(workTimer); workTimer=null;
+  if(working) working.classList.remove('on');
+}
+
+// The takeover says the word the control you pressed says — read off the
+// button itself rather than kept as a second vocabulary for the same four
+// actions, which would be free to drift from the one on screen.
+function actLabel(act,value,add){
+  const b=actions&&actions.querySelector('[data-act="'+act+'"]');
+  const word=esc(b?b.textContent.replace(/\\u2026|\\.\\.\\./,'').trim():act);
+  if(!value) return word+' &mdash; clearing';
+  return word+(add===false?' &mdash; removing <b>':' &mdash; <b>')
+             +esc(value)+'</b>';
+}
+
+async function send(cs,body,label){
   if(busy){say('still writing…');return null;}
   busy=true; say('');
+  workOpen(label||'Writing', cs.length);
   let done=0, failed=0, gone=[], total=null;
   for(let s=0;s<cs.length;s+=CHUNK){
     const batch=cs.slice(s,s+CHUNK);
@@ -1494,14 +1569,14 @@ async function send(cs,body){
       gone=gone.concat(out.dropped||[]);
       if(out.total!==null&&out.total!==undefined) total=out.total;
     }catch(e){
-      busy=false;
+      busy=false; workClose();
       say(`stopped after ${done} of ${cs.length}: ${e.message}`,true);
       return null;
     }
     done+=batch.length;
-    if(cs.length>CHUNK) say(`writing… ${done} of ${cs.length}`);
+    workProgress(done,cs.length);
   }
-  busy=false;
+  busy=false; workClose();
   touched=true; drawSel();
   cs.forEach(c=>details.delete(c.dataset.folder+'\\n'+c.dataset.name));
   if(viewer.classList.contains('on')&&cells[cur]) fill(cells[cur]);
