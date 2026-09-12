@@ -1375,9 +1375,16 @@ function drop(gone){
   const was=cells.indexOf(at);
   cells=cells.filter(c=>!leaving.includes(c));
   resection();
-  // Land where the cursor was, not where it would have been pushed to.
+  // Land where the cursor was, not where it would have been pushed to — and
+  // land without selecting. Moving the cursor normally *is* a selection, which
+  // is right when a person pressed an arrow key and wrong here: nobody asked
+  // for this move. The files left because they stopped matching the filters,
+  // and ticking whatever slid into the gap would invent a selection out of
+  // that — one nobody made, easy to miss, and waiting to be caught up in the
+  // next edit.
   cur=-1; anchor=-1;
-  if(cells.length) setCur(cells.includes(at)?cells.indexOf(at):Math.max(0,was));
+  if(cells.length)
+    setCur(cells.includes(at)?cells.indexOf(at):Math.max(0,was), true);
   if(!cells.length&&grid) grid.innerHTML=
     '<p class="empty">Nothing matches these filters any more.</p>';
   drawSel();

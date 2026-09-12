@@ -90,6 +90,10 @@ document.querySelector = sel => document.querySelectorAll(sel)[0] || null;
 
 // --- browser globals ----------------------------------------------------------
 const calls = [];
+// Which files the server says no longer match the filters. A test sets this
+// to make a write push things out of the view, which is when the grid has to
+// tidy up after itself.
+let dropping = [];
 const fetch = async (url, opts) => {
   calls.push({ url, body: opts && opts.body });
   if (url.startsWith('/api/suggest')) {
@@ -98,7 +102,8 @@ const fetch = async (url, opts) => {
   if (url.startsWith('/api/file/')) {
     return { ok: true, json: async () => ({ name: 'a.jpg', exif: {}, facts: [] }) };
   }
-  return { ok: true, json: async () => ({ failed: [], dropped: [], total: 2 }) };
+  return { ok: true,
+           json: async () => ({ failed: [], dropped: dropping, total: 2 }) };
 };
 const localStorage = { getItem: () => null, setItem: () => {} };
 const listeners = {};
@@ -334,6 +339,71 @@ function arrow(key, opts) {
           all.findIndex(c => c.classList.contains('cur')) + '');
     arrow('ArrowUp');
     check('up comes straight back', wide[0].classList.contains('cur'));
+  }
+
+  // A write that pushes files out of the view has to leave the sections
+  // honest behind it: the count says what is there now, a heading whose last
+  // file has gone goes with it, and nothing is ticked that nobody ticked.
+  {
+    const room = mk('sections');
+    const mkHead = n => {
+      const h = new El('h3');
+      h.className = 'group';
+      const gp = new El('button');
+      gp.className = 'grppick';
+      h.appendChild(gp);
+      const d = new El('span');
+      d.className = 'dim';
+      d.textContent = String(n);
+      h.appendChild(d);
+      return h;
+    };
+    const h1 = mkHead(2), h2 = mkHead(1);
+    const s1 = [cell('s1a.jpg', ''), cell('s1b.jpg', '')];
+    const s2 = [cell('s2a.jpg', '')];
+    room.appendChild(h1); s1.forEach(c => room.appendChild(c));
+    room.appendChild(h2); s2.forEach(c => room.appendChild(c));
+    const all = [...s1, ...s2];
+    document.querySelectorAll = sel => (sel === '.cell' ? all
+                                      : sel === '.group' ? [h1, h2]
+                                      : sel === '.stage' ? [stage] : realQsa(sel));
+    new Function(
+      'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
+      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
+      'GRID_GROUPS', 'GROUPING', 'setTimeout', js,
+    )(document, window, fetch, localStorage, location, confirm,
+      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
+      GRID_GROUPS, GROUPING, fn => fn());
+
+    // One file out of the first section, and the whole of the second.
+    s1[0].querySelector('.pick').click();
+    s2[0].querySelector('.pick').click();
+    dropping = [{ folder: 'f', name: 's1a.jpg' },
+                { folder: 'f', name: 's2a.jpg' }];
+    const acc = actions.children.find(b => b.dataset.act === 'access');
+    acc.click();
+    await tick(); await tick();
+    const rows = menu.querySelectorAll('.opt');
+    const names = rows.map(
+      o => (o.innerHTML.match(/<span>([^<]*)<\/span>/) || [])[1]);
+    rows[names.indexOf('james')].click();
+    await tick(); await tick();
+    dropping = [];
+
+    check('a section that loses a file recounts',
+          h1.querySelector('.dim').textContent === '1',
+          h1.querySelector('.dim').textContent);
+    check('a section that loses its last file goes too',
+          !room.children.includes(h2));
+    check('one that kept a file keeps its heading',
+          room.children.includes(h1));
+    // The cursor lands on a survivor so the keyboard has somewhere to resume,
+    // but landing is not choosing: nobody asked for that move.
+    check('nothing is left selected once the selection has gone',
+          document.byId.selcount.textContent === '0 selected',
+          document.byId.selcount.textContent);
+    check('and the survivor is not ticked on the way past',
+          !s1[1].classList.contains('picked'));
   }
 
   if (failures.length) {
