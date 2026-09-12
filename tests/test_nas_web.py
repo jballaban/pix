@@ -1356,7 +1356,12 @@ def test_undated_files_group_under_no_date(client: TestClient) -> None:
 
 
 def test_grouping_can_be_turned_off(client: TestClient) -> None:
-    assert 'class="group"' not in client.get("/browse?group=none").text
+    """One heading survives even ungrouped: the heading *is* the control, so a
+    grid with none would offer no way to start."""
+    html = client.get("/browse?group=none").text
+
+    assert "Ungrouped" in html
+    assert "30 August 2026" not in html
 
 
 def test_grouping_by_event_uses_the_event_name(client: TestClient) -> None:
@@ -1376,12 +1381,35 @@ def test_an_unknown_grouping_falls_back_to_the_default(
     assert "30 August 2026" in r.text
 
 
-def test_the_grouping_control_shows_the_current_choice(
-    client: TestClient
-) -> None:
+def test_the_heading_is_the_grouping_control(client: TestClient) -> None:
+    """The thing you want to regroup is the thing you click, and it costs no
+    row at the top."""
     html = client.get("/browse?group=month").text
 
-    assert '<option value="month" selected>' in html
+    assert 'class="grpname"' in html
+    assert 'class="addgrp"' in html
+    assert "August 2026" in html
+
+
+def test_groupings_nest(client: TestClient) -> None:
+    """A day inside an event is the obvious pair, and needs two levels."""
+    html = client.get("/browse?group=event,day").text
+
+    assert '<h3 class="group" data-level="0"' in html
+    assert '<h3 class="group" data-level="1"' in html
+    assert "Italy - Sicily" in html
+    assert "30 August 2026" in html
+
+
+def test_a_group_heading_can_select_its_files(client: TestClient) -> None:
+    assert 'class="grppick"' in client.get("/browse").text
+
+
+def test_a_repeated_level_is_dropped(client: TestClient) -> None:
+    """Grouping by day inside day is not a thing, and a URL is hand-edited."""
+    html = client.get("/browse?group=day,day").text
+
+    assert html.count('<h3 class="group" data-level="1"') == 0
 
 
 def test_order_is_by_effective_date(client: TestClient, writable: Path) -> None:

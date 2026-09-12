@@ -65,6 +65,11 @@ class El {
     while (p) { if (p === this) return true; p = p.parent; }
     return false;
   }
+  get nextElementSibling() {
+    if (!this.parent) return null;
+    const kin = this.parent.children;
+    return kin[kin.indexOf(this) + 1] || null;
+  }
   scrollIntoView() {}
   focus() {}
   setAttribute(k, v) { this.attrs[k] = v; }

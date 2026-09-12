@@ -38,6 +38,16 @@ function cell(name, audience) {
 }
 
 const grid = mk('grid');
+// A heading and its two cells, the way the server lays a section out.
+const heading = new El('h3');
+heading.className = 'group';
+heading.dataset.level = '0';
+for (const cls of ['grppick', 'grpname', 'addgrp']) {
+  const b = new El('button');
+  b.className = cls;
+  heading.appendChild(b);
+}
+grid.appendChild(heading);
 const cells = [cell('a.jpg', 'ghost'), cell('b.jpg', '')];
 cells.forEach(c => grid.appendChild(c));
 
@@ -64,6 +74,7 @@ document.addEventListener = (t, fn) => {
 };
 const realQsa = document.querySelectorAll.bind(document);
 document.querySelectorAll = sel => (sel === '.cell' ? cells
+                                  : sel === '.group' ? [heading]
                                   : sel === '.stage' ? [stage] : realQsa(sel));
 document.querySelector = sel => document.querySelectorAll(sel)[0] || null;
 
@@ -89,6 +100,9 @@ const location = { href: '/browse' };
 const confirm = () => true;
 const VIEW = { event: null, year: null, tag: null, audience: null, kind: null,
                band: null };
+const GRID_GROUPS = [['day', 'By day'], ['event', 'By event'],
+                     ['none', 'Ungrouped']];
+const GROUPING = ['day'];
 const CHIPS = [['event', 'Event'], ['audience', 'Access']];
 const FIXED = {};
 const EXTRA = { audience: [['new', 'New']] };
@@ -108,10 +122,10 @@ function arrow(key, opts) {
   try {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
-      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
+      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS', 'GROUPING',
       'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
-      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, fn => fn());
+      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, GROUPING, fn => fn());
   } catch (e) {
     console.log('FAIL the script threw on load: ' + e.message);
     process.exit(1);
@@ -224,6 +238,28 @@ function arrow(key, opts) {
   const doneBtn = document.byId.selnone;
   check('the button offers Done after an edit',
         doneBtn.textContent === 'Done', doneBtn.textContent);
+
+  // The heading selects its whole section, and says so with three states.
+  document.byId.selnone.click();
+  heading.querySelector('.grppick').click();
+  check('a heading selects its section',
+        document.byId.selcount.textContent === '2 selected',
+        document.byId.selcount.textContent);
+  check('and shows that all of it is selected', heading.dataset.state === 'all',
+        String(heading.dataset.state));
+  cells[0].querySelector('.pick').click();
+  check('and says "some" when part of it is',
+        heading.dataset.state === 'some', String(heading.dataset.state));
+
+  // The heading name opens the grouping menu.
+  heading.querySelector('.grpname').click();
+  await tick();
+  check('the heading offers groupings', !menu.hidden);
+  const groupRows = menu.querySelectorAll('.opt')
+    .map(o => (o.innerHTML.match(/<span>([^<]*)<\/span>/) || [])[1]);
+  check('including a way to remove it',
+        groupRows.includes('Remove this grouping'), groupRows.join(','));
+  grid.click();
 
   if (failures.length) {
     failures.forEach(f => console.log('FAIL ' + f));

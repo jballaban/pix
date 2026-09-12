@@ -729,27 +729,30 @@ def events(conn: sqlite3.Connection,
 
 
 def files(conn: sqlite3.Connection, filters: Filters | None = None, *,
-          group: str | None = None,
+          groups: Sequence[str] = (),
           limit: int = 500, offset: int = 0) -> list[sqlite3.Row]:
     """Files matching every active filter, in effective-date order.
 
     Undated files sort last rather than scattering through the grid: they are a
     work item of their own, not a date that happens to be small.
 
-    `group` adds a `grp` column and sorts by it first, so a page can cut the
-    grid into sections without a second query or a second idea of the order.
-    Within a section the order is unchanged — chronological, because that is
-    how a day of photographs reads.
+    `groups` names one or more keys — `("event", "day")` — and adds a `grp0`,
+    `grp1` … column for each, sorting by them outermost-first. A page can then
+    cut the grid into nested sections without a second query or a second idea
+    of the order. Within the innermost section the order is unchanged:
+    chronological, because that is how a day of photographs reads.
     """
     where, bound = _where(filters or Filters())
-    key = GROUPINGS.get(group or "none")
+    keys = [GROUPINGS[g] for g in groups if GROUPINGS.get(g)]
     params: dict[str, Any] = {**bound, "limit": limit, "offset": offset}
+    selected = "".join(f", {key} AS grp{i} " for i, key in enumerate(keys))
+    ordered = "".join(f"grp{i} IS NULL, grp{i}, " for i in range(len(keys)))
     return list(conn.execute(
         "SELECT files.*, " + _TAGS_COL + ", " + _AUDIENCE_COL
-        + (f", {key} AS grp " if key else ", NULL AS grp ")
+        + (selected or ", NULL AS grp0 ")
         + "FROM files "
         + (f"WHERE {where} " if where else "")
-        + "ORDER BY " + ("grp IS NULL, grp, " if key else "")
+        + "ORDER BY " + ordered
         + "effective_date IS NULL, effective_date, name "
         "LIMIT :limit OFFSET :offset", params
     ))

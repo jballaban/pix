@@ -24,6 +24,7 @@ import threading
 import time
 from urllib.parse import parse_qs, quote
 from dataclasses import dataclass, field
+from itertools import groupby
 from pathlib import Path
 from typing import Annotated, Any, Sequence, cast
 
@@ -254,12 +255,28 @@ button.primary { background:var(--accent); color:#0d0f12; border-color:var(--acc
    which keeps arrow-key movement walking straight through the sections
    rather than having to know they are there. */
 h3.group { grid-column:1/-1; margin:18px 0 2px; font-size:13px;
-           font-weight:600; display:flex; gap:10px; align-items:baseline;
-           border-bottom:1px solid var(--line); padding-bottom:5px; }
+           font-weight:600; display:flex; gap:8px; align-items:center;
+           border-bottom:1px solid var(--line); padding-bottom:5px;
+           padding-left:calc(var(--depth,0) * 18px); }
 h3.group:first-child { margin-top:0; }
-h3.group span { font-weight:400; font-variant-numeric:tabular-nums; }
-select { background:#222833; color:var(--fg); border:1px solid var(--line);
-         border-radius:4px; padding:4px 7px; font:inherit; }
+h3.group span { font-weight:400; font-variant-numeric:tabular-nums;
+                color:var(--dim); }
+h3.group[data-level="1"] { font-size:12px; margin-top:10px;
+                           border-bottom-style:dashed; }
+/* The name is the control: click it to regroup, `+` to group within it. */
+.grpname { background:none; border:0; padding:0; margin:0; color:inherit;
+           font:inherit; cursor:pointer; }
+.grpname:hover { color:var(--accent); text-decoration:underline; }
+.addgrp { margin:0 0 0 auto; padding:0 8px; line-height:1.4; opacity:.5; }
+.addgrp:hover { opacity:1; }
+/* Same three states as the menus: the whole section, part of it, none. */
+.grppick { margin:0; padding:0; width:16px; height:16px; flex:none;
+           border-radius:50%; background:transparent;
+           border:1.5px solid var(--dim); }
+h3.group[data-state="all"] .grppick { background:var(--accent);
+  border-color:var(--accent); }
+h3.group[data-state="some"] .grppick { background:var(--top);
+  border-color:var(--top); }
 .cell { position:relative; aspect-ratio:1; background:#0d0f12; overflow:hidden;
         border-radius:3px; cursor:pointer; }
 .cell img { width:100%; height:100%; object-fit:cover; display:block; }
@@ -520,11 +537,11 @@ def browse(user: Annotated[Principal, Depends(require_user)],
     there is one surface to learn rather than a browser and a separate editor.
     """
     conn = db()
-    group = group if group in ix.GROUPINGS else "day"
-    rows = ix.files(conn, view, group=group, limit=PAGE_LIMIT)
+    groups = _groupings(group)
+    rows = ix.files(conn, view, groups=groups, limit=PAGE_LIMIT)
     total = ix.count(conn, view)
 
-    cells = _sections(rows, group)
+    cells = _sections(rows, groups)
     shown = (f"{total:,} files" if total <= PAGE_LIMIT else
              f"{len(rows):,} of {total:,} files")
     body = (f'<div class="grid" id="grid">{cells}</div>'
@@ -540,8 +557,7 @@ def browse(user: Annotated[Principal, Depends(require_user)],
 </div>
 <div id="menu" hidden></div>""",
         tools=('<div class="chips" id="chips"></div>'
-               + _group_control(group)
-               + '<button id="selall">Select all</button>'
+               '<button id="selall">Select all</button>'
                '<button id="selnone">Deselect</button>'),
         rows=_actions(user),
         script=(
@@ -549,7 +565,8 @@ def browse(user: Annotated[Principal, Depends(require_user)],
             f"CHIPS={_js(_chips(user))},FIXED={_js(_FIXED)},"
             f"EXTRA={_js(_EXTRA)},ADMIN={_js(user.is_admin)},"
             f"USERS={_js(_audience_names())},GROUPS={_js(_group_names())},"
-            f"USUAL={_js(store().usual)};</script>"
+            f"USUAL={_js(store().usual)},"
+            f"GRID_GROUPS={_js(_GRID_GROUPS)},GROUPING={_js(groups)};</script>"
             f"<script>{_BROWSE_JS}</script>"),
         footer=f"""<span class="count" id="count">{shown}</span>
 <span class="hint"><b>click</b> a circle to select &middot;
@@ -594,45 +611,69 @@ def _chips_html(cls: str, values: list[str]) -> str:
     return f'<span class="{cls}" title="{_h(", ".join(values))}">{chips}</span>'
 
 
-def _group_control(group: str) -> str:
-    """How the grid is cut up. A plain select: it is one choice from a fixed
-    list, which is the one control every browser already gets right."""
-    options = "".join(
-        f'<option value="{key}"{" selected" if key == group else ""}>'
-        f'{_h(label)}</option>'
-        for key, label in _GRID_GROUPS)
-    return f'<select id="grouping" title="Group the grid">{options}</select>'
+def _groupings(raw: str) -> list[str]:
+    """The grouping levels, outermost first.
+
+    A list rather than one key, so a day inside an event is expressible.
+    Unknown and repeated names are dropped rather than refused: this comes
+    out of a URL, which people type and edit by hand.
+    """
+    if raw.strip() == "none":
+        return []
+    out: list[str] = []
+    for name in raw.split(","):
+        name = name.strip()
+        if name in ix.GROUPINGS and name != "none" and name not in out:
+            out.append(name)
+    # Nothing recognisable is a typo, not a request to stop grouping — `none`
+    # says that, and says it on purpose.
+    return out[:3] or ["day"]
 
 
-def _sections(rows: list[sqlite3.Row], group: str) -> str:
-    """The cells, with a heading wherever the group key changes.
+def _sections(rows: list[sqlite3.Row], groups: list[str]) -> str:
+    """The cells, with a heading wherever a group key changes.
 
-    Headings are grid items spanning every column, so one flow holds both —
-    which keeps the keyboard walking straight through the sections rather
-    than needing to know they exist.
+    Headings are grid items spanning every column, so one flow holds headings
+    and thumbnails — which keeps arrow-key movement walking straight through
+    the sections rather than having to know they are there.
+
+    There is always at least one heading, even ungrouped: the heading *is*
+    the control, so a grid with none would offer no way to start.
     """
     out: list[str] = []
-    current: object = object()
-    run: list[sqlite3.Row] = []
 
-    def flush() -> None:
-        if not run:
+    def emit(items: list[sqlite3.Row], level: int) -> None:
+        if level >= len(groups):
+            out.extend(_cell(r) for r in items)
             return
-        if group != "none":
-            label = _group_label(current, group)
-            out.append(f'<h3 class="group">{_h(label)}'
-                       f'<span class="dim">{len(run):,}</span></h3>')
-        out.extend(_cell(r) for r in run)
+        for key, run in groupby(items, key=lambda r: r[f"grp{level}"]):
+            batch = list(run)
+            out.append(_heading(_group_label(key, groups[level]),
+                                len(batch), level))
+            emit(batch, level + 1)
 
-    for row in rows:
-        key = row["grp"] if group != "none" else None
-        if key != current and run:
-            flush()
-            run = []
-        current = key
-        run.append(row)
-    flush()
+    if not groups:
+        out.append(_heading("Ungrouped", len(rows), 0))
+        out.extend(_cell(r) for r in rows)
+    else:
+        emit(rows, 0)
     return "".join(out)
+
+
+def _heading(label: str, count: int, level: int) -> str:
+    """One section heading, which is also how grouping is changed.
+
+    Putting the control here rather than in the top bar means the thing you
+    want to regroup is the thing you click, and it costs no header row —
+    every row of chrome at the top is a row of photographs pushed off.
+    """
+    return (f'<h3 class="group" data-level="{level}" '
+            f'style="--depth:{level}">'
+            f'<button class="grppick" title="Select this group"></button>'
+            f'<button class="grpname">{_h(label)}</button>'
+            f'<span class="dim">{count:,}</span>'
+            f'<button class="addgrp" title="Group within this">+</button>'
+            f'</h3>')
 
 
 def _group_label(key: object, group: str) -> str:
@@ -794,8 +835,9 @@ const picked=new Set();
 function url(patch){
   const q=new URLSearchParams();
   for(const [k,v] of Object.entries({...VIEW,...patch})) if(v!==null&&v!=='') q.set(k,v);
-  const g=document.getElementById('grouping');
-  if(g&&g.value!=='day') q.set('group',g.value);
+  // Keep the grouping across a filter change: it is how you are reading the
+  // library, not what you are reading.
+  q.set('group',GROUPING.join(',')||'none');
   return '/browse'+(q.toString()?'?'+q:'');
 }
 function drawChips(){
@@ -1103,6 +1145,7 @@ function clearPicks(){picked.forEach(c=>c.classList.remove('picked'));
 // selection that survives its own edit looks like an edit that did not take.
 let touched=false;
 function drawSel(){
+  drawGroupPicks();
   const done=document.getElementById('selnone');
   if(done){
     done.textContent = touched&&picked.size ? 'Done' : 'Deselect';
@@ -1495,14 +1538,92 @@ document.addEventListener('keydown',e=>{
   }
 });
 
-// The grouping rides in the URL with the filters, so a view stays one link.
-const grouping=document.getElementById('grouping');
-if(grouping) grouping.onchange=()=>{
+// --- grouping ----------------------------------------------------------
+// The heading is the control: the thing you want to regroup is the thing
+// you click, and it costs no row at the top — every row of chrome up there
+// is a row of photographs pushed off the screen.
+function groupUrl(levels){
   const q=new URLSearchParams();
   for(const [k,v] of Object.entries(VIEW)) if(v) q.set(k,v);
-  if(grouping.value!=='day') q.set('group',grouping.value);
-  location.href='/browse'+(q.toString()?'?'+q:'');
-};
+  q.set('group',levels.join(',')||'none');
+  return '/browse?'+q;
+}
+
+function groupMenu(anchorEl,level,insert){
+  const levels=[...GROUPING];
+  menu.innerHTML='<div id="menulist"></div>';
+  const list=menu.querySelector('#menulist');
+  const row=(label,fn,cls)=>{
+    const d=document.createElement('div');
+    d.className='opt'+(cls?' '+cls:'');
+    d.innerHTML=`<span>${esc(label)}</span>`;
+    d.onclick=e=>{e.stopPropagation();closeMenu();fn();};
+    list.appendChild(d);
+  };
+  const head=document.createElement('div');
+  head.className='band';
+  head.textContent=insert?'Group within this by':'Group by';
+  list.appendChild(head);
+  for(const [key,label] of GRID_GROUPS){
+    if(key==='none') continue;
+    if(levels.includes(key)&&levels[level]!==key) continue;
+    row(label,()=>{
+      const next=[...levels];
+      if(insert) next.splice(level+1,0,key); else next[level]=key;
+      location.href=groupUrl(next);
+    },levels[level]===key&&!insert?'cur':'');
+  }
+  if(!insert&&levels.length){
+    row('Remove this grouping',()=>{
+      const next=[...levels]; next.splice(level,1);
+      location.href=groupUrl(next);
+    });
+  }
+  const r=anchorEl.getBoundingClientRect();
+  menu.style.left=Math.min(r.left,window.innerWidth-316)+'px';
+  menu.style.top=(r.bottom+window.scrollY+4)+'px';
+  menu.hidden=false;
+  menuCtx={key:'group:'+level+':'+insert};
+}
+
+// Every cell under a heading, down to the next heading at the same depth or
+// shallower. Nested headings in between belong to this section too.
+function sectionCells(h){
+  const depth=+h.dataset.level;
+  const out=[];
+  for(let el=h.nextElementSibling; el; el=el.nextElementSibling){
+    if(el.classList.contains('group')){
+      if(+el.dataset.level<=depth) break;
+      continue;
+    }
+    if(el.classList.contains('cell')) out.push(el);
+  }
+  return out;
+}
+
+function drawGroupPicks(){
+  document.querySelectorAll('.group').forEach(h=>{
+    const mine=sectionCells(h);
+    const n=mine.filter(c=>picked.has(c)).length;
+    h.dataset.state=n===0?'none':(n===mine.length?'all':'some');
+  });
+}
+
+document.querySelectorAll('.group').forEach(h=>{
+  const level=+h.dataset.level;
+  h.querySelector('.grpname').onclick=e=>{
+    e.stopPropagation(); groupMenu(h,level,false);};
+  h.querySelector('.addgrp').onclick=e=>{
+    e.stopPropagation(); groupMenu(h,level,true);};
+  h.querySelector('.grppick').onclick=e=>{
+    e.stopPropagation();
+    const mine=sectionCells(h);
+    const on=mine.some(c=>!picked.has(c));
+    mine.forEach(c=>togglePick(cells.indexOf(c),on));
+    if(on&&mine.length) setCur(cells.indexOf(mine[0]),true);
+    drawSel();
+  };
+});
 
 drawChips(); drawSel();
 """
