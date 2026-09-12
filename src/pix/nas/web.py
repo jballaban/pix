@@ -214,6 +214,9 @@ button:hover:not(:disabled), .chip:hover { border-color:var(--accent); }
 button:disabled { opacity:.4; cursor:default; }
 button.primary { background:var(--accent); color:#0d0f12; border-color:var(--accent);
                  font-weight:600; }
+/* Named rather than shouted: it sits with the others because it is one of the
+   things you do, and a soft delete is undoable. */
+button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
 .chip.on { border-color:var(--accent); background:#20293a; }
 .chip .val { color:var(--accent); margin-left:5px; }
 .chip .x { color:var(--dim); margin-left:6px; }
@@ -637,6 +640,8 @@ def _actions(user: Principal) -> str:
   <span class="sep"></span>
   <button data-act="event">Event&hellip;</button>
   <button data-act="date">Date&hellip;</button>
+  <span class="sep"></span>
+  <button data-act="delete" class="danger">Delete</button>
 </div>"""
 
 
@@ -1640,10 +1645,27 @@ async function send(cs,body,label){
 const ACT_COLUMN={tags:'tag', access:'audience', event:'event'};
 (actions?[...actions.querySelectorAll('[data-act]')]:[]).forEach(b=>{
   const act=b.dataset.act;
-  b.onclick=e=>{e.stopPropagation();openMenu(b, act==='date'
-    ? {mode:'date'}
-    : {column:ACT_COLUMN[act]||act, mode:'set', as:act});};
+  b.onclick=e=>{
+    e.stopPropagation();
+    if(act==='delete'){closeMenu();deleteSelection();return;}
+    openMenu(b, act==='date'
+      ? {mode:'date'}
+      : {column:ACT_COLUMN[act]||act, mode:'set', as:act});};
 });
+
+// The one action with no value to pick, so it asks instead of opening a menu.
+// A confirm rather than a ceremony: this is the soft delete, it writes
+// `deleted` into the sidecar like any other judgement, and History puts it
+// back. Destroying the file itself is somewhere else entirely, and admin only.
+function deleteSelection(){
+  const cs=targets();
+  if(!cs.length){say('nothing selected');return;}
+  const what=cs.length===1?'this file':`these ${cs.length.toLocaleString()} files`;
+  if(!confirm(`Delete ${what}? They stop appearing here, and an `
+             +`administrator can restore them or destroy them for good.`))
+    return;
+  send(cs,{deleted:true},'Delete');
+}
 
 // --- keyboard ----------------------------------------------------------------
 // The mouse is the interface. Keyboard navigation of the grid — arrows that
@@ -2014,6 +2036,7 @@ class DecideBody(BaseModel):
     audience: list[str] | None = None
     add_audience: list[str] = []
     remove_audience: list[str] = []
+    deleted: bool | None = None
 
 
 @app.post("/api/decide")
@@ -2072,6 +2095,7 @@ class DecideBulkBody(BaseModel):
     audience: list[str] | None = None
     add_audience: list[str] = []
     remove_audience: list[str] = []
+    deleted: bool | None = None
 
 
 #: Bounds one request rather than the whole gesture. Finishing a 1,766-file
@@ -2165,6 +2189,7 @@ class _Change:
     audience: Sequence[str] | None | Unset = decisions.UNSET
     add_audience: Sequence[str] = field(default_factory=tuple)
     remove_audience: Sequence[str] = field(default_factory=tuple)
+    deleted: bool | Unset = decisions.UNSET
 
 
 def _change(body: DecideBody | DecideBulkBody) -> _Change:
@@ -2184,7 +2209,24 @@ def _change(body: DecideBody | DecideBulkBody) -> _Change:
                    remove_tags=tuple(body.remove_tags),
                    audience=got("audience"),
                    add_audience=tuple(body.add_audience),
-                   remove_audience=tuple(body.remove_audience))
+                   remove_audience=tuple(body.remove_audience),
+                   deleted=_flag(got("deleted")))
+
+
+def _flag(value: Any) -> bool | Unset:
+    """A boolean decision, where `null` means *leave it alone*.
+
+    For every other field `null` clears it, because every other field has a
+    cleared state distinct from any value it could hold. A flag does not:
+    there is no third thing between deleted and not, so rather than invent
+    one, sending nothing and sending null say the same thing.
+
+    `UNSET` has to survive untouched, not be coerced — `bool(UNSET)` is `True`,
+    which turned every edit of any field into a deletion.
+    """
+    if isinstance(value, Unset) or value is None:
+        return decisions.UNSET
+    return bool(value)
 
 
 def _decide(folder: str, name: str, change: _Change,
@@ -2214,7 +2256,8 @@ def _decide(folder: str, name: str, change: _Change,
                 add_tags=change.add_tags, remove_tags=change.remove_tags,
                 audience=change.audience,
                 add_audience=change.add_audience,
-                remove_audience=change.remove_audience)
+                remove_audience=change.remove_audience,
+                deleted=change.deleted)
         except decisions.DecisionError as e:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
         except OSError as e:
@@ -2258,6 +2301,9 @@ def _summary(change: _Change, n: int) -> str:
         return f"tagged {files} {', '.join(change.add_tags)}"
     if change.remove_tags:
         return f"untagged {', '.join(change.remove_tags)} on {files}"
+    if not isinstance(change.deleted, Unset):
+        return (f"deleted {files}" if change.deleted
+                else f"restored {files}")
     if not isinstance(change.event, Unset):
         return (f"set the event on {files} to {change.event}"
                 if change.event else f"cleared the event on {files}")

@@ -62,7 +62,7 @@ const cells = [cell('a.jpg', 'ghost'), cell('b.jpg', '')];
 cells.forEach(c => grid.appendChild(c));
 
 const actions = mk('actions');
-for (const act of ['access', 'tags', 'event', 'date']) {
+for (const act of ['access', 'tags', 'event', 'date', 'delete']) {
   const b = new El('button');
   b.dataset.act = act;
   actions.appendChild(b);
@@ -313,6 +313,30 @@ function arrow(key, opts) {
   const doneBtn = document.byId.selnone;
   check('the button offers Done after an edit',
         doneBtn.textContent === 'Done', doneBtn.textContent);
+
+  // Delete writes `deleted` like any other decision. There is no value to
+  // pick, so it asks instead of opening a menu — and a soft delete is undone
+  // from History, which is why a confirm is enough ceremony for it.
+  document.byId.selnone.click();
+  cells[0].querySelector('.pick').click();
+  {
+    const n = calls.length;
+    const del = actions.children.find(b => b.dataset.act === 'delete');
+    check('there is a delete action', !!del);
+    del.click();
+    await tick(); await tick();
+    check('deleting opens no menu', menu.hidden === true);
+    const sent = calls.slice(n).filter(c => c.url.startsWith('/api/decide'));
+    check('deleting sends one write', sent.length === 1, String(sent.length));
+    if (sent.length) {
+      const body = JSON.parse(sent[0].body);
+      check('and what it sends is the flag', body.deleted === true,
+            sent[0].body);
+      check('naming the selected file',
+            body.files.length === 1 && body.files[0].name === 'a.jpg',
+            sent[0].body);
+    }
+  }
 
   // The heading selects its whole section, and says so with three states.
   document.byId.selnone.click();

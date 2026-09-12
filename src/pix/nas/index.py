@@ -48,7 +48,7 @@ from pix.nas.decisions import Decision
 #: Bumped whenever the shape changes. A mismatch drops and rebuilds rather than
 #: migrating: the index is disposable by design, and a migration path is
 #: machinery to maintain for something a `pix2 index` reproduces exactly.
-SCHEMA_VERSION: int = 3
+SCHEMA_VERSION: int = 4
 
 #: `audience` filter value meaning *nobody yet* — the "New" chip in the UI.
 #: A sentinel rather than a separate reviewed flag: a file with no audience
@@ -110,6 +110,7 @@ CREATE TABLE IF NOT EXISTS files (
     year           TEXT,          -- first four of effective_date
     band           TEXT,          -- small | medium | large, by kind
     has_sidecar    INTEGER NOT NULL DEFAULT 0,
+    deleted        INTEGER NOT NULL DEFAULT 0,   -- decision: soft-deleted
     PRIMARY KEY (folder, name)
 );
 CREATE INDEX IF NOT EXISTS files_event ON files(event);
@@ -117,6 +118,8 @@ CREATE INDEX IF NOT EXISTS files_year  ON files(year);
 CREATE INDEX IF NOT EXISTS files_eff   ON files(effective_date);
 CREATE INDEX IF NOT EXISTS files_kind  ON files(kind);
 CREATE INDEX IF NOT EXISTS files_band  ON files(band);
+-- Every listing carries `deleted = 0`, so it is the one clause always present.
+CREATE INDEX IF NOT EXISTS files_del   ON files(deleted);
 CREATE TABLE IF NOT EXISTS file_tags (
     folder TEXT NOT NULL,
     name   TEXT NOT NULL,
@@ -180,6 +183,13 @@ class Filters:
     #: as readily as to a person: someone in `parents` and `family` can see
     #: anything shared with either, and a share is just a name either way.
     viewer: frozenset[str] | None = None
+
+    #: Show the soft-deleted **instead of** the living, rather than as well.
+    #: Not a filter either, and for a stronger reason than `viewer`: a deleted
+    #: file is one somebody said should be gone, and the ordinary grid must
+    #: never be one URL parameter away from showing it again. The only caller
+    #: that sets this is the admin page whose whole subject is the deleted.
+    deleted: bool = False
 
     #: Every filterable column, in the order the top bar shows them. `viewer`
     #: is deliberately absent.
@@ -287,7 +297,7 @@ def _require_current(conn: sqlite3.Connection) -> None:
         return
     raise StaleIndex(
         f"index is schema v{found}, this build reads v{SCHEMA_VERSION} — "
-        "run pix 0.1.251 to rebuild it")
+        "run `pix2 index` to rebuild it")
 
 
 def build(db_path: Path, *, echo: Callable[[str], None] = lambda _: None,
@@ -346,10 +356,10 @@ _INSERT: str = (
     "INSERT OR REPLACE INTO files "
     "(folder, name, size, mtime_ns, kind, capture_date, camera, width, height, "
     " duration, event, date_override, effective_date, year, band, "
-    " has_sidecar) "
+    " has_sidecar, deleted) "
     "VALUES (:folder, :name, :size, :mtime_ns, :kind, :capture_date, :camera, "
     " :width, :height, :duration, :event, :date_override, "
-    " :effective_date, :year, :band, :has_sidecar)"
+    " :effective_date, :year, :band, :has_sidecar, :deleted)"
 )
 
 
@@ -526,6 +536,7 @@ def _row(folder: str, record: dict[str, Any],
         "year": f"{effective.year:04d}" if effective else None,
         "band": _band(kind, record.get("size"), _duration(exif_map)),
         "has_sidecar": 1 if name in decided else 0,
+        "deleted": 1 if (decision and decision.deleted) else 0,
     }
 
 
@@ -660,9 +671,18 @@ def _scope(filters: Filters) -> tuple[str, dict[str, Any]]:
 
 
 def _where(filters: Filters) -> tuple[str, dict[str, Any]]:
-    """Everything a listing must satisfy: the filters, and the viewer scope."""
+    """Everything a listing must satisfy: the filters, the viewer scope, and
+    which side of the deletion line the caller is on.
+
+    The deletion clause is added **here**, in the one place every query
+    already passes through, rather than at each call site. `files`, `count`,
+    `events`, `suggest` and the year listing would each have had to remember
+    it, and the one that forgot would put deleted files back on screen — which
+    is the single way this feature can fail that a curator would not forgive.
+    """
     clauses = _clauses(filters)
     parts = [sql for sql, _ in clauses.values()]
+    parts.append("files.deleted = 1" if filters.deleted else "files.deleted = 0")
     params = _bind(clauses)
     scope, scope_params = _scope(filters)
     if scope:

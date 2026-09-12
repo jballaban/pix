@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 
 from pix.nas import accounts
 from pix.nas import decisions
+from pix.nas import history
 from pix.nas import index as ix
 from pix.nas import web
 from pix.nas.web import _split
@@ -46,6 +47,77 @@ def test_event_grid_shows_thumbnails(client: TestClient) -> None:
     assert r.status_code == 200
     assert "/thumb/init_2026/a.jpg" in r.text
     assert "/thumb/init_2026/b.mp4" in r.text
+
+
+def test_deleting_takes_a_file_out_of_every_listing(
+    client: TestClient, writable: Path
+) -> None:
+    """A soft delete has to be a decision like any other *and* disappear from
+    the grid. The second half is the one that can silently not happen: the
+    exclusion lives in one shared `WHERE`, and a query that forgot it would put
+    a deleted file back on screen."""
+    assert "a.jpg" in client.get("/browse?event=Italy%20-%20Sicily").text
+
+    r = client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "deleted": True})
+    assert r.status_code == 200, r.text
+
+    # The judgement is in master, beside the file, like every other.
+    assert decisions.read(writable / "a.jpg") == Decision(deleted=True)
+
+    # And it is gone from the grid, the API, and the event listing alike.
+    assert "a.jpg" not in client.get("/browse?event=Italy%20-%20Sicily").text
+    assert not [f for f in client.get("/api/files").json()
+                if f["name"] == "a.jpg"]
+
+
+def test_deleting_leaves_the_other_decisions_alone(
+    client: TestClient, writable: Path
+) -> None:
+    """Deleting is one field, not a verdict on the rest: restoring has to give
+    back the file that was deleted, not a blank one."""
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "event": "Sicily Trip",
+        "add_audience": ["family"]})
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "deleted": True})
+
+    assert decisions.read(writable / "a.jpg") == Decision(
+        event="Sicily Trip", audience=("family",), deleted=True)
+
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "deleted": False})
+    assert decisions.read(writable / "a.jpg") == Decision(
+        event="Sicily Trip", audience=("family",))
+    # Back on screen — under the event it was given, which is the point: what
+    # comes back is the file that was deleted, not a blank one.
+    assert "a.jpg" in client.get("/browse?event=Sicily%20Trip").text
+
+
+def test_a_deletion_is_undone_by_the_ordinary_revert(
+    client: TestClient, writable: Path
+) -> None:
+    """Nothing new was built for this. A deletion is a decision, the operation
+    log already records what each file said before one, so History restores it
+    the same way it restores anything else."""
+    client.post("/api/decide/bulk", json={
+        "files": [{"folder": "init_2026", "name": "a.jpg"}], "deleted": True})
+    assert decisions.read(writable / "a.jpg") == Decision(deleted=True)
+
+    page = client.get("/history").text
+    assert "deleted 1 file" in page, page[:400]
+
+    op = history.recent(1)[0]
+    assert op.summary == "deleted 1 file", op.summary
+    r = client.post("/history/revert", data={"id": op.id},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    assert "no+such" not in r.headers.get("location", ""), r.headers
+
+    # No sidecar at all, because there was none before: restoring writes the
+    # previous value wholesale rather than inverting the change.
+    assert decisions.read(writable / "a.jpg") is None
+    assert "a.jpg" in client.get("/browse?event=Italy%20-%20Sicily").text
 
 
 def test_every_page_says_which_version_it_is(client: TestClient) -> None:

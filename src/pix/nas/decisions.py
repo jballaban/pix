@@ -109,6 +109,11 @@ class Decision:
     date_override: str | None = None
     tags: tuple[str, ...] = field(default_factory=tuple)
     audience: tuple[str, ...] = field(default_factory=tuple)
+    #: Soft-deleted — *this should go*, which is a judgement like any other and
+    #: so lives here rather than in a list off to the side. Beside the file, a
+    #: deletion survives losing the index, travels with the folder, and is
+    #: undone by the ordinary revert.
+    deleted: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "tags", normalize_tags(self.tags))
@@ -118,7 +123,7 @@ class Decision:
     def is_empty(self) -> bool:
         """True when nothing has been decided, so no sidecar should exist."""
         return not (self.event or self.date_override or self.tags
-                    or self.audience)
+                    or self.audience or self.deleted)
 
 
 def normalize_tags(values: Iterable[str]) -> tuple[str, ...]:
@@ -202,6 +207,7 @@ def change(media: Path, *,
            audience: Sequence[str] | None | Unset = UNSET,
            add_audience: Sequence[str] = (),
            remove_audience: Sequence[str] = (),
+           deleted: bool | Unset = UNSET,
            ) -> tuple[Decision | None, Decision]:
     """Change some fields of `media`'s decision, leaving the rest alone.
 
@@ -230,6 +236,7 @@ def change(media: Path, *,
         tags=_merge(current.tags, tags, add_tags, remove_tags),
         audience=_merge(current.audience, audience,
                         add_audience, remove_audience, fold=True),
+        deleted=current.deleted if isinstance(deleted, Unset) else deleted,
     )
     write(media, updated)
     return was, updated
@@ -302,6 +309,11 @@ def _to_xml(decision: Decision) -> str:
         moment = datestr.alone(decision.date_override)
         if moment is not None and '*' not in decision.date_override:
             props.append(("photoshop:DateCreated", moment.isoformat()))
+    if decision.deleted:
+        # No standard equivalent, deliberately. Expressing it as a rating or a
+        # keyword would tell another tool this file is deleted in *its* terms,
+        # and Lightroom acting on that is not what a soft delete means here.
+        props.append(("pix:Deleted", "true"))
 
     body = "".join(f"    {key}={quoteattr(value)}\n" for key, value in props)
     children = (_bag("dc:subject", decision.tags)
@@ -344,8 +356,19 @@ def _from_xml(root: ET.Element) -> Decision | None:
                         date_override=values.get("DateOverride"),
                         tags=_read_bag(description, _DC_NS, "subject"),
                         audience=normalize_names(
-                            _read_bag(description, PIX_NS, "Audience")))
+                            _read_bag(description, PIX_NS, "Audience")),
+                        deleted=_truth(values.get("Deleted")))
     return None if decision.is_empty() else decision
+
+
+def _truth(value: str | None) -> bool:
+    """Lenient on the way in, exact on the way out.
+
+    This writes `true` and nothing else, but a sidecar edited by hand or by
+    another tool may say `True` or `1`, and reading that as *not deleted*
+    would quietly resurrect a file somebody meant to be rid of.
+    """
+    return (value or "").strip().lower() in ("true", "1", "yes")
 
 
 def _read_bag(description: ET.Element, namespace: str,
