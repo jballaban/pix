@@ -48,6 +48,21 @@ def test_event_grid_shows_thumbnails(client: TestClient) -> None:
     assert "/thumb/init_2026/b.mp4" in r.text
 
 
+def test_the_write_takeover_is_on_the_page(client: TestClient) -> None:
+    """The script hides and shows it, so it has to be there to find.
+
+    Every part of this shipped and none of it appeared, because the page in
+    the browser was one the old server had sent: a stale tab and a broken
+    build look identical. The script is tested where it runs; this is the
+    other half — that the markup it reaches for was actually sent.
+    """
+    html = client.get("/browse?event=Italy%20-%20Sicily").text
+    for hook in ('id="working"', 'id="workwhat"', 'id="workbar"',
+                 'id="worktally"'):
+        assert hook in html, hook
+    assert "#working.on" in html, "the takeover has no way to become visible"
+
+
 def test_video_cells_are_badged_with_duration(client: TestClient) -> None:
     """A grid of stills gives no hint which are clips."""
     assert "1:15" in client.get("/browse?event=Italy%20-%20Sicily").text
