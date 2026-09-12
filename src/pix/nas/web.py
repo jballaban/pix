@@ -536,6 +536,28 @@ def _whoami(user: Principal | None) -> str:
             '<button>Sign out</button></form>')
 
 
+def _both_sides(deleted: str | None, op_id: str | None,
+                user: Principal) -> str | None:
+    """Which side of the deletion line to show — and *both*, following a link
+    from the log.
+
+    An operation is a set of files, and *deleted 300 files* is the one you most
+    want to look at. Leaving the ordinary default in place answered that link
+    with an empty grid, because every file it named had just been deleted.
+
+    Only for an administrator, and that is the whole of the access story here:
+    the parameter is dropped for everybody else, so a curator following the
+    same link sees the living part of that set and no more. The operation
+    filter narrows a view; nothing about it widens one. The `viewer` scope
+    rides on the same query and is not negotiable either.
+    """
+    if not user.is_admin:
+        return None
+    if deleted in ("only", "with"):
+        return deleted
+    return "with" if op_id else None
+
+
 def _from_operation(op_id: str | None,
                     stale: str | None) -> tuple[tuple[str, str], ...] | None:
     """The files one operation touched, or the ones it can no longer put back.
@@ -673,8 +695,7 @@ def filters(
     return ix.Filters(event=event, date=ix.date_prefix(date), tag=tag,
                       audience=audience, chosen=_from_operation(op, stale),
                       kind=kind, band=band, viewer=user.scope,
-                      deleted=(deleted if user.is_admin
-                               and deleted in ("only", "with") else None))
+                      deleted=_both_sides(deleted, op, user))
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -3226,8 +3247,14 @@ def history_page(user: Annotated[Principal, Depends(require_admin)],
 
     rows = "".join(
         f'<tr><td class="dim">{_h(_when(op.when))}</td>'
-        f'<td><a href="/browse?op={_q(op.id)}">{_h(op.summary)}</a></td>'
-        f'<td class="dim">{_h(op.who)}</td>'
+        + (f'<td><a href="/browse?op={_q(op.id)}" '
+           f'title="Look at these files">{_h(op.summary)}</a></td>'
+           if op.files else
+           # A purge names no files: they are gone, the index rows with them.
+           # Offering a link to them would lead to an empty grid that reads as
+           # broken rather than as *there is nothing left to look at*.
+           f'<td>{_h(op.summary)}</td>')
+        + f'<td class="dim">{_h(op.who)}</td>'
         + ('<td class="dim">undone</td>' if op.id in already else
            '<td class="dim">a revert</td>' if op.reverts else
            f'<td><form method="post" action="/history/revert">'

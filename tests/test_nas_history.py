@@ -573,3 +573,54 @@ def test_the_log_links_each_operation_to_its_files(curating: TestClient) -> None
     op = history.recent()[0]
 
     assert f'href="/browse?op={op.id}"' in curating.get("/history").text
+
+
+def test_looking_at_a_delete_shows_the_files_it_deleted(
+    curating: TestClient
+) -> None:
+    """The most useful link there is, and the one the ordinary default
+    answered with an empty grid: every file it named had just been deleted, and
+    the grid shows the living by default."""
+    curating.post("/api/decide/bulk", json={
+        "deleted": True, "files": _targets("a.jpg")})
+    op = history.recent()[0]
+
+    assert "a.jpg" in curating.get(f"/browse?op={op.id}").text
+
+
+def test_a_purge_is_not_offered_as_a_link_to_files(
+    curating: TestClient
+) -> None:
+    """They are gone, and the index rows with them. A link would lead to an
+    empty grid, which reads as broken rather than as *nothing left to look
+    at*."""
+    curating.post("/api/decide/bulk", json={
+        "deleted": True, "files": _targets("a.jpg")})
+    curating.post("/api/purge", json={"files": _targets("a.jpg")})
+
+    purge = history.recent()[0]
+    assert purge.summary == "purged 1 file"
+    assert not purge.files
+    page = curating.get("/history").text
+    assert "purged 1 file" in page
+    assert f"op={purge.id}" not in page, "linked to files that no longer exist"
+
+
+def test_following_an_operation_never_widens_what_you_can_see(
+    curating: TestClient, sign_in: Callable[[str, str], TestClient],
+    writable: Path
+) -> None:
+    """The operation filter narrows a view; nothing about it widens one. A
+    curator who cannot see the deleted does not see them by arriving from the
+    log, and one who was never shared a file does not see it either."""
+    curating.post("/accounts/save", data={"name": "kid", "password": "pw"})
+    curating.post("/api/decide/bulk", json={
+        "add_audience": ["kid"], "files": _targets("a.jpg")})
+    curating.post("/api/decide/bulk", json={
+        "deleted": True, "files": _targets("a.jpg", "b.mp4")})
+    op = history.recent()[0]
+
+    kid = sign_in("kid", "pw")
+    html = kid.get(f"/browse?op={op.id}&deleted=with").text
+    assert "a.jpg" not in html, "a deleted file reached somebody without the bin"
+    assert "b.mp4" not in html, "a file nobody shared with them"
