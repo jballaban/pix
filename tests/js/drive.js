@@ -567,6 +567,61 @@ function arrow(key, opts) {
     deselect();
   }
 
+  // Making a new top must touch that stack and nothing else.
+  {
+    deselect();
+    cells.forEach(c => { c.dataset.under = ''; c.dataset.behind = '0'; });
+    // a.jpg is the top of a stack; b.jpg is an ordinary file beside it.
+    cells[0].dataset.behind = '2';
+    cells[1].querySelector('.pick').click();   // select the unrelated file
+    deselect();
+    cells[0].querySelector('.pick').click();   // select the stack top
+    const n = calls.length;
+    actBtn('top').click();
+    await settle(); await settle();
+    const sent = calls.slice(n).filter(c => c.url.startsWith('/api/decide'));
+    const named = sent.flatMap(c => JSON.parse(c.body).files.map(f => f.name));
+    check('promoting the file that already shows touches nothing',
+          named.length === 0, named.join(','));
+    check('and says so rather than doing it quietly',
+          /already shows/.test(document.byId.note.textContent),
+          document.byId.note.textContent);
+    cells[0].dataset.behind = '0';
+    deselect();
+  }
+
+  // Inside an opened stack, promoting one swaps which file speaks: the chosen
+  // one stops deferring and the old top starts.
+  {
+    deselect();
+    cells[0].dataset.behind = '1';       // a.jpg currently speaks
+    cells[1].dataset.under = 'f/a.jpg';  // b.jpg is behind it
+    cells[1].querySelector('.pick').click();
+    const n = calls.length;
+    actBtn('top').click();
+    for (let i = 0; i < 8; i++) await settle();
+    const sent = calls.slice(n).filter(c => c.url.startsWith('/api/decide'));
+    check('it takes two writes, one each way', sent.length === 2,
+          String(sent.length));
+    if (sent.length === 2) {
+      const first = JSON.parse(sent[0].body);
+      const second = JSON.parse(sent[1].body);
+      check('the old top starts deferring to the new one',
+            first.stacked_under === 'f/b.jpg'
+            && first.files.length === 1 && first.files[0].name === 'a.jpg',
+            sent[0].body);
+      check('and the new one stops deferring to anything',
+            second.stacked_under === null
+            && second.files.length === 1 && second.files[0].name === 'b.jpg',
+            sent[1].body);
+      check('both halves are one gesture in the log',
+            first.batch === second.batch, first.batch + ' vs ' + second.batch);
+    }
+    cells[0].dataset.behind = '0';
+    cells[1].dataset.under = '';
+    deselect();
+  }
+
   // The heading selects its whole section, and says so with three states.
   deselect();
   heading.querySelector('.grppick').click();

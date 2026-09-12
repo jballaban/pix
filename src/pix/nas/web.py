@@ -1829,19 +1829,31 @@ function stackSelection(){
   applyToSelection('stacked_under',keyOf(top),undefined,cs.slice(1));
 }
 
-function makeTop(){
+// Which stack a file belongs to, named by the file that currently speaks for
+// it. Empty for a file in no stack — and that emptiness is the whole point:
+// comparing `dataset.under` directly made every unstacked file on screen look
+// like a member of the same stack as every other, because they all share the
+// empty string. Selecting a stack's top in the ordinary grid and promoting it
+// swept the entire visible grid underneath it.
+function stackKey(c){ return c.dataset.under || (tops(c) ? keyOf(c) : ''); }
+
+async function makeTop(){
   const cs=targetsOn('live');
   if(cs.length!==1){say('select the one to show');return;}
   const top=cs[0];
-  // Everything already in this stack, the old top included: it stops speaking
-  // and starts deferring, which is the same write as any other member.
-  const family=cells.filter(
-    c=>c!==top&&(keyOf(c)===top.dataset.under
-                 ||c.dataset.under===top.dataset.under
-                 ||keyOf(c)===keyOf(top)));
-  if(!family.length){say('that one is not in a stack');return;}
-  applyToSelection('stacked_under',keyOf(top),undefined,family)
-    .then(()=>applyToSelection('stacked_under',null,undefined,[top]));
+  const key=stackKey(top);
+  if(!key){say('that one is not in a stack');return;}
+  if(key===keyOf(top)){say('that one already shows');return;}
+  // Everything else in this stack, the old top included: it stops speaking and
+  // starts deferring, which is the same write as any other member. They are on
+  // screen because promoting happens inside an opened stack.
+  const family=cells.filter(c=>c!==top&&stackKey(c)===key);
+  if(!family.length){say('nothing else is in that stack');return;}
+  // One gesture, so one entry in the log — the two writes carry the same id
+  // for the same reason chunks of a bulk edit do.
+  const batch=newBatch();
+  if(await applyToSelection('stacked_under',keyOf(top),undefined,family,batch))
+    await applyToSelection('stacked_under',null,undefined,[top],batch);
 }
 
 function unstack(){
@@ -1940,7 +1952,7 @@ function currentValues(cs,field){
 // on this side*. Stacking writes to everything except the keeper; making a new
 // top writes to the rest of its stack and then to itself. Both are one gesture
 // over a selection, and neither is the whole of it.
-async function applyToSelection(act,value,add,only){
+async function applyToSelection(act,value,add,only,batch){
   const cs=only||targetsOn(sideOf(act,value));
   if(!cs.length){say('nothing selected');return;}
   const multi=MULTI[act];
@@ -1962,7 +1974,7 @@ async function applyToSelection(act,value,add,only){
     c.dataset.deleted=value?'1':'';
     c.classList.toggle('gone',!!value);
   });
-  const out=await send(cs,body,actLabel(act,value,add));
+  const out=await send(cs,body,actLabel(act,value,add),batch);
   // Only the tail. A write that stops half way — cancelled, or a share that
   // dropped — has really written the first part, and painting all of it back
   // would leave the screen denying what is on disk. The cells that were
@@ -2100,13 +2112,15 @@ function actLabel(act,value,add){
              +esc(value)+'</b>';
 }
 
-async function send(cs,body,label){
+async function send(cs,body,label,sharedBatch){
   if(busy){say('still writing…');return null;}
   busy=true; say('');
   workOpen(label||'Writing', cs.length);
   // One id for the whole gesture. The chunking below is about keeping each
-  // request short; the log should not learn about it.
-  const batch=newBatch();
+  // request short; the log should not learn about it. A caller doing a gesture
+  // in more than one write passes its own, so the log does not learn about
+  // that either.
+  const batch=sharedBatch||newBatch();
   let done=0, failed=0, gone=[], total=null, binned=null, trouble=null;
   for(let s=0;s<cs.length;s+=CHUNK){
     // Checked between requests, never inside one. The chunk in flight is
