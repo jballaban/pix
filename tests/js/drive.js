@@ -540,6 +540,48 @@ function arrow(key, opts) {
           !document.byId.working.classList.contains('on'));
   }
 
+  // After a file leaves the grid, clicking a thumbnail must still open *that*
+  // thumbnail. The handlers used to hold the index their cell had at load, and
+  // `drop` rebuilds `cells` around the gap — so deleting one file made every
+  // thumbnail below it open the picture one along.
+  {
+    const room = mk('shifted');
+    // Four, and the click lands on the third. With three, dropping the first
+    // makes the stale index point past the end and `setCur` clamps it back to
+    // the right cell — the bug hides behind the clamp.
+    const shelf = [cell('s0.jpg', ''), cell('s1.jpg', ''),
+                   cell('s2.jpg', ''), cell('s3.jpg', '')];
+    shelf.forEach(c => room.appendChild(c));
+    document.querySelectorAll = sel => (sel === '.cell' ? shelf
+                                      : sel === '.group' ? []
+                                      : sel === '.stage' ? [stage] : realQsa(sel));
+    new Function(
+      'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
+      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
+      'GRID_GROUPS', 'GROUPING', 'setTimeout', js,
+    )(document, window, fetch, localStorage, location, confirm,
+      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
+      GRID_GROUPS, GROUPING, fn => fn());
+
+    // Push the first one out of the view, the way an edit does.
+    shelf[0].querySelector('.pick').click();
+    dropping = [{ folder: 'f', name: 's0.jpg' }];
+    actBtn('delete').click();
+    await settle(); await settle();
+    dropping = [];
+    check('the edited file left the grid', !room.children.includes(shelf[0]));
+
+    // Now click one in the middle. It must open itself, not its neighbour.
+    stage.click();
+    shelf[2].click();
+    await settle();
+    check('a thumbnail still opens itself after one leaves',
+          shelf[2].classList.contains('cur'),
+          shelf[3].classList.contains('cur') ? 'opened the one below it'
+                                            : 'opened neither');
+    stage.click();
+  }
+
   if (failures.length) {
     failures.forEach(f => console.log('FAIL ' + f));
     process.exit(1);

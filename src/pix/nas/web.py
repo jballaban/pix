@@ -1345,15 +1345,26 @@ function drawSel(){
     : picked.size===cells.length ? 'all' : 'some';
   if(selcount) selcount.textContent = `${picked.size} selected`;
 }
-cells.forEach((c,n)=>{
+// The index is looked up **at click time**, never captured when the handler is
+// bound. Cells leave the grid when an edit pushes them out of the filters, and
+// `cells` is rebuilt around the gap — so a handler holding the position its
+// cell had at load would open whatever has since slid into it. Delete two
+// files near the top and every thumbnail below them opened the picture two
+// along. `picked` is keyed by element for exactly this reason; the handlers
+// were the half that still counted.
+cells.forEach(c=>{
   c.querySelector('.pick').addEventListener('click',e=>{
     e.stopPropagation();
+    const n=cells.indexOf(c);
+    if(n<0) return;
     // The circle is the deliberate gesture: it adds and removes without
     // throwing away what is already ticked.
     if(e.shiftKey&&anchor>=0) range(anchor,n); else {togglePick(n); anchor=n;}
     setCur(n,true); drawSel();
   });
   c.addEventListener('click',e=>{
+    const n=cells.indexOf(c);
+    if(n<0) return;
     if(e.shiftKey&&anchor>=0){range(anchor,n);setCur(n,true);drawSel();return;}
     if(e.ctrlKey||e.metaKey){togglePick(n);anchor=n;setCur(n,true);drawSel();
                              return;}
