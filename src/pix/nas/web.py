@@ -1374,6 +1374,7 @@ function drop(gone){
   leaving.forEach(c=>{picked.delete(c); c.remove();});
   const was=cells.indexOf(at);
   cells=cells.filter(c=>!leaving.includes(c));
+  resection();
   // Land where the cursor was, not where it would have been pushed to.
   cur=-1; anchor=-1;
   if(cells.length) setCur(cells.includes(at)?cells.indexOf(at):Math.max(0,was));
@@ -1652,6 +1653,23 @@ function sectionCells(h){
     if(el.classList.contains('cell')) out.push(el);
   }
   return out;
+}
+
+// A section is its heading and the cells beneath it, so when files leave the
+// view both have to answer for it: the count says what is there now, and a
+// heading whose files have all gone is a label for nothing.
+//
+// Recounted from the DOM rather than decremented by the number dropped. The
+// grid is one render with nothing lazily loaded, so the cells present *are*
+// the section — a running tally would be a second account of the same thing,
+// free to drift from it.
+function resection(){
+  document.querySelectorAll('.group').forEach(h=>{
+    const mine=sectionCells(h);
+    if(!mine.length){ h.remove(); return; }
+    const n=h.querySelector('.dim');
+    if(n) n.textContent=mine.length.toLocaleString();
+  });
 }
 
 function drawGroupPicks(){
