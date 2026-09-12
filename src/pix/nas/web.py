@@ -309,6 +309,12 @@ h3.group[data-state="some"] .grppick { background:var(--top);
 #actions[data-state="some"] .tick { background:var(--top);
   border-color:var(--top); }
 #actions .grp { display:flex; gap:9px; align-items:center; }
+/* The same trap `#menu` fell into, and the second time it has been paid for:
+   an id selector beats the user agent's `[hidden] { display:none }`, so the
+   rule above won and `hidden = true` set a flag that hid nothing. Every action
+   stayed on screen with nothing selected. Any rule that gives an element a
+   `display` has to say what `hidden` means for it too. */
+#actions .grp[hidden] { display:none; }
 .cell { position:relative; aspect-ratio:1; background:#0d0f12; overflow:hidden;
         border-radius:3px; cursor:pointer; }
 .cell img { width:100%; height:100%; object-fit:cover; display:block; }

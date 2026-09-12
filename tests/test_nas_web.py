@@ -270,6 +270,22 @@ def test_restoring_puts_the_file_back_with_what_it_said(
     assert "a.jpg" in client.get("/browse?event=Sicily%20Trip").text
 
 
+def test_everything_the_script_hides_can_actually_be_hidden(
+    client: TestClient
+) -> None:
+    """`hidden` is a flag, not a guarantee. A CSS rule that gives an element a
+    `display` outranks the user agent's `[hidden] { display:none }`, and then
+    setting the property hides nothing — which is how the menu once became
+    undismissable, and how every action stayed on screen with nothing selected.
+
+    So: anything the script hides by property needs a rule saying what hidden
+    means for it."""
+    css = client.get("/browse?event=Italy%20-%20Sicily").text
+
+    for sel in ("#menu[hidden]", "#actions .grp[hidden]"):
+        assert sel in css, sel
+
+
 def test_the_grid_draws_no_cursor(client: TestClient) -> None:
     """The dashed ring said which cell the keyboard was on, and the grid has no
     keyboard. It stayed behind after that was removed and turned up unasked on
