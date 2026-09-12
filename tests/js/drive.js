@@ -57,6 +57,11 @@ Object.assign(document.byId.vvid, {
   pause() {}, load() {}, play: () => Promise.resolve(),
 });
 
+const realAdd = document.addEventListener.bind(document);
+document.addEventListener = (t, fn) => {
+  (keys[t] ||= []).push(fn);
+  realAdd(t, fn);
+};
 const realQsa = document.querySelectorAll.bind(document);
 document.querySelectorAll = sel => (sel === '.cell' ? cells
                                   : sel === '.stage' ? [stage] : realQsa(sel));
@@ -93,6 +98,11 @@ const GROUPS = ['family'];
 const USUAL = 'family';
 
 const tick = () => new Promise(r => setImmediate(r));
+const keys = {};
+function arrow(key, opts) {
+  (keys.keydown || []).forEach(fn => fn(Object.assign(
+    { key, preventDefault() {}, target: { tagName: 'DIV' } }, opts || {})));
+}
 
 (async () => {
   try {
@@ -163,8 +173,34 @@ const tick = () => new Promise(r => setImmediate(r));
   check('clicking beside the picture closes it',
         !document.byId.viewer.classList.contains('on'));
 
-  // The date menu opens on what the files actually say.
+  // Unticking leaves nothing selected, and nothing is implicitly targeted.
+  // The old model left the cursor on the cell: not ticked, the count saying
+  // none, and the actions quietly applying to it anyway.
   cells[0].querySelector('.pick').click();
+  check('unticking empties the selection',
+        document.byId.selcount.textContent === '0 selected',
+        document.byId.selcount.textContent);
+  {
+    const n = calls.length;
+    const acc = actions.children.find(b => b.dataset.act === 'access');
+    acc.click();
+    await tick(); await tick();
+    const rows = menu.querySelectorAll('.opt');
+    if (rows.length) rows[0].click();
+    await tick(); await tick();
+    check('nothing is changed with nothing selected',
+          !calls.slice(n).some(c => c.url.startsWith('/api/decide')));
+    grid.click();
+  }
+
+  // An arrow key both moves and selects.
+  document.byId.grid.click();
+  arrow('ArrowRight');
+  check('arrowing selects what it lands on',
+        document.byId.selcount.textContent === '1 selected',
+        document.byId.selcount.textContent);
+
+  // The date menu opens on what the files actually say.
   const date = actions.children.find(b => b.dataset.act === 'date');
   date.click();
   await tick();

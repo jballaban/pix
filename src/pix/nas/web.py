@@ -263,8 +263,12 @@ select { background:#222833; color:var(--fg); border:1px solid var(--line);
 .cell { position:relative; aspect-ratio:1; background:#0d0f12; overflow:hidden;
         border-radius:3px; cursor:pointer; }
 .cell img { width:100%; height:100%; object-fit:cover; display:block; }
-.cell.cur { outline:2px solid var(--accent); outline-offset:-2px; z-index:1; }
-.cell.picked { outline:3px solid var(--accent); outline-offset:-3px; z-index:1; }
+/* The cursor is normally also ticked, so it only needs to say *which one the
+   keyboard is on* — a lighter ring inside the selection's. */
+.cell.cur { outline:2px dashed var(--accent); outline-offset:-5px;
+            z-index:1; }
+.cell.picked { outline:3px solid var(--accent); outline-offset:-3px;
+               z-index:1; }
 .cell.picked img { opacity:.75; }
 .badge { position:absolute; right:4px; bottom:4px; background:#000a;
          padding:1px 5px; border-radius:3px; font-size:11px; }
@@ -550,6 +554,7 @@ def browse(user: Annotated[Principal, Depends(require_user)],
         footer=f"""<span class="count" id="count">{shown}</span>
 <span class="hint"><b>click</b> a circle to select &middot;
 <b>shift</b> for a range &middot; <b>ctrl</b> to add &middot;
+<b>arrows</b> move and select &middot;
 <b>S</b> repeat last access &middot; <b>Enter</b> view &middot;
 <b>I</b> details</span>
 <span class="note" id="note" hidden></span>""",
@@ -1060,12 +1065,23 @@ function drawDate(){
 }
 
 // --- selection ---------------------------------------------------------------
-function setCur(n){
+// Moving the cursor **selects** what it lands on, the way a file manager
+// does. The alternative was a cell that looked half-chosen: not ticked, the
+// count saying none, and the actions quietly applying to it anyway. Pass
+// `keep` to move without disturbing a selection.
+function setCur(n,keep){
   if(!cells.length){cur=-1;return;}
   n=Math.max(0,Math.min(cells.length-1,n));
   cells.forEach(c=>c.classList.remove('cur'));
   cur=n; cells[cur].classList.add('cur');
   cells[cur].scrollIntoView({block:'nearest'});
+  if(!keep){
+    picked.forEach(c=>c.classList.remove('picked'));
+    picked.clear();
+    togglePick(cur,true);
+    touched=false;
+    drawSel();
+  }
   if(viewer.classList.contains('on')) load(cells[cur]);
 }
 function togglePick(n,on){
@@ -1099,13 +1115,16 @@ function drawSel(){
 cells.forEach((c,n)=>{
   c.querySelector('.pick').addEventListener('click',e=>{
     e.stopPropagation();
+    // The circle is the deliberate gesture: it adds and removes without
+    // throwing away what is already ticked.
     if(e.shiftKey&&anchor>=0) range(anchor,n); else {togglePick(n); anchor=n;}
-    setCur(n); drawSel();
+    setCur(n,true); drawSel();
   });
   c.addEventListener('click',e=>{
-    if(e.shiftKey&&anchor>=0){range(anchor,n);setCur(n);drawSel();return;}
-    if(e.ctrlKey||e.metaKey){togglePick(n);anchor=n;setCur(n);drawSel();return;}
-    setCur(n); openViewer();
+    if(e.shiftKey&&anchor>=0){range(anchor,n);setCur(n,true);drawSel();return;}
+    if(e.ctrlKey||e.metaKey){togglePick(n);anchor=n;setCur(n,true);drawSel();
+                             return;}
+    setCur(n); anchor=n; openViewer();
   });
 });
 document.getElementById('selall').onclick=()=>{
@@ -1258,8 +1277,10 @@ window.addEventListener('error',e=>say('page error: '+e.message,true));
 window.addEventListener('unhandledrejection',
   e=>say('page error: '+(e.reason&&e.reason.message||e.reason),true));
 
+// Exactly what is ticked — no implicit extra. A count that says none while
+// an action changes something is the one thing a selection must never do.
 function targets(){
-  return picked.size?[...picked]:(cells[cur]?[cells[cur]]:[]);
+  return [...picked];
 }
 
 // A file that no longer matches the filters leaves the grid. Keeping it on
@@ -1464,9 +1485,14 @@ document.addEventListener('keydown',e=>{
   if(step===undefined) return;
   e.preventDefault();
   const next=(cur<0?0:cur)+step;
-  if(e.shiftKey&&cur>=0){range(cur,Math.max(0,Math.min(cells.length-1,next)));
-                         drawSel();}
-  setCur(next);
+  if(e.shiftKey&&cur>=0){
+    range(anchor<0?cur:anchor,Math.max(0,Math.min(cells.length-1,next)));
+    setCur(next,true); drawSel();
+  }else if(e.ctrlKey||e.metaKey){
+    setCur(next,true);          // move the cursor, leave the ticks alone
+  }else{
+    setCur(next); anchor=next;
+  }
 });
 
 // The grouping rides in the URL with the filters, so a view stays one link.
