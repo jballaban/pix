@@ -1004,7 +1004,12 @@ def _group_label(key: object, group: str, outer: Sequence[str] = ()) -> str:
     rather than *January 2025*, and under that the day is **Saturday 4**.
     """
     if key is None or key == "":
-        return "No date" if group in ("day", "month", "year") else "None"
+        # Named for what is missing rather than for the date as a whole: a file
+        # dated to its month lands here when the grid is cut by day, and it is
+        # not undated — it has no *day*. Calling that "No date" would deny what
+        # is actually known about it.
+        return {"day": "No day", "month": "No month",
+                "year": "No date"}.get(group, "None")
     text = str(key)
     if group == "day":
         moment = datestr.parse_pix(text + "-00:00:00")

@@ -122,6 +122,43 @@ def compose(*, year: str | int | None = None, month: str | int | None = None,
     return built if valid(built) else None
 
 
+#: How much of a date is known, as the length of the prefix that can be
+#: trusted: nothing, the year, the month, the day, the whole timestamp. They
+#: are substring lengths because that is what both the index and its queries do
+#: with them.
+NOTHING, YEAR, MONTH, DAY, FULL = 0, 4, 7, 10, 19
+
+
+def precision(auto: datetime | None, value: str | None) -> int:
+    """How much of the effective date is actually known.
+
+    An override with holes in it has to keep them. `alone` fills them with
+    minimums so that there is a date to sort by at all — *this is from 1987*
+    becomes `1987-01-01 00:00:00` — and that is the right thing for ordering
+    and the wrong thing for everything else, because the made-up first of
+    January is indistinguishable from a real one. This says how far along that
+    string the truth stops.
+
+    **A capture date makes everything known.** An override on top of one
+    replaces the components it pins and leaves the rest reading off the camera,
+    so the day is still the real day even when the year has been corrected.
+    """
+    if auto is not None:
+        return FULL
+    if not pins_anything(value):
+        return NOTHING
+    parts = slots(value)
+    if parts[0] == "*":
+        # No year to anchor it, so `alone` gives nothing and neither does this.
+        return NOTHING
+    known = 1
+    for part in parts[1:]:
+        if part == "*":
+            break
+        known += 1
+    return {1: YEAR, 2: MONTH, 3: DAY}.get(known, FULL)
+
+
 def apply(auto: datetime, value: str) -> datetime | None:
     """Patch `auto` with the non-`*` components of `value`."""
     match = OVERRIDE_RE.match(value)

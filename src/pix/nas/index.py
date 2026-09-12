@@ -49,7 +49,7 @@ from pix.nas.decisions import Decision
 #: Bumped whenever the shape changes. A mismatch drops and rebuilds rather than
 #: migrating: the index is disposable by design, and a migration path is
 #: machinery to maintain for something a `pix2 index` reproduces exactly.
-SCHEMA_VERSION: int = 4
+SCHEMA_VERSION: int = 5
 
 #: `audience` filter value meaning *nobody yet* — the "New" chip in the UI.
 #: A sentinel rather than a separate reviewed flag: a file with no audience
@@ -66,12 +66,22 @@ NO_EVENT: str = "(none)"
 #: How the grid can be cut into sections, and the SQL that computes the key.
 #: A **day** by default: a day is the unit people remember photographs in — *the
 #: afternoon at the lake* — where an event is usually several of them and a
-#: single folder is thousands.
+#: single folder is thousands. **A grouping is not a filter** — nothing may
+#: fall out of the grid because of one — so a key that cannot be known reads as
+#: NULL and its files gather in a section of their own.
+#:
+#: The date keys ask `precision` first. A file dated *August 2026, day unknown*
+#: has an `effective_date` of `2026-08-01`, because there has to be something
+#: to sort by; grouping on that filed it under the first of August beside
+#: photographs actually taken that day. Inventing the day is worse than
+#: admitting there is none.
 GROUPINGS: dict[str, str | None] = {
     "none": None,
-    "day": "substr(files.effective_date, 1, 10)",
-    "month": "substr(files.effective_date, 1, 7)",
-    "year": "files.year",
+    "day": ("CASE WHEN files.precision >= 10 "
+            "THEN substr(files.effective_date, 1, 10) END"),
+    "month": ("CASE WHEN files.precision >= 7 "
+              "THEN substr(files.effective_date, 1, 7) END"),
+    "year": "CASE WHEN files.precision >= 4 THEN files.year END",
     "event": "COALESCE(files.event, '(none)')",
     "camera": "COALESCE(files.camera, '(unknown)')",
     "kind": "files.kind",
@@ -112,6 +122,7 @@ CREATE TABLE IF NOT EXISTS files (
     band           TEXT,          -- small | medium | large, by kind
     has_sidecar    INTEGER NOT NULL DEFAULT 0,
     deleted        INTEGER NOT NULL DEFAULT 0,   -- decision: soft-deleted
+    precision      INTEGER NOT NULL DEFAULT 0,   -- how much of the date is known
     PRIMARY KEY (folder, name)
 );
 CREATE INDEX IF NOT EXISTS files_event ON files(event);
@@ -381,10 +392,10 @@ _INSERT: str = (
     "INSERT OR REPLACE INTO files "
     "(folder, name, size, mtime_ns, kind, capture_date, camera, width, height, "
     " duration, event, date_override, effective_date, year, band, "
-    " has_sidecar, deleted) "
+    " has_sidecar, deleted, precision) "
     "VALUES (:folder, :name, :size, :mtime_ns, :kind, :capture_date, :camera, "
     " :width, :height, :duration, :event, :date_override, "
-    " :effective_date, :year, :band, :has_sidecar, :deleted)"
+    " :effective_date, :year, :band, :has_sidecar, :deleted, :precision)"
 )
 
 
@@ -540,8 +551,8 @@ def _row(folder: str, record: dict[str, Any],
     capture = _capture_date(exif_map)
     override = ((decision.date_override if decision else None)
                 or _tag(exif_map, "DateOverride"))
-    effective = datestr.effective(
-        datestr.parse_exiftool(capture) if capture else None, override)
+    captured = datestr.parse_exiftool(capture) if capture else None
+    effective = datestr.effective(captured, override)
     return {
         "folder": folder,
         "name": name,
@@ -562,6 +573,7 @@ def _row(folder: str, record: dict[str, Any],
         "band": _band(kind, record.get("size"), _duration(exif_map)),
         "has_sidecar": 1 if name in decided else 0,
         "deleted": 1 if (decision and decision.deleted) else 0,
+        "precision": datestr.precision(captured, override),
     }
 
 
@@ -680,16 +692,21 @@ def _clauses(filters: Filters) -> dict[str, tuple[str, dict[str, Any]]]:
     if filters.event is not None:
         out["event"] = ("COALESCE(files.event, '(none)') = :f_event",
                         {"f_event": filters.event})
-    if filters.date is not None:
+    if filters.date == UNDATED:
+        # Undated is *no date at all*, not *not to that precision*. A file
+        # known to be from August is not undated, and answering a day filter
+        # with it would be the same invention grouping used to make.
+        out["date"] = ("files.effective_date IS NULL", {})
+    elif filters.date is not None:
         # Matched by prefix, at whatever width the value was given in, so one
-        # clause answers year, month and day. `files.year` is left alone: it
-        # is the grouping key and the landing page's index, and is no longer
-        # what this filters on.
+        # clause answers year, month and day — and only where the date is known
+        # to that width. `files.year` is left alone: it is the landing page's
+        # index, and is no longer what this filters on.
         width = len(filters.date)
         out["date"] = (
-            f"COALESCE(substr(files.effective_date, 1, {width}), :undated) "
-            "= :f_date",
-            {"f_date": filters.date, "undated": UNDATED})
+            f"(files.precision >= {width} "
+            f"AND substr(files.effective_date, 1, {width}) = :f_date)",
+            {"f_date": filters.date})
     if filters.tag is not None:
         out["tag"] = (
             "EXISTS (SELECT 1 FROM file_tags ft WHERE ft.folder = files.folder "
@@ -1060,10 +1077,19 @@ def suggest(conn: sqlite3.Connection, column: str,
         tally = (f"COUNT(*) AS n, 0 AS n_near, 0 AS span, "
                  f"SUM(CASE WHEN {_combine(clauses, 'AND')} THEN 1 ELSE 0 END) AS n_all, "
                  f"SUM(CASE WHEN {_combine(clauses, 'OR')} THEN 1 ELSE 0 END) AS n_any ")
-        where = visible(*( (f"substr(files.effective_date, 1, {len(parent)}) "
-                            "= :f_parent",) if parent else ()))
-        sql = (f"SELECT COALESCE(substr(files.effective_date, 1, {level}), "
-               " :undated) AS value, " + tally
+        # Only files whose date is known to this width have a value at it. A
+        # file dated to its month has no day to offer, and offering it as
+        # `(undated)` would be the same lie in a different place — it is not
+        # undated, it is reachable one level up.
+        narrow = [f"files.precision >= {level}"] if parent else []
+        if parent:
+            narrow.append(
+                f"substr(files.effective_date, 1, {len(parent)}) = :f_parent")
+        where = visible(*narrow)
+        value_sql = (f"substr(files.effective_date, 1, {level})" if parent else
+                     f"COALESCE(CASE WHEN files.precision >= {level} THEN "
+                     f"substr(files.effective_date, 1, {level}) END, :undated)")
+        sql = (f"SELECT {value_sql} AS value, " + tally
                + "FROM files " + where + "GROUP BY value "
                # Newest first, the way the library is remembered. Undated sorts
                # to the end on its own: a bracket is below every digit.

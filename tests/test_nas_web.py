@@ -1776,9 +1776,12 @@ def test_a_group_heading_counts_its_files(client: TestClient) -> None:
     assert ">1</span>" in client.get("/browse").text
 
 
-def test_undated_files_group_under_no_date(client: TestClient) -> None:
-    """b.mp4 has no date at all, and belongs somewhere rather than nowhere."""
-    assert "No date" in client.get("/browse").text
+def test_undated_files_group_somewhere_rather_than_nowhere(
+    client: TestClient
+) -> None:
+    """b.mp4 has no date at all, and a grouping is not a filter."""
+    assert "No day" in client.get("/browse").text
+    assert "No date" in client.get("/browse?group=year").text
 
 
 def test_grouping_can_be_turned_off(client: TestClient) -> None:

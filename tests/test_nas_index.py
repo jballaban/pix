@@ -936,3 +936,110 @@ def test_undated_is_offered_beside_the_years(tree: dict[str, Path]) -> None:
     assert [s.value for s in ix.suggest(conn, "date")] == ["2026", ix.UNDATED]
     assert [r["name"] for r in
             ix.files(conn, ix.Filters(date=ix.UNDATED))] == ["u.jpg"]
+
+
+# --- a date with holes in it keeps them ---------------------------------------
+
+def _partial(tree: dict[str, Path], name: str, override: str) -> None:
+    """A file with no capture date and an override that pins only part of one."""
+    _record(tree, "f", name, {})
+    d = tree["master"] / "f"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / name).write_bytes(b"x")
+    decisions.write(d / name, Decision(date_override=override))
+
+
+def test_a_day_that_is_not_known_is_not_invented(tree: dict[str, Path]) -> None:
+    """*August 2026, day unknown* has an `effective_date` of `2026-08-01`
+    because there has to be something to sort by. Grouping on that filed it
+    under the first of August, beside photographs actually taken that day."""
+    _dated(tree, "real.jpg", "2026:08:01 10:00:00")
+    _partial(tree, "month.jpg", "2026-08-*-*:*:*")
+    _build(tree)
+    conn = ix.connect(tree["db"])
+
+    by_day = {r["name"]: r["grp0"] for r in ix.files(conn, groups=["day"])}
+    assert by_day["real.jpg"] == "2026-08-01"
+    assert by_day["month.jpg"] is None, "invented a day it does not have"
+
+    # But the month it does know still groups, and so does the year.
+    by_month = {r["name"]: r["grp0"] for r in ix.files(conn, groups=["month"])}
+    assert by_month["month.jpg"] == "2026-08"
+    by_year = {r["name"]: r["grp0"] for r in ix.files(conn, groups=["year"])}
+    assert by_year["month.jpg"] == "2026"
+
+
+def test_grouping_never_drops_a_file(tree: dict[str, Path]) -> None:
+    """A grouping is not a filter. Whatever it cannot answer for gathers in a
+    section of its own, and the count still adds up."""
+    _dated(tree, "real.jpg", "2026:08:01 10:00:00")
+    _partial(tree, "month.jpg", "2026-08-*-*:*:*")
+    _partial(tree, "year.jpg", "1987-*-*-*:*:*")
+    _record(tree, "f", "none.jpg", {})
+    _build(tree)
+    conn = ix.connect(tree["db"])
+
+    for group in ("day", "month", "year", "event", "camera", "kind"):
+        assert len(ix.files(conn, groups=[group])) == 4, group
+
+
+def test_a_filter_only_matches_what_the_date_actually_says(
+    tree: dict[str, Path]
+) -> None:
+    """The same invention, in the other place: filtering to the first of August
+    matched a file only known to be from August."""
+    _dated(tree, "real.jpg", "2026:08:01 10:00:00")
+    _partial(tree, "month.jpg", "2026-08-*-*:*:*")
+    _build(tree)
+    conn = ix.connect(tree["db"])
+
+    def names(value: str) -> set[str]:
+        return {r["name"] for r in ix.files(conn, ix.Filters(date=value))}
+
+    assert names("2026-08-01") == {"real.jpg"}
+    assert names("2026-08") == {"real.jpg", "month.jpg"}
+    assert names("2026") == {"real.jpg", "month.jpg"}
+
+
+def test_a_partly_known_date_is_not_undated(tree: dict[str, Path]) -> None:
+    """*Undated* is no date at all, not *not to that precision*. A file known
+    to be from August is not one of the ones nobody could place."""
+    _partial(tree, "month.jpg", "2026-08-*-*:*:*")
+    _record(tree, "f", "none.jpg", {})
+    _build(tree)
+    conn = ix.connect(tree["db"])
+
+    assert {r["name"] for r in
+            ix.files(conn, ix.Filters(date=ix.UNDATED))} == {"none.jpg"}
+
+
+def test_the_day_list_offers_only_days_that_exist(tree: dict[str, Path]) -> None:
+    """A file dated to its month has no day to offer, and offering it as
+    `(undated)` would be the same lie in a different place."""
+    _dated(tree, "real.jpg", "2026:08:01 10:00:00")
+    _partial(tree, "month.jpg", "2026-08-*-*:*:*")
+    _build(tree)
+    conn = ix.connect(tree["db"])
+
+    days = [s.value for s in ix.suggest(conn, "date",
+                                        ix.Filters(date="2026-08"))]
+    assert days == ["2026-08-01"], days
+    # And it is still reachable one level up, which is where it belongs.
+    assert "2026-08" in [s.value for s in
+                         ix.suggest(conn, "date", ix.Filters(date="2026"))]
+
+
+def test_an_override_on_a_real_capture_date_keeps_full_precision(
+    tree: dict[str, Path]
+) -> None:
+    """Correcting the year of a photograph does not make its day a guess — the
+    unpinned components still read off the camera."""
+    _record(tree, "f", "fixed.jpg", {"EXIF:DateTimeOriginal": "2026:08:30 10:00:00"})
+    d = tree["master"] / "f"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "fixed.jpg").write_bytes(b"x")
+    decisions.write(d / "fixed.jpg", Decision(date_override="2025-*-*-*:*:*"))
+    _build(tree)
+    conn = ix.connect(tree["db"])
+
+    assert [r["grp0"] for r in ix.files(conn, groups=["day"])] == ["2025-08-30"]
