@@ -218,7 +218,7 @@ def test_a_tampered_cookie_is_not_a_session(app_env: dict[str, Path], sign_in: C
 def test_an_account_is_created_and_can_sign_in(app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
     admin = sign_in(accounts.ADMIN, "admin")
     admin.post("/accounts/save",
-               data={"name": "kid", "password": "pw", "roles": "family"})
+               data={"name": "kid", "password": "pw", "groups": "family"})
 
     assert sign_in("kid", "pw").get("/api/files").status_code == 200
 
@@ -275,8 +275,8 @@ def test_only_an_admin_manages_accounts(app_env: dict[str, Path], sign_in: Calla
                     data={"name": "eve", "password": "x"}).status_code == 403
 
 
-def test_a_role_reaches_what_was_shared_with_it(app_env: dict[str, Path], writable: Path, sign_in: Callable[[str, str], TestClient], add_user: Callable[..., None]) -> None:
-    """A grant names a person or a role and the check cannot tell them apart."""
+def test_a_group_reaches_what_was_shared_with_it(app_env: dict[str, Path], writable: Path, sign_in: Callable[[str, str], TestClient], add_user: Callable[..., None]) -> None:
+    """A grant names a person or a group and the check cannot tell them apart."""
     add_user("kid", "pw", ("family",))
     admin = sign_in(accounts.ADMIN, "admin")
     admin.post("/api/decide", json={"folder": "init_2026", "name": "a.jpg",
@@ -286,12 +286,12 @@ def test_a_role_reaches_what_was_shared_with_it(app_env: dict[str, Path], writab
     assert [r["name"] for r in rows] == ["a.jpg"]
 
 
-def test_losing_a_role_loses_the_access(app_env: dict[str, Path], writable: Path, sign_in: Callable[[str, str], TestClient], add_user: Callable[..., None]) -> None:
+def test_losing_a_group_loses_the_access(app_env: dict[str, Path], writable: Path, sign_in: Callable[[str, str], TestClient], add_user: Callable[..., None]) -> None:
     add_user("kid", "pw", ("family",))
     admin = sign_in(accounts.ADMIN, "admin")
     admin.post("/api/decide", json={"folder": "init_2026", "name": "a.jpg",
                                     "add_audience": ["family"]})
-    admin.post("/accounts/save", data={"name": "kid", "roles": ""})
+    admin.post("/accounts/save", data={"name": "kid", "groups": ""})
 
     assert sign_in("kid", "pw").get("/api/files").json() == []
 
@@ -1017,10 +1017,10 @@ def test_a_grant_reaches_whatever_case_signed_in(app_env: dict[str, Path], writa
     assert [r["name"] for r in rows] == ["a.jpg"]
 
 
-def test_a_role_matches_regardless_of_case(app_env: dict[str, Path], writable: Path, sign_in: Callable[[str, str], TestClient]) -> None:
+def test_a_group_matches_regardless_of_case(app_env: dict[str, Path], writable: Path, sign_in: Callable[[str, str], TestClient]) -> None:
     admin = sign_in(accounts.ADMIN, "admin")
     admin.post("/accounts/save",
-               data={"name": "kid", "password": "pw", "roles": "Family"})
+               data={"name": "kid", "password": "pw", "groups": "Family"})
     admin.post("/api/decide", json={"folder": "init_2026", "name": "a.jpg",
                                     "add_audience": ["family"]})
 

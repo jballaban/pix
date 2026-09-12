@@ -96,20 +96,24 @@ class Account:
 
     name: str
     password: str = ""
-    roles: tuple[str, ...] = field(default_factory=tuple)
+    groups: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass
 class Store:
     """The account file's contents.
 
-    `roles` is kept explicitly rather than derived from what users hold, so a
-    role can exist before anyone is in it — otherwise creating `tv` would be
-    impossible until something had already been shared with it.
+    `groups` is kept explicitly rather than derived from what people hold, so
+    a group can exist before anyone is in it — otherwise creating `tv` would
+    be impossible until something had already been shared with it.
+
+    *Group* rather than *role*: a role is something you do, and these are
+    simply sets of people — `family`, `parents`, `tv`. Naming them for what
+    they are keeps the access model one idea rather than two.
     """
 
     users: dict[str, Account] = field(default_factory=lambda: {})
-    roles: list[str] = field(default_factory=lambda: [])
+    groups: list[str] = field(default_factory=lambda: [])
     secret: str = ""
 
     #: The audience almost everything ends up with. Named so the grid can
@@ -122,16 +126,17 @@ class Store:
     def grants(self, name: str) -> frozenset[str]:
         """Every name a grant could use to reach this person.
 
-        Themselves plus their roles, because a share names one or the other and
-        the access check is not allowed to care which.
+        Themselves plus their groups, because a share names one or the other
+        and the access check is not allowed to care which.
         """
         who = canonical(name)
         account = self.users.get(who)
-        return frozenset({who, *(account.roles if account else ())})
+        return frozenset({who, *(account.groups if account else ())})
 
     def audiences(self) -> list[str]:
-        """Everything that can be shared with — people and roles, never admin."""
-        return sorted({*self.users, *self.roles} - {ADMIN})
+        """Everything that can be shared with — people and groups, never
+        the administrator, which sees everything already."""
+        return sorted({*self.users, *self.groups} - {ADMIN})
 
 
 def load(path: Path | None = None) -> Store:
@@ -155,18 +160,22 @@ def load(path: Path | None = None) -> Store:
         if not isinstance(value, dict):
             continue
         entry = cast("dict[str, Any]", value)
-        roles_raw: object = entry.get("roles")
+        # `roles` is the name this field had before; a store written by an
+        # older build should keep working rather than quietly losing
+        # everybody's memberships.
+        raw_groups: object = entry.get("groups", entry.get("roles"))
         who = canonical(str(name))
         users[who] = Account(
             name=who,
             password=str(entry.get("password") or ""),
-            roles=tuple(sorted({canonical(str(r)) for r
-                                in cast("list[Any]", roles_raw or [])})),
+            groups=tuple(sorted({canonical(str(g)) for g
+                                 in cast("list[Any]", raw_groups or [])})),
         )
-    raw_roles: object = data.get("roles")
-    roles = sorted({canonical(str(r))
-                    for r in cast("list[Any]", raw_roles or []) if str(r).strip()})
-    return Store(users=users, roles=roles,
+    raw_all: object = data.get("groups", data.get("roles"))
+    groups = sorted({canonical(str(g))
+                     for g in cast("list[Any]", raw_all or [])
+                     if str(g).strip()})
+    return Store(users=users, groups=groups,
                  usual=canonical(str(data.get("usual") or "")),
                  secret=str(data.get("secret") or ""))
 
@@ -181,9 +190,9 @@ def save(store: Store, path: Path | None = None) -> None:
     target = path if path is not None else ACCOUNTS_FILE
     target.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "users": {name: {"password": a.password, "roles": list(a.roles)}
+        "users": {name: {"password": a.password, "groups": list(a.groups)}
                   for name, a in sorted(store.users.items())},
-        "roles": sorted(set(store.roles)),
+        "groups": sorted(set(store.groups)),
         "usual": store.usual,
         "secret": store.secret,
     }

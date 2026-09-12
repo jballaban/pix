@@ -544,7 +544,7 @@ def browse(user: Annotated[Principal, Depends(require_user)],
             f"<script>const VIEW={_js(_view_dict(view))},"
             f"CHIPS={_js(_chips(user))},FIXED={_js(_FIXED)},"
             f"EXTRA={_js(_EXTRA)},ADMIN={_js(user.is_admin)},"
-            f"USERS={_js(_audience_names())},ROLES={_js(_role_names())},"
+            f"USERS={_js(_audience_names())},GROUPS={_js(_group_names())},"
             f"USUAL={_js(store().usual)};</script>"
             f"<script>{_BROWSE_JS}</script>"),
         footer=f"""<span class="count" id="count">{shown}</span>
@@ -595,7 +595,7 @@ def _group_control(group: str) -> str:
     options = "".join(
         f'<option value="{key}"{" selected" if key == group else ""}>'
         f'{_h(label)}</option>'
-        for key, label in _GROUPS)
+        for key, label in _GRID_GROUPS)
     return f'<select id="grouping" title="Group the grid">{options}</select>'
 
 
@@ -707,16 +707,16 @@ def _chips(user: Principal) -> tuple[tuple[str, str], ...]:
                  if col != "audience" or user.is_admin)
 
 
-def _role_names() -> list[str]:
-    """The roles, so the access menu can put them before the individuals."""
+def _group_names() -> list[str]:
+    """The groups, so the access menu can put them before the individuals."""
     book = store()
-    return sorted(set(book.roles) - {accounts.ADMIN})
+    return sorted(set(book.groups) - {accounts.ADMIN})
 
 
 def _audience_names() -> list[str]:
-    """Who access can be given to: **roles first, then people.**
+    """Who access can be given to: **groups first, then people.**
 
-    In that order because a role is almost always the right answer — sharing
+    In that order because a group is almost always the right answer — sharing
     with `family` keeps working as the family changes, where naming four
     people does not. Both are offered, because sometimes one person really is
     the audience.
@@ -727,9 +727,9 @@ def _audience_names() -> list[str]:
     dressed as a decision.
     """
     book = store()
-    roles = sorted(set(book.roles) - {accounts.ADMIN})
-    people = sorted(set(book.users) - {accounts.ADMIN} - set(roles))
-    return [*roles, *people]
+    groups = sorted(set(book.groups) - {accounts.ADMIN})
+    people = sorted(set(book.users) - {accounts.ADMIN} - set(groups))
+    return [*groups, *people]
 
 
 #: Labels for the filter chips and the fixed vocabularies. Kept server-side so
@@ -747,7 +747,7 @@ _FIXED: dict[str, tuple[tuple[str, str], ...]] = {
 }
 
 #: How the grid can be cut up, and what to call each choice.
-_GROUPS: tuple[tuple[str, str], ...] = (
+_GRID_GROUPS: tuple[tuple[str, str], ...] = (
     ("day", "By day"), ("month", "By month"), ("year", "By year"),
     ("event", "By event"), ("camera", "By camera"), ("kind", "By type"),
     ("none", "Ungrouped"),
@@ -757,7 +757,7 @@ _GROUPS: tuple[tuple[str, str], ...] = (
 #: text, but "nobody yet" is a state rather than a name, and it is the single
 #: most useful thing to filter on — it is the pile of work.
 _EXTRA: dict[str, tuple[tuple[str, str], ...]] = {
-    "audience": ((ix.UNREVIEWED, "New — nobody has access"),),
+    "audience": ((ix.UNREVIEWED, "Nobody — not shared yet"),),
 }
 
 _BROWSE_JS = """
@@ -967,14 +967,21 @@ async function openMenu(anchorEl,ctx){
     };
     const left=hits.filter(o=>!present.includes(o.value));
     if(ctx.column==='audience'){
-      // Roles before individuals: a role keeps working as the household
+      // The sentinel first and on its own: *nobody has this yet* is the
+      // pile of work, not a name, and grouping it with the names buried it
+      // under a heading that read as though it were a deleted account.
+      const special=new Set((EXTRA.audience||[]).map(e=>e[0]));
+      left.filter(o=>special.has(o.value))
+          .forEach(o=>list.appendChild(opt(o,()=>choose(o.value),false)));
+      // Groups before individuals: a group keeps working as the household
       // changes, where naming four people does not — so it is almost always
       // the right answer and belongs where the eye lands first.
-      group('Roles',left.filter(o=>ROLES.includes(o.value)));
-      group('People',left.filter(o=>!ROLES.includes(o.value)
-                                    &&USERS.includes(o.value)));
+      const named=left.filter(o=>!special.has(o.value));
+      group('Groups',named.filter(o=>GROUPS.includes(o.value)));
+      group('People',named.filter(o=>!GROUPS.includes(o.value)
+                                     &&USERS.includes(o.value)));
       group('No longer an account',
-            left.filter(o=>!USERS.includes(o.value)));
+            named.filter(o=>!USERS.includes(o.value)));
     }else{
       // Three bands, most relevant first: values already used by what you
       // are looking at, then by anything one filter away, then the rest.
@@ -2145,14 +2152,14 @@ def accounts_page(user: Annotated[Principal, Depends(require_admin)],
     editor and a container restart.
     """
     book = store()
-    roles = sorted(set(book.roles))
+    groups = sorted(set(book.groups))
     rows = "".join(
         f'<tr><td>{_h(a.name)}</td>'
-        f'<td class="dim">{_h(", ".join(a.roles)) or "&mdash;"}</td>'
+        f'<td class="dim">{_h(", ".join(a.groups)) or "&mdash;"}</td>'
         f'<td><form method="post" action="/accounts/save">'
         f'<input type="hidden" name="name" value="{_h(a.name)}">'
-        f'<input name="roles" value="{_h(", ".join(a.roles))}" '
-        f'placeholder="roles, comma separated" size="22">'
+        f'<input name="groups" value="{_h(", ".join(a.groups))}" '
+        f'placeholder="groups, comma separated" size="22">'
         f'<input name="password" type="password" placeholder="new password" '
         f'size="14" autocomplete="new-password">'
         f'<button>Save</button></form></td>'
@@ -2168,13 +2175,13 @@ def accounts_page(user: Annotated[Principal, Depends(require_admin)],
             'Change it below.</p>')
     return _page("Accounts", f"""{note}{warn}
 <h2 class="year">People</h2>
-<table class="acct"><thead><tr><th>Name</th><th>Roles</th>
+<table class="acct"><thead><tr><th>Name</th><th>Groups</th>
 <th>Change</th><th></th></tr></thead><tbody>{rows}</tbody></table>
 
 <h2 class="year">Add someone</h2>
 <form method="post" action="/accounts/save" class="acct">
 <input name="name" placeholder="name" size="14" autocomplete="off">
-<input name="roles" placeholder="roles, comma separated" size="22">
+<input name="groups" placeholder="groups, comma separated" size="22">
 <input name="password" type="password" placeholder="password" size="14"
        autocomplete="new-password">
 <button class="primary">Add</button></form>
@@ -2188,13 +2195,14 @@ left is the exceptions, which is the part worth seeing.</p>
        placeholder="family" autocomplete="off">
 <button>Save</button></form>
 
-<h2 class="year">Roles</h2>
-<p class="dim">A grant names a person or a role and access cannot tell them
-apart. {_h(", ".join(roles)) or "None yet."}</p>
-<form method="post" action="/accounts/roles" class="acct">
-<input name="roles" value="{_h(", ".join(roles))}" size="40"
+<h2 class="year">Groups</h2>
+<p class="dim">A grant names a person or a group and access cannot tell them
+apart, so sharing with <b>family</b> reaches everyone in it.
+{_h(", ".join(groups)) or "None yet."}</p>
+<form method="post" action="/accounts/groups" class="acct">
+<input name="groups" value="{_h(", ".join(groups))}" size="40"
        placeholder="family, parents, tv">
-<button>Save roles</button></form>
+<button>Save groups</button></form>
 
 <h2 class="year">The admin account</h2>
 <p class="dim">Built in, cannot be removed, sees everything, and is never
@@ -2226,15 +2234,15 @@ async def accounts_save(request: Request,
 
     hashed = auth.hash_password(password) if password else (
         existing.password if existing else "")
-    # Absent and empty are different: the admin form submits no roles field at
-    # all and must not clear them, while an empty box on the people form is how
-    # you take somebody out of every role.
-    kept = (tuple(sorted({accounts.canonical(r) for r in form["roles"].split(",")
-                          if r.strip()}))
-            if "roles" in form else (existing.roles if existing else ()))
+    # Absent and empty are different: the admin form submits no groups field
+    # at all and must not clear them, while an empty box on the people form is
+    # how you take somebody out of every group.
+    kept = (tuple(sorted({accounts.canonical(g)
+                          for g in form["groups"].split(",") if g.strip()}))
+            if "groups" in form else (existing.groups if existing else ()))
     book.users[who] = accounts.Account(who, hashed, kept)
-    # A role used here should exist without having to be declared twice.
-    book.roles = sorted({*book.roles, *kept})
+    # A group used here should exist without having to be declared twice.
+    book.groups = sorted({*book.groups, *kept})
     accounts.save(book)
     return _back(f"saved {who}")
 
@@ -2272,23 +2280,23 @@ async def accounts_usual(
     return _back(f"the usual audience is {book.usual or 'unset'}")
 
 
-@app.post("/accounts/roles")
-async def accounts_roles(
+@app.post("/accounts/groups")
+async def accounts_groups(
     request: Request,
     user: Annotated[Principal, Depends(require_admin)],
 ) -> Response:
-    """Set the list of roles that exist.
+    """Set the groups that exist.
 
-    Kept explicitly so a role can exist before anyone holds it — otherwise
+    Kept explicitly so a group can exist before anyone is in it — otherwise
     creating `tv` would be impossible until something had already been shared
     with it.
     """
-    roles = (await _form(request)).get("roles", "")
+    raw = (await _form(request)).get("groups", "")
     book = store()
-    book.roles = sorted({accounts.canonical(r) for r in roles.split(",")
-                         if r.strip()})
+    book.groups = sorted({accounts.canonical(g) for g in raw.split(",")
+                          if g.strip()})
     accounts.save(book)
-    return _back("saved roles")
+    return _back("saved groups")
 
 
 def _back(message: str) -> Response:

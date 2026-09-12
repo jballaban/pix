@@ -219,13 +219,13 @@ def sign_in() -> "Callable[[str, str], TestClient]":
 @pytest.fixture
 def add_user() -> "Callable[..., None]":
     """Create an account directly, for tests that only need one to exist."""
-    def go(name: str, password: str, roles: tuple[str, ...] = ()) -> None:
+    def go(name: str, password: str, groups: tuple[str, ...] = ()) -> None:
         from pix.nas import accounts, auth
 
         book = accounts.load()
         book.users[name] = accounts.Account(
-            name, auth.hash_password(password), roles)
-        book.roles = sorted({*book.roles, *roles})
+            name, auth.hash_password(password), groups)
+        book.groups = sorted({*book.groups, *groups})
         accounts.save(book)
 
     return go
