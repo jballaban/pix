@@ -194,18 +194,59 @@ function arrow(key, opts) {
   grid.click();
   check('a click outside dismisses the menu', menu.hidden === true);
 
-  // The viewer closes on a click beside the picture.
+  // The viewer closes on a click beside the picture — and looking at one
+  // photograph does not cost a selection. A mis-aimed click on a thumbnail
+  // used to throw away hundreds of gestures with nothing that could undo it.
+  check('a selection is standing before the viewer opens',
+        document.byId.selcount.textContent === '1 selected',
+        document.byId.selcount.textContent);
   cells[0].click();
   await tick();
   check('clicking a photo opens the viewer',
         document.byId.viewer.classList.contains('on'));
+  check('and the selection it was opened over survives',
+        cells[1].classList.contains('picked'),
+        document.byId.selcount.textContent);
+  // Paged right and back again: the cursor visits a file that is not the
+  // selected one, which is where paging would otherwise reselect underneath.
+  arrow('ArrowRight'); arrow('ArrowLeft');
+  check('paging past it leaves the selection alone too',
+        cells[1].classList.contains('picked')
+        && !cells[0].classList.contains('picked'),
+        document.byId.selcount.textContent);
   stage.click();
   check('clicking beside the picture closes it',
         !document.byId.viewer.classList.contains('on'));
+  check('and it is still selected on the way out',
+        document.byId.selcount.textContent === '1 selected',
+        document.byId.selcount.textContent);
+
+  // With nothing selected the viewer still gives the actions something to
+  // apply to, and paging carries that one along — otherwise S would write to
+  // a photograph that had gone off screen.
+  document.byId.selnone.click();
+  cells[0].click();
+  await tick();
+  check('opening with nothing selected selects what you opened',
+        cells[0].classList.contains('picked'),
+        document.byId.selcount.textContent);
+  arrow('ArrowRight');
+  check('and paging carries that one selection along',
+        cells[1].classList.contains('picked')
+        && !cells[0].classList.contains('picked'),
+        document.byId.selcount.textContent);
+  stage.click();
 
   // Unticking leaves nothing selected, and nothing is implicitly targeted.
   // The old model left the cursor on the cell: not ticked, the count saying
   // none, and the actions quietly applying to it anyway.
+  // From a clean selection: looking at a photograph no longer clears one, so
+  // what the viewer left ticked would otherwise still be ticked here.
+  document.byId.selnone.click();
+  cells[0].querySelector('.pick').click();
+  check('ticking one selects it',
+        document.byId.selcount.textContent === '1 selected',
+        document.byId.selcount.textContent);
   cells[0].querySelector('.pick').click();
   check('unticking empties the selection',
         document.byId.selcount.textContent === '0 selected',

@@ -1225,7 +1225,10 @@ cells.forEach((c,n)=>{
     if(e.shiftKey&&anchor>=0){range(anchor,n);setCur(n,true);drawSel();return;}
     if(e.ctrlKey||e.metaKey){togglePick(n);anchor=n;setCur(n,true);drawSel();
                              return;}
-    setCur(n); anchor=n; openViewer();
+    // A plain click is *show me this one*, and it must not cost a selection.
+    // The viewer moves the cursor itself, since whether that also selects
+    // depends on what was selected before the click.
+    anchor=n; openViewer(n);
   });
 });
 document.getElementById('selall').onclick=()=>{
@@ -1351,8 +1354,32 @@ function railHtml(d){
            +`<dl class="kv">${all}</dl></details>`:'');
 }
 
-function openViewer(){viewer.classList.add('on');setCur(cur<0?0:cur);}
-function closeViewer(){viewer.classList.remove('on');vvid.pause();}
+// Looking is not choosing. Opening the viewer used to reset the selection to
+// the single photograph you opened, so one mis-aimed click on a thumbnail
+// threw away a selection that had taken hundreds of gestures to build, with
+// nothing that could bring it back.
+//
+// So the viewer leaves a selection alone: it is a bigger look at the cursor,
+// not a place that decides anything. With nothing selected it still selects
+// what you opened, because otherwise the actions would have nothing to apply
+// to and the count would sit at none while you looked straight at the file
+// you meant.
+//
+// The one selection paging carries along is the viewer's own — the one it
+// made on opening because there was nothing else to act on. That is
+// remembered rather than worked out from the selection afterwards: "one file,
+// and it is the one under the cursor" describes the viewer's selection, but it
+// also describes a single file the curator picked in the grid the moment you
+// page onto it, and then paging away would drag their selection with it.
+let soloView=false;
+function openViewer(n){
+  soloView = picked.size===0;
+  viewer.classList.add('on');
+  setCur(n===undefined?(cur<0?0:cur):n, !soloView);
+}
+function closeViewer(){
+  viewer.classList.remove('on'); vvid.pause(); soloView=false;
+}
 // The stage fills the viewer, so clicking beside the picture lands on it
 // rather than on the viewer itself — the old check never matched and there
 // was no way back out except the keyboard.
@@ -1654,6 +1681,12 @@ document.addEventListener('keydown',e=>{
     setCur(next,true); drawSel();
   }else if(e.ctrlKey||e.metaKey){
     setCur(next,true);          // move the cursor, leave the ticks alone
+  }else if(viewer.classList.contains('on')&&!soloView){
+    // Paging in the viewer is looking, not choosing, so a selection built in
+    // the grid survives being paged past. The exception is the viewer's own
+    // selection, which follows the cursor — otherwise S would write to a
+    // photograph that is no longer on screen.
+    setCur(next,true); drawSel();
   }else{
     setCur(next); anchor=next;
   }
