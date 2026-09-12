@@ -213,6 +213,10 @@ main { padding:16px 20px 40px; }
 .count { font-variant-numeric:tabular-nums; color:var(--dim);
          white-space:nowrap; }
 .spacer { flex:1; }
+/* The chips had no container rule at all, so they sat against one another with
+   nothing between them and read as one control. Same gap as the row they are
+   in, so filters and actions line up. */
+.chips { display:flex; gap:9px; align-items:center; flex-wrap:wrap; }
 /* Counts and messages along the bottom, so the header is only controls:
    every row of chrome up there is a row of photographs pushed off. */
 .footbar { position:fixed; left:0; right:0; bottom:0; z-index:4;
@@ -743,6 +747,11 @@ def _actions(user: Principal) -> str:
     The row itself is always here. It carries the count and the tick, so it
     has something to say with nothing selected — and a row that came and went
     would move the whole grid under the pointer on the first click.
+
+    **One rule separates them, not several.** What a file *is* — its event, its
+    tags, its date, who may see it — runs together in the order those questions
+    get asked. What happens *to* it is the cluster after the bar. Bars between
+    every pair said there were four groups when there are two.
     """
     if not user.is_admin:
         return ""
@@ -750,11 +759,10 @@ def _actions(user: Principal) -> str:
   <button id="selall" class="tick" title="Select all"></button>
   <span class="count" id="selcount" style="margin:0"></span>
   <span class="grp" data-side="live" hidden>
-    <button data-act="access">Access&hellip;</button>
-    <button data-act="tags">Tags&hellip;</button>
-    <span class="sep"></span>
     <button data-act="event">Event&hellip;</button>
+    <button data-act="tags">Tags&hellip;</button>
     <button data-act="date">Date&hellip;</button>
+    <button data-act="access">Access&hellip;</button>
     <span class="sep"></span>
     <button data-act="delete" class="danger">Delete</button>
   </span>
@@ -974,9 +982,13 @@ def _audience_names() -> list[str]:
 #: Labels for the filter chips and the fixed vocabularies. Kept server-side so
 #: the tier and band words are defined once, next to the columns they describe.
 _CHIPS: tuple[tuple[str, str], ...] = (
-    ("event", "Event"), ("year", "Year"), ("tag", "Tag"),
-    ("audience", "Access"), ("kind", "Type"), ("band", "Size"),
-    ("deleted", "Deleted"),
+    # The same order as the actions, because they are the same questions:
+    # what it is, then what it is for. `kind`, `band` and `deleted` come last
+    # as a group of their own — they are facts about the file rather than
+    # judgements about it, and nobody reaches for them mid-cull.
+    ("event", "Event"), ("tag", "Tag"), ("year", "Year"),
+    ("audience", "Access"),
+    ("kind", "Type"), ("band", "Size"), ("deleted", "Deleted"),
 )
 
 #: Complete vocabularies — these columns cannot hold anything else.

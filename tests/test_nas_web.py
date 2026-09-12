@@ -8,6 +8,8 @@ curation decisions: an `.xmp` beside the master file, then that file's index row
 
 from __future__ import annotations
 
+import re
+
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
@@ -344,6 +346,44 @@ def test_a_row_reserves_the_height_of_the_controls_in_it(
     # sized in fixed pixels, and a min-height outranks their `height` — which
     # would make an oval of every select circle in the grid.
     assert "button, .chip { min-height" not in css
+
+
+def test_the_actions_and_filters_ask_the_same_questions_in_the_same_order(
+    client: TestClient
+) -> None:
+    """Two bars that read the same way. Learning one teaches the other, and a
+    control that moves between them is a control you have to find twice."""
+    html = client.get("/browse?event=Italy%20-%20Sicily").text
+
+    acts = re.findall(r'data-act="(\w+)"', html)
+    assert acts[:5] == ["event", "tags", "date", "access", "delete"], acts
+
+    chips = html[html.index("CHIPS="):html.index("FIXED=")]
+    for earlier, later in (("event", "tag"), ("tag", "year"),
+                           ("year", "audience"), ("audience", "kind"),
+                           ("kind", "band"), ("band", "deleted")):
+        assert chips.index(f'"{earlier}"') < chips.index(f'"{later}"'),             f"{earlier} should come before {later}: {chips}"
+
+
+def test_one_bar_separates_what_it_is_from_what_happens_to_it(
+    client: TestClient
+) -> None:
+    """Bars between every pair said there were four groups when there are two:
+    the file's own facts, and the things you do to it."""
+    html = client.get("/browse?event=Italy%20-%20Sicily").text
+    row = html[html.index('id="actions"'):html.index("</div>",
+                                                     html.index('id="actions"'))]
+
+    assert row.count('class="sep"') == 1, row
+
+
+def test_the_filter_chips_are_spaced(client: TestClient) -> None:
+    """They had no container rule at all, so they sat against one another and
+    read as one control."""
+    html = client.get("/browse?event=Italy%20-%20Sicily").text
+
+    assert ".chips {" in html
+    assert "gap:9px" in html[html.index(".chips {"):html.index(".chips {") + 120]
 
 
 def test_the_grid_draws_no_cursor(client: TestClient) -> None:
