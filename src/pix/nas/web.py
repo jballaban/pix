@@ -37,6 +37,7 @@ from fastapi.responses import (
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
 
+from pix import __version__ as _PIX_VERSION
 from pix import datestr
 from pix.nas import accounts
 from pix.nas import auth
@@ -199,6 +200,8 @@ main { padding:16px 20px 40px; }
            flex-wrap:wrap; font-size:12px; }
 .footbar:empty { display:none; }
 .footbar .note { margin:0; margin-left:auto; }
+.ver { color:var(--dim); font-variant-numeric:tabular-nums;
+       white-space:nowrap; }
 .note.loud { background:#5a1d16; color:#ffd9d2; padding:2px 8px;
              border-radius:3px; font-weight:600; }
 main { padding-bottom:48px; }
@@ -421,6 +424,12 @@ def _page(title: str, body: str, *, tools: str = "", rows: str = "",
     live down there so the header is only controls — every row of chrome at the
     top is a row of photographs pushed off the screen.
 
+    The **version** is in the footer of every page, for the same reason the CLI
+    prints it on every run: so that what is on screen and what is in the tree
+    can be compared. The page script is inlined into this HTML, so an open tab
+    keeps the script it was served with — a stale tab and a broken build look
+    identical from the outside, and this is what tells them apart.
+
     `script` goes **last**, after the footer. A page script that runs from
     inside `<main>` cannot see anything below it: moving the count and the
     message line into the footer left both as `null`, and the first thing every
@@ -433,7 +442,7 @@ def _page(title: str, body: str, *, tools: str = "", rows: str = "",
 <div class="row"><a class="brand" href="/">pix2</a>{tools}
 <span class="spacer"></span>{_whoami(user)}</div>{rows}
 </div><main>{body}</main>
-<footer class="footbar">{footer}</footer>
+<footer class="footbar"><span class="ver">v{_PIX_VERSION}</span>{footer}</footer>
 {script}</body></html>""")
 
 

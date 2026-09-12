@@ -48,6 +48,17 @@ def test_event_grid_shows_thumbnails(client: TestClient) -> None:
     assert "/thumb/init_2026/b.mp4" in r.text
 
 
+def test_every_page_says_which_version_it_is(client: TestClient) -> None:
+    """The CLI prints it on every run so dev and tester stay aligned; the app
+    had no equivalent, and a stale browser tab was indistinguishable from a
+    broken build for an afternoon. Read dynamically: a hard-coded number here
+    would be one more thing to forget to bump."""
+    from pix import __version__
+
+    for path in ("/", "/browse?event=Italy%20-%20Sicily", "/login", "/accounts"):
+        assert f"v{__version__}" in client.get(path).text, path
+
+
 def test_the_write_takeover_is_on_the_page(client: TestClient) -> None:
     """The script hides and shows it, so it has to be there to find.
 
