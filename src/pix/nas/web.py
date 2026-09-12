@@ -173,7 +173,11 @@ def db() -> sqlite3.Connection:
 _STYLE = """
 :root { color-scheme: dark; --bg:#14161a; --fg:#e7e9ee; --dim:#8b93a3;
         --line:#272b33; --accent:#6aa3ff; --keep:#56c16a; --top:#e3b341; --gone:#e06c5a;
-        --panel:#1b1e24; }
+        --panel:#1b1e24;
+        /* One control's outer height: a 21px line (14px at 1.5), 4px of
+           padding each side, 1px of border each side. Named because two rules
+           have to agree on it — see `.row`. */
+        --ctl:31px; }
 * { box-sizing: border-box; }
 body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5
        system-ui,-apple-system,Segoe UI,sans-serif; }
@@ -187,7 +191,16 @@ main { padding:16px 20px 40px; }
 .topbar { position:sticky; top:0; z-index:5; background:var(--bg);
           border-bottom:1px solid var(--line); padding:9px 20px; }
 .row { display:flex; gap:9px; align-items:center; flex-wrap:wrap;
-       min-height:30px; }
+       min-height:var(--ctl); }
+/* The action row empties and fills as the selection changes and it sits above
+   the grid, so its height must not depend on what is in it: at 30px empty and
+   31px with a button, every thumbnail on the page moved a pixel on the first
+   click. `--ctl` is what a text button actually measures, so the reserved
+   height and the filled height are the same number.
+   Deliberately not `min-height` on the buttons themselves to say it twice —
+   `.tick`, `.grppick` and `.pick` are buttons with a fixed 16 or 20 pixels,
+   and a min-height outranks their `height`, which would have made an oval of
+   every select circle in the grid. */
 .row + .row { margin-top:8px; border-top:1px solid var(--line); padding-top:8px; }
 .brand { font-weight:600; letter-spacing:.02em; color:var(--fg); }
 .count { font-variant-numeric:tabular-nums; color:var(--dim);

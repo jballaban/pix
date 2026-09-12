@@ -286,6 +286,23 @@ def test_everything_the_script_hides_can_actually_be_hidden(
         assert sel in css, sel
 
 
+def test_a_row_reserves_the_height_of_the_controls_in_it(
+    client: TestClient
+) -> None:
+    """The action row empties and fills as the selection changes, and it sits
+    above the grid — so if the height it reserves is not the height a button
+    actually takes, every thumbnail on the page moves on the first click. The
+    two have to be one number, not two that agree today."""
+    css = client.get("/browse?event=Italy%20-%20Sicily").text
+
+    assert "--ctl:" in css
+    assert "min-height:var(--ctl)" in css
+    # Not on the buttons as well: `.tick`, `.grppick` and `.pick` are buttons
+    # sized in fixed pixels, and a min-height outranks their `height` — which
+    # would make an oval of every select circle in the grid.
+    assert "button, .chip { min-height" not in css
+
+
 def test_the_grid_draws_no_cursor(client: TestClient) -> None:
     """The dashed ring said which cell the keyboard was on, and the grid has no
     keyboard. It stayed behind after that was removed and turned up unasked on
