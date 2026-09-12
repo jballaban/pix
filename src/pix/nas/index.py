@@ -34,6 +34,7 @@ records to record one decision is not a UI anyone uses twice.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import time
 from dataclasses import dataclass, field
@@ -169,7 +170,12 @@ class Filters:
     """
 
     event: str | None = None
-    year: str | None = None
+    #: A **prefix** of the effective date, not a year: `2026`, `2026-08` or
+    #: `2026-08-30`. One filter for three questions, because they are the same
+    #: question asked at three widths, and a library is narrowed down in
+    #: exactly that order. `UNDATED` is the fourth value it takes, and is a
+    #: state rather than a date — *the ones nobody could place* is real work.
+    date: str | None = None
     tag: str | None = None
     audience: str | None = None
     kind: str | None = None
@@ -198,7 +204,7 @@ class Filters:
 
     #: Every filterable column, in the order the top bar shows them. `viewer`
     #: is deliberately absent.
-    NAMES: ClassVar[tuple[str, ...]] = ("event", "year", "tag", "audience",
+    NAMES: ClassVar[tuple[str, ...]] = ("event", "tag", "date", "audience",
                                        "kind", "band")
 
     def active(self) -> tuple[str, ...]:
@@ -624,15 +630,44 @@ def _duration(exif: dict[str, Any]) -> float | None:
 
 # --- filtering ---------------------------------------------------------------
 
+#: `2026`, `2026-08`, `2026-08-30` — and nothing else.
+_DATE_PREFIX = re.compile(r"^\d{4}(-\d{2}(-\d{2})?)?$")
+
+
+def date_prefix(value: str | None) -> str | None:
+    """A date filter value, or None if it is not one.
+
+    Anything unrecognisable is dropped rather than refused, the same way a
+    grouping typo is: this comes out of a URL, which people type and edit by
+    hand, and a half-written date should narrow nothing rather than 500.
+
+    The width is what the clause interpolates into `substr`, so it has to be a
+    number this module chose — never one a request did.
+    """
+    if value is None:
+        return None
+    value = value.strip()
+    if value == UNDATED or _DATE_PREFIX.match(value):
+        return value
+    return None
+
+
 def _clauses(filters: Filters) -> dict[str, tuple[str, dict[str, Any]]]:
     """Each active filter as a SQL fragment plus its parameters."""
     out: dict[str, tuple[str, dict[str, Any]]] = {}
     if filters.event is not None:
         out["event"] = ("COALESCE(files.event, '(none)') = :f_event",
                         {"f_event": filters.event})
-    if filters.year is not None:
-        out["year"] = ("COALESCE(files.year, :undated) = :f_year",
-                       {"f_year": filters.year, "undated": UNDATED})
+    if filters.date is not None:
+        # Matched by prefix, at whatever width the value was given in, so one
+        # clause answers year, month and day. `files.year` is left alone: it
+        # is the grouping key and the landing page's index, and is no longer
+        # what this filters on.
+        width = len(filters.date)
+        out["date"] = (
+            f"COALESCE(substr(files.effective_date, 1, {width}), :undated) "
+            "= :f_date",
+            {"f_date": filters.date, "undated": UNDATED})
     if filters.tag is not None:
         out["tag"] = (
             "EXISTS (SELECT 1 FROM file_tags ft WHERE ft.folder = files.folder "
@@ -883,6 +918,23 @@ def widen(span: tuple[str, str], days: int = NEAR_DAYS) -> tuple[str, str]:
             datestr.format_pix(high + timedelta(days=days)))
 
 
+def _date_level(current: str | None) -> tuple[int, str | None]:
+    """How wide the next date values should be, and what to list them within.
+
+    Years with nothing set; a year's months once a year is chosen; that
+    month's days inside a month. A day already chosen lists its **siblings** —
+    the other days of the same month — because having picked the 30th, what
+    you want next is the 29th, not a list of one.
+    """
+    if current is None or current == UNDATED:
+        return 4, None
+    if len(current) == 4:
+        return 7, current
+    if len(current) == 7:
+        return 10, current
+    return 10, current[:7]
+
+
 def suggest(conn: sqlite3.Connection, column: str,
             filters: Filters | None = None, *,
             near: tuple[str, str] | None = None,
@@ -962,12 +1014,39 @@ def suggest(conn: sqlite3.Connection, column: str,
                + f"FROM {table} m "
                  "JOIN files ON files.folder = m.folder AND files.name = m.name "
                + visible() + "GROUP BY value " + order)
-    elif column == "year":
-        # Undated files are offered as a year, because *show me the ones with
-        # no date* is a real piece of work rather than an absence to hide.
+    elif column == "date":
+        # A drill-down rather than a flat list. With nothing set it offers
+        # years; inside a year, that year's months; inside a month, its days.
+        # Anything else means offering 3,000 days at once to somebody who
+        # knows only that it was a summer.
+        #
+        # The parent is **kept** rather than popped, which is the opposite of
+        # every other column. Popping exists so the first band is not just the
+        # value already filtered on; here the value already filtered on is what
+        # says which months are even worth listing.
         params["undated"] = UNDATED
-        sql = ("SELECT COALESCE(files.year, :undated) AS value, " + tally
-               + "FROM files " + visible() + "GROUP BY value " + order)
+        level, parent = _date_level(view.date)
+        if parent:
+            params["f_parent"] = parent
+            clauses["date"] = (
+                f"substr(files.effective_date, 1, {len(parent)}) = :f_parent",
+                {"f_parent": parent})
+        else:
+            clauses.pop("date", None)
+        # Rebuilt, because the clauses just changed under it.
+        params.update(_bind(clauses))
+        tally = (f"COUNT(*) AS n, 0 AS n_near, 0 AS span, "
+                 f"SUM(CASE WHEN {_combine(clauses, 'AND')} THEN 1 ELSE 0 END) AS n_all, "
+                 f"SUM(CASE WHEN {_combine(clauses, 'OR')} THEN 1 ELSE 0 END) AS n_any ")
+        where = visible(*( (f"substr(files.effective_date, 1, {len(parent)}) "
+                            "= :f_parent",) if parent else ()))
+        sql = (f"SELECT COALESCE(substr(files.effective_date, 1, {level}), "
+               " :undated) AS value, " + tally
+               + "FROM files " + where + "GROUP BY value "
+               # Newest first, the way the library is remembered. Undated sorts
+               # to the end on its own: a bracket is below every digit.
+               + "ORDER BY n_all > 0 DESC, n_any > 0 DESC, value DESC "
+                 "LIMIT :limit")
     elif column in ("event", "kind", "band"):
         sql = (f"SELECT files.{column} AS value, " + tally
                + "FROM files "

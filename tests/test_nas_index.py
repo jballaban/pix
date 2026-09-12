@@ -520,7 +520,7 @@ def test_filters_combine_with_and(tree: dict[str, Path]) -> None:
     _build(tree)
 
     conn = ix.connect(tree["db"])
-    hits = ix.files(conn, ix.Filters(event="Sicily", year="2026"))
+    hits = ix.files(conn, ix.Filters(event="Sicily", date="2026"))
     assert [r["name"] for r in hits] == ["a.jpg"]
 
 
@@ -591,7 +591,7 @@ def test_matching_one_filter_of_two_lands_in_the_middle_band(
     _build(tree)
 
     got = ix.suggest(ix.connect(tree["db"]), "event",
-                     ix.Filters(tag="tv", year="2026"))
+                     ix.Filters(tag="tv", date="2026"))
     assert [(s.value, s.scope) for s in got] == [
         ("Both", "all"), ("YearOnly", "any"), ("Neither", "other")]
 
@@ -677,7 +677,7 @@ def test_the_undated_group_is_reachable_as_a_filter(tree: dict[str, Path]) -> No
     _build(tree)
 
     conn = ix.connect(tree["db"])
-    hits = ix.files(conn, ix.Filters(year=ix.UNDATED))
+    hits = ix.files(conn, ix.Filters(date=ix.UNDATED))
     assert [r["name"] for r in hits] == ["a.jpg"]
 
 
@@ -687,7 +687,7 @@ def test_undated_is_offered_as_a_year(tree: dict[str, Path]) -> None:
     _record(tree, "init_2026", "a.jpg", {})
     _build(tree)
 
-    got = ix.suggest(ix.connect(tree["db"]), "year")
+    got = ix.suggest(ix.connect(tree["db"]), "date")
     assert [s.value for s in got] == [ix.UNDATED]
 
 
@@ -702,7 +702,7 @@ def test_matching_reports_only_the_rows_that_still_fit(
     _build(tree)
 
     conn = ix.connect(tree["db"])
-    stays = ix.matching(conn, ix.Filters(year=ix.UNDATED),
+    stays = ix.matching(conn, ix.Filters(date=ix.UNDATED),
                         [("init_2026", "a.jpg"), ("init_2026", "b.jpg")])
     assert stays == {("init_2026", "a.jpg")}
 
@@ -850,3 +850,89 @@ def test_the_tightest_event_covering_the_day_is_proposed_first(
            if s.scope == "near"]
 
     assert got == ["France Trip", "alina"], got
+
+
+# --- narrowing by date --------------------------------------------------------
+
+def _on(tree: dict[str, Path], name: str, when: str) -> None:
+    _record(tree, "f", name, {"EXIF:DateTimeOriginal": when})
+
+
+def test_a_date_filter_narrows_at_whatever_width_it_is_given(
+    tree: dict[str, Path]
+) -> None:
+    """Year, month and day are the same question at three widths, and a library
+    is narrowed down in exactly that order."""
+    _on(tree, "a.jpg", "2026:08:30 10:00:00")
+    _on(tree, "b.jpg", "2026:08:02 10:00:00")
+    _on(tree, "c.jpg", "2026:01:02 10:00:00")
+    _on(tree, "d.jpg", "2025:08:30 10:00:00")
+    _build(tree)
+    conn = ix.connect(tree["db"])
+
+    def names(value: str) -> set[str]:
+        return {r["name"] for r in ix.files(conn, ix.Filters(date=value))}
+
+    assert names("2026") == {"a.jpg", "b.jpg", "c.jpg"}
+    assert names("2026-08") == {"a.jpg", "b.jpg"}
+    assert names("2026-08-30") == {"a.jpg"}
+    assert names("2025") == {"d.jpg"}
+
+
+def test_a_date_that_is_not_one_narrows_nothing(tree: dict[str, Path]) -> None:
+    """It comes out of a URL, which people type and edit by hand. A half-typed
+    date should show everything rather than 500 — and its width reaches SQL as
+    a `substr` length, so it must be a number this code chose."""
+    assert ix.date_prefix("2026") == "2026"
+    assert ix.date_prefix("2026-08-30") == "2026-08-30"
+    assert ix.date_prefix(ix.UNDATED) == ix.UNDATED
+    for junk in ("2026-8", "202", "2026-08-30-11", "'; DROP TABLE files--",
+                 "", "august"):
+        assert ix.date_prefix(junk) is None, junk
+
+
+def test_the_date_menu_drills_down(tree: dict[str, Path]) -> None:
+    """Years with nothing set, that year's months inside a year, its days
+    inside a month. The alternative is offering three thousand days at once to
+    somebody who knows only that it was a summer."""
+    _on(tree, "a.jpg", "2026:08:30 10:00:00")
+    _on(tree, "b.jpg", "2026:08:02 10:00:00")
+    _on(tree, "c.jpg", "2026:01:02 10:00:00")
+    _on(tree, "d.jpg", "2025:08:30 10:00:00")
+    _build(tree)
+    conn = ix.connect(tree["db"])
+
+    def offered(current: str | None) -> list[str]:
+        return [s.value for s in ix.suggest(conn, "date",
+                                            ix.Filters(date=current))]
+
+    assert offered(None) == ["2026", "2025"], offered(None)
+    assert offered("2026") == ["2026-08", "2026-01"], offered("2026")
+    assert offered("2026-08") == ["2026-08-30", "2026-08-02"]
+
+
+def test_a_chosen_day_offers_its_neighbours(tree: dict[str, Path]) -> None:
+    """Having picked the 30th, what you want next is the 29th — not a list
+    containing only the 30th."""
+    _on(tree, "a.jpg", "2026:08:30 10:00:00")
+    _on(tree, "b.jpg", "2026:08:02 10:00:00")
+    _build(tree)
+    conn = ix.connect(tree["db"])
+
+    got = [s.value for s in ix.suggest(conn, "date",
+                                       ix.Filters(date="2026-08-30"))]
+    assert got == ["2026-08-30", "2026-08-02"], got
+
+
+def test_undated_is_offered_beside_the_years(tree: dict[str, Path]) -> None:
+    """*Show me the ones nobody could place* is a real piece of work, not an
+    absence to hide — and it sorts last on its own, a bracket being below every
+    digit."""
+    _on(tree, "a.jpg", "2026:08:30 10:00:00")
+    _record(tree, "f", "u.jpg", {})
+    _build(tree)
+    conn = ix.connect(tree["db"])
+
+    assert [s.value for s in ix.suggest(conn, "date")] == ["2026", ix.UNDATED]
+    assert [r["name"] for r in
+            ix.files(conn, ix.Filters(date=ix.UNDATED))] == ["u.jpg"]

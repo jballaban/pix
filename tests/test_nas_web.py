@@ -359,8 +359,8 @@ def test_the_actions_and_filters_ask_the_same_questions_in_the_same_order(
     assert acts[:5] == ["event", "tags", "date", "access", "delete"], acts
 
     chips = html[html.index("CHIPS="):html.index("FIXED=")]
-    for earlier, later in (("event", "tag"), ("tag", "year"),
-                           ("year", "audience"), ("audience", "kind"),
+    for earlier, later in (("event", "tag"), ("tag", "date"),
+                           ("date", "audience"), ("audience", "kind"),
                            ("kind", "band"), ("band", "deleted")):
         assert chips.index(f'"{earlier}"') < chips.index(f'"{later}"'),             f"{earlier} should come before {later}: {chips}"
 
@@ -493,7 +493,7 @@ def test_the_home_page_groups_by_year(client: TestClient) -> None:
     """A flat list of every event across twenty-five years is a list nobody
     can find their place in."""
     html = client.get("/").text
-    assert 'href="/browse?year=2026"' in html
+    assert 'href="/browse?date=2026"' in html
     assert "events reviewed" in html
 
 
@@ -501,14 +501,14 @@ def test_an_event_row_links_to_that_year_and_event(
     client: TestClient
 ) -> None:
     html = client.get("/").text
-    assert "year=2026&amp;event=Italy%20-%20Sicily" in html
+    assert "date=2026&amp;event=Italy%20-%20Sicily" in html
 
 
 def test_undated_files_are_reachable(client: TestClient) -> None:
     """374 of the seeded year have no date; that is a work item, not an
     absence to leave unlinked."""
     assert "(undated)" in client.get("/").text
-    assert "b.mp4" in client.get("/browse?year=(undated)").text
+    assert "b.mp4" in client.get("/browse?date=(undated)").text
 
 
 def test_api_files_filters_by_event(client: TestClient) -> None:
@@ -1044,7 +1044,7 @@ def test_the_bar_carries_every_filter(client: TestClient) -> None:
     """Filters are the address of what you are looking at; losing them 2,000
     thumbnails down is losing your place."""
     html = client.get("/browse").text
-    for column in ("event", "year", "tag", "audience", "kind", "band"):
+    for column in ("event", "date", "tag", "audience", "kind", "band"):
         assert f'"{column}"' in html
 
 
@@ -1183,7 +1183,7 @@ def test_a_year_only_date_moves_only_the_year(client: TestClient,
         "date_override": "1987-*-*-*:*:*"})
 
     assert r.json()["date_override"] == "1987-*-*-*:*:*"
-    rows = client.get("/api/files?year=1987").json()
+    rows = client.get("/api/files?date=1987").json()
     assert [row["name"] for row in rows] == ["a.jpg"]
     assert rows[0]["effective_date"] == "1987-08-30-15:34:55"
 
@@ -1205,7 +1205,7 @@ def test_dating_a_file_drops_it_from_the_undated_view(
     """The regression this exists to prevent: adding a date while filtered to
     undated left the file sitting in a view it no longer belonged to."""
     (writable / "b.mp4").write_bytes(b"fake")
-    r = client.post("/api/decide/bulk?year=(undated)", json={
+    r = client.post("/api/decide/bulk?date=(undated)", json={
         "date_override": "1987-*-*-*:*:*", "files": _targets("b.mp4")})
 
     assert r.json()["written"] == 1
@@ -1566,7 +1566,7 @@ def test_suggestions_are_scoped_to_the_viewer(
     admin = cast(TestClient, household["admin"])
 
     assert admin.get("/api/suggest?column=event").json() != []
-    for column in ("event", "year", "tag", "kind", "band"):
+    for column in ("event", "date", "tag", "kind", "band"):
         for s in kid.get(f"/api/suggest?column={column}").json():
             assert s["n"] <= 1, column
 

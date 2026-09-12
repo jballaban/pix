@@ -568,7 +568,7 @@ def bin_link_html(n: int) -> str:
 def filters(
     user: Annotated[Principal, Depends(require_user)],
     event: Annotated[str | None, Query()] = None,
-    year: Annotated[str | None, Query()] = None,
+    date: Annotated[str | None, Query()] = None,
     tag: Annotated[str | None, Query()] = None,
     audience: Annotated[str | None, Query()] = None,
     kind: Annotated[str | None, Query()] = None,
@@ -586,13 +586,19 @@ def filters(
     every query, so a non-admin cannot widen their own view by editing the
     address bar — the one thing a URL-shaped filter model must not allow.
 
+    `date` is a prefix — `2026`, `2026-08`, `2026-08-30` — and anything else is
+    dropped rather than refused, the same way a grouping typo is. Its width
+    reaches SQL as a `substr` length, so it has to be a number this code chose
+    and never one a request did; `ix.date_prefix` is where that is decided.
+
     `deleted` is in the URL like any other filter, but it is **dropped for a
     non-admin** rather than merely hidden from their bar. Hiding the chip
     stops it being offered; this is what stops it being asked for. Anything
     but the two known words is dropped too, so a typo reads as the default
     rather than as some third thing.
     """
-    return ix.Filters(event=event, year=year, tag=tag, audience=audience,
+    return ix.Filters(event=event, date=ix.date_prefix(date), tag=tag,
+                      audience=audience,
                       kind=kind, band=band, viewer=user.scope,
                       deleted=(deleted if user.is_admin
                                and deleted in ("only", "with") else None))
@@ -649,7 +655,7 @@ def _year_section(year: str, group: list[sqlite3.Row]) -> str:
     files_n = sum(int(r["n"]) for r in group)
     done = sum(1 for r in group if not r["unreviewed"])
     rows = "".join(
-        f'<tr><td><a href="/browse?year={_q(year)}&amp;event={_q(r["event"])}">'
+        f'<tr><td><a href="/browse?date={_q(year)}&amp;event={_q(r["event"])}">'
         f'{_h(r["event"])}</a></td>'
         f'<td class="num">{r["n"]:,}</td>'
         + ('<td class="num done">done</td>' if not r["unreviewed"] else
@@ -658,7 +664,7 @@ def _year_section(year: str, group: list[sqlite3.Row]) -> str:
         f'<td class="dim">{_h(str(r["last_seen"] or "")[:10])}</td></tr>'
         for r in group
     )
-    return f"""<h2 class="year"><a href="/browse?year={_q(year)}">{_h(year)}</a>
+    return f"""<h2 class="year"><a href="/browse?date={_q(year)}">{_h(year)}</a>
 <span class="dim">{files_n:,} files &middot; {done} of {len(group)}
 events reviewed</span></h2>
 <table><thead><tr><th>Event</th><th class="num">Files</th>
@@ -986,7 +992,7 @@ _CHIPS: tuple[tuple[str, str], ...] = (
     # what it is, then what it is for. `kind`, `band` and `deleted` come last
     # as a group of their own — they are facts about the file rather than
     # judgements about it, and nobody reaches for them mid-cull.
-    ("event", "Event"), ("tag", "Tag"), ("year", "Year"),
+    ("event", "Event"), ("tag", "Tag"), ("date", "Date"),
     ("audience", "Access"),
     ("kind", "Type"), ("band", "Size"), ("deleted", "Deleted"),
 )
@@ -2193,7 +2199,7 @@ def api_suggest(user: Annotated[Principal, Depends(require_user)],
     already covering those days. Both or neither — half a range is not a range,
     and guessing the missing end would propose events on evidence nobody gave.
     """
-    if column not in ("event", "tag", "audience", "year", "kind", "band"):
+    if column not in ("event", "tag", "audience", "date", "kind", "band"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             f"cannot suggest values for {column!r}")
     near = (near_from, near_to) if near_from and near_to else None
