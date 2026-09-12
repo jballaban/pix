@@ -357,6 +357,53 @@ function arrow(key, opts) {
     }
   }
 
+  // Reaching for an event sends what the selection spans, so the server can
+  // propose the events already covering those days.
+  {
+    deselect();
+    // The delete above marked `a.jpg` deleted, and the span is taken from the
+    // living half of the selection.
+    cells.forEach(c => { c.dataset.deleted = ''; c.classList.remove('gone'); });
+    cells[0].dataset.date = '2026-07-26-10:00:00';
+    cells[1].dataset.date = 'no date';
+    cells[0].querySelector('.pick').click();
+    cells[1].querySelector('.pick').click();
+    const n = calls.length;
+    actBtn('event').click();
+    await settle(); await settle();
+    const asked = calls.slice(n).find(c => c.url.startsWith('/api/suggest'));
+    check('the event menu asks about the selection dates', !!asked,
+          'no suggest call');
+    if (asked) {
+      check('sending the span it covers',
+            asked.url.includes('near_from=2026-07-26-10%3A00%3A00')
+            && asked.url.includes('near_to=2026-07-26-10%3A00%3A00'),
+            asked.url);
+      // An undated file left in would stretch the range across the library.
+      check('and leaving the undated one out of it',
+            !asked.url.includes('no+date') && !asked.url.includes('no%20date'),
+            asked.url);
+    }
+    grid.click();
+    deselect();
+    cells[0].dataset.date = '2026-01-01';
+    cells[1].dataset.date = '2026-01-01';
+  }
+
+  // Tags are not occasions, so reaching for one asks about no dates at all.
+  {
+    deselect();
+    cells[0].querySelector('.pick').click();
+    const n = calls.length;
+    actBtn('tags').click();
+    await settle(); await settle();
+    const asked = calls.slice(n).find(c => c.url.startsWith('/api/suggest'));
+    check('a tag menu asks for no span', asked && !asked.url.includes('near_'),
+          asked ? asked.url : 'no suggest call');
+    grid.click();
+    deselect();
+  }
+
   // A mixed selection offers both sets, and each acts only on the files it
   // means. This is the whole reason the sides follow the selection rather than
   // the filter: under `Including deleted` a day holds both kinds.

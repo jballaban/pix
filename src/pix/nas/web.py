@@ -1096,6 +1096,15 @@ async function openMenu(anchorEl,ctx){
     const p=new URLSearchParams();
     for(const [k,v] of Object.entries(VIEW)) if(v) p.set(k,v);
     p.set('column',ctx.column);
+    // What the selection spans, which only the page knows. Undated files are
+    // left out rather than counted as some smallest date — one of those would
+    // stretch the range across the whole library and propose everything.
+    if(ctx.mode==='set'&&ctx.column==='event'){
+      const days=targetsOn('live').map(c=>c.dataset.date)
+                                  .filter(d=>d&&d!=='no date').sort();
+      if(days.length){p.set('near_from',days[0]);
+                      p.set('near_to',days[days.length-1]);}
+    }
     try{
       const res=await fetch('/api/suggest?'+p);
       opts=(await res.json()).map(o=>({...o,label:o.value}));
@@ -1212,7 +1221,8 @@ async function openMenu(anchorEl,ctx){
     }else{
       // Three bands, most relevant first: values already used by what you
       // are looking at, then by anything one filter away, then the rest.
-      for(const [scope,title] of [['all','In this view'],['any','Related'],
+      for(const [scope,title] of [['near','Around these dates'],
+                                  ['all','In this view'],['any','Related'],
                                   ['other','Elsewhere']]){
         const band=left.filter(o=>o.scope===scope);
         if(hits.some(o=>o.scope!==scope)||present.length) group(title,band);
@@ -2107,20 +2117,28 @@ def api_files(user: Annotated[Principal, Depends(require_user)],
 @app.get("/api/suggest")
 def api_suggest(user: Annotated[Principal, Depends(require_user)],
                 view: Annotated[ix.Filters, Depends(filters)],
-                column: Annotated[str, Query()]) -> JSONResponse:
+                column: Annotated[str, Query()],
+                near_from: Annotated[str | None, Query()] = None,
+                near_to: Annotated[str | None, Query()] = None) -> JSONResponse:
     """Existing values for a column, most relevant to the current view first.
 
     A library ends up with hundreds of events and tags, and an alphabetical
     list of all of them buries the handful that apply to what is on screen.
     Ranking by how much of the current view already uses a value puts the
     likely answer in the first few rows — see `index.suggest`.
+
+    `near_from`/`near_to` are the dates the *selection* spans, which the page
+    knows and the server does not. They add the strongest band of all: events
+    already covering those days. Both or neither — half a range is not a range,
+    and guessing the missing end would propose events on evidence nobody gave.
     """
     if column not in ("event", "tag", "audience", "year", "kind", "band"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             f"cannot suggest values for {column!r}")
+    near = (near_from, near_to) if near_from and near_to else None
     return JSONResponse([
         {"value": s.value, "n": s.n, "scope": s.scope}
-        for s in ix.suggest(db(), column, view)])
+        for s in ix.suggest(db(), column, view, near=near)])
 
 
 #: The readings worth surfacing, in the order a person asks for them. The full

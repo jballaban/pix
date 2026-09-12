@@ -729,3 +729,124 @@ def test_a_name_cannot_forge_the_pair_separator(tree: dict[str, Path]) -> None:
 
     conn = ix.connect(tree["db"])
     assert ix.matching(conn, ix.Filters(), [("init", "2026/a.jpg")]) == set()
+
+
+# --- proposing an event by its dates ------------------------------------------
+
+def _dated(tree: dict[str, Path], name: str, when: str,
+           event: str | None = None) -> None:
+    """One file on a given day, optionally already belonging to an event."""
+    exif: dict[str, object] = {"EXIF:DateTimeOriginal": when}
+    if event:
+        exif["XMP:EventAuto"] = event
+    _record(tree, "f", name, exif)
+
+
+def test_an_event_spanning_the_selection_is_proposed_first(
+    tree: dict[str, Path]
+) -> None:
+    """The time-neighbour proposal (§8). Photographs taken on the same days as
+    an event usually belong to it, and that beats every other signal there is
+    for naming one — so it outranks the filter bands, which know only what is
+    on screen."""
+    _dated(tree, "f1.jpg", "2026:07:26 10:00:00", "France Trip")
+    _dated(tree, "f2.jpg", "2026:07:30 10:00:00", "France Trip")
+    _dated(tree, "o1.jpg", "2026:01:02 10:00:00", "Christmas")
+    _dated(tree, "o2.jpg", "2026:01:03 10:00:00", "Christmas")
+    _dated(tree, "new.jpg", "2026:07:28 10:00:00")
+    _build(tree)
+    conn = ix.connect(tree["db"])
+
+    got = ix.suggest(conn, "event",
+                     near=("2026-07-28-10:00:00", "2026-07-28-10:00:00"))
+    by = {s.value: s.scope for s in got}
+
+    assert by["France Trip"] == "near", by
+    assert by["Christmas"] != "near", by
+    assert got[0].value == "France Trip", [s.value for s in got]
+
+
+def test_without_a_selection_nothing_is_near(tree: dict[str, Path]) -> None:
+    """The band has to be absent rather than empty-and-first: with no selection
+    there is no evidence, and proposing on none would be guessing."""
+    _dated(tree, "f1.jpg", "2026:07:26 10:00:00", "France Trip")
+    _build(tree)
+    conn = ix.connect(tree["db"])
+
+    assert all(s.scope != "near" for s in ix.suggest(conn, "event"))
+
+
+def test_near_reaches_a_day_past_each_end(tree: dict[str, Path]) -> None:
+    """Strict overlap misses by a hair — the last afternoon photographed after
+    midnight, a camera an hour out — and an event proposed a day too late is no
+    proposal at all."""
+    _dated(tree, "f1.jpg", "2026:07:26 10:00:00", "France Trip")
+    _dated(tree, "f2.jpg", "2026:07:30 10:00:00", "France Trip")
+    _build(tree)
+    conn = ix.connect(tree["db"])
+
+    # The morning after it ended.
+    near = ("2026-07-31-09:00:00", "2026-07-31-09:00:00")
+    assert [s.scope for s in ix.suggest(conn, "event", near=near)] == ["near"]
+
+    # A week after is not "around" anything.
+    far = ("2026-08-06-09:00:00", "2026-08-06-09:00:00")
+    assert all(s.scope != "near" for s in ix.suggest(conn, "event", near=far))
+
+
+def test_an_undated_event_is_near_nothing(tree: dict[str, Path]) -> None:
+    """MIN and MAX drop NULLs, so an event with no dates has no span. Reading
+    that as a match would put the one event nobody can place at the top of
+    every proposal."""
+    _record(tree, "f", "u1.jpg", {"XMP:EventAuto": "Unknown"})
+    _dated(tree, "f1.jpg", "2026:07:26 10:00:00", "France Trip")
+    _build(tree)
+    conn = ix.connect(tree["db"])
+
+    got = {s.value: s.scope
+           for s in ix.suggest(conn, "event",
+                               near=("2026-07-26-10:00:00",
+                                     "2026-07-26-10:00:00"))}
+    assert got["France Trip"] == "near"
+    assert got["Unknown"] != "near", got
+
+
+def test_only_events_have_a_span(tree: dict[str, Path]) -> None:
+    """A tag is not an occasion. Asking when one happened would rank keywords
+    by a property they do not have."""
+    _dated(tree, "f1.jpg", "2026:07:26 10:00:00", "France Trip")
+    _sidecar(tree, "f", "f1.jpg")
+    decisions.write(tree["master"] / "f" / "f1.jpg",
+                    Decision(tags=("beach",)))
+    _build(tree)
+    conn = ix.connect(tree["db"])
+
+    near = ("2026-07-26-10:00:00", "2026-07-26-10:00:00")
+    assert all(s.scope != "near" for s in ix.suggest(conn, "tag", near=near))
+
+
+def test_the_tightest_event_covering_the_day_is_proposed_first(
+    tree: dict[str, Path]
+) -> None:
+    """Overlap alone is not enough. Against the real library a date in France
+    matched seven events and six of them were device dumps long enough to
+    overlap anything — so the band is ordered by how tightly the event fits.
+
+    A fortnight that covers your day is a claim about your day; eight months of
+    somebody's phone covers it too and says nothing."""
+    _dated(tree, "t1.jpg", "2026:07:26 10:00:00", "France Trip")
+    _dated(tree, "t2.jpg", "2026:08:02 10:00:00", "France Trip")
+    # A phone dump either side of it, months wide — and *bigger*, so that the
+    # fallback ordering (most-used first) would put it on top. Without that the
+    # test passes on alphabet alone and proves nothing.
+    _dated(tree, "d1.jpg", "2026:02:01 10:00:00", "alina")
+    _dated(tree, "d2.jpg", "2026:11:01 10:00:00", "alina")
+    _dated(tree, "d3.jpg", "2026:07:28 11:00:00", "alina")
+    _build(tree)
+    conn = ix.connect(tree["db"])
+
+    near = ("2026-07-28-10:00:00", "2026-07-28-10:00:00")
+    got = [s.value for s in ix.suggest(conn, "event", near=near)
+           if s.scope == "near"]
+
+    assert got == ["France Trip", "alina"], got

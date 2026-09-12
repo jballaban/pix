@@ -212,8 +212,9 @@ class Suggestion:
 
     value: str
     n: int
-    #: `all` — used by files matching every other active filter; `any` — used by
-    #: files matching at least one; `other` — used elsewhere in the library.
+    #: `near` — an event whose own dates span what is selected; `all` — used by
+    #: files matching every other active filter; `any` — used by files matching
+    #: at least one; `other` — used elsewhere in the library.
     scope: str
 
 
@@ -860,8 +861,31 @@ def matching(conn: sqlite3.Connection, filters: Filters,
     return {(str(r["folder"]), str(r["name"])) for r in rows}
 
 
+#: How far either side of a selection an event still counts as *around* it.
+#: Strict overlap misses the common case by a hair — the last afternoon of a
+#: trip, photographed after midnight, or a camera an hour out — and an event
+#: proposed a day too late is no proposal at all.
+NEAR_DAYS: int = 1
+
+
+def widen(span: tuple[str, str], days: int = NEAR_DAYS) -> tuple[str, str]:
+    """A date range, loosened by `days` at each end.
+
+    Given anything unparseable, it is returned as-is: the comparison it feeds
+    is a string one, and a range nobody can widen is still a range that works.
+    """
+    lo, hi = span
+    low, high = datestr.parse_pix(lo), datestr.parse_pix(hi)
+    if low is None or high is None:
+        return span
+    from datetime import timedelta
+    return (datestr.format_pix(low - timedelta(days=days)),
+            datestr.format_pix(high + timedelta(days=days)))
+
+
 def suggest(conn: sqlite3.Connection, column: str,
             filters: Filters | None = None, *,
+            near: tuple[str, str] | None = None,
             limit: int = 400) -> list[Suggestion]:
     """Existing values for `column`, most relevant to the current view first.
 
@@ -879,17 +903,52 @@ def suggest(conn: sqlite3.Connection, column: str,
     The **viewer** restriction is not part of that banding and is never
     dropped: a dropdown listing every event in the house to somebody who can
     open none of them tells them exactly what they were not shown.
+
+    `near` is the date range of what the curator has selected, and it adds a
+    band **above** all three: events whose own span overlaps it. This is the
+    time-neighbour proposal from §8 — *these forty photographs fall between two
+    files tagged France Trip* — asked at the moment of assignment rather than
+    at import. It is the strongest signal there is for naming an event, and it
+    beats the filter bands precisely because it knows something they do not:
+    photographs taken on the same days are usually the same occasion.
+
+    Within that band the **tightest** event comes first. A fortnight in France
+    that covers your day is a claim about your day; a folder called `alina`
+    holding eight months of somebody's phone covers it too and says nothing.
+    Both are offered — the long one might be right — but the specific one is
+    the proposal.
+
+    Only events have a span, so `near` is ignored for every other column.
     """
     view = filters or Filters()
     clauses = _clauses(view)
     clauses.pop(column, None)
     seen, seen_params = _scope(view)
     params: dict[str, Any] = {**_bind(clauses), **seen_params, "limit": limit}
-    tally = (f"COUNT(*) AS n, "
+    # An event's span is MIN..MAX over its own group, so *does it overlap the
+    # selection* is one expression evaluated per group rather than a second
+    # query. NULL dates fall out of MIN/MAX and the comparison reads false,
+    # which is right: an undated event is near nothing.
+    near_sql = "0 AS n_near, 0 AS span "
+    if near and column == "event":
+        lo, hi = widen(near)
+        params["near_lo"], params["near_hi"] = lo, hi
+        near_sql = ("(MIN(files.effective_date) <= :near_hi "
+                    " AND MAX(files.effective_date) >= :near_lo) AS n_near, "
+                    " julianday(substr(MAX(files.effective_date),1,10)) "
+                    " - julianday(substr(MIN(files.effective_date),1,10)) "
+                    " AS span ")
+    tally = (f"COUNT(*) AS n, " + near_sql + ", "
              f"SUM(CASE WHEN {_combine(clauses, 'AND')} THEN 1 ELSE 0 END) AS n_all, "
              f"SUM(CASE WHEN {_combine(clauses, 'OR')} THEN 1 ELSE 0 END) AS n_any ")
-    order = ("ORDER BY n_all > 0 DESC, n_any > 0 DESC, n DESC, value "
-             "LIMIT :limit")
+    # Tightest first within the band. A fortnight in France that covers your
+    # day is a claim about your day; a folder called `alina` holding eight
+    # months of a phone covers it too and says nothing. Against the real
+    # library, overlap alone proposed seven events for a date in France and
+    # only one of them was an occasion — the rest were device dumps long enough
+    # to overlap everything.
+    order = ("ORDER BY n_near DESC, CASE WHEN n_near THEN span END ASC, "
+             "n_all > 0 DESC, n_any > 0 DESC, n DESC, value LIMIT :limit")
 
     def visible(*extra: str) -> str:
         """The WHERE that every suggestion is drawn from."""
@@ -918,7 +977,8 @@ def suggest(conn: sqlite3.Connection, column: str,
         raise ValueError(f"cannot suggest values for {column!r}")
 
     return [Suggestion(value=str(r["value"]), n=int(r["n"]),
-                       scope=("all" if r["n_all"] else
+                       scope=("near" if r["n_near"] else
+                              "all" if r["n_all"] else
                               "any" if r["n_any"] else "other"))
             for r in conn.execute(sql, params)]
 

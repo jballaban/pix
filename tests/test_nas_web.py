@@ -1013,6 +1013,25 @@ def test_suggestions_respect_the_current_view(client: TestClient,
     assert [(s["value"], s["scope"]) for s in got] == [("tv", "all")]
 
 
+def test_a_selection_span_proposes_the_events_covering_it(
+    client: TestClient
+) -> None:
+    """The page knows what the selection spans and the server does not, so the
+    dates ride along with the request."""
+    got = client.get("/api/suggest?column=event"
+                     "&near_from=2026-08-30-00:00:00"
+                     "&near_to=2026-08-30-23:59:59").json()
+
+    assert [(s["value"], s["scope"]) for s in got] == [("Italy - Sicily", "near")]
+
+
+def test_half_a_range_is_not_a_range(client: TestClient) -> None:
+    """Guessing the missing end would propose events on evidence nobody gave."""
+    for query in ("&near_from=2026-08-30-00:00:00", "&near_to=2026-08-30-00:00:00"):
+        got = client.get("/api/suggest?column=event" + query).json()
+        assert all(s["scope"] != "near" for s in got), query
+
+
 def test_an_unsuggestable_column_is_refused(client: TestClient) -> None:
     assert client.get("/api/suggest?column=camera").status_code == 400
     assert client.get("/api/suggest?column=folder").status_code == 400
