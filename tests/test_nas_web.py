@@ -1333,3 +1333,64 @@ def test_the_client_hides_the_usual_audience_too(client: TestClient) -> None:
     js = client.get("/browse").text
 
     assert "all.filter(v=>v!==USUAL)" in js
+
+
+# --- grouping -----------------------------------------------------------------
+
+def test_the_grid_is_grouped_by_day_by_default(client: TestClient) -> None:
+    """A day is the unit people remember photographs in — the afternoon at the
+    lake — where an event is usually several of them."""
+    html = client.get("/browse").text
+
+    assert 'class="group"' in html
+    assert "30 August 2026" in html
+
+
+def test_a_group_heading_counts_its_files(client: TestClient) -> None:
+    assert ">1</span>" in client.get("/browse").text
+
+
+def test_undated_files_group_under_no_date(client: TestClient) -> None:
+    """b.mp4 has no date at all, and belongs somewhere rather than nowhere."""
+    assert "No date" in client.get("/browse").text
+
+
+def test_grouping_can_be_turned_off(client: TestClient) -> None:
+    assert 'class="group"' not in client.get("/browse?group=none").text
+
+
+def test_grouping_by_event_uses_the_event_name(client: TestClient) -> None:
+    html = client.get("/browse?group=event").text
+
+    assert "Italy - Sicily" in html
+
+
+def test_an_unknown_grouping_falls_back_to_the_default(
+    client: TestClient
+) -> None:
+    """A URL is typed by people and edited by hand; an unrecognised value
+    should not be a 500."""
+    r = client.get("/browse?group=nonsense")
+
+    assert r.status_code == 200
+    assert "30 August 2026" in r.text
+
+
+def test_the_grouping_control_shows_the_current_choice(
+    client: TestClient
+) -> None:
+    html = client.get("/browse?group=month").text
+
+    assert '<option value="month" selected>' in html
+
+
+def test_order_is_by_effective_date(client: TestClient, writable: Path) -> None:
+    """Not by filename, and not by capture date — by the date the file actually
+    has, after any override."""
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg",
+        "date_override": "1987-*-*-*:*:*"})
+
+    rows = client.get("/api/files").json()
+    assert [r["name"] for r in rows][0] == "a.jpg"
+    assert rows[0]["effective_date"].startswith("1987")

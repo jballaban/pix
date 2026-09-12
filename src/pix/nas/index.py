@@ -62,6 +62,20 @@ UNREVIEWED: str = "new"
 UNDATED: str = "(undated)"
 NO_EVENT: str = "(none)"
 
+#: How the grid can be cut into sections, and the SQL that computes the key.
+#: A **day** by default: a day is the unit people remember photographs in — *the
+#: afternoon at the lake* — where an event is usually several of them and a
+#: single folder is thousands.
+GROUPINGS: dict[str, str | None] = {
+    "none": None,
+    "day": "substr(files.effective_date, 1, 10)",
+    "month": "substr(files.effective_date, 1, 7)",
+    "year": "files.year",
+    "event": "COALESCE(files.event, '(none)')",
+    "camera": "COALESCE(files.camera, '(unknown)')",
+    "kind": "files.kind",
+}
+
 #: Where *small/short*, *medium* and *large/long* fall. One filter whose
 #: meaning follows the file: for a clip the question is length, for a photo
 #: it is weight, and asking it as two controls would mean picking the right
@@ -715,18 +729,28 @@ def events(conn: sqlite3.Connection,
 
 
 def files(conn: sqlite3.Connection, filters: Filters | None = None, *,
+          group: str | None = None,
           limit: int = 500, offset: int = 0) -> list[sqlite3.Row]:
     """Files matching every active filter, in effective-date order.
 
     Undated files sort last rather than scattering through the grid: they are a
     work item of their own, not a date that happens to be small.
+
+    `group` adds a `grp` column and sorts by it first, so a page can cut the
+    grid into sections without a second query or a second idea of the order.
+    Within a section the order is unchanged — chronological, because that is
+    how a day of photographs reads.
     """
     where, bound = _where(filters or Filters())
+    key = GROUPINGS.get(group or "none")
     params: dict[str, Any] = {**bound, "limit": limit, "offset": offset}
     return list(conn.execute(
-        "SELECT files.*, " + _TAGS_COL + ", " + _AUDIENCE_COL + " FROM files "
+        "SELECT files.*, " + _TAGS_COL + ", " + _AUDIENCE_COL
+        + (f", {key} AS grp " if key else ", NULL AS grp ")
+        + "FROM files "
         + (f"WHERE {where} " if where else "")
-        + "ORDER BY effective_date IS NULL, effective_date, name "
+        + "ORDER BY " + ("grp IS NULL, grp, " if key else "")
+        + "effective_date IS NULL, effective_date, name "
         "LIMIT :limit OFFSET :offset", params
     ))
 

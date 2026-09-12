@@ -36,6 +36,7 @@ from fastapi.responses import (
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
 
+from pix import datestr
 from pix.nas import accounts
 from pix.nas import auth
 from pix.nas import decisions
@@ -249,6 +250,16 @@ button.primary { background:var(--accent); color:#0d0f12; border-color:var(--acc
 /* grid */
 .grid { display:grid; gap:6px;
         grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); }
+/* A heading spans every column, so one flow holds headings and thumbnails —
+   which keeps arrow-key movement walking straight through the sections
+   rather than having to know they are there. */
+h3.group { grid-column:1/-1; margin:18px 0 2px; font-size:13px;
+           font-weight:600; display:flex; gap:10px; align-items:baseline;
+           border-bottom:1px solid var(--line); padding-bottom:5px; }
+h3.group:first-child { margin-top:0; }
+h3.group span { font-weight:400; font-variant-numeric:tabular-nums; }
+select { background:#222833; color:var(--fg); border:1px solid var(--line);
+         border-radius:4px; padding:4px 7px; font:inherit; }
 .cell { position:relative; aspect-ratio:1; background:#0d0f12; overflow:hidden;
         border-radius:3px; cursor:pointer; }
 .cell img { width:100%; height:100%; object-fit:cover; display:block; }
@@ -497,17 +508,19 @@ def event_grid(event: str) -> RedirectResponse:
 
 @app.get("/browse", response_class=HTMLResponse)
 def browse(user: Annotated[Principal, Depends(require_user)],
-           view: Annotated[ix.Filters, Depends(filters)]) -> HTMLResponse:
+           view: Annotated[ix.Filters, Depends(filters)],
+           group: Annotated[str, Query()] = "day") -> HTMLResponse:
     """The one grid, filtered — select files, then say something about them.
 
     Selecting an event on the landing page is just this page with `?event=`, so
     there is one surface to learn rather than a browser and a separate editor.
     """
     conn = db()
-    rows = ix.files(conn, view, limit=PAGE_LIMIT)
+    group = group if group in ix.GROUPINGS else "day"
+    rows = ix.files(conn, view, group=group, limit=PAGE_LIMIT)
     total = ix.count(conn, view)
 
-    cells = "".join(_cell(r) for r in rows)
+    cells = _sections(rows, group)
     shown = (f"{total:,} files" if total <= PAGE_LIMIT else
              f"{len(rows):,} of {total:,} files")
     body = (f'<div class="grid" id="grid">{cells}</div>'
@@ -523,7 +536,8 @@ def browse(user: Annotated[Principal, Depends(require_user)],
 </div>
 <div id="menu" hidden></div>""",
         tools=('<div class="chips" id="chips"></div>'
-               '<button id="selall">Select all</button>'
+               + _group_control(group)
+               + '<button id="selall">Select all</button>'
                '<button id="selnone">Deselect</button>'),
         rows=_actions(user),
         script=(
@@ -573,6 +587,63 @@ def _chips_html(cls: str, values: list[str]) -> str:
         return ""
     chips = "".join(f'<i title="{_h(v)}">{_h(v)}</i>' for v in values)
     return f'<span class="{cls}" title="{_h(", ".join(values))}">{chips}</span>'
+
+
+def _group_control(group: str) -> str:
+    """How the grid is cut up. A plain select: it is one choice from a fixed
+    list, which is the one control every browser already gets right."""
+    options = "".join(
+        f'<option value="{key}"{" selected" if key == group else ""}>'
+        f'{_h(label)}</option>'
+        for key, label in _GROUPS)
+    return f'<select id="grouping" title="Group the grid">{options}</select>'
+
+
+def _sections(rows: list[sqlite3.Row], group: str) -> str:
+    """The cells, with a heading wherever the group key changes.
+
+    Headings are grid items spanning every column, so one flow holds both —
+    which keeps the keyboard walking straight through the sections rather
+    than needing to know they exist.
+    """
+    out: list[str] = []
+    current: object = object()
+    run: list[sqlite3.Row] = []
+
+    def flush() -> None:
+        if not run:
+            return
+        if group != "none":
+            label = _group_label(current, group)
+            out.append(f'<h3 class="group">{_h(label)}'
+                       f'<span class="dim">{len(run):,}</span></h3>')
+        out.extend(_cell(r) for r in run)
+
+    for row in rows:
+        key = row["grp"] if group != "none" else None
+        if key != current and run:
+            flush()
+            run = []
+        current = key
+        run.append(row)
+    flush()
+    return "".join(out)
+
+
+def _group_label(key: object, group: str) -> str:
+    """A heading a person reads, not a sort key."""
+    if key is None or key == "":
+        return "No date" if group in ("day", "month", "year") else "None"
+    text = str(key)
+    if group == "day":
+        moment = datestr.parse_pix(text + "-00:00:00")
+        # Composed rather than one strftime: `%-d` drops the leading zero on
+        # Linux and is simply invalid on Windows, and this runs on both.
+        return (f"{moment:%A} {moment.day} {moment:%B %Y}" if moment else text)
+    if group == "month":
+        moment = datestr.parse_pix(text + "-01-00:00:00")
+        return moment.strftime("%B %Y") if moment else text
+    return text
 
 
 def _access_html(shared: list[str]) -> str:
@@ -675,6 +746,13 @@ _FIXED: dict[str, tuple[tuple[str, str], ...]] = {
              ("large", "Large / long")),
 }
 
+#: How the grid can be cut up, and what to call each choice.
+_GROUPS: tuple[tuple[str, str], ...] = (
+    ("day", "By day"), ("month", "By month"), ("year", "By year"),
+    ("event", "By event"), ("camera", "By camera"), ("kind", "By type"),
+    ("none", "Ungrouped"),
+)
+
 #: Offered *in addition* to whatever already exists. Audience names are free
 #: text, but "nobody yet" is a state rather than a name, and it is the single
 #: most useful thing to filter on — it is the pile of work.
@@ -711,6 +789,8 @@ const picked=new Set();
 function url(patch){
   const q=new URLSearchParams();
   for(const [k,v] of Object.entries({...VIEW,...patch})) if(v!==null&&v!=='') q.set(k,v);
+  const g=document.getElementById('grouping');
+  if(g&&g.value!=='day') q.set('group',g.value);
   return '/browse'+(q.toString()?'?'+q:'');
 }
 function drawChips(){
@@ -1381,6 +1461,15 @@ document.addEventListener('keydown',e=>{
                          drawSel();}
   setCur(next);
 });
+
+// The grouping rides in the URL with the filters, so a view stays one link.
+const grouping=document.getElementById('grouping');
+if(grouping) grouping.onchange=()=>{
+  const q=new URLSearchParams();
+  for(const [k,v] of Object.entries(VIEW)) if(v) q.set(k,v);
+  if(grouping.value!=='day') q.set('group',grouping.value);
+  location.href='/browse'+(q.toString()?'?'+q:'');
+};
 
 drawChips(); drawSel();
 """
