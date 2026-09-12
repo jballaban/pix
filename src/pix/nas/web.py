@@ -300,10 +300,11 @@ h3.group[data-state="some"] .grppick { background:var(--top);
 .cell { position:relative; aspect-ratio:1; background:#0d0f12; overflow:hidden;
         border-radius:3px; cursor:pointer; }
 .cell img { width:100%; height:100%; object-fit:cover; display:block; }
-/* The cursor is normally also ticked, so it only needs to say *which one the
-   keyboard is on* — a lighter ring inside the selection's. */
-.cell.cur { outline:2px dashed var(--accent); outline-offset:-5px;
-            z-index:1; }
+/* The cursor is not drawn. It said *which one the keyboard is on*, and there
+   is no grid keyboard any more — so the dashed ring marked a position nothing
+   could use, and turned up unasked on whatever a delete happened to land on.
+   The cursor itself stays: it is how the viewer knows which file it is showing
+   and which way left and right go. It is simply not the curator's business. */
 .cell.picked { outline:3px solid var(--accent); outline-offset:-3px;
                z-index:1; }
 .cell.picked img { opacity:.75; }
@@ -314,7 +315,7 @@ h3.group[data-state="some"] .grppick { background:var(--top);
 .pick { position:absolute; left:5px; top:5px; width:20px; height:20px; padding:0;
         border-radius:50%; background:#000a; border:1.5px solid #fff9;
         opacity:0; transition:opacity .08s; z-index:2; }
-.cell:hover .pick, .cell.cur .pick { opacity:1; }
+.cell:hover .pick { opacity:1; }
 .cell.picked .pick { opacity:1; background:var(--accent); border-color:var(--accent); }
 /* Touch has no hover, so there the circle is the only way to select at all. */
 @media (hover: none) { .pick { opacity:.55; } }
@@ -1189,7 +1190,12 @@ function setCur(n,keep){
   n=Math.max(0,Math.min(cells.length-1,n));
   cells.forEach(c=>c.classList.remove('cur'));
   cur=n; cells[cur].classList.add('cur');
-  cells[cur].scrollIntoView({block:'nearest'});
+  // Only while the viewer is open, where the cursor is what you are looking at
+  // and the grid behind should end up where you left off. With it closed
+  // nothing points at the cursor, so scrolling to it is the page moving for
+  // reasons of its own — which is what a bulk delete did, landing the cursor
+  // on a survivor hundreds of rows away.
+  if(viewer.classList.contains('on')) cells[cur].scrollIntoView({block:'nearest'});
   if(!keep){
     picked.forEach(c=>c.classList.remove('picked'));
     picked.clear();

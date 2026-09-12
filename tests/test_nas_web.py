@@ -226,6 +226,16 @@ def test_destroying_is_recorded_but_offers_no_revert(
     assert not op.files, "a destroy that offers files to put back"
 
 
+def test_the_grid_draws_no_cursor(client: TestClient) -> None:
+    """The dashed ring said which cell the keyboard was on, and the grid has no
+    keyboard. It stayed behind after that was removed and turned up unasked on
+    whatever a delete happened to land the cursor on, reading as a selection
+    nobody had made. The class survives — the viewer needs to know which file
+    it is showing — but nothing paints it."""
+    html = client.get("/browse?event=Italy%20-%20Sicily").text
+    assert ".cell.cur" not in html
+
+
 def test_every_page_says_which_version_it_is(client: TestClient) -> None:
     """The CLI prints it on every run so dev and tester stay aligned; the app
     had no equivalent, and a stale browser tab was indistinguishable from a
