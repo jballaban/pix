@@ -606,9 +606,8 @@ def browse(user: Annotated[Principal, Depends(require_user)],
         footer=f"""<span class="count" id="count">{shown}</span>
 <span class="hint"><b>click</b> a circle to select &middot;
 <b>shift</b> for a range &middot; <b>ctrl</b> to add &middot;
-<b>arrows</b> move and select &middot;
-<b>S</b> repeat last access &middot; <b>Enter</b> view &middot;
-<b>I</b> details</span>
+<b>click</b> a photo to open it &middot;
+<b>&larr; &rarr;</b> page the viewer</span>
 <span class="note" id="note" hidden></span>""",
         user=user)
 
@@ -1487,7 +1486,6 @@ async function applyToSelection(act,value,add){
   if(out===null&&multi) cs.forEach((c,i)=>{
     c.dataset[multi[0]]=before[i]; repaint(c,multi[0]);
   });
-  if(out!==null&&act==='access'&&add) lastShare=value;
   return out;
 }
 
@@ -1628,68 +1626,36 @@ const ACT_COLUMN={tags:'tag', access:'audience', event:'event'};
 });
 
 // --- keyboard ----------------------------------------------------------------
-// Sharing needs a name, so no single key can express it in general. What a cull
-// actually repeats is the *same* share over and over, so S repeats the last one
-// and only falls back to the menu when there is nothing to repeat.
-let lastShare=null;
-try{lastShare=localStorage.getItem('pix2.share')||null;}catch(e){}
-function repeatShare(){
-  if(!ADMIN) return;
-  if(cur<0&&!picked.size) setCur(0);
-  if(!lastShare){
-    const b=actions&&actions.querySelector('[data-act="access"]');
-    if(b) b.click();
-    return;
-  }
-  const cs=targets();
-  if(!cs.length) return;
-  applyToSelection('access',lastShare,true);
-  try{localStorage.setItem('pix2.share',lastShare);}catch(e){}
-  if(!picked.size&&cur<cells.length-1) setCur(cur+1);
-}
-
+// The mouse is the interface. Keyboard navigation of the grid — arrows that
+// moved and selected, shift to extend, ctrl to move without selecting, S to
+// repeat a share — is gone rather than patched. Every one of those keys had
+// to decide what it meant for the selection, each answered slightly
+// differently, and between them they kept producing selections nobody had
+// made. None of them could do anything the mouse cannot, so none of them was
+// worth the ambiguity. Keyboard support is worth designing on purpose later,
+// not accreting a key at a time.
+//
+// What stays is what only a key can say once the viewer is full-screen:
+// which way to go, and stop.
 document.addEventListener('keydown',e=>{
   if(e.target.tagName==='INPUT') return;
-  if(e.key==='i'||e.key==='I'){
-    e.preventDefault(); railOn=!railOn; drawRail();
-    if(railOn&&cells[cur]) fill(cells[cur]);
-    return;
-  }
   if(e.key==='Escape'){
+    // Dismissal rather than navigation. A full-screen viewer with no key out
+    // is a trap, even though clicking beside the picture also closes it.
     if(viewer.classList.contains('on')) closeViewer();
     else if(!menu.hidden) closeMenu();
-    else clearPicks();
     return;
   }
-  if(e.key==='Enter'){
-    viewer.classList.contains('on')?closeViewer():openViewer(); return;
-  }
-  if((e.key==='s'||e.key==='S')&&!e.ctrlKey&&!e.metaKey){
-    // Advance only when working one at a time: with a selection the gesture is
-    // deliberate and moving the cursor underneath it would be noise.
-    e.preventDefault(); repeatShare(); return;
-  }
-  const move={ArrowRight:'next',ArrowLeft:'prev',
-              ArrowDown:'down',ArrowUp:'up'}[e.key];
-  if(move===undefined) return;
+  if(!viewer.classList.contains('on')) return;
+  const step=e.key==='ArrowRight'?1:e.key==='ArrowLeft'?-1:0;
+  if(!step) return;
   e.preventDefault();
-  const from=cur<0?0:cur;
-  const next=move==='next'?from+1:move==='prev'?from-1
-            :rowNeighbour(from,move==='down'?1:-1);
-  if(e.shiftKey&&cur>=0){
-    range(anchor<0?cur:anchor,Math.max(0,Math.min(cells.length-1,next)));
-    setCur(next,true); drawSel();
-  }else if(e.ctrlKey||e.metaKey){
-    setCur(next,true);          // move the cursor, leave the ticks alone
-  }else if(viewer.classList.contains('on')&&!soloView){
-    // Paging in the viewer is looking, not choosing, so a selection built in
-    // the grid survives being paged past. The exception is the viewer's own
-    // selection, which follows the cursor — otherwise S would write to a
-    // photograph that is no longer on screen.
-    setCur(next,true); drawSel();
-  }else{
-    setCur(next); anchor=next;
-  }
+  const next=(cur<0?0:cur)+step;
+  // Paging is looking, not choosing: a selection built in the grid survives
+  // being paged past. The exception is the viewer's own selection, which
+  // follows the cursor so the actions keep pointing at what is on screen.
+  if(soloView){ setCur(next); anchor=next; }
+  else { setCur(next,true); drawSel(); }
 });
 
 // --- grouping ----------------------------------------------------------
@@ -1734,30 +1700,6 @@ function groupMenu(anchorEl,level,insert){
   menuCtx={key:'group:'+level+':'+insert};
 }
 
-// Up and down are answered geometrically rather than by adding a column count
-// to an index. Group headings are grid items spanning every column, so a
-// heading eats a whole row and `index + columns` lands a cell short — which
-// read as "down goes down and one to the right". Asking where things actually
-// are is immune to that, to ragged final rows, and to the column count
-// changing with the window.
-function rowNeighbour(from,dir){
-  const a=cells[from]&&cells[from].getBoundingClientRect();
-  if(!a) return from;
-  const ax=a.left+a.width/2, ay=a.top+a.height/2;
-  let best=from, score=Infinity;
-  for(let i=0;i<cells.length;i++){
-    if(i===from) continue;
-    const b=cells[i].getBoundingClientRect();
-    const dy=(b.top+b.height/2)-ay;
-    // Same visual row: not a move up or down.
-    if(Math.abs(dy)<a.height/2) continue;
-    if(dir>0?dy<0:dy>0) continue;
-    // Nearest row first, then nearest column within it.
-    const s=Math.abs(dy)*1000+Math.abs((b.left+b.width/2)-ax);
-    if(s<score){score=s;best=i;}
-  }
-  return best;
-}
 
 // Every cell under a heading, down to the next one. There is one heading per
 // section now, so this is simply "until the next heading".

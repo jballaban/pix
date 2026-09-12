@@ -264,12 +264,21 @@ function arrow(key, opts) {
     grid.click();
   }
 
-  // An arrow key both moves and selects.
+  // Arrows do nothing in the grid. The mouse is the interface there, and a
+  // key that moved a cursor which was also a selection is what kept inventing
+  // selections nobody had made.
   document.byId.grid.click();
-  arrow('ArrowRight');
-  check('arrowing selects what it lands on',
-        document.byId.selcount.textContent === '1 selected',
+  document.byId.selnone.click();
+  const at = cells.findIndex(c => c.classList.contains('cur'));
+  arrow('ArrowRight'); arrow('ArrowDown'); arrow('ArrowUp');
+  check('arrows do not move the cursor in the grid',
+        cells.findIndex(c => c.classList.contains('cur')) === at,
+        'moved from ' + at);
+  check('and do not select in the grid',
+        document.byId.selcount.textContent === '0 selected',
         document.byId.selcount.textContent);
+  // What follows still needs something to act on.
+  cells[0].querySelector('.pick').click();
 
   // The date menu opens on what the files actually say.
   const date = actions.children.find(b => b.dataset.act === 'date');
@@ -342,46 +351,6 @@ function arrow(key, opts) {
     location.href = '/browse';
   }
 
-  // Arrow keys navigate by where things *are*. Adding a column count to an
-  // index went wrong two ways: a heading spans every column and eats a whole
-  // row, and the count itself was only right at some window widths — which is
-  // why "down" went down and one to the right, but only sometimes.
-  {
-    const wide = [];
-    for (let i = 0; i < 7; i++) wide.push(cell('w' + i + '.jpg', ''));
-    const room = mk('room');
-    const head = new El('h3');
-    head.className = 'group';
-    head.dataset.level = '0';
-    head._rect = { left: 0, top: 0, width: 480, height: 24 };
-    room.appendChild(head);
-    // Three per row, 160 wide, 160 tall — the last row deliberately short.
-    wide.forEach((c, i) => {
-      c._rect = { left: (i % 3) * 160, top: 24 + Math.floor(i / 3) * 160,
-                  width: 160, height: 160 };
-      room.appendChild(c);
-    });
-    const all = [...cells, ...wide];
-    document.querySelectorAll = sel => (sel === '.cell' ? all
-                                      : sel === '.group' ? [heading]
-                                      : sel === '.stage' ? [stage] : realQsa(sel));
-    // Re-running the script picks up the new grid.
-    new Function(
-      'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
-      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'setTimeout', js,
-    )(document, window, fetch, localStorage, location, confirm,
-      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, fn => fn());
-
-    wide[0].querySelector('.pick').click();
-    arrow('ArrowDown');
-    check('down lands directly below, not one to the right',
-          wide[3].classList.contains('cur'),
-          all.findIndex(c => c.classList.contains('cur')) + '');
-    arrow('ArrowUp');
-    check('up comes straight back', wide[0].classList.contains('cur'));
-  }
 
   // A write that pushes files out of the view has to leave the sections
   // honest behind it: the count says what is there now, a heading whose last
