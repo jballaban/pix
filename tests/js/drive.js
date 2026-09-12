@@ -89,6 +89,8 @@ const FIXED = {};
 const EXTRA = { audience: [['new', 'New']] };
 const ADMIN = true;
 const USERS = ['family', 'james'];
+const ROLES = ['family'];
+const USUAL = 'family';
 
 const tick = () => new Promise(r => setImmediate(r));
 
@@ -96,9 +98,10 @@ const tick = () => new Promise(r => setImmediate(r));
   try {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
-      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'setTimeout', js,
+      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'ROLES', 'USUAL',
+      'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
-      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, fn => fn());
+      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, ROLES, USUAL, fn => fn());
   } catch (e) {
     console.log('FAIL the script threw on load: ' + e.message);
     process.exit(1);
@@ -138,6 +141,13 @@ const tick = () => new Promise(r => setImmediate(r));
           body.files.length === 1 && body.files[0].name === 'b.jpg',
           sent[0].body);
   }
+
+  // Roles come before individuals; a name that is no longer an account is
+  // still listed, so a stale grant stays removable.
+  const bands = menu.querySelectorAll('.band').map(b => b.textContent);
+  check('roles are grouped first', bands.indexOf('Roles') >= 0, bands.join('|'));
+  check('a dead grant is grouped apart',
+        bands.includes('No longer an account'), bands.join('|'));
 
   // Clicking outside dismisses.
   grid.click();

@@ -112,6 +112,13 @@ class Store:
     roles: list[str] = field(default_factory=lambda: [])
     secret: str = ""
 
+    #: The audience almost everything ends up with. Named so the grid can
+    #: stay quiet about it: if nine files in ten say `family`, printing
+    #: `family` on nine thumbnails in ten is noise that tells you nothing.
+    #: A setting rather than a hard-coded name, because which audience is
+    #: usual is a fact about a household, not about the software.
+    usual: str = ""
+
     def grants(self, name: str) -> frozenset[str]:
         """Every name a grant could use to reach this person.
 
@@ -159,7 +166,9 @@ def load(path: Path | None = None) -> Store:
     raw_roles: object = data.get("roles")
     roles = sorted({canonical(str(r))
                     for r in cast("list[Any]", raw_roles or []) if str(r).strip()})
-    return Store(users=users, roles=roles, secret=str(data.get("secret") or ""))
+    return Store(users=users, roles=roles,
+                 usual=canonical(str(data.get("usual") or "")),
+                 secret=str(data.get("secret") or ""))
 
 
 def save(store: Store, path: Path | None = None) -> None:
@@ -175,6 +184,7 @@ def save(store: Store, path: Path | None = None) -> None:
         "users": {name: {"password": a.password, "roles": list(a.roles)}
                   for name, a in sorted(store.users.items())},
         "roles": sorted(set(store.roles)),
+        "usual": store.usual,
         "secret": store.secret,
     }
     tmp = target.with_name(target.name + SIDECAR_TMP_SUFFIX)

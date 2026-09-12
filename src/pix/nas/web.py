@@ -287,6 +287,11 @@ button.primary { background:var(--accent); color:#0d0f12; border-color:var(--acc
                   padding:1px 5px; border-radius:3px; background:#000b;
                   font-size:10px; font-weight:600; }
 .who i  { color:var(--keep); }
+/* Nobody can see this yet — quiet, because early on that is most of the
+   library, and unmistakable once it is not. */
+.unshared { position:absolute; left:6px; bottom:6px; width:8px; height:8px;
+            border-radius:50%; background:var(--top);
+            box-shadow:0 0 0 2px #000a; }
 .tags i { color:#fff; }
 
 table { border-collapse:collapse; width:100%; max-width:900px; }
@@ -525,7 +530,8 @@ def browse(user: Annotated[Principal, Depends(require_user)],
             f"<script>const VIEW={_js(_view_dict(view))},"
             f"CHIPS={_js(_chips(user))},FIXED={_js(_FIXED)},"
             f"EXTRA={_js(_EXTRA)},ADMIN={_js(user.is_admin)},"
-            f"USERS={_js(_audience_names())};</script>"
+            f"USERS={_js(_audience_names())},ROLES={_js(_role_names())},"
+            f"USUAL={_js(store().usual)};</script>"
             f"<script>{_BROWSE_JS}</script>"),
         footer=f"""<span class="count" id="count">{shown}</span>
 <span class="hint"><b>click</b> a circle to select &middot;
@@ -569,6 +575,29 @@ def _chips_html(cls: str, values: list[str]) -> str:
     return f'<span class="{cls}" title="{_h(", ".join(values))}">{chips}</span>'
 
 
+def _access_html(shared: list[str]) -> str:
+    """What a thumbnail says about who can see it.
+
+    Three states, and only two of them are visible:
+
+    - **nobody** — a small mark, because that is the work still to do;
+    - **the usual audience, exactly** — nothing at all. If nine files in ten
+      say `family`, printing `family` on nine thumbnails in ten is noise
+      that tells you nothing you did not already assume;
+    - **anything else** — named, because that is the exception and the whole
+      reason to look.
+
+    The usual audience is a setting rather than a hard-coded name: which one
+    is usual is a fact about a household, not about the software.
+    """
+    if not shared:
+        return ('<span class="unshared" title="Nobody has access yet">'
+                '</span>')
+    usual = store().usual
+    unusual = [a for a in shared if a != usual]
+    return _chips_html("who", unusual)
+
+
 def _cell(row: sqlite3.Row) -> str:
     tags = _split(row["tags"])
     shared = _split(row["audience"])
@@ -587,7 +616,7 @@ def _cell(row: sqlite3.Row) -> str:
         f'<button class="pick" aria-label="select"></button>'
         + (f'<span class="badge">{_dur(row["duration"])}</span>'
            if row["kind"] == "video" else "")
-        + _chips_html("who", shared) + _chips_html("tags", tags)
+        + _access_html(shared) + _chips_html("tags", tags)
         + "</div>"
     )
 
@@ -605,6 +634,12 @@ def _chips(user: Principal) -> tuple[tuple[str, str], ...]:
     """
     return tuple((col, label) for col, label in _CHIPS
                  if col != "audience" or user.is_admin)
+
+
+def _role_names() -> list[str]:
+    """The roles, so the access menu can put them before the individuals."""
+    book = store()
+    return sorted(set(book.roles) - {accounts.ADMIN})
 
 
 def _audience_names() -> list[str]:
@@ -843,18 +878,33 @@ async function openMenu(anchorEl,ctx){
           {value:v,label:v,n:null},()=>choose(v),true)));
       }
     }
-    // Then three bands, most relevant first: values already used by what you
-    // are looking at, then by anything one filter away, then the rest.
-    for(const [scope,title] of [['all','In this view'],['any','Related'],
-                                ['other','Elsewhere']]){
-      const band=hits.filter(o=>o.scope===scope&&!present.includes(o.value));
-      if(!band.length) continue;
-      if(hits.some(o=>o.scope!==scope)||present.length){
-        const h=document.createElement('div');
-        h.className='band'; h.textContent=title; list.appendChild(h);
-      }
+    const group=(title,band)=>{
+      if(!band.length) return;
+      const h=document.createElement('div');
+      h.className='band'; h.textContent=title; list.appendChild(h);
       band.forEach(o=>list.appendChild(
         opt(o,()=>choose(o.value),checkable)));
+    };
+    const left=hits.filter(o=>!present.includes(o.value));
+    if(ctx.column==='audience'){
+      // Roles before individuals: a role keeps working as the household
+      // changes, where naming four people does not — so it is almost always
+      // the right answer and belongs where the eye lands first.
+      group('Roles',left.filter(o=>ROLES.includes(o.value)));
+      group('People',left.filter(o=>!ROLES.includes(o.value)
+                                    &&USERS.includes(o.value)));
+      group('No longer an account',
+            left.filter(o=>!USERS.includes(o.value)));
+    }else{
+      // Three bands, most relevant first: values already used by what you
+      // are looking at, then by anything one filter away, then the rest.
+      for(const [scope,title] of [['all','In this view'],['any','Related'],
+                                  ['other','Elsewhere']]){
+        const band=left.filter(o=>o.scope===scope);
+        if(hits.some(o=>o.scope!==scope)||present.length) group(title,band);
+        else band.forEach(o=>list.appendChild(
+          opt(o,()=>choose(o.value),checkable)));
+      }
     }
     if(!hits.length&&!typed){
       list.innerHTML='<div class="band">nothing yet</div>';
@@ -1207,12 +1257,23 @@ function paint(c,field,value,add){
 }
 function repaint(c,field){
   const cls=field==='tags'?'tags':'who';
-  const list=valuesOf(c,field);
+  const all=valuesOf(c,field);
+  // Access says only what is unusual: the usual audience is silent, and
+  // nobody-at-all gets a mark. Same rule the server renders by, so a cell
+  // edited here and a cell fetched fresh cannot look different.
+  const list=cls==='who'?all.filter(v=>v!==USUAL):all;
+  let mark=c.querySelector('.unshared');
+  if(cls==='who'){
+    if(!all.length&&!mark){
+      mark=document.createElement('span');
+      mark.className='unshared';
+      mark.setAttribute('title','Nobody has access yet');
+      c.appendChild(mark);
+    }else if(all.length&&mark){ mark.remove(); }
+  }
   let el=c.querySelector('.'+cls);
   if(!list.length){if(el) el.remove(); return;}
   if(!el){el=document.createElement('span');el.className=cls;c.appendChild(el);}
-  // Same shape the server renders, so a cell edited here and a cell fetched
-  // fresh cannot look different.
   el.setAttribute('title',list.join(', '));
   el.innerHTML=list.map(v=>`<i title="${esc(v)}">${esc(v)}</i>`).join('');
 }
@@ -2029,6 +2090,15 @@ def accounts_page(user: Annotated[Principal, Depends(require_admin)],
        autocomplete="new-password">
 <button class="primary">Add</button></form>
 
+<h2 class="year">The usual audience</h2>
+<p class="dim">Most photographs end up shared with the same people. Name
+that audience and the grid stops printing it on every thumbnail — what is
+left is the exceptions, which is the part worth seeing.</p>
+<form method="post" action="/accounts/usual" class="acct">
+<input name="usual" value="{_h(book.usual)}" size="20"
+       placeholder="family" autocomplete="off">
+<button>Save</button></form>
+
 <h2 class="year">Roles</h2>
 <p class="dim">A grant names a person or a role and access cannot tell them
 apart. {_h(", ".join(roles)) or "None yet."}</p>
@@ -2099,6 +2169,18 @@ async def accounts_delete(
     book.users.pop(name, None)
     accounts.save(book)
     return _back(f"removed {name}")
+
+
+@app.post("/accounts/usual")
+async def accounts_usual(
+    request: Request,
+    user: Annotated[Principal, Depends(require_admin)],
+) -> Response:
+    """Name the audience the grid should stay quiet about."""
+    book = store()
+    book.usual = accounts.canonical((await _form(request)).get("usual", ""))
+    accounts.save(book)
+    return _back(f"the usual audience is {book.usual or 'unset'}")
 
 
 @app.post("/accounts/roles")

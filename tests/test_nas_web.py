@@ -1276,3 +1276,60 @@ def test_an_edited_cell_looks_like_a_fetched_one(client: TestClient) -> None:
     js = client.get("/browse").text
 
     assert "el.innerHTML=list.map(v=>`<i title=" in js
+
+
+# --- the grid reports deviation, not the norm ---------------------------------
+
+def test_the_usual_audience_is_not_printed_on_every_thumbnail(
+    client: TestClient, writable: Path
+) -> None:
+    """If nine files in ten say `family`, printing `family` on nine thumbnails
+    in ten is noise that tells you nothing you did not already assume."""
+    client.post("/accounts/usual", data={"usual": "family"})
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "add_audience": ["family"]})
+
+    html = client.get("/browse").text
+    assert "<i title=\"family\">" not in html
+
+
+def test_an_unusual_audience_is_named(client: TestClient,
+                                      writable: Path) -> None:
+    """That is the exception, and the whole reason to look."""
+    client.post("/accounts/usual", data={"usual": "family"})
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg",
+        "add_audience": ["family", "tv"]})
+
+    html = client.get("/browse").text
+    assert '<i title="tv">tv</i>' in html
+    assert "<i title=\"family\">" not in html
+
+
+def test_no_access_is_marked(client: TestClient, writable: Path) -> None:
+    """The work still to do."""
+    assert 'class="unshared"' in client.get("/browse").text
+
+
+def test_the_mark_goes_once_something_is_shared(client: TestClient,
+                                                writable: Path) -> None:
+    client.post("/accounts/usual", data={"usual": "family"})
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "add_audience": ["family"]})
+
+    cell = client.get("/browse").text.split('data-name="a.jpg"')[1][:400]
+    assert "unshared" not in cell
+
+
+def test_the_usual_audience_survives_a_reload(client: TestClient) -> None:
+    client.post("/accounts/usual", data={"usual": "Family"})
+
+    assert accounts.load().usual == "family"
+    assert 'value="family"' in client.get("/accounts").text
+
+
+def test_the_client_hides_the_usual_audience_too(client: TestClient) -> None:
+    """Or a photo you just shared would look different from one you reloaded."""
+    js = client.get("/browse").text
+
+    assert "all.filter(v=>v!==USUAL)" in js
