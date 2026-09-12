@@ -243,6 +243,13 @@ button.primary { background:var(--accent); color:#0d0f12; border-color:var(--acc
    things you do, and a soft delete is undoable. */
 button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
 .chip.on { border-color:var(--accent); background:#20293a; }
+/* Arrived at from the log rather than picked from a list, so it is not a
+   dropdown — but it says what it is and can be dismissed, because a filter you
+   cannot see is a library that looks smaller than it is. */
+.from-op { cursor:default; max-width:46ch; overflow:hidden;
+           text-overflow:ellipsis; white-space:nowrap; }
+.from-op .x { margin-left:7px; color:var(--dim); }
+.from-op .x:hover { color:var(--fg); text-decoration:none; }
 .chip .val { color:var(--accent); margin-left:5px; }
 .chip .x { color:var(--dim); margin-left:6px; }
 .chip .x:hover { color:var(--fg); }
@@ -529,6 +536,69 @@ def _whoami(user: Principal | None) -> str:
             '<button>Sign out</button></form>')
 
 
+def _from_operation(op_id: str | None,
+                    stale: str | None) -> tuple[tuple[str, str], ...] | None:
+    """The files one operation touched, or the ones it can no longer put back.
+
+    *Show me what that did* is the question the log cannot answer on its own: it
+    can say what happened, but looking at the photographs afterwards means
+    getting them into the grid, where everything else already works. So the
+    operation becomes a filter, and from there the curator has the whole tool.
+
+    `stale` narrows it to the files a revert cannot put back — the ones edited
+    since, which are no longer what the operation left them. Those are the
+    interesting ones: a revert reports a number, and that number is the work
+    still to look at.
+
+    **Minus whatever a revert has already restored.** *No longer in effect*
+    stops telling the two apart the moment one runs, because a file that was
+    put back is not in effect either — that is what putting it back means. Ask
+    after reverting and every file would look like one it had skipped.
+
+    Worked out from the **index** rather than by reading the sidecars. The
+    truth is in master, but three hundred reads over SMB to answer a link would
+    take seconds, and the index is a projection of exactly the five fields a
+    decision holds.
+    """
+    if not op_id:
+        return None
+    op = history.get(op_id)
+    if op is None:
+        return ()
+    touched = tuple((f.folder, f.name) for f in op.files)
+    if not stale or not touched:
+        return touched
+
+    try:
+        conn = db()
+    except HTTPException:
+        return touched
+    try:
+        now = {(r["folder"], r["name"]): _as_decision(r)
+               for r in ix.files(conn, ix.Filters(chosen=touched,
+                                                 deleted="with"),
+                                 limit=len(touched))}
+    except sqlite3.Error:
+        return touched
+    finally:
+        conn.close()
+    restored = history.put_back(op_id)
+    return tuple(
+        (f.folder, f.name) for f in op.files
+        if (f.folder, f.name) not in restored
+        and not history.in_effect(f.did, now.get((f.folder, f.name))))
+
+
+def _as_decision(row: sqlite3.Row) -> decisions.Decision:
+    """An index row read back as the decision it is a projection of."""
+    return decisions.Decision(
+        event=row["event"] or None,
+        date_override=row["date_override"] or None,
+        tags=tuple(_split(row["tags"])),
+        audience=tuple(_split(row["audience"])),
+        deleted=bool(row["deleted"]))
+
+
 def _bin_link() -> str:
     """*8 deleted* — a standing count, and the way to go and deal with them.
 
@@ -575,6 +645,8 @@ def filters(
     kind: Annotated[str | None, Query()] = None,
     band: Annotated[str | None, Query()] = None,
     deleted: Annotated[str | None, Query()] = None,
+    op: Annotated[str | None, Query()] = None,
+    stale: Annotated[str | None, Query()] = None,
 ) -> ix.Filters:
     """The current view, read off the query string.
 
@@ -599,7 +671,7 @@ def filters(
     rather than as some third thing.
     """
     return ix.Filters(event=event, date=ix.date_prefix(date), tag=tag,
-                      audience=audience,
+                      audience=audience, chosen=_from_operation(op, stale),
                       kind=kind, band=band, viewer=user.scope,
                       deleted=(deleted if user.is_admin
                                and deleted in ("only", "with") else None))
@@ -687,7 +759,9 @@ def event_grid(event: str) -> RedirectResponse:
 @app.get("/browse", response_class=HTMLResponse)
 def browse(user: Annotated[Principal, Depends(require_user)],
            view: Annotated[ix.Filters, Depends(filters)],
-           group: Annotated[str, Query()] = "day") -> HTMLResponse:
+           group: Annotated[str, Query()] = "day",
+           op: Annotated[str | None, Query()] = None,
+           stale: Annotated[str | None, Query()] = None) -> HTMLResponse:
     """The one grid, filtered — select files, then say something about them.
 
     Selecting an event on the landing page is just this page with `?event=`, so
@@ -719,7 +793,8 @@ def browse(user: Annotated[Principal, Depends(require_user)],
   <div class="tally" id="worktally"></div>
   <button id="workstop">Stop</button>
 </div>""",
-        tools='<div class="chips" id="chips"></div>',
+        tools=('<div class="chips" id="chips"></div>'
+               + _from_link(op, stale, len(rows))),
         rows=_actions(user),
         script=(
             f"<script>const VIEW={_js(_view_dict(view))},"
@@ -736,6 +811,26 @@ def browse(user: Annotated[Principal, Depends(require_user)],
 <b>&larr; &rarr;</b> page the viewer</span>
 <span class="note" id="note" hidden></span>""",
         user=user)
+
+
+def _from_link(op_id: str | None, stale: str | None, shown: int) -> str:
+    """Why this grid is showing a particular set of files, and the way out.
+
+    Not a chip: a chip is a value picked from a list of values, and there is no
+    list of operations to pick from — you arrive here from the log. But it has
+    to say what it is and be dismissable for the same reason the chips do,
+    because a filter you cannot see is a library that looks smaller than it is.
+    """
+    if not op_id:
+        return ""
+    op = history.get(op_id)
+    what = (_h(op.summary) if op is not None else "an edit that is no longer "
+            "in the log")
+    lead = "left behind by" if stale else "from"
+    return (f'<span class="chip on from-op">{lead} <b>{what}</b>'
+            f'<span class="val">{shown:,}</span>'
+            f'<a class="x" href="/browse" title="Show everything">&times;</a>'
+            f'</span>')
 
 
 def _actions(user: Principal) -> str:
@@ -3117,7 +3212,8 @@ def _back(message: str) -> Response:
 
 @app.get("/history", response_class=HTMLResponse)
 def history_page(user: Annotated[Principal, Depends(require_admin)],
-                 msg: Annotated[str, Query()] = "") -> HTMLResponse:
+                 msg: Annotated[str, Query()] = "",
+                 look: Annotated[str, Query()] = "") -> HTMLResponse:
     """What has been changed, newest first, each with a way back.
 
     A bulk edit can touch several hundred files from one click, and *I just
@@ -3130,7 +3226,7 @@ def history_page(user: Annotated[Principal, Depends(require_admin)],
 
     rows = "".join(
         f'<tr><td class="dim">{_h(_when(op.when))}</td>'
-        f'<td>{_h(op.summary)}</td>'
+        f'<td><a href="/browse?op={_q(op.id)}">{_h(op.summary)}</a></td>'
         f'<td class="dim">{_h(op.who)}</td>'
         + ('<td class="dim">undone</td>' if op.id in already else
            '<td class="dim">a revert</td>' if op.reverts else
@@ -3140,7 +3236,11 @@ def history_page(user: Annotated[Principal, Depends(require_admin)],
         + "</tr>"
         for op in ops
     )
-    note = f'<p class="note">{_h(msg)}</p>' if msg else ""
+    # A revert that left files alone says how many. The number is the work
+    # still to look at, so it comes with the way to go and look at it.
+    seeing = (f' <a href="/browse?op={_q(look)}&amp;stale=1">'
+              f'see the ones it left &rarr;</a>' if look else "")
+    note = f'<p class="note">{_h(msg)}{seeing}</p>' if msg else ""
     if not ops:
         return _page("History", f'{note}<p class="empty">Nothing changed yet.</p>',
                      user=user)
@@ -3232,7 +3332,11 @@ async def history_revert(
         said += f", {moved:,} changed since and left alone"
     if failed:
         said += f", {failed:,} could not be"
-    return RedirectResponse(f"/history?msg={quote(said)}", status_code=303)
+    # A count is not much use on its own. The ones it left alone are the work
+    # still to look at, so the message carries a way to go and look at them.
+    tail = f"&look={_q(op.id)}" if moved else ""
+    return RedirectResponse(f"/history?msg={quote(said)}{tail}",
+                            status_code=303)
 
 
 def _when(moment: float) -> str:

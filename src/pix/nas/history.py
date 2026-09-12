@@ -265,6 +265,21 @@ def _norm(value: object, name: str) -> object:
     return str(value) if value else None
 
 
+def put_back(op_id: str, *, path: Path | None = None) -> set[tuple[str, str]]:
+    """Which files a revert of `op_id` has already restored.
+
+    Needed because *no longer in effect* stops telling the two cases apart the
+    moment a revert runs: a file it put back is not in effect either — that is
+    what putting it back means. Subtracting what was restored leaves what was
+    skipped, which is the set worth looking at.
+    """
+    out: set[tuple[str, str]] = set()
+    for op in recent(limit=100_000, path=path):
+        if op.reverts == op_id:
+            out.update((f.folder, f.name) for f in op.files)
+    return out
+
+
 def undone(ops: list[Operation]) -> set[str]:
     """Which of these have already been reverted."""
     return {op.reverts for op in ops if op.reverts}

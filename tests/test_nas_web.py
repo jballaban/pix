@@ -386,6 +386,21 @@ def test_the_filter_chips_are_spaced(client: TestClient) -> None:
     assert "gap:9px" in html[html.index(".chips {"):html.index(".chips {") + 120]
 
 
+def test_the_page_is_handed_every_filter_it_is_showing(
+    client: TestClient
+) -> None:
+    """The page rebuilds its own address from this — for the chips, and for the
+    query it sends with a write so the server can say which files have left the
+    view. A filter missing here is a chip that cannot show what it is set to and
+    an edit that reports itself as made somewhere else."""
+    html = client.get("/browse?deleted=only&event=Italy%20-%20Sicily").text
+    view = html[html.index("const VIEW="):html.index(",CHIPS")]
+
+    for name in ("event", "tag", "date", "audience", "kind", "band", "deleted"):
+        assert f'"{name}"' in view, f"{name} missing from {view}"
+    assert '"deleted": "only"' in view, view
+
+
 def test_the_grid_draws_no_cursor(client: TestClient) -> None:
     """The dashed ring said which cell the keyboard was on, and the grid has no
     keyboard. It stayed behind after that was removed and turned up unasked on

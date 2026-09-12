@@ -190,6 +190,16 @@ class Filters:
     #: anything shared with either, and a share is just a name either way.
     viewer: frozenset[str] | None = None
 
+    #: An explicit set of `(folder, name)`, and the one filter that is not a
+    #: question about the files. *These particular ones* is what a link from
+    #: the operation log needs: the files one edit touched have nothing in
+    #: common the index could be asked about, and by the time you want to look
+    #: at them they may have nothing in common at all.
+    #:
+    #: An empty tuple matches nothing, which is right — an operation that
+    #: touched no files should show no files, not every file.
+    chosen: tuple[tuple[str, str], ...] | None = None
+
     #: Which side of the deletion line to show. `None` — the default, and what
     #: everyone other than an administrator ever gets — is the living only.
     #: `only` is the bin; `with` shows both, which is the view where marking
@@ -202,14 +212,17 @@ class Filters:
     #: talked into showing what somebody said should be gone.
     deleted: str | None = None
 
-    #: Every filterable column, in the order the top bar shows them. `viewer`
-    #: is deliberately absent.
+    #: Every filterable column, in the order the top bar shows them, and what
+    #: the page is handed so that it can rebuild its own address. `viewer` is
+    #: deliberately absent — it is not a question the viewer is allowed to ask.
+    #:
+    #: `deleted` was missing from this while being offered as a chip, so the
+    #: chip could never show what it was set to, and an edit made in the bin
+    #: told the server it had been made in the ordinary grid — which is how it
+    #: decides whether a file has left the view. Restoring a file left it on
+    #: screen in a listing of the deleted.
     NAMES: ClassVar[tuple[str, ...]] = ("event", "tag", "date", "audience",
-                                       "kind", "band")
-
-    def active(self) -> tuple[str, ...]:
-        """Which filters are set, by name."""
-        return tuple(n for n in self.NAMES if getattr(self, n) is not None)
+                                       "kind", "band", "deleted")
 
 
 @dataclass(frozen=True)
@@ -655,6 +668,15 @@ def date_prefix(value: str | None) -> str | None:
 def _clauses(filters: Filters) -> dict[str, tuple[str, dict[str, Any]]]:
     """Each active filter as a SQL fragment plus its parameters."""
     out: dict[str, tuple[str, dict[str, Any]]] = {}
+    if filters.chosen is not None:
+        # One parameter rather than one per file: a single event edit can run
+        # to seventeen hundred files, and a placeholder each would be an
+        # expression the database refuses to compile.
+        out["chosen"] = (
+            "files.folder || char(10) || files.name IN "
+            "(SELECT value FROM json_each(:f_chosen))",
+            {"f_chosen": json.dumps(
+                [f + chr(10) + n for f, n in filters.chosen])})
     if filters.event is not None:
         out["event"] = ("COALESCE(files.event, '(none)') = :f_event",
                         {"f_event": filters.event})

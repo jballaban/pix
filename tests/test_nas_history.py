@@ -497,3 +497,79 @@ def test_an_operation_recorded_before_this_says_it_cannot_be_put_back(
                       follow_redirects=False)
     assert "cannot be put back" in unquote(r.headers["location"])
     assert decisions.read(writable / "a.jpg") == Decision(event="trip")
+
+
+# --- looking at what an operation touched -------------------------------------
+
+def test_an_operation_is_a_filter_into_the_grid(curating: TestClient) -> None:
+    """*Show me what that did* is the question the log cannot answer on its own.
+    It says what happened; looking at the photographs means getting them into
+    the grid, where everything else already works."""
+    curating.post("/api/decide/bulk", json={
+        "event": "trip", "files": _targets("a.jpg")})
+    op = history.recent()[0]
+
+    html = curating.get(f"/browse?op={op.id}").text
+    assert "a.jpg" in html
+    assert "b.mp4" not in html, "showed a file the operation never touched"
+    # And says why it is showing a handful of files rather than the library.
+    assert "from-op" in html
+    assert "to trip" in html
+
+
+def test_the_ones_a_revert_left_alone_can_be_looked_at(
+    curating: TestClient
+) -> None:
+    """A revert reports a number. That number is the work still to look at, so
+    it has to be reachable — these are the files somebody edited after the
+    operation, which is exactly the set worth a second look."""
+    curating.post("/api/decide/bulk", json={
+        "event": "trip", "files": _targets("a.jpg", "b.mp4")})
+    curating.post("/api/decide/bulk", json={
+        "event": "somewhere else", "files": _targets("b.mp4")})
+    trip = [op for op in history.recent() if op.summary.endswith("to trip")][0]
+
+    r = curating.post("/history/revert", data={"id": trip.id},
+                      follow_redirects=False)
+    assert f"look={trip.id}" in r.headers["location"]
+    assert "see the ones it left" in curating.get(
+        r.headers["location"]).text
+
+    html = curating.get(f"/browse?op={trip.id}&stale=1").text
+    assert "b.mp4" in html, "the file that had moved on is not offered"
+    assert "a.jpg" not in html, "offered a file the revert did put back"
+
+
+def test_the_whole_operation_and_the_stale_part_are_different_views(
+    curating: TestClient
+) -> None:
+    curating.post("/api/decide/bulk", json={
+        "event": "trip", "files": _targets("a.jpg", "b.mp4")})
+    curating.post("/api/decide/bulk", json={
+        "event": "somewhere else", "files": _targets("b.mp4")})
+    trip = [op for op in history.recent() if op.summary.endswith("to trip")][0]
+
+    whole = curating.get(f"/browse?op={trip.id}").text
+    assert "a.jpg" in whole and "b.mp4" in whole
+
+    stale = curating.get(f"/browse?op={trip.id}&stale=1").text
+    assert "a.jpg" not in stale and "b.mp4" in stale
+
+
+def test_an_operation_nobody_has_heard_of_shows_nothing(
+    curating: TestClient
+) -> None:
+    """Not everything. A filter that fails open is a filter that lies about how
+    much it is showing."""
+    html = curating.get("/browse?op=not-a-real-id").text
+
+    assert "a.jpg" not in html
+    assert "b.mp4" not in html
+
+
+def test_the_log_links_each_operation_to_its_files(curating: TestClient) -> None:
+    curating.post("/api/decide/bulk", json={
+        "event": "trip", "files": _targets("a.jpg")})
+    op = history.recent()[0]
+
+    assert f'href="/browse?op={op.id}"' in curating.get("/history").text
