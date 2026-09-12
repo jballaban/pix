@@ -166,13 +166,51 @@ def test_a_non_admin_cannot_ask_for_the_deleted(
                 if f["name"] == "a.jpg"]
 
 
+def test_a_write_reports_what_is_left_in_the_bin(
+    client: TestClient, writable: Path
+) -> None:
+    """The header count is rendered with the page, so the write that changes it
+    has to say what it is now. A number that only refreshes on reload is worse
+    than no number, because it looks current."""
+    r = client.post("/api/decide/bulk", json={
+        "files": [{"folder": "init_2026", "name": "a.jpg"}], "deleted": True})
+    assert r.json()["binned"] == 1, r.text
+
+    # Restoring takes it back down...
+    r = client.post("/api/decide/bulk", json={
+        "files": [{"folder": "init_2026", "name": "a.jpg"}], "deleted": False})
+    assert r.json()["binned"] == 0, r.text
+
+    # ...and so does destroying it.
+    client.post("/api/decide/bulk", json={
+        "files": [{"folder": "init_2026", "name": "a.jpg"}], "deleted": True})
+    r = client.post("/api/purge", json={
+        "files": [{"folder": "init_2026", "name": "a.jpg"}]})
+    assert r.json()["binned"] == 0, r.text
+
+
+def test_the_bin_link_is_hideable(client: TestClient) -> None:
+    """It is rendered at zero and hidden, rather than left out, so that
+    deleting something can light it up without a reload — an element that is
+    not there cannot be updated. Which means it has to be hideable: `.who-link`
+    sets a `display`, and that outranks the user agent's `[hidden]`."""
+    html = client.get("/browse?event=Italy%20-%20Sicily").text
+
+    assert 'id="bincount"' in html
+    assert ".who-link[hidden]" in html
+
+
 def test_the_header_counts_what_is_waiting(
     client: TestClient, writable: Path
 ) -> None:
     """Deleting is cheap, so files pile up in a state nobody is looking at. A
     link saying "Deleted" reports nothing; a number says there is something to
     do, and says it on every page until there is not."""
-    assert "deleted</a>" not in client.get("/").text, "a nag at zero"
+    # Rendered but hidden, rather than absent: deleting has to light it up
+    # without a reload, and an element that is not there cannot be updated.
+    empty = client.get("/").text
+    assert 'id="bincount"' in empty
+    assert "hidden>0 deleted</a>" in empty, "a nag at zero"
 
     client.post("/api/decide", json={
         "folder": "init_2026", "name": "a.jpg", "deleted": True})
@@ -297,6 +335,11 @@ def test_a_row_reserves_the_height_of_the_controls_in_it(
 
     assert "--ctl:" in css
     assert "min-height:var(--ctl)" in css
+    # A stacked row carries its own padding and rule, and `box-sizing:
+    # border-box` puts both *inside* the min-height — so it has to reserve the
+    # control plus that chrome, or it reserves 22 pixels for a 31-pixel button.
+    assert "box-sizing: border-box" in css
+    assert "min-height:calc(var(--ctl) + 8px + 1px)" in css
     # Not on the buttons as well: `.tick`, `.grppick` and `.pick` are buttons
     # sized in fixed pixels, and a min-height outranks their `height` — which
     # would make an oval of every select circle in the grid.

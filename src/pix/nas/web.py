@@ -193,15 +193,22 @@ main { padding:16px 20px 40px; }
 .row { display:flex; gap:9px; align-items:center; flex-wrap:wrap;
        min-height:var(--ctl); }
 /* The action row empties and fills as the selection changes and it sits above
-   the grid, so its height must not depend on what is in it: at 30px empty and
-   31px with a button, every thumbnail on the page moved a pixel on the first
-   click. `--ctl` is what a text button actually measures, so the reserved
-   height and the filled height are the same number.
+   the grid, so its height must not depend on what is in it — otherwise every
+   thumbnail on the page moves the moment you tick one. `--ctl` is what a text
+   button actually measures, so the reserved height and the filled height are
+   the same number.
    Deliberately not `min-height` on the buttons themselves to say it twice —
    `.tick`, `.grppick` and `.pick` are buttons with a fixed 16 or 20 pixels,
    and a min-height outranks their `height`, which would have made an oval of
    every select circle in the grid. */
-.row + .row { margin-top:8px; border-top:1px solid var(--line); padding-top:8px; }
+/* `box-sizing: border-box` is set on everything, so a min-height covers the
+   element's own padding and border as well as its content. A stacked row has
+   8px of padding and a 1px rule above it, which the first row does not — so
+   reserving a bare control's height here reserved 22px of room for a 31px
+   button, and the row jumped nine pixels the moment one appeared. It has to
+   ask for the control *plus* its own chrome. */
+.row + .row { margin-top:8px; border-top:1px solid var(--line); padding-top:8px;
+              min-height:calc(var(--ctl) + 8px + 1px); }
 .brand { font-weight:600; letter-spacing:.02em; color:var(--fg); }
 .count { font-variant-numeric:tabular-nums; color:var(--dim);
          white-space:nowrap; }
@@ -406,6 +413,10 @@ h2.year span { font-size:13px; font-weight:400; }
 .gate .note, main > .note { margin:8px 0; }
 .warn { color:#e3b341; }
 .who-link { margin-left:10px; display:inline-flex; align-items:center; }
+/* Another `display` that would outrank the user agent's `[hidden]`. The bin
+   count is hidden at zero and shown the moment something is deleted, without
+   a reload, so it has to be hideable. */
+.who-link[hidden] { display:none; }
 .who-link button { padding:3px 9px; margin:0; }
 .empty { color:var(--dim); padding:40px 0; }
 
@@ -526,7 +537,9 @@ def _bin_link() -> str:
     on would be the count lying, which is the one thing it cannot do.
 
     Silent at zero: an empty bin is not news, and a nag that is always there
-    stops being read.
+    stops being read. Rendered anyway and hidden, rather than left out, because
+    deleting something has to light it up without a reload — and an element
+    that is not there cannot be updated.
     """
     try:
         conn = db()
@@ -538,9 +551,13 @@ def _bin_link() -> str:
         return ""
     finally:
         conn.close()
-    if not n:
-        return ""
-    return (f'<a class="who-link bin-link" href="/browse?deleted=only">'
+    return bin_link_html(n)
+
+
+def bin_link_html(n: int) -> str:
+    """The bin count as the header shows it — and as the page rewrites it."""
+    return (f'<a class="who-link bin-link" id="bincount" '
+            f'href="/browse?deleted=only"{"" if n else " hidden"}>'
             f'{n:,} deleted</a>')
 
 
@@ -995,6 +1012,7 @@ const actions=document.getElementById('actions');
 // the server would refuse anyway.
 const selcount=document.getElementById('selcount');
 const countEl=document.getElementById('count');
+const binEl=document.getElementById('bincount');
 const note=document.getElementById('note');
 const viewer=document.getElementById('viewer');
 const vimg=document.getElementById('vimg'), vvid=document.getElementById('vvid');
@@ -1524,21 +1542,21 @@ function railHtml(d){
 // to and the count would sit at none while you looked straight at the file
 // you meant.
 //
-// The one selection paging carries along is the viewer's own — the one it
-// made on opening because there was nothing else to act on. That is
-// remembered rather than worked out from the selection afterwards: "one file,
-// and it is the one under the cursor" describes the viewer's selection, but it
-// also describes a single file the curator picked in the grid the moment you
-// page onto it, and then paging away would drag their selection with it.
-let soloView=false;
+// Looking changes nothing at all. The viewer used to select what you opened
+// when nothing was selected — so that the actions had something to apply to
+// while you were in there — and leave the selection alone otherwise. That was
+// two behaviours for one gesture and it showed: the first photograph you
+// opened got ticked and the next one did not.
+//
+// It bought nothing any more. The rule existed for `S`, which wrote to the
+// photograph on screen, and the viewer has had no controls of its own since
+// the keyboard went. So opening and paging are pure looking, and the only way
+// to choose a file is still to click its circle.
 function openViewer(n){
-  soloView = picked.size===0;
   viewer.classList.add('on');
-  setCur(n===undefined?(cur<0?0:cur):n, !soloView);
+  setCur(n===undefined?(cur<0?0:cur):n, true);
 }
-function closeViewer(){
-  viewer.classList.remove('on'); vvid.pause(); soloView=false;
-}
+function closeViewer(){ viewer.classList.remove('on'); vvid.pause(); }
 // The stage fills the viewer, so clicking beside the picture lands on it
 // rather than on the viewer itself — the old check never matched and there
 // was no way back out except the keyboard.
@@ -1742,6 +1760,16 @@ function workProgress(done,total){
     `${done.toLocaleString()} of ${total.toLocaleString()} `+
     (total===1?'file':'files');
 }
+// The standing count of what is waiting in the bin. It is rendered with the
+// page, so every delete, restore and purge has to say what it is now — a
+// number that only refreshes on reload is worse than no number, because it
+// looks current.
+function drawBin(n){
+  if(binEl===null||n===null||n===undefined) return;
+  binEl.textContent=`${n.toLocaleString()} deleted`;
+  binEl.hidden=!n;
+}
+
 function workClose(){
   clearTimeout(workTimer); workTimer=null;
   if(working) working.classList.remove('on');
@@ -1766,7 +1794,7 @@ async function send(cs,body,label){
   if(busy){say('still writing…');return null;}
   busy=true; say('');
   workOpen(label||'Writing', cs.length);
-  let done=0, failed=0, gone=[], total=null;
+  let done=0, failed=0, gone=[], total=null, binned=null;
   for(let s=0;s<cs.length;s+=CHUNK){
     const batch=cs.slice(s,s+CHUNK);
     try{
@@ -1783,6 +1811,7 @@ async function send(cs,body,label){
       failed+=out.failed.length;
       gone=gone.concat(out.dropped||[]);
       if(out.total!==null&&out.total!==undefined) total=out.total;
+      if(out.binned!==null&&out.binned!==undefined) binned=out.binned;
     }catch(e){
       busy=false; workClose();
       say(`stopped after ${done} of ${cs.length}: ${e.message}`,true);
@@ -1797,6 +1826,7 @@ async function send(cs,body,label){
   if(viewer.classList.contains('on')&&cells[cur]) fill(cells[cur]);
   drop(gone);
   if(total!==null&&countEl) countEl.textContent=`${total.toLocaleString()} files`;
+  drawBin(binned);
   if(failed) say(`${failed} file(s) could not be written`,true);
   else if(gone.length) say(`${gone.length} file(s) no longer match — removed`);
   else say('');
@@ -1849,7 +1879,7 @@ async function purgeSelection(){
              +`made from them are removed. This cannot be undone.`)) return;
   if(busy){say('still writing…');return;}
   busy=true; say(''); workOpen('Purge', cs.length);
-  let purged=0, failed=0, gone=[], total=null;
+  let purged=0, failed=0, gone=[], total=null, binned=null;
   try{
     for(let s0=0;s0<cs.length;s0+=CHUNK){
       const batch=cs.slice(s0,s0+CHUNK);
@@ -1864,6 +1894,7 @@ async function purgeSelection(){
       purged+=out.purged; failed+=out.failed.length;
       gone=gone.concat(out.dropped||[]);
       if(out.total!==null&&out.total!==undefined) total=out.total;
+      if(out.binned!==null&&out.binned!==undefined) binned=out.binned;
       workProgress(Math.min(s0+batch.length,cs.length),cs.length);
     }
   }catch(e){
@@ -1874,6 +1905,7 @@ async function purgeSelection(){
   busy=false; workClose();
   drop(gone);
   if(total!==null&&countEl) countEl.textContent=`${total.toLocaleString()} files`;
+  drawBin(binned);
   if(failed) say(`${failed} file(s) could not be purged`,true);
   else say(`${purged.toLocaleString()} file(s) destroyed`);
 }
@@ -1903,12 +1935,9 @@ document.addEventListener('keydown',e=>{
   const step=e.key==='ArrowRight'?1:e.key==='ArrowLeft'?-1:0;
   if(!step) return;
   e.preventDefault();
-  const next=(cur<0?0:cur)+step;
-  // Paging is looking, not choosing: a selection built in the grid survives
-  // being paged past. The exception is the viewer's own selection, which
-  // follows the cursor so the actions keep pointing at what is on screen.
-  if(soloView){ setCur(next); anchor=next; }
-  else { setCur(next,true); drawSel(); }
+  // Paging is looking, not choosing, so whatever is selected stays selected.
+  setCur((cur<0?0:cur)+step, true);
+  drawSel();
 });
 
 // --- grouping ----------------------------------------------------------
@@ -2313,7 +2342,7 @@ def api_purge(user: Annotated[Principal, Depends(require_admin)],
     """
     if not body.files:
         return JSONResponse({"purged": 0, "failed": [], "dropped": [],
-                             "total": None})
+                             "total": None, "binned": None})
     if len(body.files) > BULK_LIMIT:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -2347,6 +2376,8 @@ def api_purge(user: Annotated[Principal, Depends(require_admin)],
             purged += 1
             gone.append({"folder": target.folder, "name": target.name})
         total = ix.count(conn, view) if conn is not None else None
+        binned = (ix.count(conn, ix.Filters(deleted="only"))
+                  if conn is not None else None)
     finally:
         if conn is not None:
             conn.close()
@@ -2357,7 +2388,7 @@ def api_purge(user: Annotated[Principal, Depends(require_admin)],
         history.record(user.name, f"purged {purged} file"
                        + ("s" if purged != 1 else ""), [])
     return JSONResponse({"purged": purged, "failed": failed,
-                         "dropped": gone, "total": total})
+                         "dropped": gone, "total": total, "binned": binned})
 
 
 class DecideBulkBody(BaseModel):
@@ -2413,7 +2444,7 @@ def api_decide_bulk(user: Annotated[Principal, Depends(require_admin)],
     """
     if not body.files:
         return JSONResponse({"written": 0, "indexed": 0, "failed": [],
-                             "dropped": [], "total": None})
+                             "dropped": [], "total": None, "binned": None})
     if len(body.files) > BULK_LIMIT:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -2423,6 +2454,7 @@ def api_decide_bulk(user: Annotated[Principal, Depends(require_admin)],
     written = 0
     indexed = 0
     failed: list[dict[str, str]] = []
+    binned: int | None = None
     # One index connection for the whole batch. Opening a SQLite file over SMB
     # per row dominated the cost — measured at 96ms/file against the NAS, most
     # of it the open rather than the write.
@@ -2431,6 +2463,7 @@ def api_decide_bulk(user: Annotated[Principal, Depends(require_admin)],
     undo: list[history.Before] = []
     dropped: list[dict[str, str]] = []
     total: int | None = None
+    binned: int | None = None
     try:
         for target in body.files:
             try:
@@ -2449,6 +2482,10 @@ def api_decide_bulk(user: Annotated[Principal, Depends(require_admin)],
             dropped = [{"folder": f, "name": n}
                        for f, n in done if (f, n) not in stays]
             total = ix.count(conn, view)
+            # The header's standing count. It is rendered with the page, so
+            # without this it stays at whatever it said when the page loaded —
+            # which is wrong the instant anything is deleted or restored.
+            binned = ix.count(conn, ix.Filters(deleted="only"))
     finally:
         if conn is not None:
             conn.close()
@@ -2461,7 +2498,7 @@ def api_decide_bulk(user: Annotated[Principal, Depends(require_admin)],
         history.record(user.name, _summary(change, len(undo)), undo)
     return JSONResponse({"written": written, "indexed": indexed,
                          "failed": failed, "dropped": dropped,
-                         "total": total})
+                         "total": total, "binned": binned})
 
 
 # --- the write path ----------------------------------------------------------

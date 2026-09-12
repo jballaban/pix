@@ -90,7 +90,8 @@ const actBtn = name => actions.querySelectorAll('[data-act]')
                               .find(b => b.dataset.act === name);
 for (const id of ['menu', 'chips', 'selcount', 'count', 'note', 'viewer',
                   'vimg', 'vvid', 'vmeta', 'rail', 'railtoggle', 'viewclose',
-                  'working', 'workwhat', 'workbar', 'worktally']) mk(id);
+                  'working', 'workwhat', 'workbar', 'worktally',
+                  'bincount']) mk(id);
 const stage = new El('div');
 stage.className = 'stage';
 document.byId.viewer.appendChild(stage);
@@ -115,6 +116,8 @@ const calls = [];
 // to make a write push things out of the view, which is when the grid has to
 // tidy up after itself.
 let dropping = [];
+// What the server says is waiting in the bin after a write.
+let binned = 0;
 const fetch = async (url, opts) => {
   calls.push({ url, body: opts && opts.body });
   if (url.startsWith('/api/suggest')) {
@@ -124,7 +127,8 @@ const fetch = async (url, opts) => {
     return { ok: true, json: async () => ({ name: 'a.jpg', exif: {}, facts: [] }) };
   }
   return { ok: true,
-           json: async () => ({ failed: [], dropped: dropping, total: 2 }) };
+           json: async () => ({ failed: [], dropped: dropping, total: 2,
+                                purged: 1, binned }) };
 };
 const localStorage = { getItem: () => null, setItem: () => {} };
 const listeners = {};
@@ -253,19 +257,21 @@ function arrow(key, opts) {
         document.byId.selcount.textContent === '1 selected',
         document.byId.selcount.textContent);
 
-  // With nothing selected the viewer still gives the actions something to
-  // apply to, and paging carries that one along — otherwise S would write to
-  // a photograph that had gone off screen.
+  // Looking changes nothing, with or without a selection standing. The viewer
+  // used to tick what you opened when nothing was selected and leave things
+  // alone otherwise — two behaviours for one gesture, and it showed: the first
+  // photograph you opened got ticked and the next one did not.
   deselect();
   cells[0].click();
   await settle();
-  check('opening with nothing selected selects what you opened',
-        cells[0].classList.contains('picked'),
+  check('opening with nothing selected still selects nothing',
+        document.byId.selcount.textContent === '0 selected',
         document.byId.selcount.textContent);
   arrow('ArrowRight');
-  check('and paging carries that one selection along',
-        cells[1].classList.contains('picked')
-        && !cells[0].classList.contains('picked'),
+  check('and paging selects nothing either',
+        document.byId.selcount.textContent === '0 selected'
+        && !cells[0].classList.contains('picked')
+        && !cells[1].classList.contains('picked'),
         document.byId.selcount.textContent);
   stage.click();
 
@@ -461,6 +467,35 @@ function arrow(key, opts) {
     cells[0].dataset.deleted = '';
     cells[0].classList.remove('gone');
     cells[1].dataset.deleted = '';
+    deselect();
+  }
+
+  // The bin count is rendered with the page, so a write has to say what it is
+  // now. A number that only refreshes on reload is worse than none, because it
+  // looks current.
+  {
+    deselect();
+    cells.forEach(c => { c.dataset.deleted = ''; c.classList.remove('gone'); });
+    const bin = document.byId.bincount;
+    bin.hidden = true;
+    cells[0].querySelector('.pick').click();
+    binned = 3;
+    actBtn('delete').click();
+    await settle(); await settle();
+    check('deleting updates the standing bin count',
+          bin.textContent === '3 deleted', bin.textContent);
+    check('and shows it once there is something in it', bin.hidden === false);
+
+    // Emptying it puts the count away rather than leaving a nag at zero.
+    deselect();
+    cells[0].querySelector('.pick').click();
+    binned = 0;
+    actBtn('purge').click();
+    await settle(); await settle();
+    check('and hides it again when the bin empties', bin.hidden === true,
+          bin.textContent);
+    binned = 0;
+    cells.forEach(c => { c.dataset.deleted = ''; c.classList.remove('gone'); });
     deselect();
   }
 
