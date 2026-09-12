@@ -1523,11 +1523,13 @@ document.addEventListener('keydown',e=>{
     // deliberate and moving the cursor underneath it would be noise.
     e.preventDefault(); repeatShare(); return;
   }
-  const cols=Math.max(1,Math.round(grid?grid.clientWidth/156:1));
-  const step={ArrowRight:1,ArrowLeft:-1,ArrowDown:cols,ArrowUp:-cols}[e.key];
-  if(step===undefined) return;
+  const move={ArrowRight:'next',ArrowLeft:'prev',
+              ArrowDown:'down',ArrowUp:'up'}[e.key];
+  if(move===undefined) return;
   e.preventDefault();
-  const next=(cur<0?0:cur)+step;
+  const from=cur<0?0:cur;
+  const next=move==='next'?from+1:move==='prev'?from-1
+            :rowNeighbour(from,move==='down'?1:-1);
   if(e.shiftKey&&cur>=0){
     range(anchor<0?cur:anchor,Math.max(0,Math.min(cells.length-1,next)));
     setCur(next,true); drawSel();
@@ -1584,6 +1586,31 @@ function groupMenu(anchorEl,level,insert){
   menu.style.top=(r.bottom+window.scrollY+4)+'px';
   menu.hidden=false;
   menuCtx={key:'group:'+level+':'+insert};
+}
+
+// Up and down are answered geometrically rather than by adding a column count
+// to an index. Group headings are grid items spanning every column, so a
+// heading eats a whole row and `index + columns` lands a cell short — which
+// read as "down goes down and one to the right". Asking where things actually
+// are is immune to that, to ragged final rows, and to the column count
+// changing with the window.
+function rowNeighbour(from,dir){
+  const a=cells[from]&&cells[from].getBoundingClientRect();
+  if(!a) return from;
+  const ax=a.left+a.width/2, ay=a.top+a.height/2;
+  let best=from, score=Infinity;
+  for(let i=0;i<cells.length;i++){
+    if(i===from) continue;
+    const b=cells[i].getBoundingClientRect();
+    const dy=(b.top+b.height/2)-ay;
+    // Same visual row: not a move up or down.
+    if(Math.abs(dy)<a.height/2) continue;
+    if(dir>0?dy<0:dy>0) continue;
+    // Nearest row first, then nearest column within it.
+    const s=Math.abs(dy)*1000+Math.abs((b.left+b.width/2)-ax);
+    if(s<score){score=s;best=i;}
+  }
+  return best;
 }
 
 // Every cell under a heading, down to the next heading at the same depth or

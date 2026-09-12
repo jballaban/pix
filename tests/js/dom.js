@@ -59,7 +59,12 @@ class El {
     if (i >= 0) { this.parent.children[i] = other; other.parent = this.parent; }
   }
   addEventListener(t, fn) { (this._listeners[t] ||= []).push(fn); }
-  getBoundingClientRect() { return { left: 0, top: 0, right: 0, bottom: 0 }; }
+  // Tests set `_rect` to lay elements out; without one an element simply
+  // has no position, which is what an undisplayed node reports anyway.
+  getBoundingClientRect() {
+    const r = this._rect || { left: 0, top: 0, width: 0, height: 0 };
+    return { ...r, right: r.left + r.width, bottom: r.top + r.height };
+  }
   contains(other) {
     let p = other;
     while (p) { if (p === this) return true; p = p.parent; }

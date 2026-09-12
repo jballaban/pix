@@ -261,6 +261,47 @@ function arrow(key, opts) {
         groupRows.includes('Remove this grouping'), groupRows.join(','));
   grid.click();
 
+  // Arrow keys navigate by where things *are*. Adding a column count to an
+  // index went wrong two ways: a heading spans every column and eats a whole
+  // row, and the count itself was only right at some window widths — which is
+  // why "down" went down and one to the right, but only sometimes.
+  {
+    const wide = [];
+    for (let i = 0; i < 7; i++) wide.push(cell('w' + i + '.jpg', ''));
+    const room = mk('room');
+    const head = new El('h3');
+    head.className = 'group';
+    head.dataset.level = '0';
+    head._rect = { left: 0, top: 0, width: 480, height: 24 };
+    room.appendChild(head);
+    // Three per row, 160 wide, 160 tall — the last row deliberately short.
+    wide.forEach((c, i) => {
+      c._rect = { left: (i % 3) * 160, top: 24 + Math.floor(i / 3) * 160,
+                  width: 160, height: 160 };
+      room.appendChild(c);
+    });
+    const all = [...cells, ...wide];
+    document.querySelectorAll = sel => (sel === '.cell' ? all
+                                      : sel === '.group' ? [heading]
+                                      : sel === '.stage' ? [stage] : realQsa(sel));
+    // Re-running the script picks up the new grid.
+    new Function(
+      'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
+      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
+      'GRID_GROUPS', 'GROUPING', 'setTimeout', js,
+    )(document, window, fetch, localStorage, location, confirm,
+      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
+      GRID_GROUPS, GROUPING, fn => fn());
+
+    wide[0].querySelector('.pick').click();
+    arrow('ArrowDown');
+    check('down lands directly below, not one to the right',
+          wide[3].classList.contains('cur'),
+          all.findIndex(c => c.classList.contains('cur')) + '');
+    arrow('ArrowUp');
+    check('up comes straight back', wide[0].classList.contains('cur'));
+  }
+
   if (failures.length) {
     failures.forEach(f => console.log('FAIL ' + f));
     process.exit(1);
