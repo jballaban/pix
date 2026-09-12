@@ -41,12 +41,22 @@ const grid = mk('grid');
 // A heading and its two cells, the way the server lays a section out.
 const heading = new El('h3');
 heading.className = 'group';
-heading.dataset.level = '0';
-for (const cls of ['grppick', 'grpname', 'addgrp']) {
+const pick = new El('button');
+pick.className = 'grppick';
+heading.appendChild(pick);
+// One heading per section, reading as a path: each crumb is a level.
+const crumb = new El('span');
+crumb.className = 'crumb';
+crumb.dataset.level = '0';
+for (const cls of ['grpname', 'rmgrp']) {
   const b = new El('button');
   b.className = cls;
-  heading.appendChild(b);
+  crumb.appendChild(b);
 }
+heading.appendChild(crumb);
+const addBtn = new El('button');
+addBtn.className = 'addgrp';
+heading.appendChild(addBtn);
 grid.appendChild(heading);
 const cells = [cell('a.jpg', 'ghost'), cell('b.jpg', '')];
 cells.forEach(c => grid.appendChild(c));
@@ -251,18 +261,24 @@ function arrow(key, opts) {
   check('and says "some" when part of it is',
         heading.dataset.state === 'some', String(heading.dataset.state));
 
-  // The heading name opens the grouping menu.
-  heading.querySelector('.grpname').click();
+  // A crumb's name opens the grouping menu for that level.
+  crumb.querySelector('.grpname').click();
   await tick();
-  check('the heading offers groupings', !menu.hidden);
+  check('a crumb offers groupings', !menu.hidden);
   const groupRows = menu.querySelectorAll('.opt')
     .map(o => (o.innerHTML.match(/<span>([^<]*)<\/span>/) || [])[1]);
-  check('including a way to remove it',
-        groupRows.includes('Remove this grouping'), groupRows.join(','));
+  check('to change that level', groupRows.includes('By event'),
+        groupRows.join(','));
   grid.click();
 
+  // The cross on a crumb drops that level outright — no menu to go and find.
+  crumb.querySelector('.rmgrp').click();
+  check('the cross removes the grouping',
+        /group=none/.test(location.href), location.href);
+  location.href = '/browse';
+
   // `+` on a heading adds a level *inside* it rather than replacing it.
-  heading.querySelector('.addgrp').click();
+  addBtn.click();
   await tick();
   {
     const rows = menu.querySelectorAll('.opt');

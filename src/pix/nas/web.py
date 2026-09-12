@@ -256,13 +256,20 @@ button.primary { background:var(--accent); color:#0d0f12; border-color:var(--acc
    rather than having to know they are there. */
 h3.group { grid-column:1/-1; margin:18px 0 2px; font-size:13px;
            font-weight:600; display:flex; gap:8px; align-items:center;
-           border-bottom:1px solid var(--line); padding-bottom:5px;
-           padding-left:calc(var(--depth,0) * 18px); }
+           border-bottom:1px solid var(--line); padding-bottom:5px; }
 h3.group:first-child { margin-top:0; }
-h3.group span { font-weight:400; font-variant-numeric:tabular-nums;
-                color:var(--dim); }
-h3.group[data-level="1"] { font-size:12px; margin-top:10px;
-                           border-bottom-style:dashed; }
+h3.group > span.dim { font-weight:400;
+                      font-variant-numeric:tabular-nums; }
+/* A path, so the last crumb — the one that actually changed — is the one
+   that reads loudest. */
+.crumbs { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+.crumb { display:inline-flex; align-items:center; }
+.crumbs .sep { color:var(--dim); font-weight:400; }
+.crumb:not(:last-child) .grpname { color:var(--dim); font-weight:400; }
+.rmgrp { background:none; border:0; margin:0; padding:0 4px; color:var(--dim);
+         font:inherit; cursor:pointer; opacity:0; transition:opacity .1s; }
+.crumb:hover .rmgrp, .rmgrp:focus { opacity:1; }
+.rmgrp:hover { color:#ffb4a2; }
 /* The name is the control: click it to regroup, `+` to group within it. */
 .grpname { background:none; border:0; padding:0; margin:0; color:inherit;
            font:inherit; cursor:pointer; }
@@ -637,64 +644,87 @@ def _groupings(raw: str) -> list[str]:
 
 
 def _sections(rows: list[sqlite3.Row], groups: list[str]) -> str:
-    """The cells, with a heading wherever a group key changes.
+    """The cells, with one heading wherever the section changes.
+
+    **One heading, not one per level.** Nested headings meant an indent for
+    every level and a row of chrome for each, and the deeper ones said less and
+    less. A section's identity is the whole path — *2026 › July › Sports Day* —
+    so the heading says that, once, and the levels in it are the controls.
 
     Headings are grid items spanning every column, so one flow holds headings
-    and thumbnails — which keeps arrow-key movement walking straight through
-    the sections rather than having to know they are there.
+    and thumbnails; arrow-key movement walks straight through rather than having
+    to know the sections are there.
 
-    There is always at least one heading, even ungrouped: the heading *is*
-    the control, so a grid with none would offer no way to start.
+    There is always at least one heading, even ungrouped: the heading *is* the
+    control, so a grid without one would offer no way to start.
     """
-    out: list[str] = []
-
-    def emit(items: list[sqlite3.Row], level: int) -> None:
-        if level >= len(groups):
-            out.extend(_cell(r) for r in items)
-            return
-        for key, run in groupby(items, key=lambda r: r[f"grp{level}"]):
-            batch = list(run)
-            out.append(_heading(_group_label(key, groups[level]),
-                                len(batch), level))
-            emit(batch, level + 1)
-
     if not groups:
-        out.append(_heading("Ungrouped", len(rows), 0))
-        out.extend(_cell(r) for r in rows)
-    else:
-        emit(rows, 0)
+        return _heading([], 0, len(rows)) + "".join(_cell(r) for r in rows)
+
+    out: list[str] = []
+    for keys, run in groupby(rows, key=lambda r: tuple(
+            r[f"grp{i}"] for i in range(len(groups)))):
+        batch = list(run)
+        labels = [_group_label(k, g, groups[:i])
+                  for i, (k, g) in enumerate(zip(keys, groups))]
+        out.append(_heading(labels, len(groups), len(batch)))
+        out.extend(_cell(r) for r in batch)
     return "".join(out)
 
 
-def _heading(label: str, count: int, level: int) -> str:
+def _heading(labels: list[str], levels: int, count: int) -> str:
     """One section heading, which is also how grouping is changed.
 
-    Putting the control here rather than in the top bar means the thing you
-    want to regroup is the thing you click, and it costs no header row —
-    every row of chrome at the top is a row of photographs pushed off.
+    Each crumb is two controls: the name changes that level, the `×` drops it.
+    Removal lives here rather than inside the menu because *take this away* is
+    a thing you should be able to see, not something to go and find.
     """
-    return (f'<h3 class="group" data-level="{level}" '
-            f'style="--depth:{level}">'
-            f'<button class="grppick" title="Select this group"></button>'
+    if not labels:
+        crumbs = ('<span class="crumb" data-level="0">'
+                  '<button class="grpname">Ungrouped</button></span>')
+    else:
+        crumbs = '<span class="sep">&rsaquo;</span>'.join(
+            f'<span class="crumb" data-level="{i}">'
             f'<button class="grpname">{_h(label)}</button>'
-            f'<button class="addgrp" title="Add a grouping inside this one">+</button>'
+            f'<button class="rmgrp" title="Remove this grouping">&times;</button>'
+            f'</span>'
+            for i, label in enumerate(labels))
+    add = ("" if levels >= 3 else
+           '<button class="addgrp" title="Add a grouping inside this one">'
+           "+</button>")
+    return (f'<h3 class="group">'
+            f'<button class="grppick" title="Select this group"></button>'
+            f'<span class="crumbs">{crumbs}</span>{add}'
             f'<span class="dim">{count:,}</span>'
             f'</h3>')
 
 
-def _group_label(key: object, group: str) -> str:
-    """A heading a person reads, not a sort key."""
+def _group_label(key: object, group: str, outer: Sequence[str] = ()) -> str:
+    """A heading a person reads, not a sort key.
+
+    `outer` is the coarser levels already shown to the left, so a crumb does
+    not repeat what the path has said: under *2025*, the month is **January**
+    rather than *January 2025*, and under that the day is **Saturday 4**.
+    """
     if key is None or key == "":
         return "No date" if group in ("day", "month", "year") else "None"
     text = str(key)
     if group == "day":
         moment = datestr.parse_pix(text + "-00:00:00")
+        if not moment:
+            return text
         # Composed rather than one strftime: `%-d` drops the leading zero on
         # Linux and is simply invalid on Windows, and this runs on both.
-        return (f"{moment:%A} {moment.day} {moment:%B %Y}" if moment else text)
+        if "month" in outer:
+            return f"{moment:%A} {moment.day}"
+        if "year" in outer:
+            return f"{moment:%A} {moment.day} {moment:%B}"
+        return f"{moment:%A} {moment.day} {moment:%B %Y}"
     if group == "month":
         moment = datestr.parse_pix(text + "-01-00:00:00")
-        return moment.strftime("%B %Y") if moment else text
+        if not moment:
+            return text
+        return moment.strftime("%B" if "year" in outer else "%B %Y")
     return text
 
 
@@ -1570,7 +1600,7 @@ function groupMenu(anchorEl,level,insert){
   };
   const head=document.createElement('div');
   head.className='band';
-  head.textContent=insert?'Group within this by':'Group by';
+  head.textContent=insert?'Then group by':'Group by';
   list.appendChild(head);
   for(const [key,label] of GRID_GROUPS){
     if(key==='none') continue;
@@ -1580,12 +1610,6 @@ function groupMenu(anchorEl,level,insert){
       if(insert) next.splice(level+1,0,key); else next[level]=key;
       location.href=groupUrl(next);
     },levels[level]===key&&!insert?'cur':'');
-  }
-  if(!insert&&levels.length){
-    row('Remove this grouping',()=>{
-      const next=[...levels]; next.splice(level,1);
-      location.href=groupUrl(next);
-    });
   }
   const r=anchorEl.getBoundingClientRect();
   menu.style.left=Math.min(r.left,window.innerWidth-316)+'px';
@@ -1619,16 +1643,12 @@ function rowNeighbour(from,dir){
   return best;
 }
 
-// Every cell under a heading, down to the next heading at the same depth or
-// shallower. Nested headings in between belong to this section too.
+// Every cell under a heading, down to the next one. There is one heading per
+// section now, so this is simply "until the next heading".
 function sectionCells(h){
-  const depth=+h.dataset.level;
   const out=[];
   for(let el=h.nextElementSibling; el; el=el.nextElementSibling){
-    if(el.classList.contains('group')){
-      if(+el.dataset.level<=depth) break;
-      continue;
-    }
+    if(el.classList.contains('group')) break;
     if(el.classList.contains('cell')) out.push(el);
   }
   return out;
@@ -1643,11 +1663,23 @@ function drawGroupPicks(){
 }
 
 document.querySelectorAll('.group').forEach(h=>{
-  const level=+h.dataset.level;
-  h.querySelector('.grpname').onclick=e=>{
-    e.stopPropagation(); groupMenu(h,level,false);};
-  h.querySelector('.addgrp').onclick=e=>{
-    e.stopPropagation(); groupMenu(h,level,true);};
+  // Each crumb is two controls: the name changes that level, the cross drops
+  // it. Removal is on the crumb rather than inside the menu because *take this
+  // away* is a thing you should be able to see, not go and find.
+  h.querySelectorAll('.crumb').forEach(crumb=>{
+    const level=+crumb.dataset.level;
+    crumb.querySelector('.grpname').onclick=e=>{
+      e.stopPropagation(); groupMenu(crumb,level,false);};
+    const rm=crumb.querySelector('.rmgrp');
+    if(rm) rm.onclick=e=>{
+      e.stopPropagation();
+      const next=[...GROUPING]; next.splice(level,1);
+      location.href=groupUrl(next);
+    };
+  });
+  const add=h.querySelector('.addgrp');
+  if(add) add.onclick=e=>{
+    e.stopPropagation(); groupMenu(add,GROUPING.length-1,true);};
   h.querySelector('.grppick').onclick=e=>{
     e.stopPropagation();
     const mine=sectionCells(h);

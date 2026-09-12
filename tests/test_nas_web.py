@@ -1395,10 +1395,32 @@ def test_groupings_nest(client: TestClient) -> None:
     """A day inside an event is the obvious pair, and needs two levels."""
     html = client.get("/browse?group=event,day").text
 
-    assert '<h3 class="group" data-level="0"' in html
-    assert '<h3 class="group" data-level="1"' in html
+    assert 'class="crumb" data-level="0"' in html
+    assert 'class="crumb" data-level="1"' in html
     assert "Italy - Sicily" in html
     assert "30 August 2026" in html
+
+
+def test_a_section_has_one_heading_reading_as_a_path(
+    client: TestClient
+) -> None:
+    """Nested headings cost an indent and a row per level, and the deeper ones
+    said less and less. A section's identity is the whole path."""
+    html = client.get("/browse?group=year,event").text
+    heading = html[html.index('<h3 class="group"'):]
+    heading = heading[:heading.index("</h3>")]
+
+    assert heading.count("crumb") >= 2
+    assert "&rsaquo;" in heading
+    assert html.count('<h3 class="group"') == html.count('class="crumbs"')
+
+
+def test_every_crumb_can_be_removed(client: TestClient) -> None:
+    """Removal on the crumb rather than inside a menu: *take this away* is a
+    thing you should be able to see, not go and find."""
+    html = client.get("/browse?group=year,event").text
+
+    assert html.count('class="rmgrp"') >= 2
 
 
 def test_a_group_heading_can_select_its_files(client: TestClient) -> None:
@@ -1409,7 +1431,7 @@ def test_a_repeated_level_is_dropped(client: TestClient) -> None:
     """Grouping by day inside day is not a thing, and a URL is hand-edited."""
     html = client.get("/browse?group=day,day").text
 
-    assert html.count('<h3 class="group" data-level="1"') == 0
+    assert 'data-level="1"' not in html
 
 
 def test_order_is_by_effective_date(client: TestClient, writable: Path) -> None:
@@ -1430,10 +1452,10 @@ def test_the_add_button_sits_beside_the_name(client: TestClient) -> None:
     """At the end of the row it went unnoticed, which is the whole failure a
     control can have."""
     html = client.get("/browse").text
-    heading = html[html.index('<h3 class="group"'):][:400]
+    heading = html[html.index('<h3 class="group"'):][:500]
 
     assert heading.index("grpname") < heading.index("addgrp")
-    assert heading.index("addgrp") < heading.index('class="dim"')
+    assert heading.index("addgrp") < heading.index('<span class="dim"')
 
 
 def test_the_add_button_is_visible_without_hovering(
@@ -1451,5 +1473,6 @@ def test_three_levels_is_the_limit(client: TestClient) -> None:
     """Past three the headings outnumber the photographs."""
     html = client.get("/browse?group=event,year,month,day").text
 
-    assert '<h3 class="group" data-level="2"' in html
-    assert '<h3 class="group" data-level="3"' not in html
+    assert 'data-level="2"' in html
+    assert 'data-level="3"' not in html
+    assert 'class="addgrp"' not in html
