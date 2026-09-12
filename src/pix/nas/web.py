@@ -1659,13 +1659,16 @@ const ACT_COLUMN={tags:'tag', access:'audience', event:'event'};
 // A confirm rather than a ceremony: this is the soft delete, it writes
 // `deleted` into the sidecar like any other judgement, and History puts it
 // back. Destroying the file itself is somewhere else entirely, and admin only.
+//
+// The question says none of that. *Deleted* is what the curator meant and what
+// they should be told; that it is recoverable, and by whom, is how the app
+// keeps its promise rather than a caveat on it. Answering "are you sure?" with
+// "well, sort of" invites a yes that was never really given.
 function deleteSelection(){
   const cs=targets();
   if(!cs.length){say('nothing selected');return;}
   const what=cs.length===1?'this file':`these ${cs.length.toLocaleString()} files`;
-  if(!confirm(`Delete ${what}? They stop appearing here, and an `
-             +`administrator can restore them or destroy them for good.`))
-    return;
+  if(!confirm(`Are you sure you want to delete ${what}?`)) return;
   send(cs,{deleted:true},'Delete');
 }
 
