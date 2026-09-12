@@ -261,6 +261,24 @@ function arrow(key, opts) {
         groupRows.includes('Remove this grouping'), groupRows.join(','));
   grid.click();
 
+  // `+` on a heading adds a level *inside* it rather than replacing it.
+  heading.querySelector('.addgrp').click();
+  await tick();
+  {
+    const rows = menu.querySelectorAll('.opt');
+    const labels = rows.map(
+      o => (o.innerHTML.match(/<span>([^<]*)<\/span>/) || [])[1]);
+    check('the plus offers a grouping to nest',
+          labels.includes('By event'), labels.join(','));
+    check('and does not offer to remove the level it is adding to',
+          !labels.includes('Remove this grouping'), labels.join(','));
+    rows[labels.indexOf('By event')].click();
+    check('choosing one keeps the outer level and adds inside it',
+          /group=day%2Cevent|group=day,event/.test(location.href),
+          location.href);
+    location.href = '/browse';
+  }
+
   // Arrow keys navigate by where things *are*. Adding a column count to an
   // index went wrong two ways: a heading spans every column and eats a whole
   // row, and the count itself was only right at some window widths — which is

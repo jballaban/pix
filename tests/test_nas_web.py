@@ -1422,3 +1422,34 @@ def test_order_is_by_effective_date(client: TestClient, writable: Path) -> None:
     rows = client.get("/api/files").json()
     assert [r["name"] for r in rows][0] == "a.jpg"
     assert rows[0]["effective_date"].startswith("1987")
+
+
+# --- sub-grouping -------------------------------------------------------------
+
+def test_the_add_button_sits_beside_the_name(client: TestClient) -> None:
+    """At the end of the row it went unnoticed, which is the whole failure a
+    control can have."""
+    html = client.get("/browse").text
+    heading = html[html.index('<h3 class="group"'):][:400]
+
+    assert heading.index("grpname") < heading.index("addgrp")
+    assert heading.index("addgrp") < heading.index('class="dim"')
+
+
+def test_the_add_button_is_visible_without_hovering(
+    client: TestClient
+) -> None:
+    """A control you cannot see until you hover the right thing is a control
+    you never learn is there."""
+    css = client.get("/browse").text
+
+    assert "visibility:hidden" not in css.split(".addgrp")[1][:120]
+    assert "opacity:.3" in css.split(".addgrp")[1][:120]
+
+
+def test_three_levels_is_the_limit(client: TestClient) -> None:
+    """Past three the headings outnumber the photographs."""
+    html = client.get("/browse?group=event,year,month,day").text
+
+    assert '<h3 class="group" data-level="2"' in html
+    assert '<h3 class="group" data-level="3"' not in html

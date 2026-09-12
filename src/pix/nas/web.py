@@ -267,8 +267,14 @@ h3.group[data-level="1"] { font-size:12px; margin-top:10px;
 .grpname { background:none; border:0; padding:0; margin:0; color:inherit;
            font:inherit; cursor:pointer; }
 .grpname:hover { color:var(--accent); text-decoration:underline; }
-.addgrp { margin:0 0 0 auto; padding:0 8px; line-height:1.4; opacity:.5; }
-.addgrp:hover { opacity:1; }
+/* Beside the name it belongs to, not marooned at the end of the row, where it
+   went unnoticed. Dim rather than hidden: a control you cannot see until you
+   hover the right thing is a control you never learn is there, and a page of
+   faint plus signs is quiet enough. */
+.addgrp { margin:0; padding:0 7px; line-height:1.3; font-size:14px;
+          opacity:.3; transition:opacity .1s; }
+h3.group:hover .addgrp, .addgrp:focus { opacity:1; }
+.addgrp:hover { border-color:var(--accent); color:var(--accent); }
 /* Same three states as the menus: the whole section, part of it, none. */
 .grppick { margin:0; padding:0; width:16px; height:16px; flex:none;
            border-radius:50%; background:transparent;
@@ -671,8 +677,8 @@ def _heading(label: str, count: int, level: int) -> str:
             f'style="--depth:{level}">'
             f'<button class="grppick" title="Select this group"></button>'
             f'<button class="grpname">{_h(label)}</button>'
+            f'<button class="addgrp" title="Add a grouping inside this one">+</button>'
             f'<span class="dim">{count:,}</span>'
-            f'<button class="addgrp" title="Group within this">+</button>'
             f'</h3>')
 
 
