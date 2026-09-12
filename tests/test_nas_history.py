@@ -9,6 +9,7 @@ archive remembers they used to say something else.
 from __future__ import annotations
 
 import json
+from urllib.parse import unquote
 from collections.abc import Callable
 from pathlib import Path
 
@@ -357,3 +358,142 @@ def test_lines_written_before_any_of_this_still_read(log: Path) -> None:
     # No placeholder and no count of its own: it says what it always said.
     assert ops[0].summary == "tagged 3 files beach"
     assert ops[0].n == 1
+
+
+# --- a revert undoes its own operation, and only while it still holds ---------
+
+def test_reverting_one_field_leaves_another_alone(curating: TestClient,
+                                                  writable: Path) -> None:
+    """Two edits to different fields do not touch each other, so either can be
+    put back in any order. Writing the whole previous value back took the other
+    one with it: setting a date and then an event, then reverting the date,
+    destroyed the event."""
+    curating.post("/api/decide/bulk", json={
+        "date_override": "2026-*-*-*:*:*", "files": _targets("a.jpg")})
+    curating.post("/api/decide/bulk", json={
+        "event": "blah", "files": _targets("a.jpg")})
+
+    dated = [op for op in history.recent() if "dated" in op.summary][0]
+    curating.post("/history/revert", data={"id": dated.id})
+
+    assert decisions.read(writable / "a.jpg") == Decision(event="blah")
+
+
+def test_an_operation_that_has_been_overwritten_cannot_be_put_back(
+    curating: TestClient, writable: Path
+) -> None:
+    """Set an event, set it again, and the first is no longer what the file
+    says — so there is nothing of it left to undo. It used to "succeed",
+    quietly replacing the second answer with a value nobody held."""
+    curating.post("/api/decide/bulk", json={
+        "event": "one", "files": _targets("a.jpg")})
+    curating.post("/api/decide/bulk", json={
+        "event": "two", "files": _targets("a.jpg")})
+
+    first = [op for op in history.recent() if "one" in op.summary][0]
+    r = curating.post("/history/revert", data={"id": first.id},
+                      follow_redirects=False)
+
+    said = unquote(r.headers["location"])
+    assert "0 files put back" in said, said
+    assert "1 changed since" in said, said
+    assert decisions.read(writable / "a.jpg") == Decision(event="two")
+
+
+def test_putting_the_newer_one_back_makes_the_older_one_reachable_again(
+    curating: TestClient, writable: Path
+) -> None:
+    """Which is the whole point of checking rather than refusing: undo them in
+    order and each becomes valid as the one above it is lifted."""
+    curating.post("/api/decide/bulk", json={
+        "event": "one", "files": _targets("a.jpg")})
+    curating.post("/api/decide/bulk", json={
+        "event": "two", "files": _targets("a.jpg")})
+
+    second = [op for op in history.recent() if "two" in op.summary][0]
+    curating.post("/history/revert", data={"id": second.id})
+    assert decisions.read(writable / "a.jpg") == Decision(event="one")
+
+    first = [op for op in history.recent() if op.summary.endswith("to one")][0]
+    curating.post("/history/revert", data={"id": first.id})
+    assert decisions.read(writable / "a.jpg") is None
+
+
+def test_a_revert_takes_back_only_the_value_it_gave(curating: TestClient,
+                                                    writable: Path) -> None:
+    """*Gave family access* is undone by taking `family` away, not by restoring
+    the whole list — somebody added `james` since, and that grant was never
+    this operation's to remove."""
+    curating.post("/api/decide/bulk", json={
+        "add_audience": ["family"], "files": _targets("a.jpg")})
+    curating.post("/api/decide/bulk", json={
+        "add_audience": ["james"], "files": _targets("a.jpg")})
+
+    gave = [op for op in history.recent() if "family" in op.summary][0]
+    curating.post("/history/revert", data={"id": gave.id})
+
+    assert decisions.read(writable / "a.jpg") == Decision(audience=("james",))
+
+
+def test_a_value_the_file_already_had_is_not_taken_away(
+    curating: TestClient, writable: Path
+) -> None:
+    """Adding a tag to a file that carried it did nothing. Undoing nothing by
+    removing it would be this operation destroying a decision it never made."""
+    curating.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "add_tags": ["beach"]})
+    curating.post("/api/decide/bulk", json={
+        "add_tags": ["beach"], "files": _targets("a.jpg")})
+
+    bulk = history.recent()[0]
+    curating.post("/history/revert", data={"id": bulk.id})
+
+    assert decisions.read(writable / "a.jpg") == Decision(tags=("beach",))
+
+
+def test_the_files_that_have_moved_on_are_counted_not_refused(
+    curating: TestClient, writable: Path
+) -> None:
+    """At three hundred files some always will have moved. Refusing the whole
+    operation for one of them would make revert useless exactly when it is
+    needed most."""
+    curating.post("/api/decide/bulk", json={
+        "event": "trip", "files": _targets("a.jpg", "b.mp4")})
+    curating.post("/api/decide/bulk", json={
+        "event": "somewhere else", "files": _targets("b.mp4")})
+
+    trip = [op for op in history.recent() if op.summary.endswith("to trip")][0]
+    r = curating.post("/history/revert", data={"id": trip.id},
+                      follow_redirects=False)
+
+    said = unquote(r.headers["location"])
+    assert "1 file put back" in said, said
+    assert "1 changed since" in said, said
+    assert decisions.read(writable / "a.jpg") is None
+    assert decisions.read(writable / "b.mp4") == Decision(event="somewhere else")
+
+
+def test_an_operation_recorded_before_this_says_it_cannot_be_put_back(
+    curating: TestClient, writable: Path, log: Path
+) -> None:
+    """Without knowing what an operation set, there is no way to tell whether
+    it is still in effect — so it is refused rather than guessed at. The old
+    behaviour was to write the whole previous value back, which is the thing
+    this replaced."""
+    curating.post("/api/decide/bulk", json={
+        "event": "trip", "files": _targets("a.jpg")})
+    # Strip what it did, the way a line written last week has none.
+    lines = [json.loads(line)
+             for line in log.read_text(encoding="utf-8").splitlines()]
+    for entry in lines:
+        for f in entry["files"]:
+            f.pop("did", None)
+    log.write_text("".join(json.dumps(e) + "\n" for e in lines),
+                   encoding="utf-8")
+
+    op = history.recent()[0]
+    assert not op.revertable()
+    r = curating.post("/history/revert", data={"id": op.id},
+                      follow_redirects=False)
+    assert "cannot be put back" in unquote(r.headers["location"])
+    assert decisions.read(writable / "a.jpg") == Decision(event="trip")

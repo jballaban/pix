@@ -2396,7 +2396,8 @@ def api_decide(user: Annotated[Principal, Depends(require_admin)],
     """
     was, decision, indexed = _decide(body.folder, body.name, _change(body))
     history.record(user.name, _summary(_change(body)),
-                   [history.Before(body.folder, body.name, was)])
+                   [history.Before(body.folder, body.name, was,
+                                   did=_recorded(_change(body)))])
     return JSONResponse({
         "folder": body.folder,
         "name": body.name,
@@ -2554,6 +2555,7 @@ def api_decide_bulk(user: Annotated[Principal, Depends(require_admin)],
             f"{len(body.files)} files in one request — send at most {BULK_LIMIT}")
 
     change = _change(body)
+    did = _recorded(change)
     written = 0
     indexed = 0
     failed: list[dict[str, str]] = []
@@ -2579,7 +2581,8 @@ def api_decide_bulk(user: Annotated[Principal, Depends(require_admin)],
             written += 1
             indexed += 1 if was_indexed else 0
             done.append((target.folder, target.name))
-            undo.append(history.Before(target.folder, target.name, was))
+            undo.append(history.Before(target.folder, target.name, was,
+                                       did=did))
         if conn is not None and done:
             stays = ix.matching(conn, view, done)
             dropped = [{"folder": f, "name": n}
@@ -2640,6 +2643,27 @@ def _change(body: DecideBody | DecideBulkBody) -> _Change:
                    add_audience=tuple(body.add_audience),
                    remove_audience=tuple(body.remove_audience),
                    deleted=_flag(got("deleted")))
+
+
+def _recorded(change: _Change) -> dict[str, Any]:
+    """What an operation did, in the shape the log keeps it.
+
+    Only the fields it actually sent — `UNSET` means *left alone*, and a log
+    that could not tell that apart from *set to nothing* would revert fields
+    the operation never touched.
+    """
+    out: dict[str, Any] = {}
+    for name in ("event", "date_override", "tags", "audience", "deleted"):
+        value: Any = getattr(change, name)
+        if isinstance(value, Unset):
+            continue
+        out[name] = ([str(v) for v in cast("Sequence[str]", value)]
+                     if isinstance(value, (list, tuple)) else value)
+    for name in ("add_tags", "remove_tags", "add_audience", "remove_audience"):
+        many = cast("Sequence[str]", getattr(change, name))
+        if many:
+            out[name] = [str(v) for v in many]
+    return out
 
 
 def _flag(value: Any) -> bool | Unset:
@@ -3134,19 +3158,35 @@ async def history_revert(
     request: Request,
     user: Annotated[Principal, Depends(require_admin)],
 ) -> Response:
-    """Put the files in one operation back to what they said before it.
+    """Undo what one operation did, wherever that is still what the file says.
 
-    Written wholesale from the recorded previous value, not as an inverse of
-    the change: the inverse of *added family* is only *remove family* if nothing
-    else touched the file since, and something might have.
+    **The inverse of the change, not the whole previous value.** Writing every
+    recorded field back was wrong twice over: set a date on a file and then an
+    event, revert the date, and the event went with it — it was never this
+    operation's to undo. The objection that used to justify the wholesale
+    write — that the inverse of *added family* is only *remove family* if
+    nothing else touched the file since — is answered by checking that nothing
+    else did, per file, rather than by undoing more than was asked.
+
+    Files that have moved on are left alone and counted. At three hundred files
+    some always will have, and refusing the whole operation for one of them
+    would make revert useless exactly when it is needed most.
     """
     op_id = (await _form(request)).get("id", "")
     op = history.get(op_id)
     if op is None:
         return RedirectResponse("/history?msg=no+such+operation", status_code=303)
 
+    if not op.revertable():
+        return RedirectResponse(
+            "/history?msg=" + quote("that was recorded before reverting knew "
+                                    "what an operation had done, so it cannot "
+                                    "be put back"),
+            status_code=303)
+
     restored = 0
     failed = 0
+    moved = 0
     undo: list[history.Before] = []
     conn = ix.open_rw(DB_PATH) if DB_PATH.is_file() else None
     try:
@@ -3158,11 +3198,18 @@ async def history_revert(
             with _write_lock:
                 try:
                     was = decisions.read(media)
-                    decisions.write(media, item.decision or decisions.Decision())
+                    if not history.in_effect(item.did, was):
+                        moved += 1
+                        continue
+                    putting_back = history.undo(item.did, item.decision)
+                    decisions.change(media, **putting_back)
                 except (decisions.DecisionError, OSError):
                     failed += 1
                     continue
-                undo.append(history.Before(item.folder, item.name, was))
+                # What the revert did to *this* file, so putting the revert
+                # back is the same gesture again rather than a special case.
+                undo.append(history.Before(item.folder, item.name, was,
+                                           did=dict(putting_back)))
                 if conn is not None:
                     try:
                         ix.refresh(conn, item.folder, item.name,
@@ -3175,13 +3222,17 @@ async def history_revert(
             conn.close()
 
     if undo:
+        # Recorded with what it did, like any other operation, so putting a
+        # revert back is the same gesture again rather than a special case.
         history.record(user.name, f"reverted: {op.summary}", undo,
                        reverts=op.id)
-    tail = f", {failed} could not be" if failed else ""
     noun = "file" if restored == 1 else "files"
-    return RedirectResponse(
-        f"/history?msg={_q(f'{restored} {noun} put back{tail}')}",
-        status_code=303)
+    said = f"{restored:,} {noun} put back"
+    if moved:
+        said += f", {moved:,} changed since and left alone"
+    if failed:
+        said += f", {failed:,} could not be"
+    return RedirectResponse(f"/history?msg={quote(said)}", status_code=303)
 
 
 def _when(moment: float) -> str:
