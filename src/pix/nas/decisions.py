@@ -16,6 +16,13 @@ The sidecar is named **full filename plus `.xmp`** (`IMG_4471.HEIC.xmp`, not
 most common device in the library: an iPhone Live Photo lands as `IMG_4471.HEIC`
 and `IMG_4471.MOV` in the same import.
 
+**A stack is one file speaking for several.** Eight takes of the same
+photograph, one shown and the rest folded behind it. Each of the others records
+which file it defers to; the top records nothing, because being spoken for is
+the decision and speaking is just what is left. That is [§15]'s open question
+about where a judgement concerning a *set* lives, answered: it was never about
+the set.
+
 **`audience` is who may see the file**, and it replaced a `tier` of
 `none`/`photo`/`top`. Those were two questions wearing one name — *has this
 been reviewed* and *how good is it* — and neither was the question actually
@@ -52,6 +59,7 @@ understand:
 | event | `pix:EventOverride` | `Iptc4xmpExt:Event` |
 | tags | — | `dc:subject`, the standard keywords bag |
 | audience | `pix:Audience` | — nothing standard expresses *who may see this* |
+| stacked under | `pix:StackedUnder` | — Lightroom keeps stacks in its catalogue, not the file |
 | date override | `pix:DateOverride` | `photoshop:DateCreated`, when the
   override pins a whole timestamp — a partial one has no standard form |
 
@@ -114,6 +122,17 @@ class Decision:
     #: deletion survives losing the index, travels with the folder, and is
     #: undone by the ordinary revert.
     deleted: bool = False
+    #: `folder/name` of the file this one is **stacked behind** — eight takes
+    #: of one photograph, with one of them shown and the rest folded under it.
+    #: Empty on the top of a stack, which records nothing: a stack is *these
+    #: files defer to that one*, and only the deferring is a decision.
+    #:
+    #: This answers §15's open question about where a judgement concerning a
+    #: *set* lives. It lives per file after all, because it is not really about
+    #: the set — it is each file saying which one speaks for it. Losing a folder
+    #: costs those files and their deference together, which is the same rule
+    #: as everything else here.
+    stacked_under: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "tags", normalize_tags(self.tags))
@@ -123,7 +142,8 @@ class Decision:
     def is_empty(self) -> bool:
         """True when nothing has been decided, so no sidecar should exist."""
         return not (self.event or self.date_override or self.tags
-                    or self.audience or self.deleted)
+                    or self.audience or self.deleted
+                    or self.stacked_under)
 
 
 def normalize_tags(values: Iterable[str]) -> tuple[str, ...]:
@@ -208,6 +228,7 @@ def change(media: Path, *,
            add_audience: Sequence[str] = (),
            remove_audience: Sequence[str] = (),
            deleted: bool | Unset = UNSET,
+           stacked_under: str | None | Unset = UNSET,
            ) -> tuple[Decision | None, Decision]:
     """Change some fields of `media`'s decision, leaving the rest alone.
 
@@ -237,6 +258,8 @@ def change(media: Path, *,
         audience=_merge(current.audience, audience,
                         add_audience, remove_audience, fold=True),
         deleted=current.deleted if isinstance(deleted, Unset) else deleted,
+        stacked_under=(current.stacked_under
+                       if isinstance(stacked_under, Unset) else stacked_under),
     )
     write(media, updated)
     return was, updated
@@ -309,6 +332,8 @@ def _to_xml(decision: Decision) -> str:
         moment = datestr.alone(decision.date_override)
         if moment is not None and '*' not in decision.date_override:
             props.append(("photoshop:DateCreated", moment.isoformat()))
+    if decision.stacked_under:
+        props.append(("pix:StackedUnder", decision.stacked_under))
     if decision.deleted:
         # No standard equivalent, deliberately. Expressing it as a rating or a
         # keyword would tell another tool this file is deleted in *its* terms,
@@ -357,7 +382,8 @@ def _from_xml(root: ET.Element) -> Decision | None:
                         tags=_read_bag(description, _DC_NS, "subject"),
                         audience=normalize_names(
                             _read_bag(description, PIX_NS, "Audience")),
-                        deleted=_truth(values.get("Deleted")))
+                        deleted=_truth(values.get("Deleted")),
+                        stacked_under=values.get("StackedUnder") or None)
     return None if decision.is_empty() else decision
 
 

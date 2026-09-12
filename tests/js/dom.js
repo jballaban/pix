@@ -87,14 +87,22 @@ class El {
     const byClass = sel.startsWith('.');
     const byAttr = sel.startsWith('[');
     const want = sel.slice(byId || byClass ? 1 : 0);
-    const attr = byAttr ? sel.slice(1, -1).split('=')[0] : null;
+    // `[data-act]` and `[data-act="stack"]` are different questions, and
+    // answering both with the first was how a lookup for one button kept
+    // finding another.
+    const spec = byAttr ? sel.slice(1, -1).split('=') : null;
+    const attr = spec ? spec[0] : null;
+    const want_val = spec && spec.length > 1
+      ? spec.slice(1).join('=').replace(/^["']|["']$/g, '') : null;
     const walk = e => {
       for (const c of e.children) {
         if (byId && c.id === want) out.push(c);
         else if (byClass && c._classes.has(want)) out.push(c);
-        else if (byAttr
-                 && c.dataset[camel(attr.replace(/^data-/, ''))] !== undefined) {
-          out.push(c);
+        else if (byAttr) {
+          const have = c.dataset[camel(attr.replace(/^data-/, ''))];
+          if (have !== undefined && (want_val === null || have === want_val)) {
+            out.push(c);
+          }
         } else if (!byId && !byClass && !byAttr
                    && c.tagName === sel.toUpperCase()) out.push(c);
         walk(c);

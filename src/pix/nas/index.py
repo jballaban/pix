@@ -49,7 +49,7 @@ from pix.nas.decisions import Decision
 #: Bumped whenever the shape changes. A mismatch drops and rebuilds rather than
 #: migrating: the index is disposable by design, and a migration path is
 #: machinery to maintain for something a `pix2 index` reproduces exactly.
-SCHEMA_VERSION: int = 5
+SCHEMA_VERSION: int = 6
 
 #: `audience` filter value meaning *nobody yet* — the "New" chip in the UI.
 #: A sentinel rather than a separate reviewed flag: a file with no audience
@@ -123,6 +123,7 @@ CREATE TABLE IF NOT EXISTS files (
     has_sidecar    INTEGER NOT NULL DEFAULT 0,
     deleted        INTEGER NOT NULL DEFAULT 0,   -- decision: soft-deleted
     precision      INTEGER NOT NULL DEFAULT 0,   -- how much of the date is known
+    stacked_under  TEXT,          -- decision: `folder/name` this sits behind
     PRIMARY KEY (folder, name)
 );
 CREATE INDEX IF NOT EXISTS files_event ON files(event);
@@ -132,6 +133,9 @@ CREATE INDEX IF NOT EXISTS files_kind  ON files(kind);
 CREATE INDEX IF NOT EXISTS files_band  ON files(band);
 -- Every listing carries `deleted = 0`, so it is the one clause always present.
 CREATE INDEX IF NOT EXISTS files_del   ON files(deleted);
+-- Read twice for every listing: once to hide what is stacked, once to count
+-- what is behind each file that is not.
+CREATE INDEX IF NOT EXISTS files_stack ON files(stacked_under);
 CREATE TABLE IF NOT EXISTS file_tags (
     folder TEXT NOT NULL,
     name   TEXT NOT NULL,
@@ -200,6 +204,11 @@ class Filters:
     #: as readily as to a person: someone in `parents` and `family` can see
     #: anything shared with either, and a share is just a name either way.
     viewer: frozenset[str] | None = None
+
+    #: One stack, opened: the file named and everything stacked behind it.
+    #: Without it a listing shows only what speaks for itself — the tops of
+    #: stacks and everything unstacked — which is the whole point of stacking.
+    within: str | None = None
 
     #: An explicit set of `(folder, name)`, and the one filter that is not a
     #: question about the files. *These particular ones* is what a link from
@@ -392,10 +401,11 @@ _INSERT: str = (
     "INSERT OR REPLACE INTO files "
     "(folder, name, size, mtime_ns, kind, capture_date, camera, width, height, "
     " duration, event, date_override, effective_date, year, band, "
-    " has_sidecar, deleted, precision) "
+    " has_sidecar, deleted, precision, stacked_under) "
     "VALUES (:folder, :name, :size, :mtime_ns, :kind, :capture_date, :camera, "
     " :width, :height, :duration, :event, :date_override, "
-    " :effective_date, :year, :band, :has_sidecar, :deleted, :precision)"
+    " :effective_date, :year, :band, :has_sidecar, :deleted, :precision,"
+    " :stacked_under)"
 )
 
 
@@ -574,6 +584,7 @@ def _row(folder: str, record: dict[str, Any],
         "has_sidecar": 1 if name in decided else 0,
         "deleted": 1 if (decision and decision.deleted) else 0,
         "precision": datestr.precision(captured, override),
+        "stacked_under": decision.stacked_under if decision else None,
     }
 
 
@@ -680,6 +691,11 @@ def date_prefix(value: str | None) -> str | None:
 def _clauses(filters: Filters) -> dict[str, tuple[str, dict[str, Any]]]:
     """Each active filter as a SQL fragment plus its parameters."""
     out: dict[str, tuple[str, dict[str, Any]]] = {}
+    if filters.within:
+        out["within"] = (
+            "(files.stacked_under = :f_within "
+            " OR files.folder || '/' || files.name = :f_within)",
+            {"f_within": filters.within})
     if filters.chosen is not None:
         # One parameter rather than one per file: a single event edit can run
         # to seventeen hundred files, and a placeholder each would be an
@@ -770,6 +786,10 @@ def _where(filters: Filters) -> tuple[str, dict[str, Any]]:
         parts.append("files.deleted = 1")
     elif filters.deleted != "with":
         parts.append("files.deleted = 0")
+    # A file stacked behind another does not appear on its own — that is what
+    # stacking is. Opening one stack is the exception, and says which.
+    if not filters.within:
+        parts.append("files.stacked_under IS NULL")
     params = _bind(clauses)
     scope, scope_params = _scope(filters)
     if scope:
@@ -856,6 +876,7 @@ def files(conn: sqlite3.Connection, filters: Filters | None = None, *,
     ordered = "".join(f"grp{i} IS NULL, grp{i}, " for i in range(len(keys)))
     return list(conn.execute(
         "SELECT files.*, " + _TAGS_COL + ", " + _AUDIENCE_COL
+        + ", " + _BEHIND_COL
         + (selected or ", NULL AS grp0 ")
         + "FROM files "
         + (f"WHERE {where} " if where else "")
@@ -864,6 +885,13 @@ def files(conn: sqlite3.Connection, filters: Filters | None = None, *,
         "LIMIT :limit OFFSET :offset", params
     ))
 
+
+#: How many files defer to this one. Read per row so the grid can badge a stack
+#: without a second query, and indexed so that it is a lookup rather than a
+#: scan of the library for every thumbnail.
+_BEHIND_COL: str = (
+    "(SELECT COUNT(*) FROM files m "
+    " WHERE m.stacked_under = files.folder || '/' || files.name) AS behind")
 
 _TAGS_COL: str = (
     "(SELECT group_concat(ft.tag, char(10)) FROM file_tags ft "

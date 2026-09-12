@@ -193,7 +193,8 @@ def get(op_id: str, *, path: Path | None = None) -> Operation | None:
 # exactly when it matters most.
 
 #: The scalar decisions: one value, replaced outright.
-_SCALARS: tuple[str, ...] = ("event", "date_override", "deleted")
+_SCALARS: tuple[str, ...] = ("event", "date_override", "deleted",
+                             "stacked_under")
 
 #: The multi-valued ones, as (whole-list key, add key, remove key, attribute).
 _LISTS: tuple[tuple[str, str, str, str], ...] = (
@@ -303,7 +304,8 @@ def _decision_json(decision: Decision | None) -> dict[str, Any] | None:
         return None
     return {"event": decision.event, "date_override": decision.date_override,
             "tags": list(decision.tags), "audience": list(decision.audience),
-            "deleted": decision.deleted}
+            "deleted": decision.deleted,
+            "stacked_under": decision.stacked_under}
 
 
 def _render(summary: str, n: int) -> str:
@@ -376,4 +378,6 @@ def _decision_from(raw: object) -> Decision | None:
         # Absent in anything written before deletion existed, which reads as
         # not deleted — which is what those files were.
         deleted=bool(d.get("deleted")),
+        stacked_under=(str(d["stacked_under"])
+                       if d.get("stacked_under") else None),
     )

@@ -356,7 +356,10 @@ def test_the_actions_and_filters_ask_the_same_questions_in_the_same_order(
     html = client.get("/browse?event=Italy%20-%20Sicily").text
 
     acts = re.findall(r'data-act="(\w+)"', html)
-    assert acts[:5] == ["event", "tags", "date", "access", "delete"], acts
+    # What a file is, then which of them speaks for the rest, then what
+    # happens to it.
+    assert acts[:8] == ["event", "tags", "date", "access",
+                        "stack", "top", "unstack", "delete"], acts
 
     chips = html[html.index("CHIPS="):html.index("FIXED=")]
     for earlier, later in (("event", "tag"), ("tag", "date"),
@@ -413,6 +416,95 @@ def test_the_bars_are_not_the_colour_of_the_page(client: TestClient) -> None:
     # And not on the page itself, or there would be nothing to tell apart.
     body = css[css.index("body {"):css.index("body {") + 90]
     assert "var(--bg)" in body, body
+
+
+def _two_files(writable: Path) -> None:
+    """The fixture puts one file in master; a stack needs at least two."""
+    (writable / "b.mp4").write_bytes(b"fake")
+
+
+def test_stacking_folds_a_file_behind_another(
+    client: TestClient, writable: Path
+) -> None:
+    """Each file records which one it defers to; the top records nothing,
+    because being spoken for is the decision and speaking is what is left."""
+    _two_files(writable)
+    r = client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/a.jpg",
+        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
+    assert r.status_code == 200, r.text
+
+    assert decisions.read(writable / "b.mp4") == Decision(
+        stacked_under="init_2026/a.jpg")
+    assert decisions.read(writable / "a.jpg") is None, "the top recorded something"
+
+    html = client.get("/browse?event=Italy%20-%20Sicily").text
+    assert "b.mp4" not in html, "a stacked file appeared on its own"
+    assert "a.jpg" in html
+    assert 'class="stack"' in html, "the top is not badged"
+    assert "within=init_2026%2Fa.jpg" in html, "no way to open the stack"
+
+
+def test_opening_a_stack_shows_what_is_behind_it(
+    client: TestClient, writable: Path
+) -> None:
+    _two_files(writable)
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/a.jpg",
+        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
+
+    html = client.get("/browse?within=init_2026/a.jpg").text
+    assert "a.jpg" in html and "b.mp4" in html
+
+
+def test_unstacking_puts_a_file_back_on_its_own(
+    client: TestClient, writable: Path
+) -> None:
+    _two_files(writable)
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/a.jpg",
+        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
+    client.post("/api/decide/bulk", json={
+        "stacked_under": None,
+        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
+
+    assert decisions.read(writable / "b.mp4") is None
+    assert "b.mp4" in client.get("/browse?event=Italy%20-%20Sicily").text
+
+
+def test_stacking_leaves_the_other_decisions_alone(
+    client: TestClient, writable: Path
+) -> None:
+    """It is one field like the rest: a file keeps its event and its audience
+    when it goes behind another, and gets them back when it comes out."""
+    _two_files(writable)
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "b.mp4", "event": "Sicily Trip",
+        "add_audience": ["family"]})
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/a.jpg",
+        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
+
+    assert decisions.read(writable / "b.mp4") == Decision(
+        event="Sicily Trip", audience=("family",),
+        stacked_under="init_2026/a.jpg")
+
+
+def test_a_stack_is_recorded_and_can_be_put_back(
+    client: TestClient, writable: Path
+) -> None:
+    """Like any other decision — nothing new was built for the undo."""
+    _two_files(writable)
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/a.jpg",
+        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
+
+    op = history.recent()[0]
+    assert op.summary == "stacked 1 file under a.jpg", op.summary
+
+    client.post("/history/revert", data={"id": op.id})
+    assert decisions.read(writable / "b.mp4") is None
+    assert "b.mp4" in client.get("/browse?event=Italy%20-%20Sicily").text
 
 
 def test_the_grid_draws_no_cursor(client: TestClient) -> None:
@@ -1905,4 +1997,5 @@ def test_three_levels_is_the_limit(client: TestClient) -> None:
     assert 'data-level="2"' in html
     assert 'data-level="3"' not in html
     assert 'class="addgrp"' not in html
+
 

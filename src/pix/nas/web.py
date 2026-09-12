@@ -356,6 +356,10 @@ h3.group[data-state="some"] .grppick { background:var(--top);
    stayed on screen with nothing selected. Any rule that gives an element a
    `display` has to say what `hidden` means for it too. */
 #actions .grp[hidden] { display:none; }
+/* The same trap once more: these are buttons, and `button` has no `display`
+   of its own here — but the flex container gives them one, so say what hidden
+   means for them too. */
+#actions button[hidden] { display:none; }
 .cell { position:relative; aspect-ratio:1; background:#0d0f12; overflow:hidden;
         border-radius:3px; cursor:pointer; }
 .cell img { width:100%; height:100%; object-fit:cover; display:block; }
@@ -400,6 +404,14 @@ h3.group[data-state="some"] .grppick { background:var(--top);
    and a cull needs both at once. */
 .cell[data-audience]:not([data-audience=""]) {
   box-shadow: inset 0 0 0 3px var(--keep); }
+/* The stack count, top-right beside the tags: it is a fact about the file
+   like they are, and a stack is almost never also heavily tagged. Reads as a
+   depth — a card with cards behind it. */
+.stack { position:absolute; right:4px; top:4px; z-index:3;
+         background:#000b; color:var(--fg); font-size:11px; font-weight:600;
+         padding:1px 6px; border-radius:3px;
+         box-shadow:2px -2px 0 -1px #000b, 4px -4px 0 -2px #000b; }
+.stack:hover { background:var(--accent); color:#0d0f12; text-decoration:none; }
 /* Access bottom-left, tags top-right, duration bottom-right — three corners,
    nothing overlapping. Each value is its own chip: a thumbnail is 150px and
    three role names are not, so one run of text just gets cut off mid-word
@@ -679,6 +691,7 @@ def filters(
     deleted: Annotated[str | None, Query()] = None,
     op: Annotated[str | None, Query()] = None,
     stale: Annotated[str | None, Query()] = None,
+    within: Annotated[str | None, Query()] = None,
 ) -> ix.Filters:
     """The current view, read off the query string.
 
@@ -704,6 +717,7 @@ def filters(
     """
     return ix.Filters(event=event, date=ix.date_prefix(date), tag=tag,
                       audience=audience, chosen=_from_operation(op, stale),
+                      within=within,
                       kind=kind, band=band, viewer=user.scope,
                       deleted=_both_sides(deleted, op, user))
 
@@ -883,9 +897,14 @@ def _actions(user: Principal) -> str:
     would move the whole grid under the pointer on the first click.
 
     **One rule separates them, not several.** What a file *is* — its event, its
-    tags, its date, who may see it — runs together in the order those questions
-    get asked. What happens *to* it is the cluster after the bar. Bars between
-    every pair said there were four groups when there are two.
+    tags, its date, who may see it, and which of them speaks for the rest —
+    runs together in the order those questions get asked. What happens *to* it
+    is the cluster after the bar. Bars between every pair said there were four
+    groups when there are two.
+
+    The stack actions join the first cluster rather than earning a bar of their
+    own, and not only for tidiness: they are usually hidden, and a separator is
+    not, so a bar around them would hang there beside nothing.
     """
     if not user.is_admin:
         return ""
@@ -897,6 +916,9 @@ def _actions(user: Principal) -> str:
     <button data-act="tags">Tags&hellip;</button>
     <button data-act="date">Date&hellip;</button>
     <button data-act="access">Access&hellip;</button>
+    <button data-act="stack">Stack</button>
+    <button data-act="top">Make top</button>
+    <button data-act="unstack">Unstack</button>
     <span class="sep"></span>
     <button data-act="delete" class="danger">Delete</button>
   </span>
@@ -1068,14 +1090,35 @@ def _cell(row: sqlite3.Row) -> str:
         f'data-event="{_h(row["event"] or "")}" '
         f'data-tags="{_h(nl.join(tags))}" '
         f'data-date="{_h(str(row["effective_date"] or "no date"))}" '
-        f'data-deleted="{"1" if row["deleted"] else ""}">'
+        f'data-deleted="{"1" if row["deleted"] else ""}" '
+        f'data-under="{_h(row["stacked_under"] or "")}" '
+        f'data-behind="{row["behind"] or 0}">'
         f'<img loading="lazy" src="/thumb/{_q(row["folder"])}/{_q(row["name"])}">'
         f'<button class="pick" aria-label="select"></button>'
         + (f'<span class="badge">{_dur(row["duration"])}</span>'
            if row["kind"] == "video" else "")
+        + _stack_badge(row)
         + _access_html(shared) + _chips_html("tags", tags)
         + "</div>"
     )
+
+
+def _stack_badge(row: sqlite3.Row) -> str:
+    """How many files this one is speaking for, and the way to see them.
+
+    Only on the top of a stack, and only when it has anything behind it: a
+    count of one is a photograph, not a stack. It is a link rather than a
+    button because opening a stack is a view of the library like any other —
+    the ordinary grid, filtered to these files, with everything the grid can do
+    still on the table.
+    """
+    behind = row["behind"] or 0
+    if not behind:
+        return ""
+    key = f'{row["folder"]}/{row["name"]}'
+    return (f'<a class="stack" href="/browse?within={_q(key)}" '
+            f'title="{behind + 1} photographs stacked here">'
+            f'{behind + 1}</a>')
 
 
 def _view_dict(view: ix.Filters) -> dict[str, str | None]:
@@ -1501,6 +1544,11 @@ function range(a,b){
 }
 function clearPicks(){picked.forEach(c=>c.classList.remove('picked'));
                       picked.clear(); drawSel();}
+function show(act,on){
+  const b=actions&&actions.querySelector('[data-act="'+act+'"]');
+  if(b) b.hidden=!on;
+}
+
 function drawSel(){
   drawGroupPicks();
   if(!actions) return;
@@ -1515,9 +1563,15 @@ function drawSel(){
   // to. Not greyed: an action that is absent says *not for these files*,
   // where a greyed one says *not yet* — and with a mixed selection both are
   // present and neither is waiting for anything.
-  const live=targetsOn('live').length, dead=targetsOn('gone').length;
+  const live=targetsOn('live'), dead=targetsOn('gone').length;
   for(const g of actions.querySelectorAll('.grp'))
-    g.hidden = !(g.dataset.side==='gone'?dead:live);
+    g.hidden = !(g.dataset.side==='gone'?dead:live.length);
+  // The stack actions ask a narrower question than *is anything selected*, so
+  // they answer it themselves: two or more to make a stack, one that is in one
+  // to promote, anything already stacked to take out.
+  show('stack', live.length > 1);
+  show('top', live.length === 1 && (stacked(live[0]) || tops(live[0])));
+  show('unstack', live.some(c => stacked(c) || tops(c)));
   // The tick wears the three states of what it would do: nothing selected and
   // it selects everything, anything selected and it clears.
   actions.dataset.state = !picked.size ? 'none'
@@ -1746,13 +1800,54 @@ function targets(){
 // what it says to the files it means, rather than refusing the whole gesture
 // because the selection was not pure.
 const ACT_SIDE={access:'live', tags:'live', event:'live', date:'live',
-                delete:'live', restore:'gone', purge:'gone'};
+                delete:'live', stack:'live', top:'live', unstack:'live',
+                restore:'gone', purge:'gone'};
 function gone(c){ return !!c.dataset.deleted; }
 function sideOf(act,value){
   // One flag, two buttons: deleting is something you do to a living file and
   // restoring to a deleted one, so the field name alone cannot say which.
   if(act==='deleted') return value?'live':'gone';
   return ACT_SIDE[act]||'live';
+}
+
+// --- stacks ------------------------------------------------------------------
+// Eight takes of one photograph, one shown and the rest folded behind it. Each
+// of the others records which file it defers to; the top records nothing,
+// because being spoken for is the decision and speaking is what is left.
+function keyOf(c){ return c.dataset.folder+'/'+c.dataset.name; }
+function stacked(c){ return !!c.dataset.under; }
+function tops(c){ return +(c.dataset.behind||0) > 0; }
+
+// The first one ticked. A stack needs one of its files to speak for the rest,
+// and the only ordering the page has is the order they were chosen in — which
+// is also the order somebody picking a keeper would naturally use. Getting it
+// wrong costs one click of *Make top*.
+function stackSelection(){
+  const cs=targetsOn('live');
+  if(cs.length<2){say('select the ones to stack, keeper first');return;}
+  const top=cs[0];
+  applyToSelection('stacked_under',keyOf(top),undefined,cs.slice(1));
+}
+
+function makeTop(){
+  const cs=targetsOn('live');
+  if(cs.length!==1){say('select the one to show');return;}
+  const top=cs[0];
+  // Everything already in this stack, the old top included: it stops speaking
+  // and starts deferring, which is the same write as any other member.
+  const family=cells.filter(
+    c=>c!==top&&(keyOf(c)===top.dataset.under
+                 ||c.dataset.under===top.dataset.under
+                 ||keyOf(c)===keyOf(top)));
+  if(!family.length){say('that one is not in a stack');return;}
+  applyToSelection('stacked_under',keyOf(top),undefined,family)
+    .then(()=>applyToSelection('stacked_under',null,undefined,[top]));
+}
+
+function unstack(){
+  const cs=targetsOn('live').filter(c=>stacked(c));
+  if(!cs.length){say('select files that are in a stack');return;}
+  applyToSelection('stacked_under',null,undefined,cs);
 }
 function targetsOn(side){
   return [...picked].filter(c=>side==='gone'?gone(c):!gone(c));
@@ -1841,8 +1936,12 @@ function currentValues(cs,field){
 // Optimistic: the cell changes now and the write follows, because a cull is a
 // rhythm and waiting on SMB between gestures destroys it. A failure puts the
 // old value back rather than leaving the screen claiming something untrue.
-async function applyToSelection(act,value,add){
-  const cs=targetsOn(sideOf(act,value));
+// `only` names the files to write to when they are not simply *the selection
+// on this side*. Stacking writes to everything except the keeper; making a new
+// top writes to the rest of its stack and then to itself. Both are one gesture
+// over a selection, and neither is the whole of it.
+async function applyToSelection(act,value,add,only){
+  const cs=only||targetsOn(sideOf(act,value));
   if(!cs.length){say('nothing selected');return;}
   const multi=MULTI[act];
   if(multi&&value===null){say('pick a name');return;}
@@ -2068,6 +2167,9 @@ const ACT_COLUMN={tags:'tag', access:'audience', event:'event'};
   b.onclick=e=>{
     e.stopPropagation();
     if(act==='delete'){closeMenu();deleteSelection();return;}
+    if(act==='stack'){closeMenu();stackSelection();return;}
+    if(act==='top'){closeMenu();makeTop();return;}
+    if(act==='unstack'){closeMenu();unstack();return;}
     if(act==='restore'){closeMenu();applyToSelection('deleted',false);return;}
     if(act==='purge'){closeMenu();purgeSelection();return;}
     openMenu(b, act==='date'
@@ -2513,6 +2615,7 @@ class DecideBody(BaseModel):
     add_audience: list[str] = []
     remove_audience: list[str] = []
     deleted: bool | None = None
+    stacked_under: str | None = None
 
 
 @app.post("/api/decide")
@@ -2651,6 +2754,7 @@ class DecideBulkBody(BaseModel):
     add_audience: list[str] = []
     remove_audience: list[str] = []
     deleted: bool | None = None
+    stacked_under: str | None = None
 
 
 #: Bounds one request rather than the whole gesture. Finishing a 1,766-file
@@ -2753,6 +2857,7 @@ class _Change:
     add_audience: Sequence[str] = field(default_factory=tuple)
     remove_audience: Sequence[str] = field(default_factory=tuple)
     deleted: bool | Unset = decisions.UNSET
+    stacked_under: str | None | Unset = decisions.UNSET
 
 
 def _change(body: DecideBody | DecideBulkBody) -> _Change:
@@ -2773,7 +2878,8 @@ def _change(body: DecideBody | DecideBulkBody) -> _Change:
                    audience=got("audience"),
                    add_audience=tuple(body.add_audience),
                    remove_audience=tuple(body.remove_audience),
-                   deleted=_flag(got("deleted")))
+                   deleted=_flag(got("deleted")),
+                   stacked_under=got("stacked_under"))
 
 
 def _recorded(change: _Change) -> dict[str, Any]:
@@ -2784,7 +2890,8 @@ def _recorded(change: _Change) -> dict[str, Any]:
     the operation never touched.
     """
     out: dict[str, Any] = {}
-    for name in ("event", "date_override", "tags", "audience", "deleted"):
+    for name in ("event", "date_override", "tags", "audience", "deleted",
+                 "stacked_under"):
         value: Any = getattr(change, name)
         if isinstance(value, Unset):
             continue
@@ -2841,7 +2948,8 @@ def _decide(folder: str, name: str, change: _Change,
                 audience=change.audience,
                 add_audience=change.add_audience,
                 remove_audience=change.remove_audience,
-                deleted=change.deleted)
+                deleted=change.deleted,
+                stacked_under=change.stacked_under)
         except decisions.DecisionError as e:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
         except OSError as e:
@@ -2889,6 +2997,9 @@ def _summary(change: _Change) -> str:
         return f"tagged {files} {', '.join(change.add_tags)}"
     if change.remove_tags:
         return f"untagged {', '.join(change.remove_tags)} on {files}"
+    if not isinstance(change.stacked_under, Unset):
+        return (f"stacked {files} under {change.stacked_under.rpartition('/')[2]}"
+                if change.stacked_under else f"unstacked {files}")
     if not isinstance(change.deleted, Unset):
         return (f"deleted {files}" if change.deleted
                 else f"restored {files}")

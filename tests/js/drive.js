@@ -82,7 +82,8 @@ function actGroup(side, names) {
   actions.appendChild(g);
   return g;
 }
-const liveActs = actGroup('live', ['access', 'tags', 'event', 'date', 'delete']);
+const liveActs = actGroup('live',
+  ['event', 'tags', 'date', 'access', 'stack', 'top', 'unstack', 'delete']);
 const goneActs = actGroup('gone', ['restore', 'purge']);
 // Buttons are nested in their group now, so they are found by walking rather
 // than by looking at the row's own children.
@@ -506,6 +507,63 @@ function arrow(key, opts) {
           bin.textContent);
     binned = 0;
     cells.forEach(c => { c.dataset.deleted = ''; c.classList.remove('gone'); });
+    deselect();
+  }
+
+  // A stack is one file speaking for several: the first ticked keeps its
+  // place, the rest record that they defer to it.
+  {
+    deselect();
+    cells.forEach(c => { c.dataset.deleted = ''; c.dataset.under = '';
+                         c.dataset.behind = '0'; c.classList.remove('gone'); });
+    check('nothing to stack with one file selected', actBtn('stack').hidden !== false
+          || document.byId.selcount.textContent === '0 selected');
+
+    cells[1].querySelector('.pick').click();
+    check('one file alone cannot be stacked', actBtn('stack').hidden === true);
+    check('and is not in a stack to be taken out of',
+          actBtn('unstack').hidden === true);
+
+    cells[0].querySelector('.pick').click();
+    check('two can', actBtn('stack').hidden === false);
+
+    const n = calls.length;
+    actBtn('stack').click();
+    await settle(); await settle();
+    const sent = calls.slice(n).filter(c => c.url.startsWith('/api/decide'));
+    check('stacking sends one write', sent.length === 1, String(sent.length));
+    if (sent.length) {
+      const body = JSON.parse(sent[0].body);
+      check('the keeper is the one ticked first',
+            body.stacked_under === 'f/b.jpg', sent[0].body);
+      check('and it is not asked to defer to itself',
+            body.files.length === 1 && body.files[0].name === 'a.jpg',
+            sent[0].body);
+    }
+    deselect();
+    cells.forEach(c => { c.dataset.under = ''; c.dataset.behind = '0'; });
+  }
+
+  // Taking one out of a stack is offered only for files that are in one.
+  {
+    deselect();
+    cells[0].dataset.under = 'f/b.jpg';
+    cells[0].querySelector('.pick').click();
+    check('a stacked file can be taken out', actBtn('unstack').hidden === false);
+    check('and can be made the one that shows',
+          actBtn('top').hidden === false);
+
+    const n = calls.length;
+    actBtn('unstack').click();
+    await settle(); await settle();
+    const sent = calls.slice(n).filter(c => c.url.startsWith('/api/decide'));
+    check('unstacking sends one write', sent.length === 1, String(sent.length));
+    if (sent.length) {
+      const body = JSON.parse(sent[0].body);
+      check('clearing what it deferred to', body.stacked_under === null,
+            sent[0].body);
+    }
+    cells[0].dataset.under = '';
     deselect();
   }
 

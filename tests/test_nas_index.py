@@ -1043,3 +1043,67 @@ def test_an_override_on_a_real_capture_date_keeps_full_precision(
     conn = ix.connect(tree["db"])
 
     assert [r["grp0"] for r in ix.files(conn, groups=["day"])] == ["2025-08-30"]
+
+
+# --- stacks -------------------------------------------------------------------
+
+def _stacked(tree: dict[str, Path], name: str, under: str) -> None:
+    d = tree["master"] / "f"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / name).write_bytes(b"x")
+    decisions.write(d / name, Decision(stacked_under=under))
+
+
+def test_a_stacked_file_does_not_appear_on_its_own(tree: dict[str, Path]) -> None:
+    """That is what stacking is: eight takes of one photograph, one shown."""
+    for i in range(4):
+        _dated(tree, f"shot{i}.jpg", f"2026:08:30 10:00:0{i}")
+    for i in (1, 2, 3):
+        _stacked(tree, f"shot{i}.jpg", "f/shot0.jpg")
+    _build(tree)
+    conn = ix.connect(tree["db"])
+
+    rows = ix.files(conn)
+    assert [r["name"] for r in rows] == ["shot0.jpg"]
+    assert rows[0]["behind"] == 3
+    assert ix.count(conn) == 1
+
+
+def test_opening_a_stack_shows_it_whole(tree: dict[str, Path]) -> None:
+    """The top and everything behind it, in the ordinary grid — so everything
+    the grid can do still applies to them."""
+    for i in range(4):
+        _dated(tree, f"shot{i}.jpg", f"2026:08:30 10:00:0{i}")
+    for i in (1, 2, 3):
+        _stacked(tree, f"shot{i}.jpg", "f/shot0.jpg")
+    _build(tree)
+    conn = ix.connect(tree["db"])
+
+    rows = ix.files(conn, ix.Filters(within="f/shot0.jpg"))
+    assert {r["name"] for r in rows} == {
+        "shot0.jpg", "shot1.jpg", "shot2.jpg", "shot3.jpg"}
+
+
+def test_a_stack_hides_its_files_from_every_listing(tree: dict[str, Path]) -> None:
+    """Filtering and counting have to agree with the grid, or a count says one
+    thing and the thumbnails another."""
+    _dated(tree, "top.jpg", "2026:08:30 10:00:00")
+    _dated(tree, "behind.jpg", "2026:08:30 10:00:01")
+    _stacked(tree, "behind.jpg", "f/top.jpg")
+    _build(tree)
+    conn = ix.connect(tree["db"])
+
+    assert ix.count(conn, ix.Filters(date="2026-08-30")) == 1
+    assert [r["name"] for r in
+            ix.files(conn, ix.Filters(date="2026-08-30"))] == ["top.jpg"]
+
+
+def test_a_file_with_nothing_behind_it_is_not_a_stack(
+    tree: dict[str, Path]
+) -> None:
+    """A count of one is a photograph. The badge has to know the difference."""
+    _dated(tree, "alone.jpg", "2026:08:30 10:00:00")
+    _build(tree)
+    conn = ix.connect(tree["db"])
+
+    assert ix.files(conn)[0]["behind"] == 0
