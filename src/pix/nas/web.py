@@ -174,6 +174,13 @@ _STYLE = """
 :root { color-scheme: dark; --bg:#14161a; --fg:#e7e9ee; --dim:#8b93a3;
         --line:#272b33; --accent:#6aa3ff; --keep:#56c16a; --top:#e3b341; --gone:#e06c5a;
         --panel:#1b1e24;
+        /* The bars are a surface, not part of the page. They were the same
+           colour as it, separated by a single line — which put the tick that
+           selects *everything* a few pixels from the one that selects the
+           first group, on the same background, looking like the same kind of
+           control. Reaching for the group and selecting the library is a
+           mistake the colour was inviting. */
+        --chrome:#1e232b;
         /* One control's outer height: a 21px line (14px at 1.5), 4px of
            padding each side, 1px of border each side. Named because two rules
            have to agree on it — see `.row`. */
@@ -188,8 +195,11 @@ main { padding:16px 20px 40px; }
 
 /* The bar never leaves: filters are the address of what you are looking at,
    and losing them 2,000 thumbnails down is losing your place. */
-.topbar { position:sticky; top:0; z-index:5; background:var(--bg);
-          border-bottom:1px solid var(--line); padding:9px 20px; }
+.topbar { position:sticky; top:0; z-index:5; background:var(--chrome);
+          border-bottom:1px solid #0008; padding:9px 20px;
+          /* It scrolls over the grid, so it reads as a layer above it rather
+             than as the first thing in it. */
+          box-shadow:0 8px 16px -12px #000c; }
 .row { display:flex; gap:9px; align-items:center; flex-wrap:wrap;
        min-height:var(--ctl); }
 /* The action row empties and fills as the selection changes and it sits above
@@ -220,7 +230,7 @@ main { padding:16px 20px 40px; }
 /* Counts and messages along the bottom, so the header is only controls:
    every row of chrome up there is a row of photographs pushed off. */
 .footbar { position:fixed; left:0; right:0; bottom:0; z-index:4;
-           background:var(--bg); border-top:1px solid var(--line);
+           background:var(--chrome); border-top:1px solid #0008;
            padding:6px 20px; display:flex; gap:14px; align-items:baseline;
            flex-wrap:wrap; font-size:12px; }
 .footbar:empty { display:none; }

@@ -401,6 +401,20 @@ def test_the_page_is_handed_every_filter_it_is_showing(
     assert '"deleted": "only"' in view, view
 
 
+def test_the_bars_are_not_the_colour_of_the_page(client: TestClient) -> None:
+    """They were, separated by a single line — which put the tick that selects
+    the whole library a few pixels above the one that selects the first group,
+    on the same background, looking like the same kind of control. Reaching for
+    one and getting the other is a mistake the colouring was inviting."""
+    css = client.get("/browse?event=Italy%20-%20Sicily").text
+
+    assert "--chrome:" in css
+    assert "background:var(--chrome)" in css
+    # And not on the page itself, or there would be nothing to tell apart.
+    body = css[css.index("body {"):css.index("body {") + 90]
+    assert "var(--bg)" in body, body
+
+
 def test_the_grid_draws_no_cursor(client: TestClient) -> None:
     """The dashed ring said which cell the keyboard was on, and the grid has no
     keyboard. It stayed behind after that was removed and turned up unasked on
