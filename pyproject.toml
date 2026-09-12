@@ -39,6 +39,11 @@ dev = [
     "fastapi>=0.115",
     "httpx>=0.27",
     "uvicorn>=0.30",
+    # The reloader uvicorn actually wants; without it it polls with
+    # `StatReload`. It is not the fix for a dev server serving stale code —
+    # that was orphaned workers (see deploy/README.md) — but detection is
+    # immediate and exact rather than a filesystem sweep on a timer.
+    "watchfiles>=0.21",
     "pytest>=8.0",
     "pyright>=1.1.380",
     "types-pyyaml>=6.0",

@@ -71,7 +71,38 @@ it is one command from the repo root:
 uv run uvicorn pix.nas.web:app --reload --port 8001
 ```
 
-Then `http://127.0.0.1:8001`. `--reload` picks up every save.
+Then `http://127.0.0.1:8001`.
+
+### Stopping it: kill the worker, not just the reloader
+
+`--reload` runs two processes — a reloader that owns the listening socket, and
+a worker that serves. **Killing the reloader does not kill the worker.** The
+orphan inherits the socket, goes on answering on the same port, and serves
+whatever code it started with. Start a replacement and it binds the port
+without complaint and receives nothing, because the orphan is still accepting.
+
+This is indistinguishable from a broken build, and costs hours: every change
+appears not to work, the page keeps the behaviour it had, and the log of the
+server you are reading is not the log of the server you are talking to. If
+`Get-NetTCPConnection -LocalPort 8001` names a process id that no longer
+exists, this is what happened — the id is the dead parent that created the
+socket, and the orphan holding it is a `python.exe` whose command line says
+`spawn_main`, not `uvicorn`.
+
+Stop it with Ctrl-C in its own terminal, which takes both down. When that is
+not possible, kill the worker as well:
+
+```powershell
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+  Where-Object { $_.CommandLine -match 'uvicorn|spawn_main' } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+```
+
+Reloading on save is best-effort here. It detects changes reliably, but the
+restart itself does not always complete — when in doubt, restart the server
+and confirm the change is live rather than assuming it was picked up. And the
+page script is inlined into the HTML, so a server restart is never enough on
+its own: the browser tab has to be reloaded too.
 
 It reads the **same** index and the same derived tiers over SMB that the
 container reads, so what you see is what the NAS will serve. Only the path prefix
