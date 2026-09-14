@@ -710,6 +710,15 @@ function arrow(key, opts) {
     check('the depth badge goes while its files are on screen',
           badgeOn(cells[0]) === null || badgeOn(cells[0]).hidden === true,
           'still claiming a closed stack');
+    // Any of them can be the one that shows, so none of them is ringed as
+    // though it were already a different kind of candidate.
+    check('nothing is selected while a top is being chosen',
+          cells.every(c => !c.classList.contains('picked'))
+          && (!opened || !opened.classList.contains('picked')),
+          'a file was left looking chosen');
+    check('and the tick and count go with the selection',
+          document.byId.selall.hidden === true
+          && document.byId.selcount.hidden === true);
 
     // Choose the file that was hidden inside a stack.
     const n = calls.length;
@@ -787,6 +796,14 @@ function arrow(key, opts) {
     check('with the badge saying what it says again',
           badgeOn(cells[0]) === null || badgeOn(cells[0]).hidden === false,
           'the stack closed without its count');
+    // Cancelling asked for none of it to have happened, which includes the
+    // selection you arrived with.
+    check('and the selection you had is back',
+          document.byId.selcount.textContent === '2 selected',
+          document.byId.selcount.textContent);
+    check('with the tick and count back too',
+          document.byId.selall.hidden === false
+          && document.byId.selcount.hidden === false);
     behindCells = '';
     cells[0].dataset.behind = '0';
     deselect();

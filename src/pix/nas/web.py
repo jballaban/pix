@@ -342,6 +342,7 @@ h3.group[data-state="some"] .grppick { background:var(--top);
    none, some, all. It replaces a *Select all* and a *Deselect* that were two
    buttons for one question, and were in the top bar rather than beside the
    count they were about. */
+.tick[hidden], .count[hidden] { display:none; }
 .tick { margin:0; padding:0; width:16px; height:16px; flex:none;
         border-radius:50%; background:transparent;
         border:1.5px solid var(--dim); }
@@ -1600,6 +1601,11 @@ function drawSel(){
   // where a greyed one says *not yet* — and with a mixed selection both are
   // present and neither is waiting for anything.
   const live=targetsOn('live'), dead=targetsOn('gone').length;
+  // The tick and the count belong to a selection, and while a top is being
+  // chosen there is not one.
+  const tickEl=document.getElementById('selall');
+  if(tickEl) tickEl.hidden=!!choosing;
+  if(selcount) selcount.hidden=!!choosing;
   for(const g of actions.querySelectorAll('.grp')){
     const side=g.dataset.side;
     // While a top is being chosen there is one question on screen, so there is
@@ -1878,7 +1884,7 @@ function tops(c){ return +(c.dataset.behind||0) > 0; }
 // no address of its own — they are already on screen, so *filter to these* is
 // hiding the others and *back to where you were* is showing them again, with
 // the scroll never having moved.
-let choosing=null, fetched=[], opened=[];
+let choosing=null, fetched=[], opened=[], wasPicked=[];
 
 // Merging two stacks has to offer every photograph in both of them as the one
 // to show. Choosing between the two that happen to be speaking is choosing
@@ -1887,11 +1893,15 @@ let choosing=null, fetched=[], opened=[];
 async function stackSelection(){
   const cs=targetsOn('live');
   if(cs.length<2){say('select the ones to stack');return;}
-  choosing=cs; fetched=[]; opened=[];
+  choosing=cs; fetched=[]; opened=[]; wasPicked=cs.slice();
   const keep=new Set(cs);
   cells.forEach(c=>{c.hidden=!keep.has(c);});
   document.querySelectorAll('.group').forEach(h=>{h.hidden=true;});
-  say(''); drawSel();
+  // Nothing is selected while a top is being chosen. The question is *which
+  // one of these*, and leaving the files you arrived with ringed while the
+  // ones fetched out of a stack are not says they are two kinds of candidate.
+  // They are not: any of them can be the one that shows.
+  say(''); clearPicks();
   for(const head of cs.filter(c=>tops(c))) await expand(head);
 }
 
@@ -1921,7 +1931,7 @@ async function expand(head){
   }
 }
 
-function endChoosing(){
+function endChoosing(restore){
   if(!choosing) return;
   choosing=null;
   // Whatever was fetched belongs to a stack, and a stack's files do not sit in
@@ -1935,6 +1945,14 @@ function endChoosing(){
   opened=[];
   cells.forEach(c=>{c.hidden=false;});
   document.querySelectorAll('.group').forEach(h=>{h.hidden=false;});
+  // Changing your mind puts back what you had, not an empty grid: the files
+  // were selected before this asked anything, and cancelling asked for none
+  // of it to have happened.
+  if(restore) wasPicked.forEach(c=>{
+    const n=cells.indexOf(c);
+    if(n>=0) togglePick(n,true);
+  });
+  wasPicked=[];
   drawSel();
 }
 
@@ -2259,7 +2277,8 @@ function stopWork(){
 if(workStop) workStop.onclick=e=>{e.stopPropagation();stopWork();};
 
 const chooseCancel=document.getElementById('choosecancel');
-if(chooseCancel) chooseCancel.onclick=e=>{e.stopPropagation();endChoosing();};
+if(chooseCancel) chooseCancel.onclick=e=>{e.stopPropagation();
+                                          endChoosing(true);};
 
 // The takeover says the word the control you pressed says — read off the
 // button itself rather than kept as a second vocabulary for the same four
@@ -2435,7 +2454,7 @@ document.addEventListener('keydown',e=>{
     // Dismissal rather than navigation. A full-screen viewer with no key out
     // is a trap, even though clicking beside the picture also closes it.
     if(busy){stopWork();return;}
-    if(choosing){endChoosing();return;}
+    if(choosing){endChoosing(true);return;}
     if(viewer.classList.contains('on')) closeViewer();
     else if(!menu.hidden) closeMenu();
     return;
