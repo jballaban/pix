@@ -442,6 +442,16 @@ h3.group[data-state="some"] .grppick { background:var(--top);
    display of its own, so the user agent would cover this — but five rules in
    this file have needed saying, which is enough to stop calling it luck. */
 .stack[hidden] { display:none; }
+/* On the photograph, and only while one is being chosen. Out of the way until
+   the pointer is over it, like the select circle — a control that is always
+   there on every thumbnail is a page about its own controls. */
+.choose { position:absolute; left:50%; bottom:8px; transform:translateX(-50%);
+          z-index:4; opacity:0; transition:opacity .08s; white-space:nowrap;
+          background:var(--accent); color:#0d0f12; border-color:var(--accent);
+          font-weight:600; }
+.cell:hover .choose, .choose:focus { opacity:1; }
+/* Nothing to select while a top is being chosen, so nothing offers to. */
+.grid[data-choosing] .pick { display:none; }
 /* Inside an opened stack, the one that speaks. Everything in there looks
    alike — that is why they were stacked — so without this there is nothing to
    say which one the grid outside will show. */
@@ -1731,7 +1741,6 @@ function drawSel(){
 function wire(c){
   c.querySelector('.pick').addEventListener('click',e=>{
     e.stopPropagation();
-    if(choosing){chooseTop(c);return;}
     const n=cells.indexOf(c);
     if(n<0) return;
     // The circle is the deliberate gesture: it adds and removes without
@@ -1742,10 +1751,6 @@ function wire(c){
   c.addEventListener('click',e=>{
     const n=cells.indexOf(c);
     if(n<0) return;
-    // While a top is being chosen, a click on a photograph says *that one* —
-    // it is the only question on screen, so it is the only thing a click can
-    // mean.
-    if(choosing){e.stopPropagation();chooseTop(c);return;}
     if(e.shiftKey&&anchor>=0){range(anchor,n);setCur(n,true);drawSel();return;}
     if(e.ctrlKey||e.metaKey){togglePick(n);anchor=n;setCur(n,true);drawSel();
                              return;}
@@ -1976,6 +1981,7 @@ function tops(c){ return +(c.dataset.behind||0) > 0; }
 // hiding the others and *back to where you were* is showing them again, with
 // the scroll never having moved.
 let choosing=null, fetched=[], opened=[], wasPicked=[], wasScrolled=0;
+let choiceBtns=[];
 
 // Merging two stacks has to offer every photograph in both of them as the one
 // to show. Choosing between the two that happen to be speaking is choosing
@@ -1992,6 +1998,9 @@ async function stackSelection(){
   wasScrolled=window.scrollY;
   const keep=new Set(cs);
   cells.forEach(c=>{c.hidden=!keep.has(c);});
+  if(grid) grid.dataset.choosing='1';
+  choiceBtns=[];
+  cs.forEach(offerChoice);
   document.querySelectorAll('.group').forEach(h=>{h.hidden=true;});
   // Nothing is selected while a top is being chosen. The question is *which
   // one of these*, and leaving the files you arrived with ringed while the
@@ -2024,12 +2033,33 @@ async function expand(head){
     after.insertAdjacentElement('afterend',c);
     after=c;
     cells.push(c); choosing.push(c); fetched.push(c); wire(c); useSource(c);
+  offerChoice(c);
   }
+}
+
+// Clicking a photograph opens it, here as everywhere else. It used to mean
+// *this one* while a top was being chosen, and the cost of that was finding
+// out by having chosen: you click one to see it properly, and instead the
+// question is answered and the grid comes back.
+//
+// So choosing has a control of its own, on the photograph, appearing when the
+// pointer is over it. There is one of them per candidate and one candidate per
+// click, which is why it can be a button rather than a mode.
+function offerChoice(c){
+  const b=document.createElement('button');
+  b.className='choose';
+  b.textContent='Show this one';
+  b.onclick=e=>{e.stopPropagation();chooseTop(c);};
+  c.appendChild(b);
+  choiceBtns.push(b);
 }
 
 function endChoosing(restore){
   if(!choosing) return;
   choosing=null;
+  choiceBtns.forEach(b=>b.remove());
+  choiceBtns=[];
+  if(grid) delete grid.dataset.choosing;
   // Whatever was fetched belongs to a stack, and a stack's files do not sit in
   // the grid — that is the whole point of one. They were borrowed to be
   // chosen between.
@@ -2074,6 +2104,11 @@ async function chooseTop(top){
   // matching the moment they were stacked — but the one left standing has to
   // start saying how many it now speaks for.
   if(out&&out.done) markStack(top,behind);
+  // Same rename, if this was done from inside the stack being merged into.
+  if(out&&out.done&&VIEW.within&&VIEW.within!==keyOf(top)){
+    location.href=url({within:keyOf(top)});
+    return;
+  }
   // And the selection is spent. It used to survive, holding the file that had
   // just become a top — so the next things ticked were stacked *with it*, and
   // its own members ended up a level down behind a file that was itself behind
@@ -2120,7 +2155,13 @@ async function makeTop(){
   // One write. The other half — taking the new top out of what it was behind —
   // is the server's, because a file everything defers to cannot be left
   // deferring to one of them whoever asks for it.
-  await applyToSelection('stacked_under',keyOf(top),undefined,family);
+  const out=await applyToSelection('stacked_under',keyOf(top),undefined,family);
+  if(!out||!out.done) return;
+  // A stack is named by the file that speaks for it, so promoting one renames
+  // it. An open stack's address is that name — stay on it and the page asks
+  // for a stack whose files have all just gone somewhere else, which is how
+  // this left you looking at one photograph with no way back but the browser.
+  if(VIEW.within) location.href=url({within:keyOf(top)});
 }
 
 async function unstack(){

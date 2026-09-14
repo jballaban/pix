@@ -866,6 +866,35 @@ def test_the_grid_has_three_thumbnail_sizes(client: TestClient) -> None:
         assert f'.grid[data-size="{size}"]' in html, size
 
 
+def test_promoting_renames_the_stack_so_its_old_address_empties(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """A stack is named by the file that speaks for it, so promoting one
+    renames it. The old address then holds one photograph and no stack — which
+    is what stranded somebody who did this from inside the stack and had
+    nowhere to go but the browser's back button.
+
+    The page follows the rename; this is the server half of why it has to."""
+    _three_files(writable, app_env)
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/a.jpg",
+        "files": [{"folder": "init_2026", "name": "b.mp4"},
+                  {"folder": "init_2026", "name": "c.jpg"}]})
+    assert client.get("/browse?within=init_2026/a.jpg").text.count(
+        "data-name=") == 3
+
+    # Promote c.jpg the way `Make top` does.
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/c.jpg",
+        "files": [{"folder": "init_2026", "name": "a.jpg"},
+                  {"folder": "init_2026", "name": "b.mp4"}]})
+
+    was = client.get("/browse?within=init_2026/a.jpg").text
+    assert was.count("data-name=") == 1, "the old address still holds a stack"
+    now = client.get("/browse?within=init_2026/c.jpg").text
+    assert now.count("data-name=") == 3, "the stack is not at its new address"
+
+
 def test_the_grid_draws_no_cursor(client: TestClient) -> None:
     """The dashed ring said which cell the keyboard was on, and the grid has no
     keyboard. It stayed behind after that was removed and turned up unasked on

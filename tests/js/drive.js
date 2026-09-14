@@ -68,6 +68,11 @@ const actions = mk('actions');
 const sizePick = mk('sizepick');
 
 const badgeOn = c => c.children.find(k => k._classes.has('stack')) || null;
+// Choosing a top is a control on the photograph now, not the photograph
+// itself: clicking one opens it, here as everywhere else.
+const chooseOn = c => c.children.find(k => k._classes.has('choose')) || null;
+// Still asking, i.e. the choose controls are on the page.
+const choosing_still = () => grid.children.some(c => !!chooseOn(c));
 const tick = new El('button');
 tick.id = 'selall';
 tick.className = 'tick';
@@ -561,7 +566,24 @@ function arrow(key, opts) {
     check('and the only controls are the ones for choosing',
           chooseActs.hidden === false && liveActs.hidden === true);
 
-    cells[0].click();          // this one shows
+    check('every candidate offers itself', !!chooseOn(cells[0]));
+    // The thing that caught somebody out: clicking a photograph to see it
+    // properly answered the question instead, and the grid came back.
+    {
+      const before = calls.length;
+      cells[1].click();
+      await settle();
+      check('and clicking one opens it rather than choosing it',
+            document.byId.viewer.classList.contains('on')
+            && !!choosing_still(),
+            'a click chose instead of opening');
+      check('without writing anything',
+            calls.slice(before).filter(
+              c => c.url.startsWith('/api/decide')).length === 0);
+      stage.click();
+    }
+    const pickTop = chooseOn(cells[0]);
+    if (pickTop) pickTop.click();        // this one shows
     for (let i = 0; i < 6; i++) await settle();
     const sent = calls.slice(n).filter(c => c.url.startsWith('/api/decide'));
     check('choosing one sends the write', sent.length === 1, String(sent.length));
@@ -733,7 +755,9 @@ function arrow(key, opts) {
 
     // Choose the file that was hidden inside a stack.
     const n = calls.length;
-    if (opened) opened.click();
+    check('what came out of the stack offers itself too',
+          !!opened && !!chooseOn(opened));
+    if (opened) chooseOn(opened).click();
     for (let i = 0; i < 8; i++) await settle();
     const sent = calls.slice(n).filter(c => c.url.startsWith('/api/decide'));
     check('choosing it sends one write', sent.length === 1, String(sent.length));
@@ -783,7 +807,9 @@ function arrow(key, opts) {
     for (let i = 0; i < 8; i++) await settle();
 
     const n = calls.length;
-    cells[0].click();                 // keep a.jpg as the one that shows
+    const keepTop = chooseOn(cells[0]);
+    check('the file already speaking is a candidate too', !!keepTop);
+    if (keepTop) keepTop.click();     // keep a.jpg as the one that shows
     for (let i = 0; i < 8; i++) await settle();
     const sent = calls.slice(n).filter(c => c.url.startsWith('/api/decide'));
     if (sent.length) {
