@@ -115,23 +115,41 @@ const settle = () => new Promise(r => setImmediate(r));
 
   // --- the filters ------------------------------------------------------------
   const chips = document.byId.chips;
-  check('the chips are drawn', chips.children.length === CHIPS.length,
-        String(chips.children.length));
-  const dated = chips.children.find(c => c.innerHTML.includes('2026'));
-  check('and one of them shows what this view is', !!dated,
-        chips.children.map(c => c.innerHTML).join('|'));
+  const menu = document.byId.menu;
+  const labels = el => el.querySelectorAll('.opt')
+    .map(o => (o.innerHTML.match(/<span>([^<]*)<\/span>/) || [])[1]);
+  const on = () => chips.children.filter(c => !c._classes.has('addchip'));
+  const plus = () => chips.children.find(c => c._classes.has('addchip'));
 
-  chips.children[0].click();
+  // Only the filters that are doing something. The others are a list of
+  // questions the app can ask, which is not a thing to read past on the way
+  // to the one or two that are the address of what you are looking at.
+  check('only the filters in use are on the bar', on().length === 1,
+        chips.children.map(c => c.innerHTML).join('|'));
+  check('and it says what it is set to', on()[0].innerHTML.includes('2026'),
+        on()[0].innerHTML);
+  check('the rest are behind a +', !!plus());
+
+  plus().click();
+  await settle();
+  check('which offers the ones not in use',
+        labels(menu).join(',') === 'Event,Camera', labels(menu).join(','));
+  check('and not the one already on the bar',
+        !labels(menu).includes('Date'), labels(menu).join(','));
+
+  // Two steps: which question, then what to answer. The value list is the one
+  // the chip itself opens, rather than a second version of it here.
+  menu.querySelectorAll('.opt')[0].click();
   await settle(); await settle();
-  check('a filter menu opens', document.byId.menu.hidden === false);
+  check('picking one opens its values', menu.hidden === false);
   const asked = calls.filter(c => c.url.startsWith('/api/suggest'));
-  check('and asks the server what is on offer', asked.length === 1,
+  check('which the server is asked for', asked.length === 1,
         String(asked.length));
-  // The values offered have to be the ones for *this* view, or the folder you
-  // are standing in has nothing to do with the list you are handed.
+  // They have to be the values for *this* view, or the folder you are standing
+  // in has nothing to do with the list you are handed.
   check('for this view', asked.length > 0 && asked[0].url.includes('date=2026'),
         asked[0] && asked[0].url);
-  const opts = document.byId.menu.querySelectorAll('.opt');
+  const opts = menu.querySelectorAll('.opt');
   check('the values come back', opts.length > 0, String(opts.length));
   opts[0].click();
   check('picking one goes to a view that carries both',
@@ -157,8 +175,8 @@ const settle = () => new Promise(r => setImmediate(r));
   went = null;
   grpname.click();
   await settle();
-  check('the grouping menu opens', document.byId.menu.hidden === false);
-  const levels = document.byId.menu.querySelectorAll('.opt');
+  check('the grouping menu opens', menu.hidden === false);
+  const levels = menu.querySelectorAll('.opt');
   check('it offers the ways to cut the library', levels.length > 0,
         String(levels.length));
   levels[0].click();
@@ -171,7 +189,7 @@ const settle = () => new Promise(r => setImmediate(r));
   went = null;
   addBtn.click();
   await settle();
-  const inner = document.byId.menu.querySelectorAll('.opt');
+  const inner = menu.querySelectorAll('.opt');
   const byEvent = inner.find(o => o.innerHTML.includes('By event'));
   check('a level can be added inside the one already there', !!byEvent,
         inner.map(o => o.innerHTML).join('|'));

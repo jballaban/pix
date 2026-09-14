@@ -203,6 +203,19 @@ main { padding:16px 20px 40px; }
           box-shadow:0 8px 16px -12px #000c; }
 .row { display:flex; gap:9px; align-items:center; flex-wrap:wrap;
        min-height:var(--ctl); }
+/* The top row never wraps as a whole. The filters are the one part of it that
+   grows without limit, so they are the one part allowed to take two lines —
+   and they take them *inside their own box*, or the account and the way out
+   get carried down with them, and the way out is what you reach for when
+   something has gone wrong. */
+.topbar > .row:first-child { flex-wrap:nowrap; align-items:flex-start; }
+.topbar > .row:first-child > .brand,
+.topbar > .row:first-child > .right {
+       min-height:var(--ctl); display:flex; align-items:center; flex:none; }
+/* Takes the slack and gives it back: `min-width:0` is what lets a flex item
+   shrink below its own content, which is what makes the chips wrap rather
+   than push everything past the end of the row. */
+.topbar > .row:first-child > .chips { flex:1 1 auto; min-width:0; }
 /* The action row empties and fills as the selection changes and it sits above
    the grid, so its height must not depend on what is in it — otherwise every
    thumbnail on the page moves the moment you tick one. `--ctl` is what a text
@@ -228,6 +241,11 @@ main { padding:16px 20px 40px; }
    nothing between them and read as one control. Same gap as the row they are
    in, so filters and actions line up. */
 .chips { display:flex; gap:9px; align-items:center; flex-wrap:wrap; }
+/* The filters you are not using are a list of everything the app can ask,
+   which is not a thing to read past on the way to the ones you are. The same
+   `+` the grouping heading uses, for the same gesture: one more of these. */
+.addchip { padding:3px 9px; font-weight:600; color:var(--dim); }
+.addchip:hover { color:var(--fg); border-color:var(--dim); }
 /* Counts and messages along the bottom, so the header is only controls:
    every row of chrome up there is a row of photographs pushed off. */
 .footbar { position:fixed; left:0; right:0; bottom:0; z-index:4;
@@ -619,7 +637,7 @@ def _page(title: str, body: str, *, tools: str = "", rows: str = "",
 <title>{title}</title><style>{_STYLE}</style></head><body>
 <div class="topbar">
 <div class="row"><a class="brand" href="/">pix2</a>{tools}
-<span class="spacer"></span>{right}{_whoami(user)}</div>{rows}
+<span class="spacer"></span><span class="right">{right}{_whoami(user)}</span></div>{rows}
 </div><main>{body}</main>
 <footer class="footbar"><span class="ver">v{_PIX_VERSION}</span>{footer}</footer>
 {script}</body></html>""")
@@ -1587,14 +1605,21 @@ function url(patch){
   // except that the library you were summarising turns into a wall of files.
   return PAGE+(q.toString()?'?'+q:'');
 }
+// Only the filters that are doing something, and a `+` for the rest.
+//
+// Every filter, always, was a row of eleven controls that grew every time the
+// app learned to ask something new — ten of them saying nothing, in front of
+// the one or two that are the address of what you are looking at. The unused
+// ones are a list of questions, and a list of questions belongs in a menu.
 function drawChips(){
   chips.innerHTML='';
   for(const [col,label] of CHIPS){
     const v=VIEW[col];
+    if(!v) continue;
     const b=document.createElement('button');
-    b.className='chip'+(v?' on':'');
-    b.innerHTML=label+(v?`<span class="val">${esc(labelFor(col,v))}</span>`
-                        +'<span class="x">&times;</span>':'');
+    b.className='chip on';
+    b.innerHTML=label+`<span class="val">${esc(labelFor(col,v))}</span>`
+                     +'<span class="x">&times;</span>';
     b.onclick=e=>{
       e.stopPropagation();
       if(e.target.classList.contains('x')){location.href=url({[col]:null});return;}
@@ -1602,7 +1627,49 @@ function drawChips(){
     };
     chips.appendChild(b);
   }
+  const spare=CHIPS.filter(([col])=>!VIEW[col]);
+  if(spare.length){
+    const add=document.createElement('button');
+    add.className='chip addchip';
+    add.textContent='+';
+    add.title='Add a filter';
+    add.onclick=e=>{e.stopPropagation();filterMenu(add,spare);};
+    chips.appendChild(add);
+  }
 }
+
+// Which question to ask, and then what to answer — two steps, because the
+// value list is the same one the chip itself opens and building a second
+// version of it here is how the two would come to disagree.
+function filterMenu(anchorEl,spare){
+  const key='addfilter';
+  if(menuCtx&&menuCtx.key===key&&!menu.hidden){closeMenu();return;}
+  menu.innerHTML='<div id="menulist"></div>';
+  const list=menu.querySelector('#menulist');
+  const head=document.createElement('div');
+  head.className='band';
+  head.textContent='Filter by';
+  list.appendChild(head);
+  for(const [col,label] of spare){
+    const d=document.createElement('div');
+    d.className='opt';
+    d.innerHTML=`<span>${esc(label)}</span>`;
+    d.onclick=e=>{e.stopPropagation();closeMenu();
+                  openMenu(anchorEl,{column:col,mode:'filter'});};
+    list.appendChild(d);
+  }
+  placeMenu(anchorEl);
+  menuCtx={key};
+}
+
+// Under the control that opened it, and never off the right-hand edge.
+function placeMenu(anchorEl){
+  const r=anchorEl.getBoundingClientRect();
+  menu.style.left=Math.min(r.left,window.innerWidth-316)+'px';
+  menu.style.top=(r.bottom+window.scrollY+4)+'px';
+  menu.hidden=false;
+}
+
 function labelFor(col,v){
   const fixed=FIXED[col];
   if(!fixed) return v;
@@ -1630,10 +1697,7 @@ async function openMenu(anchorEl,ctx){
   const key=ctx.mode+':'+(ctx.column||'')+':'+(ctx.as||'');
   if(menuCtx&&menuCtx.key===key&&!menu.hidden){closeMenu();return;}
   ctx.key=key; menuCtx=ctx;
-  const r=anchorEl.getBoundingClientRect();
-  menu.style.left=Math.min(r.left,window.innerWidth-316)+'px';
-  menu.style.top=(r.bottom+window.scrollY+4)+'px';
-  menu.hidden=false;
+  placeMenu(anchorEl);
 
   if(ctx.mode==='date'){drawDate();return;}
   const fixed=FIXED[ctx.column];
@@ -2926,10 +2990,7 @@ function groupMenu(anchorEl,level,insert){
       location.href=groupUrl(next);
     },levels[level]===key&&!insert?'cur':'');
   }
-  const r=anchorEl.getBoundingClientRect();
-  menu.style.left=Math.min(r.left,window.innerWidth-316)+'px';
-  menu.style.top=(r.bottom+window.scrollY+4)+'px';
-  menu.hidden=false;
+  placeMenu(anchorEl);
   menuCtx={key:'group:'+level+':'+insert};
 }
 

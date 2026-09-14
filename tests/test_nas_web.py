@@ -380,8 +380,10 @@ def test_the_filter_chips_are_spaced(client: TestClient) -> None:
     read as one control."""
     html = client.get("/browse?event=Italy%20-%20Sicily").text
 
-    assert ".chips {" in html
-    assert "gap:9px" in html[html.index(".chips {"):html.index(".chips {") + 120]
+    # The rule for the container itself, not the one that says how it shares
+    # the row — both mention `.chips` and only one of them is about spacing.
+    at = html.index(chr(10) + ".chips {")
+    assert "gap:9px" in html[at:at + 120]
 
 
 def test_the_page_is_handed_every_filter_it_is_showing(
@@ -2373,6 +2375,41 @@ def test_the_identity_controls_sit_top_right(client: TestClient) -> None:
 
     assert 'class="spacer"' in html
     assert html.index('class="spacer"') < html.index('Sign out')
+
+
+def test_the_filters_wrap_without_carrying_the_way_out_with_them(
+    client: TestClient
+) -> None:
+    """The filters are the one part of the top row that grows without limit,
+    so they are the one part allowed a second line — inside their own box. The
+    row wrapping as a whole took the account and Sign out down with it, and
+    the way out is what you reach for when something has gone wrong.
+    """
+    html = client.get("/browse").text
+    row = html[html.index('class="row"'):html.index("</div><main")]
+
+    # One box holds them, so the row has one thing to keep in place rather
+    # than four loose ones to wrap between.
+    assert 'class="right"' in row
+    assert row.index('class="right"') < row.index("Sign out")
+
+    css = html[html.index("<style>"):html.index("</style>")]
+    assert ".topbar > .row:first-child { flex-wrap:nowrap" in css
+    # On the chips themselves: a flex item will not shrink below its own
+    # content without it, so without it they push the row wide instead of
+    # wrapping. Other rules carry the same property for other reasons.
+    at = css.index(".topbar > .row:first-child > .chips")
+    assert "min-width:0" in css[at:at + 120], css[at:at + 120]
+
+
+def test_only_the_filters_in_use_are_on_the_bar(client: TestClient) -> None:
+    """Every filter, always, was a row of controls that grew each time the app
+    learned to ask something new — most of them saying nothing, in front of
+    the one or two that are the address of what you are looking at."""
+    js = web._BROWSE_JS
+
+    assert "if(!v) continue;" in js, "unset filters are still drawn"
+    assert "addchip" in js and "filterMenu" in js
 
 
 def test_select_all_is_reachable_with_nothing_selected(
