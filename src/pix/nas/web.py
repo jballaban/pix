@@ -775,6 +775,7 @@ def filters(
     kind: Annotated[str | None, Query()] = None,
     band: Annotated[str | None, Query()] = None,
     camera: Annotated[str | None, Query()] = None,
+    source: Annotated[str | None, Query()] = None,
     deleted: Annotated[str | None, Query()] = None,
     op: Annotated[str | None, Query()] = None,
     stale: Annotated[str | None, Query()] = None,
@@ -820,7 +821,7 @@ def filters(
                       stacks=(stacks if user.is_admin
                               and stacks in ("with", "only") else None),
                       unfold="stack" in _groupings(group),
-                      kind=kind, band=band, camera=camera,
+                      kind=kind, band=band, camera=camera, source=source,
                       viewer=user.scope,
                       deleted=_both_sides(deleted, op, user))
 
@@ -924,7 +925,8 @@ def _folder(row: sqlite3.Row, groups: list[str], view: ix.Filters,
 #: and then had nowhere to send you.
 _DRILL: dict[str, str] = {
     "day": "date", "month": "date", "year": "date", "event": "event",
-    "camera": "camera", "kind": "kind", "stack": "within",
+    "camera": "camera", "source": "source", "kind": "kind",
+    "stack": "within",
 }
 
 
@@ -1443,7 +1445,8 @@ _CHIPS: tuple[tuple[str, str], ...] = (
     # judgements about it, and nobody reaches for them mid-cull.
     ("event", "Event"), ("tag", "Tag"), ("date", "Date"),
     ("audience", "Access"),
-    ("kind", "Type"), ("band", "Size"), ("camera", "Camera"),
+    ("kind", "Type"), ("band", "Size"), ("source", "Source"),
+    ("camera", "Camera"),
     ("stacks", "Stacks"), ("deleted", "Deleted"),
 )
 
@@ -1467,7 +1470,8 @@ _FIXED: dict[str, tuple[tuple[str, str], ...]] = {
 #: How the grid can be cut up, and what to call each choice.
 _GRID_GROUPS: tuple[tuple[str, str], ...] = (
     ("day", "By day"), ("month", "By month"), ("year", "By year"),
-    ("event", "By event"), ("camera", "By camera"), ("kind", "By type"),
+    ("event", "By event"), ("source", "By source"),
+    ("camera", "By camera"), ("kind", "By type"),
     ("stack", "By stack"), ("none", "Ungrouped"),
 )
 
@@ -3110,7 +3114,7 @@ def api_suggest(user: Annotated[Principal, Depends(require_user)],
     and guessing the missing end would propose events on evidence nobody gave.
     """
     if column not in ("event", "tag", "audience", "date", "kind", "band",
-                      "camera"):
+                      "camera", "source"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             f"cannot suggest values for {column!r}")
     near = (near_from, near_to) if near_from and near_to else None

@@ -43,13 +43,13 @@ from typing import Any, Callable, ClassVar, Iterator, Sequence, cast
 
 from pix import datestr
 from pix.nas import decisions
-from pix.nas.const import MASTER_DIR, META_DIR
+from pix.nas.const import LEDGER_NAME, MASTER_DIR, META_DIR
 from pix.nas.decisions import Decision
 
 #: Bumped whenever the shape changes. A mismatch drops and rebuilds rather than
 #: migrating: the index is disposable by design, and a migration path is
 #: machinery to maintain for something a `pix2 index` reproduces exactly.
-SCHEMA_VERSION: int = 8
+SCHEMA_VERSION: int = 9
 
 #: `audience` filter value meaning *nobody yet* — the "New" chip in the UI.
 #: A sentinel rather than a separate reviewed flag: a file with no audience
@@ -84,6 +84,10 @@ GROUPINGS: dict[str, str | None] = {
     "year": "CASE WHEN files.precision >= 4 THEN files.year END",
     "event": "COALESCE(files.event, '(none)')",
     "camera": "COALESCE(files.camera, '(unknown)')",
+    # Where it came into the library from, in the words the person doing the
+    # importing used. Not the same question as which camera: a phone is
+    # replaced every few years and the pictures are still *james's*.
+    "source": "COALESCE(files.source, '(unknown)')",
     "kind": "files.kind",
     # A stack is a section like any other: the file that speaks for the others
     # and the others themselves, together. Grouping by it is what *opens* every
@@ -142,6 +146,7 @@ CREATE TABLE IF NOT EXISTS files (
     precision      INTEGER NOT NULL DEFAULT 0,   -- how much of the date is known
     stacked_under  TEXT,          -- decision: `folder/name` this sits behind
     no_stack       INTEGER NOT NULL DEFAULT 0,   -- decision: never suggest this
+    source         TEXT,          -- what it was imported as: the ledger's name
     suggested_under TEXT,         -- guessed: the `folder/name` this looks like
     PRIMARY KEY (folder, name)
 );
@@ -150,6 +155,7 @@ CREATE INDEX IF NOT EXISTS files_year  ON files(year);
 CREATE INDEX IF NOT EXISTS files_eff   ON files(effective_date);
 CREATE INDEX IF NOT EXISTS files_kind  ON files(kind);
 CREATE INDEX IF NOT EXISTS files_band  ON files(band);
+CREATE INDEX IF NOT EXISTS files_src   ON files(source);
 -- Every listing carries `deleted = 0`, so it is the one clause always present.
 CREATE INDEX IF NOT EXISTS files_del   ON files(deleted);
 -- Read twice for every listing: once to hide what is stacked, once to count
@@ -223,6 +229,11 @@ class Filters:
     #: landing page could cut the library by camera and then had nowhere to send
     #: you when you clicked one.
     camera: str | None = None
+    #: The name the import was given — `james`, `alina`, the folder tree that
+    #: seeded the library. A device is replaced every few years and a camera
+    #: model says which one it was; this says whose it was, which is the
+    #: question people actually ask of a library.
+    source: str | None = None
 
     #: Restricts every query to what this person may see. **Not a filter** —
     #: it is never read from a URL and cannot be cleared from one. A filter is
@@ -288,8 +299,8 @@ class Filters:
     #: decides whether a file has left the view. Restoring a file left it on
     #: screen in a listing of the deleted.
     NAMES: ClassVar[tuple[str, ...]] = ("event", "tag", "date", "audience",
-                                       "kind", "band", "camera", "deleted",
-                                       "stacks", "within")
+                                       "kind", "band", "source", "camera",
+                                       "deleted", "stacks", "within")
 
 
 @dataclass(frozen=True)
@@ -415,9 +426,9 @@ def build(db_path: Path, *, echo: Callable[[str], None] = lambda _: None,
             conn.execute("DELETE FROM files")
             conn.execute("DELETE FROM file_tags")
             conn.execute("DELETE FROM file_audience")
-            for folder, decided in _folders(meta_root, master_root):
+            for folder, decided, source in _folders(meta_root, master_root):
                 for record in _records(meta_root / folder):
-                    row = _row(folder, record, decided)
+                    row = _row(folder, record, decided, source)
                     if row is None:
                         stats.skipped.append(f"{folder}: unreadable record")
                         continue
@@ -451,11 +462,11 @@ _INSERT: str = (
     "INSERT OR REPLACE INTO files "
     "(folder, name, size, mtime_ns, kind, capture_date, camera, width, height, "
     " duration, event, date_override, effective_date, year, band, "
-    " has_sidecar, deleted, precision, stacked_under, no_stack) "
+    " has_sidecar, deleted, precision, stacked_under, no_stack, source) "
     "VALUES (:folder, :name, :size, :mtime_ns, :kind, :capture_date, :camera, "
     " :width, :height, :duration, :event, :date_override, "
     " :effective_date, :year, :band, :has_sidecar, :deleted, :precision,"
-    " :stacked_under, :no_stack)"
+    " :stacked_under, :no_stack, :source)"
 )
 
 
@@ -488,15 +499,20 @@ def refresh(conn: sqlite3.Connection, folder: str, name: str, *,
     decided: dict[str, Decision | None] = (
         {name: decisions.read(media)}
         if decisions.sidecar_path(media).is_file() else {})
-    row = _row(folder, record, decided)
+    # The source is a fact about the folder, not about the file, so it is
+    # carried from the row already there rather than read off the ledger
+    # again. One extra open per file over SMB is what makes a bulk edit slow.
+    before = conn.execute(
+        "SELECT suggested_under, source FROM files "
+        "WHERE folder = ? AND name = ?", (folder, name)).fetchone()
+    source = (str(before["source"]) if before and before["source"]
+              else _source(master_root / folder))
+    row = _row(folder, record, decided, source)
     if row is None:
         return False
     # Which guessed group this file was in, read before the row is replaced —
     # `_INSERT` does not carry `suggested_under`, so writing the row is already
     # this file leaving whatever it was part of.
-    before = conn.execute(
-        "SELECT suggested_under FROM files WHERE folder = ? AND name = ?",
-        (folder, name)).fetchone()
     was = (str(before["suggested_under"])
            if before and before["suggested_under"] else None)
     with conn:
@@ -547,8 +563,9 @@ def built_at(conn: sqlite3.Connection) -> float | None:
 
 def _folders(
     meta_root: Path, master_root: Path
-) -> Iterator[tuple[str, dict[str, Decision | None]]]:
-    """Each master folder in the meta tier, with the decisions made in it.
+) -> Iterator[tuple[str, dict[str, Decision | None], str | None]]:
+    """Each master folder in the meta tier, with the decisions made in it and
+    what it was imported as.
 
     Sidecars are **listed once per folder** rather than stat-ed per file: over
     SMB that is one round trip against tens of thousands. Only the sidecars that
@@ -571,7 +588,7 @@ def _folders(
             # parse still counts as one. Master is the record, so a damaged file
             # there has to stay visible rather than reading as "never decided".
             decided[media.name] = decisions.read(media)
-        yield folder.name, decided
+        yield folder.name, decided, _source(master_folder)
 
 
 def _records(folder: Path) -> Iterator[dict[str, Any]]:
@@ -597,8 +614,25 @@ def _record(path: Path) -> dict[str, Any] | None:
     return cast("dict[str, Any]", parsed) if isinstance(parsed, dict) else None
 
 
+def _source(master_folder: Path) -> str | None:
+    """What a master folder was imported as, from its ledger header.
+
+    One line per folder, read once per build — the ledger's whole point is that
+    the header answers *where did this come from* without opening the body.
+
+    A folder with no readable ledger has no source rather than a made-up one:
+    the placeholder that reaches the page says *unknown*, and inventing a name
+    here would make that indistinguishable from a real import called unknown.
+    """
+    from pix.nas import ledger
+
+    header = ledger.read_header(master_folder / LEDGER_NAME)
+    return header.name if header else None
+
+
 def _row(folder: str, record: dict[str, Any],
-         decided: dict[str, Decision | None]) -> dict[str, Any] | None:
+         decided: dict[str, Decision | None],
+         source: str | None = None) -> dict[str, Any] | None:
     """Flatten one metadata record into an index row."""
     name = record.get("file")
     if not isinstance(name, str) or not name:
@@ -625,6 +659,7 @@ def _row(folder: str, record: dict[str, Any],
     return {
         "folder": folder,
         "name": name,
+        "source": source,
         "size": record.get("size"),
         "mtime_ns": record.get("mtime_ns"),
         "kind": kind,
@@ -812,6 +847,9 @@ def _clauses(filters: Filters) -> dict[str, tuple[str, dict[str, Any]]]:
         out["kind"] = ("files.kind = :f_kind", {"f_kind": filters.kind})
     if filters.band is not None:
         out["band"] = ("files.band = :f_band", {"f_band": filters.band})
+    if filters.source is not None:
+        out["source"] = ("COALESCE(files.source, '(unknown)') = :f_source",
+                         {"f_source": filters.source})
     if filters.camera is not None:
         # Through the same placeholder the grouping uses, so *the ones whose
         # camera nobody recorded* is a section you can click into rather than a
@@ -1525,7 +1563,7 @@ def suggest(conn: sqlite3.Connection, column: str,
                # to the end on its own: a bracket is below every digit.
                + "ORDER BY n_all > 0 DESC, n_any > 0 DESC, value DESC "
                  "LIMIT :limit")
-    elif column in ("event", "kind", "band", "camera"):
+    elif column in ("event", "kind", "band", "camera", "source"):
         sql = (f"SELECT files.{column} AS value, " + tally
                + "FROM files "
                + visible(f"files.{column} IS NOT NULL")

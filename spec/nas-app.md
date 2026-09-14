@@ -690,8 +690,13 @@ beneath it. A folder's cover is that section's first photograph, so it looks
 like what is inside it rather than like a name somebody chose.
 
 Opening a folder is this view plus what the folder is, which means **a grouping
-has to be expressible as a filter to be drilled into**. `camera` became one
-because of this page. Two are not: *no day* and *no month* mean *dated less
+has to be expressible as a filter to be drilled into**. `camera` and `source`
+became filters because of this page — `source` being the name the import was
+given (`james`, `alina`, the folder tree that seeded the library), read once
+per folder from its ledger header. It is the more useful of the two: a phone is
+replaced every few years and a camera model says which one it was, where this
+says whose it was. Every import from that phone lands in a master folder of its
+own, so the folder is no use as a filter and the name is. Two are not: *no day* and *no month* mean *dated less
 precisely than that*, and the date filter answers `undated` or a prefix with
 nothing in between — so those folders say they cannot be opened rather than
 opening something larger than what was clicked.

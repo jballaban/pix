@@ -613,6 +613,119 @@ def test_suggesting_an_unknown_column_is_refused(tree: dict[str, Path]) -> None:
         ix.suggest(ix.connect(tree["db"]), "folder")
 
 
+# --- where a file came from ---------------------------------------------------
+
+def _ledger(tree: dict[str, Path], folder: str, name: str,
+            source: str = "device") -> None:
+    """A master folder's import ledger, header line only."""
+    d = tree["master"] / folder
+    d.mkdir(parents=True, exist_ok=True)
+    (d / ".import.jsonl").write_text(
+        json.dumps({"name": name, "source": source}) + "\n", encoding="utf-8")
+
+
+def test_a_file_carries_the_name_its_import_was_given(
+    tree: dict[str, Path]
+) -> None:
+    """Whose it is, which is the question people ask of a library. The camera
+    model answers a different one — a phone is replaced every few years and the
+    pictures are still james's."""
+    _record(tree, "a_2026", "one.jpg", {"EXIF:Model": "iPhone 17 Pro"})
+    _ledger(tree, "a_2026", "james")
+    _build(tree)
+
+    row = ix.one(ix.connect(tree["db"]), "a_2026", "one.jpg")
+    assert row is not None and row["source"] == "james"
+
+
+def test_two_imports_of_the_same_name_are_one_source(
+    tree: dict[str, Path]
+) -> None:
+    """The whole point. Every import from that phone lands in a folder of its
+    own, and a filter per folder would be a filter per Tuesday."""
+    for folder in ("a_2026", "b_2026"):
+        _record(tree, folder, "one.jpg", {})
+        _ledger(tree, folder, "james")
+    _record(tree, "c_2026", "one.jpg", {})
+    _ledger(tree, "c_2026", "alina")
+    conn = _built(tree)
+
+    assert ix.count(conn, ix.Filters(source="james")) == 2
+    assert ix.count(conn, ix.Filters(source="alina")) == 1
+
+
+def test_a_folder_with_no_ledger_has_no_source_rather_than_a_made_up_one(
+    tree: dict[str, Path]
+) -> None:
+    """The placeholder that reaches the page says *unknown*. Inventing a name
+    here would make that indistinguishable from an import actually called
+    unknown."""
+    _record(tree, "a_2026", "one.jpg", {})
+    conn = _built(tree)
+
+    row = ix.one(conn, "a_2026", "one.jpg")
+    assert row is not None and row["source"] is None
+    # Reachable all the same: it is a real pile of files, and it has to be a
+    # folder with an address rather than a section nothing can open — which is
+    # what a NULL key would make it.
+    assert ix.count(conn, ix.Filters(source="(unknown)")) == 1
+    assert [r["grp0"] for r in
+            ix.sections(conn, groups=["source"])] == ["(unknown)"]
+
+
+def test_a_decision_does_not_lose_where_a_file_came_from(
+    tree: dict[str, Path]
+) -> None:
+    """A decision rewrites the row, and the source is a fact about the folder
+    that nothing on the write path re-reads."""
+    _record(tree, "a_2026", "one.jpg", {})
+    _ledger(tree, "a_2026", "james")
+    conn = _built(tree)
+    _sidecar(tree, "a_2026", "one.jpg")
+    decisions.write(tree["master"] / "a_2026" / "one.jpg",
+                    Decision(event="Sports Day"))
+
+    ix.refresh(conn, "a_2026", "one.jpg",
+               meta_dir=tree["meta"], master_dir=tree["master"])
+
+    row = ix.one(conn, "a_2026", "one.jpg")
+    assert row is not None and row["source"] == "james"
+
+
+def test_a_file_indexed_before_its_ledger_was_read_picks_it_up(
+    tree: dict[str, Path]
+) -> None:
+    """Carried from the row already there, *or* read when there is nothing to
+    carry — otherwise the one case that needs the ledger is the one that never
+    opens it."""
+    _record(tree, "a_2026", "one.jpg", {})
+    _build(tree)
+    conn = ix.connect(tree["db"])
+    conn.execute("UPDATE files SET source = NULL")
+    conn.commit()
+    _ledger(tree, "a_2026", "james")
+    _sidecar(tree, "a_2026", "one.jpg")
+    decisions.write(tree["master"] / "a_2026" / "one.jpg", Decision(event="x"))
+
+    ix.refresh(conn, "a_2026", "one.jpg",
+               meta_dir=tree["meta"], master_dir=tree["master"])
+
+    row = ix.one(conn, "a_2026", "one.jpg")
+    assert row is not None and row["source"] == "james"
+
+
+def test_the_library_can_be_cut_by_source(tree: dict[str, Path]) -> None:
+    """A grouping as well as a filter, so the landing page can show one folder
+    per person whose photographs are in here."""
+    for folder, who in (("a_2026", "james"), ("b_2026", "alina")):
+        _record(tree, folder, "one.jpg", {})
+        _ledger(tree, folder, who)
+    conn = _built(tree)
+
+    rows = ix.sections(conn, ix.Filters(), groups=["source"])
+    assert [(r["grp0"], r["n"]) for r in rows] == [("alina", 1), ("james", 1)]
+
+
 # --- schema ------------------------------------------------------------------
 
 def test_an_old_schema_is_dropped_not_migrated(tree: dict[str, Path]) -> None:

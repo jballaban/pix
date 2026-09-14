@@ -1324,6 +1324,32 @@ def test_the_same_filters_are_on_both_pages(client: TestClient) -> None:
     assert 'id="chips"' in home
 
 
+def test_where_a_photograph_came_from_is_a_filter(
+    client: TestClient, app_env: dict[str, Path], writable: Path
+) -> None:
+    """The name the import was given — `james`, `alina`, the folder tree that
+    seeded the library. Every import from that phone lands in a folder of its
+    own, so the folder is no use as a filter and the name it was given is."""
+    import json as _json
+
+    (writable / ".import.jsonl").write_text(
+        _json.dumps({"name": "james", "source": "device"}) + chr(10),
+        encoding="utf-8")
+    ix.build(app_env["db"], meta_dir=app_env["share"] / "meta",
+             master_dir=app_env["share"] / "master")
+
+    assert client.get("/api/suggest?column=source").status_code == 200
+    html = client.get("/browse?source=james").text
+    assert 'data-name="a.jpg"' in html
+    assert 'data-name="a.jpg"' not in client.get("/browse?source=alina").text
+
+    # And a way to see who is in the library at all, which is the landing page
+    # doing what it does with every other grouping.
+    folders = client.get("/?group=source").text
+    assert ">james<" in folders
+    assert "/browse?source=james" in folders
+
+
 def test_the_camera_a_photograph_came_from_is_a_filter(
     client: TestClient, writable: Path, app_env: dict[str, Path]
 ) -> None:
