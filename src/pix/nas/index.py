@@ -242,7 +242,7 @@ class Filters:
     #: decides whether a file has left the view. Restoring a file left it on
     #: screen in a listing of the deleted.
     NAMES: ClassVar[tuple[str, ...]] = ("event", "tag", "date", "audience",
-                                       "kind", "band", "deleted")
+                                       "kind", "band", "deleted", "within")
 
 
 @dataclass(frozen=True)
@@ -918,6 +918,17 @@ _TAGS_COL: str = (
 _AUDIENCE_COL: str = (
     "(SELECT group_concat(fa.who, char(10)) FROM file_audience fa "
     " WHERE fa.folder = files.folder AND fa.name = files.name) AS audience")
+
+
+def members(conn: sqlite3.Connection, key: str) -> list[tuple[str, str]]:
+    """The files stacked behind `key`, as `(folder, name)`.
+
+    Asked when a file that speaks for others is itself put behind something:
+    they have to come with it, or they are stranded one level down where no
+    listing will reach them.
+    """
+    return [(str(r["folder"]), str(r["name"])) for r in conn.execute(
+        "SELECT folder, name FROM files WHERE stacked_under = ?", (key,))]
 
 
 def one(conn: sqlite3.Connection, folder: str,

@@ -562,6 +562,12 @@ function arrow(key, opts) {
           cells[0].dataset.behind === '1'
           && !!cells[0].querySelector('.stack'),
           cells[0].dataset.behind);
+    // The selection used to survive, still holding the file that had just
+    // become a top — so the next things ticked were stacked *with it*, and its
+    // own members ended up behind a file that was itself behind something.
+    check('and the selection is spent',
+          document.byId.selcount.textContent === '0 selected',
+          document.byId.selcount.textContent);
     deselect();
     cells.forEach(c => { c.dataset.under = ''; c.dataset.behind = '0'; });
   }

@@ -522,6 +522,103 @@ def test_the_page_can_ask_which_photograph_to_show(
     assert ".cell[hidden]" in html
 
 
+def _three_files(writable: Path) -> None:
+    for name in ("b.mp4", "c.jpg"):
+        (writable / name).write_bytes(b"fake")
+
+
+def test_stacking_a_stack_brings_its_files_up(
+    client: TestClient, writable: Path
+) -> None:
+    """Stacks are flat. Stacking a file that already speaks for others reads as
+    *put all of these together* — and the alternative is not a deeper stack, it
+    is a stranded one: the members end up a level down where no listing reaches
+    them, and the count on the outermost file is wrong about what it holds."""
+    _three_files(writable)
+    # b.mp4 goes behind a.jpg.
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/a.jpg",
+        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
+    # Now a.jpg — which speaks for b.mp4 — goes behind c.jpg.
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/c.jpg",
+        "files": [{"folder": "init_2026", "name": "a.jpg"}]})
+
+    assert decisions.read(writable / "a.jpg") == Decision(
+        stacked_under="init_2026/c.jpg")
+    assert decisions.read(writable / "b.mp4") == Decision(
+        stacked_under="init_2026/c.jpg"), "left a level down"
+
+    inside = client.get("/browse?within=init_2026/c.jpg").text
+    for name in ("a.jpg", "b.mp4", "c.jpg"):
+        assert name in inside, name
+    # And nothing inside it claims a stack of its own.
+    assert 'class="stack"' not in inside
+
+
+def test_the_open_stack_is_not_badged_inside_itself(
+    client: TestClient, writable: Path
+) -> None:
+    """A link to where you are standing, and a depth badge inside the thing it
+    measures reads as a stack within a stack."""
+    _three_files(writable)
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/a.jpg",
+        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
+
+    assert 'class="stack"' in client.get(
+        "/browse?event=Italy%20-%20Sicily").text
+    assert 'class="stack"' not in client.get(
+        "/browse?within=init_2026/a.jpg").text
+
+
+def test_bringing_a_stack_up_is_part_of_the_same_gesture(
+    client: TestClient, writable: Path
+) -> None:
+    """The files that came with it are in the same operation, so putting it
+    back puts all of it back."""
+    _three_files(writable)
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/a.jpg",
+        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/c.jpg",
+        "files": [{"folder": "init_2026", "name": "a.jpg"}]})
+
+    op = history.recent()[0]
+    assert {f.name for f in op.files} == {"a.jpg", "b.mp4"}, [
+        f.name for f in op.files]
+
+    client.post("/history/revert", data={"id": op.id})
+    assert decisions.read(writable / "b.mp4") == Decision(
+        stacked_under="init_2026/a.jpg"), "it did not go back where it was"
+
+
+def test_the_page_knows_it_is_inside_a_stack(client: TestClient) -> None:
+    """It has to send that back with a write, or the server works out what left
+    the view against a different view — and a file taken out of a stack sits
+    there until the page is reloaded."""
+    html = client.get("/browse?within=init_2026/a.jpg").text
+    view = html[html.index("const VIEW="):html.index(",CHIPS")]
+
+    assert '"within": "init_2026/a.jpg"' in view, view
+
+
+def test_unstacking_takes_a_file_out_of_the_open_stack(
+    client: TestClient, writable: Path
+) -> None:
+    _three_files(writable)
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/a.jpg",
+        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
+
+    r = client.post("/api/decide/bulk?within=init_2026/a.jpg", json={
+        "stacked_under": None,
+        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
+
+    assert [d["name"] for d in r.json()["dropped"]] == ["b.mp4"], r.text
+
+
 def test_the_grid_draws_no_cursor(client: TestClient) -> None:
     """The dashed ring said which cell the keyboard was on, and the grid has no
     keyboard. It stayed behind after that was removed and turned up unasked on

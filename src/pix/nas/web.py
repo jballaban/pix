@@ -823,7 +823,7 @@ def browse(user: Annotated[Principal, Depends(require_user)],
     rows = ix.files(conn, view, groups=groups, limit=PAGE_LIMIT)
     total = ix.count(conn, view)
 
-    cells = _sections(rows, groups)
+    cells = _sections(rows, groups, view.within)
     shown = (f"{total:,} files" if total <= PAGE_LIMIT else
              f"{len(rows):,} of {total:,} files")
     body = (f'<div class="grid" id="grid">{cells}</div>'
@@ -972,7 +972,8 @@ def _groupings(raw: str) -> list[str]:
     return out[:3] or ["day"]
 
 
-def _sections(rows: list[sqlite3.Row], groups: list[str]) -> str:
+def _sections(rows: list[sqlite3.Row], groups: list[str],
+              within: str | None = None) -> str:
     """The cells, with one heading wherever the section changes.
 
     **One heading, not one per level.** Nested headings meant an indent for
@@ -988,7 +989,8 @@ def _sections(rows: list[sqlite3.Row], groups: list[str]) -> str:
     control, so a grid without one would offer no way to start.
     """
     if not groups:
-        return _heading([], 0, len(rows)) + "".join(_cell(r) for r in rows)
+        return (_heading([], 0, len(rows))
+                + "".join(_cell(r, within) for r in rows))
 
     out: list[str] = []
     for keys, run in groupby(rows, key=lambda r: tuple(
@@ -997,7 +999,7 @@ def _sections(rows: list[sqlite3.Row], groups: list[str]) -> str:
         labels = [_group_label(k, g, groups[:i])
                   for i, (k, g) in enumerate(zip(keys, groups))]
         out.append(_heading(labels, len(groups), len(batch)))
-        out.extend(_cell(r) for r in batch)
+        out.extend(_cell(r, within) for r in batch)
     return "".join(out)
 
 
@@ -1085,7 +1087,7 @@ def _access_html(shared: list[str]) -> str:
     return _chips_html("who", unusual)
 
 
-def _cell(row: sqlite3.Row) -> str:
+def _cell(row: sqlite3.Row, within: str | None = None) -> str:
     tags = _split(row["tags"])
     shared = _split(row["audience"])
     # Newline-joined, matching what the client splits on. A stray control byte
@@ -1107,13 +1109,13 @@ def _cell(row: sqlite3.Row) -> str:
         f'<button class="pick" aria-label="select"></button>'
         + (f'<span class="badge">{_dur(row["duration"])}</span>'
            if row["kind"] == "video" else "")
-        + _stack_badge(row)
+        + _stack_badge(row, within)
         + _access_html(shared) + _chips_html("tags", tags)
         + "</div>"
     )
 
 
-def _stack_badge(row: sqlite3.Row) -> str:
+def _stack_badge(row: sqlite3.Row, within: str | None = None) -> str:
     """How many files this one is speaking for, and the way to see them.
 
     Only on the top of a stack, and only when it has anything behind it: a
@@ -1126,6 +1128,11 @@ def _stack_badge(row: sqlite3.Row) -> str:
     if not behind:
         return ""
     key = f'{row["folder"]}/{row["name"]}'
+    # Not on the file whose stack is already open: it would be a link to where
+    # you are standing, and a depth badge inside the thing it measures reads as
+    # a stack within a stack.
+    if within == key:
+        return ""
     return (f'<a class="stack" href="/browse?within={_q(key)}" '
             f'title="{behind + 1} photographs stacked here">'
             f'{behind + 1}</a>')
@@ -1879,6 +1886,11 @@ async function chooseTop(top){
   // matching the moment they were stacked — but the one left standing has to
   // start saying how many it now speaks for.
   if(out&&out.done) markStack(top,behind);
+  // And the selection is spent. It used to survive, holding the file that had
+  // just become a top — so the next things ticked were stacked *with it*, and
+  // its own members ended up a level down behind a file that was itself behind
+  // something. Nothing on screen said that was about to happen.
+  clearPicks();
 }
 
 // Built here rather than fetched, the way the access and tag chips are: it is
@@ -2904,6 +2916,14 @@ def api_decide_bulk(user: Annotated[Principal, Depends(require_admin)],
             done.append((target.folder, target.name))
             undo.append(history.Before(target.folder, target.name, was,
                                        did=did))
+        # Before asking what left the view, because bringing a stack's
+        # members up changes the answer for them too.
+        if (conn is not None and done
+                and not isinstance(change.stacked_under, Unset)
+                and change.stacked_under):
+            brought = _flatten(conn, done, change.stacked_under)
+            undo.extend(brought)
+            done.extend((b.folder, b.name) for b in brought)
         if conn is not None and done:
             stays = ix.matching(conn, view, done)
             dropped = [{"folder": f, "name": n}
@@ -3060,6 +3080,39 @@ def _decide(folder: str, name: str, change: _Change,
                 if own:
                     conn.close()
     return was, decision, indexed
+
+
+def _flatten(conn: sqlite3.Connection | None,
+             done: list[tuple[str, str]], top: str) -> list[history.Before]:
+    """Bring a stack's members up when the file speaking for them is itself
+    put behind something.
+
+    Stacks are flat. Stacking a file that already speaks for others reads as
+    *put all of these together*, which is what Lightroom does too — and the
+    alternative is not a deeper stack, it is a stranded one: the members end up
+    a level down, where no listing reaches them and the count on the outermost
+    file is wrong about what it contains.
+
+    Their previous values come back so the whole thing reverts as one gesture.
+    Nothing recurses: this runs on every stacking write, so there is never more
+    than one level to collapse.
+    """
+    if conn is None:
+        return []
+    moved: list[history.Before] = []
+    written = {f"{f}/{n}" for f, n in done}
+    for folder, name in done:
+        for m_folder, m_name in ix.members(conn, f"{folder}/{name}"):
+            if f"{m_folder}/{m_name}" in written:
+                continue
+            try:
+                was, _, _ = _decide(m_folder, m_name,
+                                    _Change(stacked_under=top), conn=conn)
+            except HTTPException:
+                continue
+            moved.append(history.Before(m_folder, m_name, was,
+                                        did={"stacked_under": top}))
+    return moved
 
 
 def _summary(change: _Change) -> str:
