@@ -1075,7 +1075,7 @@ def _sections(rows: list[sqlite3.Row], groups: list[str],
     for keys, run in groupby(rows, key=lambda r: tuple(
             r[f"grp{i}"] for i in range(len(groups)))):
         batch = list(run)
-        labels = [_group_label(k, g, groups[:i])
+        labels = [_group_label(k, g, groups[:i], batch[0])
                   for i, (k, g) in enumerate(zip(keys, groups))]
         out.append(_heading(labels, len(groups), len(batch)))
         out.extend(_cell(r, view) for r in batch)
@@ -1109,12 +1109,19 @@ def _heading(labels: list[str], levels: int, count: int) -> str:
             f'</h3>')
 
 
-def _group_label(key: object, group: str, outer: Sequence[str] = ()) -> str:
+def _group_label(key: object, group: str, outer: Sequence[str] = (),
+                 first: sqlite3.Row | None = None) -> str:
     """A heading a person reads, not a sort key.
 
     `outer` is the coarser levels already shown to the left, so a crumb does
     not repeat what the path has said: under *2025*, the month is **January**
     rather than *January 2025*, and under that the day is **Saturday 4**.
+
+    `first` is the section's first file, for the one grouping whose key is not
+    something anybody would want to read. A stack is identified by the
+    photograph that speaks for it, and a generated name carries the date, the
+    camera and the extension — so the heading was 40 characters of machinery
+    where the useful part is *when*.
     """
     if key is None or key == "":
         # Named for what is missing rather than for the date as a whole: a file
@@ -1125,10 +1132,21 @@ def _group_label(key: object, group: str, outer: Sequence[str] = ()) -> str:
                 "stack": "Not in a stack"}.get(group, "None")
     text = str(key)
     if group == "stack":
-        # The photograph that speaks for the section, by name. The folder is
-        # the path the heading already sits in, and repeating it would push the
-        # one part that differs off the end of the line.
-        return text.rpartition("/")[2]
+        # The moment, because that is what a stack is: one photograph taken
+        # several times. The name of the file that speaks for it is machinery.
+        moment = (datestr.parse_pix(str(first["effective_date"]))
+                  if first is not None and first["precision"] >= datestr.FULL
+                  else None)
+        if moment is None:
+            # No usable clock, so the only honest label left is the file that
+            # speaks for the section. The folder is the path the heading
+            # already sits in, and repeating it would push the one part that
+            # differs off the end of the line.
+            return text.rpartition("/")[2]
+        if "day" in outer:
+            return f"{moment:%H:%M}"
+        return (f"{moment:%A} {moment.day} {moment:%B %Y}, "
+                f"{moment:%H:%M}")
     if group == "day":
         moment = datestr.parse_pix(text + "-00:00:00")
         if not moment:

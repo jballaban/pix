@@ -963,6 +963,22 @@ def test_only_suggested_is_the_shelf_of_what_is_still_to_answer(
     assert opened.count("h3 class=") == 1, "not one section per guess"
 
 
+def test_a_stack_section_is_headed_by_its_moment(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """A stack is identified by the file that speaks for it, and a generated
+    name is the date, the camera and the extension run together — forty
+    characters of machinery where the useful part is *when*."""
+    _burst(app_env, writable, "x.jpg", "y.jpg")
+
+    html = client.get("/browse?stacks=only&group=stack").text
+
+    assert "Sunday 30 August 2026, 11:00" in html, "headed by a filename"
+
+    nested = client.get("/browse?stacks=only&group=day,stack").text
+    assert ">11:00<" in nested, "the day is repeated inside itself"
+
+
 def test_grouping_by_stack_opens_what_is_stacked_and_leaves_the_rest(
     client: TestClient, writable: Path, app_env: dict[str, Path]
 ) -> None:
