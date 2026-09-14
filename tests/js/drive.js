@@ -162,6 +162,7 @@ let scrolled = 0;
 const window = {
   innerWidth: 1400, scrollY: 0,
   scrollBy: (_x, y) => { scrolled += y; window.scrollY = scrolled; },
+  scrollTo: (_x, y) => { scrolled = y; window.scrollY = y; },
   addEventListener: (t, fn) => ((listeners[t] ||= []).push(fn)),
 };
 let reloaded = 0;
@@ -698,8 +699,14 @@ function arrow(key, opts) {
 
     cells[0].querySelector('.pick').click();
     cells[1].querySelector('.pick').click();
+    // Somewhere down the grid, which is where stacking is done from.
+    scrolled = 900; window.scrollY = 900;
     actBtn('stack').click();
     for (let i = 0; i < 8; i++) await settle();
+    // The stub has no layout, so the collapse is applied by hand: hiding the
+    // rest of the grid leaves a page a few rows tall, and a browser will not
+    // hold a scroll position past the bottom of a document.
+    scrolled = 0; window.scrollY = 0;
 
     const opened = grid.children.find(c => c.dataset.name === 'hidden.jpg');
     check('the stack being merged is opened up', !!opened,
@@ -735,6 +742,10 @@ function arrow(key, opts) {
     check('and the one chosen stays, now speaking for the rest',
           !!grid.children.find(c => c.dataset.name === 'hidden.jpg'),
           'the promoted file was given back with the borrowed ones');
+    // Hiding the rest of the grid collapses the page, and a browser will not
+    // hold a scroll position past the bottom of a document.
+    check('and you are still where you were when you asked',
+          window.scrollY === 900, String(window.scrollY));
     if (sent.length) {
       const body = JSON.parse(sent[0].body);
       check('everything else defers to it',
@@ -787,6 +798,7 @@ function arrow(key, opts) {
   // Changing your mind about a merge leaves nothing borrowed behind.
   {
     deselect();
+    scrolled = 640; window.scrollY = 640;
     cells[0].dataset.behind = '1';
     behindCells = '<div class="cell" data-folder="f" data-name="borrowed.jpg"'
                 + ' data-kind="image" data-audience="" data-event=""'
@@ -797,6 +809,7 @@ function arrow(key, opts) {
     cells[1].querySelector('.pick').click();
     actBtn('stack').click();
     for (let i = 0; i < 8; i++) await settle();
+    scrolled = 0; window.scrollY = 0;      // the same collapse, by hand
     check('it was borrowed',
           !!grid.children.find(c => c.dataset.name === 'borrowed.jpg'));
     document.byId.choosecancel.click();
@@ -804,6 +817,8 @@ function arrow(key, opts) {
     check('and given back',
           !grid.children.find(c => c.dataset.name === 'borrowed.jpg'),
           'a file from inside a stack was left in the grid');
+    check('at the place you were standing', window.scrollY === 640,
+          String(window.scrollY));
     check('with the badge saying what it says again',
           badgeOn(cells[0]) === null || badgeOn(cells[0]).hidden === false,
           'the stack closed without its count');

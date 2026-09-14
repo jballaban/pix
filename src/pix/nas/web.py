@@ -1922,7 +1922,7 @@ function tops(c){ return +(c.dataset.behind||0) > 0; }
 // no address of its own — they are already on screen, so *filter to these* is
 // hiding the others and *back to where you were* is showing them again, with
 // the scroll never having moved.
-let choosing=null, fetched=[], opened=[], wasPicked=[];
+let choosing=null, fetched=[], opened=[], wasPicked=[], wasScrolled=0;
 
 // Merging two stacks has to offer every photograph in both of them as the one
 // to show. Choosing between the two that happen to be speaking is choosing
@@ -1932,6 +1932,11 @@ async function stackSelection(){
   const cs=targetsOn('live');
   if(cs.length<2){say('select the ones to stack');return;}
   choosing=cs; fetched=[]; opened=[]; wasPicked=cs.slice();
+  // Where you were, because it is about to be taken from you. Hiding the rest
+  // of the grid collapses the page to a few rows, and a browser will not hold
+  // a scroll position past the bottom of a document — so it clamps to the top,
+  // and putting the cells back afterwards does not put you back with them.
+  wasScrolled=window.scrollY;
   const keep=new Set(cs);
   cells.forEach(c=>{c.hidden=!keep.has(c);});
   document.querySelectorAll('.group').forEach(h=>{h.hidden=true;});
@@ -1983,6 +1988,9 @@ function endChoosing(restore){
   opened=[];
   cells.forEach(c=>{c.hidden=false;});
   document.querySelectorAll('.group').forEach(h=>{h.hidden=false;});
+  // The page is tall again, so the position it was holding means something
+  // again. Whatever leaves the grid next is anchored from here.
+  window.scrollTo(0,wasScrolled);
   // Changing your mind puts back what you had, not an empty grid: the files
   // were selected before this asked anything, and cancelling asked for none
   // of it to have happened.
