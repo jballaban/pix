@@ -49,7 +49,7 @@ from pix.nas.decisions import Decision
 #: Bumped whenever the shape changes. A mismatch drops and rebuilds rather than
 #: migrating: the index is disposable by design, and a migration path is
 #: machinery to maintain for something a `pix2 index` reproduces exactly.
-SCHEMA_VERSION: int = 6
+SCHEMA_VERSION: int = 7
 
 #: `audience` filter value meaning *nobody yet* — the "New" chip in the UI.
 #: A sentinel rather than a separate reviewed flag: a file with no audience
@@ -124,6 +124,7 @@ CREATE TABLE IF NOT EXISTS files (
     deleted        INTEGER NOT NULL DEFAULT 0,   -- decision: soft-deleted
     precision      INTEGER NOT NULL DEFAULT 0,   -- how much of the date is known
     stacked_under  TEXT,          -- decision: `folder/name` this sits behind
+    no_stack       INTEGER NOT NULL DEFAULT 0,   -- decision: never suggest this
     PRIMARY KEY (folder, name)
 );
 CREATE INDEX IF NOT EXISTS files_event ON files(event);
@@ -401,11 +402,11 @@ _INSERT: str = (
     "INSERT OR REPLACE INTO files "
     "(folder, name, size, mtime_ns, kind, capture_date, camera, width, height, "
     " duration, event, date_override, effective_date, year, band, "
-    " has_sidecar, deleted, precision, stacked_under) "
+    " has_sidecar, deleted, precision, stacked_under, no_stack) "
     "VALUES (:folder, :name, :size, :mtime_ns, :kind, :capture_date, :camera, "
     " :width, :height, :duration, :event, :date_override, "
     " :effective_date, :year, :band, :has_sidecar, :deleted, :precision,"
-    " :stacked_under)"
+    " :stacked_under, :no_stack)"
 )
 
 
@@ -585,6 +586,7 @@ def _row(folder: str, record: dict[str, Any],
         "deleted": 1 if (decision and decision.deleted) else 0,
         "precision": datestr.precision(captured, override),
         "stacked_under": decision.stacked_under if decision else None,
+        "no_stack": 1 if (decision and decision.no_stack) else 0,
     }
 
 
@@ -918,6 +920,108 @@ _TAGS_COL: str = (
 _AUDIENCE_COL: str = (
     "(SELECT group_concat(fa.who, char(10)) FROM file_audience fa "
     " WHERE fa.folder = files.folder AND fa.name = files.name) AS audience")
+
+
+#: How close in time two photographs have to be to read as one moment. Measured
+#: against the real library: at two seconds it finds 1,551 groups covering 4,342
+#: files, two thirds of them simple pairs. At five it finds 6,011 files, which is
+#: no longer bursts — it is how somebody shoots an afternoon.
+BURST_SECONDS: int = 2
+
+#: The legacy collision suffix. Two files whose generated names differ only by
+#: it had the same event and the same second, which is the same claim the burst
+#: window makes and survives a missing camera or a partial date.
+_SUFFIX = re.compile(r"_\d{3}$")
+
+
+def suggestions(rows: Sequence[sqlite3.Row]) -> list[list[sqlite3.Row]]:
+    """Files that look like one moment, grouped — a proposal, never a decision.
+
+    Two signals, and the second is nearly a subset of the first: photographs
+    taken within `BURST_SECONDS` on the same camera, and files whose names
+    differ only by the collision suffix. Against the real library the second
+    adds about thirty groups to the first's fifteen hundred, and it is kept
+    because what it catches is the case the first cannot see — a file with no
+    camera recorded, or a date known only to the day.
+
+    Computed rather than stored. It is derived from facts the index already
+    holds, and [§4] keeps nothing in master that can be recomputed — a
+    suggestion is not even a decision, only an offer to make one.
+
+    Singletons are not returned: there is nothing to review about a photograph
+    that resembles none of its neighbours.
+    """
+    groups: dict[str, list[sqlite3.Row]] = {}
+
+    by_camera: dict[str, list[sqlite3.Row]] = {}
+    for row in rows:
+        if row["no_stack"] or row["stacked_under"]:
+            continue
+        if row["precision"] == datestr.FULL and row["effective_date"]:
+            by_camera.setdefault(str(row["camera"] or ""), []).append(row)
+
+    for camera, items in by_camera.items():
+        items.sort(key=lambda r: str(r["effective_date"]))
+        key = ""
+        previous: sqlite3.Row | None = None
+        for row in items:
+            if previous is None or not _same_moment(previous, row):
+                key = f"burst:{camera}:{row['effective_date']}"
+            groups.setdefault(key, []).append(row)
+            previous = row
+
+    for row in rows:
+        if row["no_stack"] or row["stacked_under"]:
+            continue
+        # Only where the date is really known. A generated name carries the
+        # date, so files dated to a month all get the same name and collide
+        # with each other — 68 photographs of a skiing trip read as one burst
+        # because none of them knows which day it happened on. The collision is
+        # an artefact of the naming, and a fabricated timestamp is not evidence
+        # of anything.
+        if row["precision"] != datestr.FULL:
+            continue
+        # The file without a suffix belongs to the family too — it is the one
+        # the others collided with.
+        base = _SUFFIX.sub("", str(row["name"]).rsplit(".", 1)[0])
+        groups.setdefault(f"name:{row['folder']}:{base}", []).append(row)
+
+    return _merged(groups)
+
+
+def _same_moment(a: sqlite3.Row, b: sqlite3.Row) -> bool:
+    """Whether `b` was taken within the burst window of `a`."""
+    first, second = str(a["effective_date"]), str(b["effective_date"])
+    if first[:10] != second[:10]:
+        return False
+    return abs(_clock(second) - _clock(first)) <= BURST_SECONDS
+
+
+def _clock(when: str) -> int:
+    try:
+        return (int(when[11:13]) * 3600 + int(when[14:16]) * 60
+                + int(when[17:19]))
+    except ValueError:
+        return 0
+
+
+def _merged(groups: dict[str, list[sqlite3.Row]]) -> list[list[sqlite3.Row]]:
+    """One group per file, and only groups worth reviewing.
+
+    The two signals overlap almost entirely, so a file can arrive in both. It
+    belongs to one proposal or the reviewing is nonsense — you would accept it
+    into a stack and still be asked about it.
+    """
+    seen: set[tuple[str, str]] = set()
+    out: list[list[sqlite3.Row]] = []
+    for group in groups.values():
+        kept = [r for r in group
+                if (str(r["folder"]), str(r["name"])) not in seen]
+        if len(kept) < 2:
+            continue
+        seen.update((str(r["folder"]), str(r["name"])) for r in kept)
+        out.append(kept)
+    return out
 
 
 def members(conn: sqlite3.Connection, key: str) -> list[tuple[str, str]]:

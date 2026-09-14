@@ -1180,3 +1180,114 @@ def test_opening_a_stack_still_offers_what_is_in_it(
 
     inside = ix.Filters(within="f/top.jpg")
     assert [s.value for s in ix.suggest(conn, "tag", inside)] == ["beach"]
+
+
+# --- suggested stacks ---------------------------------------------------------
+
+def _shot(tree: dict[str, Path], name: str, when: str,
+          camera: str = "iPhone 17 Pro") -> None:
+    _record(tree, "f", name, {"EXIF:DateTimeOriginal": when,
+                              "EXIF:Model": camera})
+
+
+def _rows(tree: dict[str, Path]) -> list[Any]:
+    _build(tree)
+    return ix.files(ix.connect(tree["db"]), limit=1000)
+
+
+def test_photographs_seconds_apart_are_one_suggestion(
+    tree: dict[str, Path]
+) -> None:
+    """Most of a burst is one photograph shot eight times."""
+    _shot(tree, "a.jpg", "2026:08:30 10:00:00")
+    _shot(tree, "b.jpg", "2026:08:30 10:00:01")
+    _shot(tree, "c.jpg", "2026:08:30 10:02:00")     # two minutes later
+
+    got = ix.suggestions(_rows(tree))
+    assert [sorted(r["name"] for r in g) for g in got] == [["a.jpg", "b.jpg"]]
+
+
+def test_a_photograph_on_its_own_is_not_a_suggestion(
+    tree: dict[str, Path]
+) -> None:
+    """There is nothing to review about one that resembles no neighbour."""
+    _shot(tree, "alone.jpg", "2026:08:30 10:00:00")
+
+    assert ix.suggestions(_rows(tree)) == []
+
+
+def test_two_cameras_at_once_are_not_one_moment(tree: dict[str, Path]) -> None:
+    """Two people photographing the same thing are not eight takes of it."""
+    _shot(tree, "mine.jpg", "2026:08:30 10:00:00", camera="iPhone 17 Pro")
+    _shot(tree, "yours.jpg", "2026:08:30 10:00:01", camera="Pixel 9")
+
+    assert ix.suggestions(_rows(tree)) == []
+
+
+def test_the_collision_suffix_is_a_signal_of_its_own(
+    tree: dict[str, Path]
+) -> None:
+    """Two files whose names differ only by `_001` had the same event and the
+    same second — which the burst window cannot see without a camera."""
+    _record(tree, "f", "G_2026-08-30_100000.jpg",
+            {"EXIF:DateTimeOriginal": "2026:08:30 10:00:00"})
+    _record(tree, "f", "G_2026-08-30_100000_001.jpg",
+            {"EXIF:DateTimeOriginal": "2026:08:30 10:00:00"})
+
+    got = ix.suggestions(_rows(tree))
+    assert len(got) == 1 and len(got[0]) == 2
+
+
+def test_a_fabricated_timestamp_is_not_evidence(tree: dict[str, Path]) -> None:
+    """A generated name carries the date, so files dated only to a month all
+    get the same name and collide. Sixty-eight photographs of a skiing trip
+    read as one burst because none of them knew which day it happened on."""
+    for i in range(4):
+        name = f"G_2026-03-01_000000{'_%03d' % i if i else ''}.jpg"
+        _record(tree, "f", name, {})
+        _sidecar(tree, "f", name)
+        decisions.write(tree["master"] / "f" / name,
+                        Decision(date_override="2026-03-*-*:*:*"))
+
+    assert ix.suggestions(_rows(tree)) == []
+
+
+def test_a_file_declined_once_is_not_offered_again(
+    tree: dict[str, Path]
+) -> None:
+    """The whole point of remembering: scrolling past the same proposal every
+    time is worse than never having been offered it."""
+    _shot(tree, "a.jpg", "2026:08:30 10:00:00")
+    _shot(tree, "b.jpg", "2026:08:30 10:00:01")
+    for name in ("a.jpg", "b.jpg"):
+        _sidecar(tree, "f", name)
+        decisions.write(tree["master"] / "f" / name, Decision(no_stack=True))
+
+    assert ix.suggestions(_rows(tree)) == []
+
+
+def test_a_file_already_stacked_is_not_offered(tree: dict[str, Path]) -> None:
+    """It has been dealt with, by the strongest possible answer."""
+    _shot(tree, "top.jpg", "2026:08:30 10:00:00")
+    _shot(tree, "behind.jpg", "2026:08:30 10:00:01")
+    _sidecar(tree, "f", "behind.jpg")
+    decisions.write(tree["master"] / "f" / "behind.jpg",
+                    Decision(stacked_under="f/top.jpg"))
+
+    assert ix.suggestions(_rows(tree)) == []
+
+
+def test_no_photograph_is_in_two_suggestions(tree: dict[str, Path]) -> None:
+    """The two signals overlap almost entirely. A file in both would be
+    accepted into one stack and still asked about in the other."""
+    _record(tree, "f", "G_2026-08-30_100000.jpg",
+            {"EXIF:DateTimeOriginal": "2026:08:30 10:00:00",
+             "EXIF:Model": "iPhone 17 Pro"})
+    _record(tree, "f", "G_2026-08-30_100000_001.jpg",
+            {"EXIF:DateTimeOriginal": "2026:08:30 10:00:00",
+             "EXIF:Model": "iPhone 17 Pro"})
+    _shot(tree, "G_2026-08-30_100001.jpg", "2026:08:30 10:00:01")
+
+    got = ix.suggestions(_rows(tree))
+    seen = [r["name"] for g in got for r in g]
+    assert len(seen) == len(set(seen)), seen

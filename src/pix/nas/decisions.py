@@ -60,6 +60,7 @@ understand:
 | tags | — | `dc:subject`, the standard keywords bag |
 | audience | `pix:Audience` | — nothing standard expresses *who may see this* |
 | stacked under | `pix:StackedUnder` | — Lightroom keeps stacks in its catalogue, not the file |
+| not a stack | `pix:NoStack` | — a refusal of the app's own suggestion has no standard |
 | date override | `pix:DateOverride` | `photoshop:DateCreated`, when the
   override pins a whole timestamp — a partial one has no standard form |
 
@@ -133,6 +134,16 @@ class Decision:
     #: costs those files and their deference together, which is the same rule
     #: as everything else here.
     stacked_under: str | None = None
+    #: *Not a stack* — said of a file the app suggested stacking and the
+    #: curator declined. A judgement like the rest, so it lives here and is
+    #: never asked again.
+    #:
+    #: Per file rather than per suggestion, which loses something: a file
+    #: declined in one grouping is not offered in another either. That is the
+    #: right trade while suggestions come from a burst window, because a
+    #: photograph belongs to one burst — and the cost of being wrong is
+    #: stacking it by hand, which was always available.
+    no_stack: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "tags", normalize_tags(self.tags))
@@ -143,7 +154,7 @@ class Decision:
         """True when nothing has been decided, so no sidecar should exist."""
         return not (self.event or self.date_override or self.tags
                     or self.audience or self.deleted
-                    or self.stacked_under)
+                    or self.stacked_under or self.no_stack)
 
 
 def normalize_tags(values: Iterable[str]) -> tuple[str, ...]:
@@ -229,6 +240,7 @@ def change(media: Path, *,
            remove_audience: Sequence[str] = (),
            deleted: bool | Unset = UNSET,
            stacked_under: str | None | Unset = UNSET,
+           no_stack: bool | Unset = UNSET,
            ) -> tuple[Decision | None, Decision]:
     """Change some fields of `media`'s decision, leaving the rest alone.
 
@@ -260,6 +272,8 @@ def change(media: Path, *,
         deleted=current.deleted if isinstance(deleted, Unset) else deleted,
         stacked_under=(current.stacked_under
                        if isinstance(stacked_under, Unset) else stacked_under),
+        no_stack=(current.no_stack
+                  if isinstance(no_stack, Unset) else no_stack),
     )
     write(media, updated)
     return was, updated
@@ -334,6 +348,8 @@ def _to_xml(decision: Decision) -> str:
             props.append(("photoshop:DateCreated", moment.isoformat()))
     if decision.stacked_under:
         props.append(("pix:StackedUnder", decision.stacked_under))
+    if decision.no_stack:
+        props.append(("pix:NoStack", "true"))
     if decision.deleted:
         # No standard equivalent, deliberately. Expressing it as a rating or a
         # keyword would tell another tool this file is deleted in *its* terms,
@@ -383,7 +399,8 @@ def _from_xml(root: ET.Element) -> Decision | None:
                         audience=normalize_names(
                             _read_bag(description, PIX_NS, "Audience")),
                         deleted=_truth(values.get("Deleted")),
-                        stacked_under=values.get("StackedUnder") or None)
+                        stacked_under=values.get("StackedUnder") or None,
+                        no_stack=_truth(values.get("NoStack")))
     return None if decision.is_empty() else decision
 
 
