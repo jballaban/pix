@@ -1609,7 +1609,10 @@ function drawSel(){
   // they answer it themselves: two or more to make a stack, one that is in one
   // to promote, anything already stacked to take out.
   show('stack', live.length > 1);
-  show('top', live.length === 1 && (stacked(live[0]) || tops(live[0])));
+  // Only for a file that is behind something. Offered on the one already
+  // showing, it could do nothing but say so — a button whose whole answer is
+  // that it should not have been there.
+  show('top', live.length === 1 && stacked(live[0]));
   show('unstack', live.some(c => stacked(c) || tops(c)));
   // The tick wears the three states of what it would do: nothing selected and
   // it selects everything, anything selected and it clears.
@@ -1951,10 +1954,20 @@ async function makeTop(){
     await applyToSelection('stacked_under',null,undefined,[top],batch);
 }
 
-function unstack(){
-  const cs=targetsOn('live').filter(c=>stacked(c));
+async function unstack(){
+  // The file that speaks for a stack counts as being in one. Selecting it and
+  // being told to select something in a stack was the tool disagreeing with
+  // the screen, which showed a depth badge on the thing it was refusing.
+  const cs=targetsOn('live').filter(c=>stacked(c)||tops(c));
   if(!cs.length){say('select files that are in a stack');return;}
-  applyToSelection('stacked_under',null,undefined,cs);
+  const dissolving=cs.some(c=>tops(c));
+  const out=await applyToSelection('stacked_under',null,undefined,cs);
+  if(!out) return;
+  cs.forEach(c=>{c.dataset.under='';});
+  // Taking a whole stack apart puts photographs *back* into the grid, and the
+  // grid can only ever lose cells on its own — the ones that come back were
+  // never sent to it. This is the one gesture that needs the page again.
+  if(dissolving) location.reload();
 }
 function targetsOn(side){
   return [...picked].filter(c=>side==='gone'?gone(c):!gone(c));
@@ -2934,9 +2947,8 @@ def api_decide_bulk(user: Annotated[Principal, Depends(require_admin)],
         # Before asking what left the view, because bringing a stack's
         # members up changes the answer for them too.
         if (conn is not None and done
-                and not isinstance(change.stacked_under, Unset)
-                and change.stacked_under):
-            brought = _flatten(conn, done, change.stacked_under)
+                and not isinstance(change.stacked_under, Unset)):
+            brought = _cascade(conn, done, change.stacked_under)
             undo.extend(brought)
             done.extend((b.folder, b.name) for b in brought)
         if conn is not None and done:
@@ -3097,20 +3109,25 @@ def _decide(folder: str, name: str, change: _Change,
     return was, decision, indexed
 
 
-def _flatten(conn: sqlite3.Connection | None,
-             done: list[tuple[str, str]], top: str) -> list[history.Before]:
-    """Bring a stack's members up when the file speaking for them is itself
-    put behind something.
+def _cascade(conn: sqlite3.Connection | None,
+             done: list[tuple[str, str]],
+             top: str | None) -> list[history.Before]:
+    """A stack's members follow the file that speaks for them.
 
-    Stacks are flat. Stacking a file that already speaks for others reads as
-    *put all of these together*, which is what Lightroom does too — and the
-    alternative is not a deeper stack, it is a stranded one: the members end up
-    a level down, where no listing reaches them and the count on the outermost
-    file is wrong about what it contains.
+    One rule, and it answers both directions. Stacked behind something else,
+    and they go with it — stacks are flat, and the alternative is not a deeper
+    stack but a stranded one, with the members a level down where no listing
+    reaches them. Taken out of its stack, and they come out too: *unstack this*
+    said of the file that speaks means the stack, not the one photograph, and
+    leaving the others deferring to a file that defers to nobody would leave a
+    stack nobody asked to keep.
+
+    A file that speaks for nobody has nothing to cascade, which is why taking
+    one photograph out of a stack takes only that one.
 
     Their previous values come back so the whole thing reverts as one gesture.
     Nothing recurses: this runs on every stacking write, so there is never more
-    than one level to collapse.
+    than one level to follow.
     """
     if conn is None:
         return []

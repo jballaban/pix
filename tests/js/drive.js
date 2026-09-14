@@ -623,16 +623,19 @@ function arrow(key, opts) {
     cells[1].querySelector('.pick').click();   // select the unrelated file
     deselect();
     cells[0].querySelector('.pick').click();   // select the stack top
+    check('the file that already shows is not offered a promotion',
+          actBtn('top').hidden === true);
+    // But it is in a stack, whatever the old test thought: it is the one the
+    // depth badge is drawn on.
+    check('and it can be taken apart', actBtn('unstack').hidden === false);
     const n = calls.length;
     actBtn('top').click();
     await settle(); await settle();
-    const sent = calls.slice(n).filter(c => c.url.startsWith('/api/decide'));
-    const named = sent.flatMap(c => JSON.parse(c.body).files.map(f => f.name));
-    check('promoting the file that already shows touches nothing',
-          named.length === 0, named.join(','));
-    check('and says so rather than doing it quietly',
-          /already shows/.test(document.byId.note.textContent),
-          document.byId.note.textContent);
+    const named = calls.slice(n)
+      .filter(c => c.url.startsWith('/api/decide'))
+      .flatMap(c => JSON.parse(c.body).files.map(f => f.name));
+    check('and reaching it anyway touches nothing', named.length === 0,
+          named.join(','));
     cells[0].dataset.behind = '0';
     deselect();
   }
