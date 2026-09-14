@@ -535,12 +535,17 @@ h2.year span { font-size:13px; font-weight:400; }
 
 
 def _page(title: str, body: str, *, tools: str = "", rows: str = "",
-          footer: str = "", script: str = "",
+          right: str = "", footer: str = "", script: str = "",
           user: Principal | None = None) -> HTMLResponse:
     """One shell.
 
-    `tools` sits beside the brand on the first row, `rows` are whole extra rows
-    below it, and `footer` is the strip along the bottom. Counts and messages
+    `tools` sits beside the brand on the first row, `right` is pushed to the far
+    end of it beside who you are, `rows` are whole extra rows below it, and
+    `footer` is the strip along the bottom.
+
+    The two ends of that row are two different kinds of thing. On the left, what
+    you are looking at — the filters, which are the address. On the right, how
+    you are looking at it and who as, which no link carries. Counts and messages
     live down there so the header is only controls — every row of chrome at the
     top is a row of photographs pushed off the screen.
 
@@ -560,7 +565,7 @@ def _page(title: str, body: str, *, tools: str = "", rows: str = "",
 <title>{title}</title><style>{_STYLE}</style></head><body>
 <div class="topbar">
 <div class="row"><a class="brand" href="/">pix2</a>{tools}
-<span class="spacer"></span>{_whoami(user)}</div>{rows}
+<span class="spacer"></span>{right}{_whoami(user)}</div>{rows}
 </div><main>{body}</main>
 <footer class="footbar"><span class="ver">v{_PIX_VERSION}</span>{footer}</footer>
 {script}</body></html>""")
@@ -864,11 +869,16 @@ def browse(user: Annotated[Principal, Depends(require_user)],
   <button id="workstop">Stop</button>
 </div>""",
         tools=('<div class="chips" id="chips"></div>'
-               + _from_link(op, stale, len(rows))
-               # A view control rather than a filter, so it says what it will
-               # do rather than what is true. With two sizes that is the whole
-               # of it: no state to read off a label that might mean either.
-               + '<button id="thumbsize" title="Thumbnail size"></button>'),
+               + _from_link(op, stale, len(rows))),
+        # Away from the filters, at the end of the row with the account. It is
+        # a view control rather than a filter — nothing it does changes which
+        # photographs are here — and standing among the chips it read as one
+        # more thing narrowing the library.
+        #
+        # It says what it will do rather than what is true. With two sizes that
+        # is the whole of it: no state to read off a label that might mean
+        # either.
+        right='<button id="thumbsize" title="Thumbnail size"></button>',
         rows=_actions(user),
         script=(
             f"<script>const VIEW={_js(_view_dict(view))},"

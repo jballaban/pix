@@ -851,6 +851,13 @@ def test_the_grid_has_a_second_thumbnail_size(client: TestClient) -> None:
     html = client.get("/browse?event=Italy%20-%20Sicily").text
 
     assert 'id="thumbsize"' in html
+    # At the far end of the row with the account, not among the filters: it
+    # changes how you are looking, never which photographs are here.
+    row = html[html.index('class="row"'):html.index("</div><main")]
+    # Past the spacer is what puts it at the far end; merely being after the
+    # chips is true of anything in that row.
+    assert row.index("thumbsize") > row.index("spacer")
+    assert row.index("thumbsize") < row.index("who-link")
     assert "minmax(150px,1fr)" in html
     assert '.grid[data-size="big"]' in html
     assert "minmax(230px,1fr)" in html
