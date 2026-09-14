@@ -44,13 +44,16 @@ def test_the_browse_script_runs_and_does_the_right_thing(
 
 @pytest.mark.skipif(shutil.which("node") is None,
                     reason="node is not installed")
-def test_the_same_script_reviews_suggested_stacks(tmp_path: Path) -> None:
-    """The review page is the same script on a different page: keep one of a
-    proposal, or say it is not a stack, and go down the list.
+def test_the_same_script_folds_and_refuses_the_apps_own_guesses(
+    tmp_path: Path
+) -> None:
+    """A grid holding a guessed stack, a decided one and a photograph that is
+    neither: only the first can be refused, and refusing it puts back what it
+    was hiding.
 
-    Worth driving rather than reading, because the page the script arrives on
-    decides whether it runs at all — a proposal handed to the section wiring
-    threw on load and left a page that silently ignored every click.
+    Worth driving rather than reading, because every part of it is a
+    consequence rather than a string — which button is on screen, what order
+    the two requests go out in, and where the photographs land afterwards.
     """
     script = tmp_path / "browse.js"
     script.write_text(web._BROWSE_JS, encoding="utf-8")

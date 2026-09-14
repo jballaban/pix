@@ -358,13 +358,15 @@ def test_the_actions_and_filters_ask_the_same_questions_in_the_same_order(
     acts = re.findall(r'data-act="(\w+)"', html)
     # What a file is, then which of them speaks for the rest, then what
     # happens to it.
-    assert acts[:8] == ["event", "tags", "date", "access",
-                        "stack", "top", "unstack", "delete"], acts
+    assert acts[:9] == ["event", "tags", "date", "access",
+                        "stack", "top", "unstack", "nostack",
+                        "delete"], acts
 
     chips = html[html.index("CHIPS="):html.index("FIXED=")]
     for earlier, later in (("event", "tag"), ("tag", "date"),
                            ("date", "audience"), ("audience", "kind"),
-                           ("kind", "band"), ("band", "deleted")):
+                           ("kind", "band"), ("band", "stacks"),
+                           ("stacks", "deleted")):
         assert chips.index(f'"{earlier}"') < chips.index(f'"{later}"'),             f"{earlier} should come before {later}: {chips}"
 
 
@@ -913,56 +915,156 @@ def _burst(app_env: dict[str, Path], writable: Path, *names: str) -> None:
              master_dir=share / "master")
 
 
-def test_suggestions_are_shown_open_and_marked_as_proposals(
+def test_a_guess_is_not_in_the_view_until_it_is_asked_for(
     client: TestClient, writable: Path, app_env: dict[str, Path]
 ) -> None:
-    """Expanded, because the question is *are these the same photograph* and a
-    collapsed stack shows one of them. Marked as a proposal, because nothing
-    here has been decided and a suggestion dressed as a stack would be the app
-    having quietly made up its mind."""
+    """The default library is the one people left: two photographs that look
+    alike are two photographs. Nothing the app noticed changes what is on
+    screen until somebody turns it on."""
     _burst(app_env, writable, "x.jpg", "y.jpg")
 
-    html = client.get("/browse?suggest=1").text
+    html = client.get("/browse").text
 
-    assert "group proposal" in html
     assert 'data-name="x.jpg"' in html and 'data-name="y.jpg"' in html
-    assert "Not a stack" in html
-    assert "2 photographs" in html
+    assert "stack guessed" not in html
 
 
-def test_the_review_shows_only_what_has_something_to_answer(
+def test_a_guessed_stack_folds_like_a_stack_and_says_it_is_a_guess(
     client: TestClient, writable: Path, app_env: dict[str, Path]
 ) -> None:
-    """A photograph resembling none of its neighbours has nothing to review."""
+    """One photograph on screen and the rest behind it — otherwise it is not a
+    suggestion, it is the pile you already had. Marked as a guess, because a
+    count nobody confirmed and a count somebody decided are different claims,
+    and the curator is deciding which to trust."""
     _burst(app_env, writable, "x.jpg", "y.jpg")
 
-    assert "a.jpg" in client.get("/browse").text, "fixture never held it"
-    assert "a.jpg" not in client.get("/browse?suggest=1").text, (
-        "offered a file with nothing to answer")
+    html = client.get("/browse?stacks=with").text
+
+    assert 'data-name="x.jpg"' in html, "nothing speaks for the group"
+    assert 'data-name="y.jpg"' not in html, "the group is not folded"
+    assert "stack guessed" in html
+    assert 'data-proposed="1"' in html
 
 
-def test_declining_a_suggestion_is_remembered(
+def test_only_suggested_is_the_shelf_of_what_is_still_to_answer(
     client: TestClient, writable: Path, app_env: dict[str, Path]
 ) -> None:
-    """Scrolling past the same refusal every time is worse than never having
-    been offered it."""
+    """A view of nothing but the unanswered. Grouped by stack it is the whole
+    review: every guess, open, one section each."""
     _burst(app_env, writable, "x.jpg", "y.jpg")
-    assert "group proposal" in client.get("/browse?suggest=1").text
 
+    folded = client.get("/browse?stacks=only").text
+    assert 'data-name="x.jpg"' in folded
+    assert 'data-name="a.jpg"' not in folded, "offered one with nothing to say"
+
+    opened = client.get("/browse?stacks=only&group=stack").text
+    assert 'data-name="x.jpg"' in opened and 'data-name="y.jpg"' in opened
+    assert 'data-name="a.jpg"' not in opened
+    assert opened.count("h3 class=") == 1, "not one section per guess"
+
+
+def test_grouping_by_stack_opens_what_is_stacked_and_leaves_the_rest(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """The members come out from behind what speaks for them — that is what
+    opening is. A photograph in no stack is not a stack of one, and a heading
+    per thumbnail would bury the sections that mean something."""
+    _burst(app_env, writable, "x.jpg", "y.jpg")
+
+    html = client.get("/browse?stacks=with&group=stack").text
+
+    assert 'data-name="x.jpg"' in html and 'data-name="y.jpg"' in html
+    assert 'data-name="a.jpg"' in html, "the rest of the library left the view"
+    assert "Not in a stack" in html
+
+
+def test_the_count_agrees_with_the_grid_when_stacks_are_opened(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """One place decides what a listing holds. The header count, the grid and
+    the *has this left the view* check had three chances to disagree."""
+    _burst(app_env, writable, "x.jpg", "y.jpg")
+
+    folded = client.get("/browse?stacks=only").text
+    assert "1 files" in folded, "the count does not match the one cell"
+    opened = client.get("/browse?stacks=only&group=stack").text
+    assert "2 files" in opened, "the count does not match the opened stack"
+
+
+def test_a_guess_is_only_for_the_person_who_can_answer_it(
+    client: TestClient, writable: Path, app_env: dict[str, Path],
+    sign_in: "Callable[[str, str], TestClient]",
+    add_user: "Callable[..., None]"
+) -> None:
+    """It hides photographs on the strength of a guess. Somebody who cannot
+    accept or refuse one should not be able to turn it on — and asking for it
+    in the address bar is how *hidden from the bar* would have been found out
+    to mean nothing."""
+    _burst(app_env, writable, "x.jpg", "y.jpg")
+    add_user("kid", "pw")
     client.post("/api/decide/bulk", json={
-        "no_stack": True,
+        "add_audience": ["kid"],
         "files": [{"folder": "init_2026", "name": "x.jpg"},
                   {"folder": "init_2026", "name": "y.jpg"}]})
 
-    assert decisions.read(writable / "x.jpg") == Decision(no_stack=True)
-    assert "group proposal" not in client.get("/browse?suggest=1").text
+    html = sign_in("kid", "pw").get("/browse?stacks=with").text
+
+    assert 'data-name="x.jpg"' in html and 'data-name="y.jpg"' in html
+    assert '"stacks"' not in html[html.index("CHIPS="):html.index("FIXED=")]
 
 
-def test_accepting_a_suggestion_is_an_ordinary_stack(
+def test_a_decision_on_a_folded_guess_reaches_what_it_hides(
     client: TestClient, writable: Path, app_env: dict[str, Path]
 ) -> None:
-    """Nothing special is written. A suggestion accepted is a stack, made the
-    way any other is — so it unstacks, reverts and behaves like one."""
+    """The whole point of folding is to work as though there is one file, so a
+    decision made about what is on screen is a decision about all of them —
+    exactly the rule a stack somebody made already follows."""
+    _burst(app_env, writable, "x.jpg", "y.jpg")
+
+    client.post("/api/decide/bulk?stacks=with", json={
+        "event": "Sports Day",
+        "files": [{"folder": "init_2026", "name": "x.jpg"}]})
+
+    assert decisions.read(writable / "y.jpg") == Decision(event="Sports Day")
+
+
+def test_a_decision_in_the_ordinary_view_reaches_only_what_was_picked(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """With the guessing off, the photograph the curator ticked is an ordinary
+    photograph and nothing is hiding behind it."""
+    _burst(app_env, writable, "x.jpg", "y.jpg")
+
+    client.post("/api/decide/bulk", json={
+        "event": "Sports Day",
+        "files": [{"folder": "init_2026", "name": "x.jpg"}]})
+
+    assert decisions.read(writable / "y.jpg") is None
+
+
+def test_refusing_a_guess_reaches_every_photograph_in_it(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """Written to all of them before any of them is answered. Recorded on the
+    one that speaks first, the index would regroup the rest behind a new
+    leader and offer the same guess again tomorrow."""
+    _burst(app_env, writable, "x.jpg", "y.jpg")
+
+    client.post("/api/decide/bulk?stacks=with", json={
+        "no_stack": True,
+        "files": [{"folder": "init_2026", "name": "x.jpg"}]})
+
+    assert decisions.read(writable / "x.jpg") == Decision(no_stack=True)
+    assert decisions.read(writable / "y.jpg") == Decision(no_stack=True)
+    assert "stack guessed" not in client.get("/browse?stacks=with").text
+    assert 'data-name="x.jpg"' not in client.get("/browse?stacks=only").text
+
+
+def test_accepting_a_guess_is_an_ordinary_stack(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """Nothing special is written. A guess accepted is a stack, made the way
+    any other is — so it unstacks, reverts and behaves like one."""
     _burst(app_env, writable, "x.jpg", "y.jpg")
 
     client.post("/api/decide/bulk", json={
@@ -971,26 +1073,41 @@ def test_accepting_a_suggestion_is_an_ordinary_stack(
 
     assert decisions.read(writable / "y.jpg") == Decision(
         stacked_under="init_2026/x.jpg")
-    assert "group proposal" not in client.get("/browse?suggest=1").text
+    html = client.get("/browse?stacks=with").text
+    assert "stack guessed" not in html, "still offered as a guess"
+    assert 'class="stack"' in html, "not a stack"
+    assert 'data-name="x.jpg"' not in client.get("/browse?stacks=only").text
 
 
-def test_declining_is_recorded_and_can_be_taken_back(
+def test_refusing_is_recorded_and_can_be_taken_back(
     client: TestClient, writable: Path, app_env: dict[str, Path]
 ) -> None:
     """It is a decision like the others, so it is in the log and revertible —
-    which is the way back if you dismiss a screenful by mistake."""
+    which is the way back if a shelf of them is waved off by mistake."""
     _burst(app_env, writable, "x.jpg", "y.jpg")
-    client.post("/api/decide/bulk", json={
+    client.post("/api/decide/bulk?stacks=with", json={
         "no_stack": True,
-        "files": [{"folder": "init_2026", "name": "x.jpg"},
-                  {"folder": "init_2026", "name": "y.jpg"}]})
+        "files": [{"folder": "init_2026", "name": "x.jpg"}]})
 
     op = history.recent()[0]
     assert op.summary == "said 2 files are not a stack", op.summary
 
     client.post("/history/revert", data={"id": op.id})
     assert decisions.read(writable / "x.jpg") is None
-    assert "group proposal" in client.get("/browse?suggest=1").text
+    assert "stack guessed" in client.get("/browse?stacks=with").text
+
+
+def test_an_opened_stack_holds_what_it_hides_however_it_got_there(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """Opening one is how the choosing works, and a guessed stack is chosen
+    between exactly like a decided one."""
+    _burst(app_env, writable, "x.jpg", "y.jpg")
+
+    behind = client.get("/api/behind/init_2026/x.jpg").json()["cells"]
+
+    assert 'data-name="y.jpg"' in behind
+    assert 'data-name="x.jpg"' not in behind, "the stack holds itself"
 
 
 def test_the_grid_draws_no_cursor(client: TestClient) -> None:

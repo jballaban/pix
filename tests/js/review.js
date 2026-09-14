@@ -1,9 +1,10 @@
-// The same script, on the review page (spec/nas-app.md §15).
+// The same script, on a grid that is folding the app's own guesses.
 //
-// A second stage rather than more of drive.js's, because the review page is a
-// different page: no sections, no grouping, every photograph in an open
-// proposal with a control on it. Driving it from the ordinary grid's stage
-// would mean asserting on a page the server never sends.
+// A second stage rather than more of drive.js's, because this is a different
+// library: one photograph standing for two the viewer cannot see, beside a
+// stack somebody actually made and a photograph that is only itself. Telling
+// those three apart is the whole of the feature, and drive.js's two cells
+// cannot pose the question.
 const fs = require('fs');
 const { El, document } = require('./dom.js');
 
@@ -22,40 +23,53 @@ function mk(id, cls) {
   return e;
 }
 
-function cell(name) {
+function cell(name, extra) {
   const c = new El('div');
   c.className = 'cell';
   Object.assign(c.dataset, {
     folder: 'f', name, kind: 'image', audience: '', tags: '',
-    date: '2026-08-30',
-  });
+    date: '2026-08-30', under: '', behind: '0', proposed: '0',
+  }, extra || {});
   const pick = new El('button');
   pick.className = 'pick';
   c.appendChild(pick);
+  if (+c.dataset.behind + +c.dataset.proposed > 0) {
+    const badge = new El('a');
+    badge.className = 'stack' + (+c.dataset.proposed ? ' guessed' : '');
+    c.appendChild(badge);
+  }
   return c;
 }
 
 const grid = mk('grid');
-// Two proposals, because they are answered one at a time and the one still to
-// answer has to survive the one just answered.
-const cells = [];
-function proposal(names) {
-  const h = new El('h3');
-  h.className = 'group proposal';
-  h.dataset.files = names.map(n => 'f/' + n).join(',');
-  const when = new El('span');
-  when.className = 'grpname dim';
-  when.textContent = '2026 08 30 10:00';
-  h.appendChild(when);
-  const no = new El('button');
-  no.className = 'notastack';
-  h.appendChild(no);
-  grid.appendChild(h);
-  for (const n of names) { const c = cell(n); cells.push(c); grid.appendChild(c); }
-  return h;
+const heading = new El('h3');
+heading.className = 'group';
+for (const cls of ['grppick', 'addgrp']) {
+  const b = new El('button');
+  b.className = cls;
+  heading.appendChild(b);
 }
-const first = proposal(['a.jpg', 'b.jpg', 'c.jpg']);
-const second = proposal(['d.jpg', 'e.jpg']);
+const crumb = new El('span');
+crumb.className = 'crumb';
+crumb.dataset.level = '0';
+for (const cls of ['grpname', 'rmgrp']) {
+  const b = new El('button');
+  b.className = cls;
+  crumb.appendChild(b);
+}
+heading.appendChild(crumb);
+const count = new El('span');
+count.className = 'dim';
+count.textContent = '3';
+heading.appendChild(count);
+grid.appendChild(heading);
+
+// A guess, a decision, and a photograph that is neither.
+const cells = [cell('lead.jpg', { proposed: '2' }),
+               cell('real.jpg', { behind: '1' }),
+               cell('plain.jpg')];
+cells.forEach(c => grid.appendChild(c));
+const lead = cells[0];
 
 const actions = mk('actions');
 const tick = new El('button');
@@ -77,7 +91,7 @@ function actGroup(side, acts) {
   return g;
 }
 actGroup('live', ['event', 'tags', 'date', 'access', 'stack', 'top', 'unstack',
-                  'delete']);
+                  'nostack', 'delete']);
 actGroup('gone', ['restore', 'purge']);
 const chooseActs = actGroup('choose', []);
 const cancelBtn = new El('button');
@@ -95,15 +109,35 @@ document.byId.viewer.appendChild(stage);
 Object.assign(document.byId.vvid, {
   pause() {}, load() {}, play: () => Promise.resolve(),
 });
+const actBtn = name => actions.querySelectorAll('[data-act]')
+                              .find(b => b.dataset.act === name);
 
 const realQsa = document.querySelectorAll.bind(document);
 document.querySelectorAll = sel => (sel === '.cell' ? cells
+                                  : sel === '.group' ? [heading]
                                   : sel === '.stage' ? [stage] : realQsa(sel));
 document.querySelector = sel => document.querySelectorAll(sel)[0] || null;
+
+// What the two photographs behind the guess come back as.
+const BEHIND =
+  '<div class="cell" data-folder="f" data-name="one.jpg" data-kind="image"'
+  + ' data-audience="" data-event="" data-tags="" data-date="2026-08-30"'
+  + ' data-deleted="" data-under="" data-behind="0" data-proposed="0">'
+  + '<button class="pick" aria-label="select"></button></div>'
+  + '<div class="cell" data-folder="f" data-name="two.jpg" data-kind="image"'
+  + ' data-audience="" data-event="" data-tags="" data-date="2026-08-30"'
+  + ' data-deleted="" data-under="" data-behind="0" data-proposed="0">'
+  + '<button class="pick" aria-label="select"></button></div>';
 
 const calls = [];
 const fetch = async (url, opts) => {
   calls.push({ url, body: opts && opts.body });
+  if (url.startsWith('/api/behind/')) {
+    return { ok: true, json: async () => ({ cells: BEHIND }) };
+  }
+  if (url.startsWith('/api/file/')) {
+    return { ok: true, json: async () => ({ name: 'lead.jpg', exif: {}, facts: [] }) };
+  }
   return { ok: true,
            json: async () => ({ failed: [], dropped: [], total: 5,
                                 purged: 0, binned: 0 }) };
@@ -113,19 +147,23 @@ const localStorage = {
   getItem: k => (k in stored ? stored[k] : null),
   setItem: (k, v) => { stored[k] = String(v); },
 };
+const listeners = {};
 const window = {
   innerWidth: 1400, scrollY: 0,
   scrollBy: () => {}, scrollTo: () => {},
-  addEventListener: () => {},
+  addEventListener: (t, fn) => ((listeners[t] ||= []).push(fn)),
 };
-const location = { href: '/browse?suggest=1', reload: () => {} };
+const location = { href: '/browse?stacks=with', reload: () => {} };
 const confirm = () => true;
-const VIEW = { event: null, year: null, tag: null, audience: null, kind: null,
-               band: null };
-const GRID_GROUPS = [['day', 'By day'], ['none', 'Ungrouped']];
-const GROUPING = [];
-const CHIPS = [['event', 'Event'], ['audience', 'Access']];
-const FIXED = {};
+const VIEW = { event: null, date: null, tag: null, audience: null, kind: null,
+               band: null, deleted: null, stacks: 'with', within: null };
+const GRID_GROUPS = [['day', 'By day'], ['stack', 'By stack'],
+                     ['none', 'Ungrouped']];
+const GROUPING = ['day'];
+const CHIPS = [['event', 'Event'], ['stacks', 'Stacks']];
+const FIXED = { stacks: [['with', 'Including suggestions'],
+                         ['only', 'Only suggested'],
+                         ['', 'Exclude suggestions']] };
 const EXTRA = {};
 const ADMIN = true;
 const USERS = ['family'];
@@ -133,13 +171,23 @@ const GROUPS = ['family'];
 const USUAL = 'family';
 
 const settle = () => new Promise(r => setImmediate(r));
-const on = c => c.children.find(k => k._classes.has('choose')) || null;
+const keys = {};
+function arrow(key) {
+  (keys.keydown || []).forEach(fn => fn(
+    { key, preventDefault() {}, target: { tagName: 'DIV' } }));
+}
 const writes = () => calls.filter(c => c.url.startsWith('/api/decide'));
 const inGrid = n => grid.children.some(
   c => c._classes.has('cell') && c.dataset.name === n);
-const counted = () => document.byId.selcount.textContent;
+const at = n => grid.children.filter(c => c._classes.has('cell'))
+                            .findIndex(c => c.dataset.name === n);
+function deselect() {
+  if (document.byId.selcount.textContent !== '0 selected') tick.click();
+}
 
 (async () => {
+  const realAdd = document.addEventListener.bind(document);
+  document.addEventListener = (t, fn) => { (keys[t] ||= []).push(fn); realAdd(t, fn); };
   try {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
@@ -153,63 +201,76 @@ const counted = () => document.byId.selcount.textContent;
     process.exit(1);
   }
 
-  // Nothing arrives selected and nothing is asked of the selection: the work
-  // is answering one proposal at a time, and a page that arrived with three
-  // photographs ticked would apply the next thing pressed to all of them.
-  check('nothing arrives selected', counted() === '0 selected', counted());
-  // Every photograph offers to be the one kept — the question is which of
-  // these to keep, so each of them has to be answerable.
-  check('each photograph offers to be kept', cells.every(on),
-        String(cells.filter(on).length));
+  // --- what can be refused ----------------------------------------------------
+  const no = actBtn('nostack');
+  check('refusing is not offered with nothing selected', no.hidden === true);
 
-  // --- keeping one ------------------------------------------------------------
-  on(cells[1]).click();
-  await settle(); await settle();
-  check('keeping one writes once', writes().length === 1,
+  cells[2].querySelector('.pick').click();
+  check('nor for a photograph the app said nothing about', no.hidden === true);
+
+  deselect();
+  cells[1].querySelector('.pick').click();
+  // Un-deciding a decision is what Unstack is for, and offering both here
+  // would make two buttons for the same gesture with different consequences.
+  check('nor for a stack somebody made', no.hidden === true);
+  check('but that one can be taken apart', actBtn('unstack').hidden === false);
+
+  deselect();
+  lead.querySelector('.pick').click();
+  check('offered for a guess', no.hidden === false);
+  // A guess is chosen between exactly like a decision: the badge means there
+  // are more of these, and Stack is how you say which one to keep — on its
+  // own, because the others are not on the page to be ticked.
+  check('and a guess can be accepted as a stack',
+        actBtn('stack').hidden === false);
+  // Nothing to take apart yet. Offering it would be un-deciding something
+  // nobody decided, beside a button that refuses the same guess properly.
+  check('but not taken apart', actBtn('unstack').hidden === true);
+
+  // --- refusing it ------------------------------------------------------------
+  no.click();
+  await settle(); await settle(); await settle();
+
+  const asked = calls.findIndex(c => c.url.startsWith('/api/behind/'));
+  const wrote = calls.findIndex(c => c.url.startsWith('/api/decide'));
+  check('what it was hiding is asked for', asked >= 0);
+  // Afterwards they are nothing's members, and the page would have no way
+  // left to find out what it had been holding back.
+  check('and asked for before the refusal is written',
+        asked >= 0 && wrote >= 0 && asked < wrote, `${asked} then ${wrote}`);
+  check('the refusal is written once', writes().length === 1,
         String(writes().length));
-  const body = JSON.parse(writes()[0].body || '{}');
-  check('the others are stacked under the one kept',
-        body.stacked_under === 'f/b.jpg', writes()[0].body);
-  check('and the one kept is not stacked under itself',
-        (body.files || []).map(f => f.name).sort().join(',') === 'a.jpg,c.jpg',
-        writes()[0].body);
+  const body = JSON.parse((writes()[0] || {}).body || '{}');
+  check('it says this is not a stack', body.no_stack === true,
+        writes()[0] && writes()[0].body);
+  check('and names the photograph that spoke for it',
+        (body.files || []).length === 1 && body.files[0].name === 'lead.jpg',
+        writes()[0] && writes()[0].body);
 
-  // Answered, so it stops being a question: the others fold away, the heading
-  // goes, and what is left is the stack that was just made.
-  check('the rest leave the page', !inGrid('a.jpg') && !inGrid('c.jpg'));
-  check('the one kept stays', inGrid('b.jpg'));
-  check('it is shown as a stack',
-        !!cells[1].children.find(k => k._classes.has('stack')));
-  check('the proposal is answered and gone',
-        !grid.children.includes(first));
-  check('no control is left asking on it',
-        !inGrid('b.jpg') || !on(cells[1]));
-  check('and nothing was left selected', counted() === '0 selected', counted());
-  // The page is a list of questions. Answering one must not answer, disturb
-  // or unwire the next — you go down the page.
-  check('the next proposal is untouched', grid.children.includes(second)
-        && inGrid('d.jpg') && inGrid('e.jpg'));
-  check('and its date is still a date, not a count',
-        second.querySelector('.dim').textContent === '2026 08 30 10:00',
-        second.querySelector('.dim').textContent);
+  // The library is not smaller than it was — those photographs were always
+  // there, and a grid that kept them off screen until the next reload would
+  // be quietly holding part of it back.
+  check('what it hid is on the page', inGrid('one.jpg') && inGrid('two.jpg'));
+  check('beside the one that was speaking for them',
+        at('one.jpg') === at('lead.jpg') + 1
+        && at('two.jpg') === at('lead.jpg') + 2,
+        `${at('lead.jpg')} ${at('one.jpg')} ${at('two.jpg')}`);
+  check('and it no longer claims to be a stack',
+        !lead.children.find(k => k._classes.has('stack'))
+        && lead.dataset.proposed === '0');
+  check('so it cannot be refused twice', no.hidden === true);
 
-  // --- saying it is not a stack ----------------------------------------------
-  const was = writes().length;
-  second.querySelector('.notastack').click();
-  await settle(); await settle();
-  const said = writes().slice(was);
-  check('declining writes once', said.length === 1, String(said.length));
-  const refused = JSON.parse((said[0] || {}).body || '{}');
-  // Remembered, so the same refusal is not offered again tomorrow.
-  check('it is remembered against every file in the proposal',
-        refused.no_stack === true
-        && (refused.files || []).map(f => f.name).sort().join(',')
-           === 'd.jpg,e.jpg', said[0] && said[0].body);
-  check('the photographs leave the page',
-        !inGrid('d.jpg') && !inGrid('e.jpg'));
-  check('and the question with them', !grid.children.includes(second));
-  check('nothing is selected after declining either',
-        counted() === '0 selected', counted());
+  // Put where they belong rather than at the end: the order the grid reads in
+  // is the order the viewer pages through, and a photograph on screen here and
+  // last in that order opens the wrong picture.
+  deselect();
+  lead.click();
+  await settle();
+  arrow('ArrowRight');
+  await settle();
+  check('paging on goes to the one beside it',
+        document.byId.vmeta.textContent.startsWith('one.jpg'),
+        document.byId.vmeta.textContent);
 
   if (failures.length) {
     failures.forEach(f => console.log('FAIL ' + f));

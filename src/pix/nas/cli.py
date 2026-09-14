@@ -238,6 +238,11 @@ def _reindex(*, quiet: bool) -> None:
         f"{stats.files:,} file(s), {stats.events} event(s), "
         f"{stats.with_date:,} dated, {stats.with_sidecar:,} with decisions"
     )
+    # Said out loud because it is a pile of work that appeared without anybody
+    # asking for it, and the only place it shows otherwise is a filter nobody
+    # has a reason to reach for until they know there is something behind it.
+    if stats.suggested:
+        typer.echo(f"{stats.suggested:,} possible stack(s) to review")
     typer.echo(f"Index: {INDEX_DB}")
     for line in stats.skipped[:10]:
         typer.echo(f"  {line}", err=True)

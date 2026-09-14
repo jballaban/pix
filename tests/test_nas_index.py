@@ -1195,6 +1195,11 @@ def _rows(tree: dict[str, Path]) -> list[sqlite3.Row]:
     return ix.files(ix.connect(tree["db"]), limit=1000)
 
 
+def _built(tree: dict[str, Path]) -> sqlite3.Connection:
+    _build(tree)
+    return ix.connect(tree["db"])
+
+
 def test_photographs_seconds_apart_are_one_suggestion(
     tree: dict[str, Path]
 ) -> None:
@@ -1290,6 +1295,23 @@ def test_a_file_already_stacked_is_not_offered(tree: dict[str, Path]) -> None:
     assert ix.suggestions(inside) == []
 
     assert ix.suggestions(ix.files(conn, limit=1000)) == []
+
+
+def test_a_deleted_photograph_is_not_guessed_about(
+    tree: dict[str, Path]
+) -> None:
+    """It is not in the library anybody sees, and a suggestion is an offer to
+    curate what is there. Offered, a pair would be half a proposal — accept it
+    and the stack is one photograph deep with something invisible behind it."""
+    _shot(tree, "a.jpg", "2026:08:30 10:00:00")
+    _shot(tree, "b.jpg", "2026:08:30 10:00:01")
+    _sidecar(tree, "f", "b.jpg")
+    decisions.write(tree["master"] / "f" / "b.jpg", Decision(deleted=True))
+
+    assert ix.suggestions(_rows(tree)) == []
+    conn = _built(tree)
+    assert [r["name"] for r in conn.execute(
+        "SELECT name FROM files WHERE suggested_under IS NOT NULL")] == []
 
 
 def test_no_photograph_is_in_two_suggestions(tree: dict[str, Path]) -> None:

@@ -438,6 +438,11 @@ h3.group[data-state="some"] .grppick { background:var(--top);
          padding:1px 6px; border-radius:3px;
          box-shadow:2px -2px 0 -1px #000b, 4px -4px 0 -2px #000b; }
 .stack:hover { background:var(--accent); color:#0d0f12; text-decoration:none; }
+/* Nobody has confirmed this one. The same badge in the colour the app uses for
+   *this is the one that speaks* rather than the one it uses for a decision —
+   so a shelf of guesses reads as a shelf of guesses at a glance. */
+.stack.guessed { border-color:var(--top); color:var(--top); }
+.stack.guessed:hover { background:var(--top); color:#0d0f12; }
 /* Hidden while its files are on screen being chosen between. An anchor has no
    display of its own, so the user agent would cover this — but five rules in
    this file have needed saying, which is enough to stop calling it luck. */
@@ -452,11 +457,6 @@ h3.group[data-state="some"] .grppick { background:var(--top);
 .cell:hover .choose, .choose:focus { opacity:1; }
 /* Nothing to select while a top is being chosen, so nothing offers to. */
 .grid[data-choosing] .pick { display:none; }
-/* A proposal, and marked as one: nothing here has been decided, and a
-   suggestion dressed as a stack would be the app having quietly made up its
-   mind. */
-h3.group.proposal { border-left:3px solid var(--top); padding-left:9px; }
-h3.group.proposal .notastack { margin-left:auto; }
 /* Inside an opened stack, the one that speaks. Everything in there looks
    alike — that is why they were stacked — so without this there is nothing to
    say which one the grid outside will show. */
@@ -610,7 +610,6 @@ def _whoami(user: Principal | None) -> str:
     if user is None:
         return '<a class="who-link" href="/login">Sign in</a>'
     manage = (f'{_bin_link()}'
-              '<a class="who-link" href="/browse?suggest=1">Suggestions</a>'
               '<a class="who-link" href="/history">History</a>'
               '<a class="who-link" href="/accounts">Accounts</a>'
               if user.is_admin else "")
@@ -753,6 +752,8 @@ def filters(
     op: Annotated[str | None, Query()] = None,
     stale: Annotated[str | None, Query()] = None,
     within: Annotated[str | None, Query()] = None,
+    stacks: Annotated[str | None, Query()] = None,
+    group: Annotated[str, Query()] = "day",
 ) -> ix.Filters:
     """The current view, read off the query string.
 
@@ -770,6 +771,16 @@ def filters(
     reaches SQL as a `substr` length, so it has to be a number this code chose
     and never one a request did; `ix.date_prefix` is where that is decided.
 
+    `group` is read here as well as by the page, for one reason: grouping by
+    stack opens every stack in the view, and what a listing holds is decided in
+    one place. Handing the grouping to the grid alone would have left the count
+    in the header, the *did this leave the view* check and the grid itself with
+    three different ideas of what was on screen.
+
+    `stacks` is dropped for a non-admin for the same reason `deleted` is — it
+    hides photographs behind a guess, and only somebody who can accept or
+    refuse that guess should be able to turn it on.
+
     `deleted` is in the URL like any other filter, but it is **dropped for a
     non-admin** rather than merely hidden from their bar. Hiding the chip
     stops it being offered; this is what stops it being asked for. Anything
@@ -779,6 +790,9 @@ def filters(
     return ix.Filters(event=event, date=ix.date_prefix(date), tag=tag,
                       audience=audience, chosen=_from_operation(op, stale),
                       within=within,
+                      stacks=(stacks if user.is_admin
+                              and stacks in ("with", "only") else None),
+                      unfold="stack" in _groupings(group),
                       kind=kind, band=band, viewer=user.scope,
                       deleted=_both_sides(deleted, op, user))
 
@@ -867,8 +881,7 @@ def browse(user: Annotated[Principal, Depends(require_user)],
            view: Annotated[ix.Filters, Depends(filters)],
            group: Annotated[str, Query()] = "day",
            op: Annotated[str | None, Query()] = None,
-           stale: Annotated[str | None, Query()] = None,
-           suggest: Annotated[str | None, Query()] = None) -> HTMLResponse:
+           stale: Annotated[str | None, Query()] = None) -> HTMLResponse:
     """The one grid, filtered — select files, then say something about them.
 
     Selecting an event on the landing page is just this page with `?event=`, so
@@ -879,25 +892,11 @@ def browse(user: Annotated[Principal, Depends(require_user)],
     rows = ix.files(conn, view, groups=groups, limit=PAGE_LIMIT)
     total = ix.count(conn, view)
 
-    lead = ""
-    if suggest:
-        # A review rather than a listing: only what has something to answer.
-        proposals = ix.suggestions(rows)
-        rows = [r for g in proposals for r in g]
-        cells = "".join(_proposal(g) for g in proposals)
-        lead = (f'<p class="dim">{len(proposals):,} groups of photographs '
-                f'taken in the same moment, {len(rows):,} files. Nothing here '
-                f'has been decided — keep one of each, or say it is not a '
-                f'stack and it will not be offered again.</p>'
-                if proposals else
-                '<p class="empty">Nothing left to review.</p>')
-    else:
-        cells = _sections(rows, groups, view.within)
+    cells = _sections(rows, groups, view)
     shown = (f"{total:,} files" if total <= PAGE_LIMIT else
              f"{len(rows):,} of {total:,} files")
-    body = (lead + f'<div class="grid" id="grid">{cells}</div>'
-            if rows else
-            lead or '<p class="empty">Nothing matches these filters.</p>')
+    body = (f'<div class="grid" id="grid">{cells}</div>' if rows else
+            '<p class="empty">Nothing matches these filters.</p>')
     return _page("pix2 browse", f"""{body}
 <div id="viewer">
   <div class="stage"><img id="vimg">
@@ -1004,6 +1003,7 @@ def _actions(user: Principal) -> str:
     <button data-act="stack">Stack</button>
     <button data-act="top">Make top</button>
     <button data-act="unstack">Unstack</button>
+    <button data-act="nostack">Not a stack</button>
     <span class="sep"></span>
     <button data-act="delete" class="danger">Delete</button>
   </span>
@@ -1052,7 +1052,7 @@ def _groupings(raw: str) -> list[str]:
 
 
 def _sections(rows: list[sqlite3.Row], groups: list[str],
-              within: str | None = None) -> str:
+              view: ix.Filters | None = None) -> str:
     """The cells, with one heading wherever the section changes.
 
     **One heading, not one per level.** Nested headings meant an indent for
@@ -1069,7 +1069,7 @@ def _sections(rows: list[sqlite3.Row], groups: list[str],
     """
     if not groups:
         return (_heading([], 0, len(rows))
-                + "".join(_cell(r, within) for r in rows))
+                + "".join(_cell(r, view) for r in rows))
 
     out: list[str] = []
     for keys, run in groupby(rows, key=lambda r: tuple(
@@ -1078,39 +1078,14 @@ def _sections(rows: list[sqlite3.Row], groups: list[str],
         labels = [_group_label(k, g, groups[:i])
                   for i, (k, g) in enumerate(zip(keys, groups))]
         out.append(_heading(labels, len(groups), len(batch)))
-        out.extend(_cell(r, within) for r in batch)
+        out.extend(_cell(r, view) for r in batch)
     return "".join(out)
-
-
-def _proposal(group: list[sqlite3.Row]) -> str:
-    """One suggested stack, open, with the two answers it can be given.
-
-    Expanded rather than collapsed, because the question is *are these the same
-    photograph* and a collapsed stack shows one of them. The work is scrolling:
-    look, then either say which one to keep or say it is not a stack, and the
-    next one is already on screen.
-
-    Marked as a proposal and not as a stack — nothing here has been decided,
-    and a suggestion that looked like a stack would be the app having quietly
-    made up its mind.
-    """
-    keys = ",".join(f'{r["folder"]}/{r["name"]}' for r in group)
-    when = str(group[0]["effective_date"] or "")[:16].replace("-", " ", 3)
-    return (
-        f'<h3 class="group proposal" data-files="{_h(keys)}">'
-        f'<span class="crumbs"><span class="crumb">'
-        f'<span class="grpname">{len(group)} photographs</span></span>'
-        f'<span class="sep">&rsaquo;</span><span class="crumb">'
-        f'<span class="grpname dim">{_h(when)}</span></span></span>'
-        f'<button class="notastack">Not a stack</button>'
-        f'</h3>'
-        + "".join(_cell(r) for r in group))
 
 
 def _heading(labels: list[str], levels: int, count: int) -> str:
     """One section heading, which is also how grouping is changed.
 
-    Each crumb is two controls: the name changes that level, the `×` drops it.
+    Each crumb is two controls: the name changes that level, the `Ã—` drops it.
     Removal lives here rather than inside the menu because *take this away* is
     a thing you should be able to see, not something to go and find.
     """
@@ -1144,11 +1119,16 @@ def _group_label(key: object, group: str, outer: Sequence[str] = ()) -> str:
     if key is None or key == "":
         # Named for what is missing rather than for the date as a whole: a file
         # dated to its month lands here when the grid is cut by day, and it is
-        # not undated — it has no *day*. Calling that "No date" would deny what
+        # not undated â€” it has no *day*. Calling that "No date" would deny what
         # is actually known about it.
-        return {"day": "No day", "month": "No month",
-                "year": "No date"}.get(group, "None")
+        return {"day": "No day", "month": "No month", "year": "No date",
+                "stack": "Not in a stack"}.get(group, "None")
     text = str(key)
+    if group == "stack":
+        # The photograph that speaks for the section, by name. The folder is
+        # the path the heading already sits in, and repeating it would push the
+        # one part that differs off the end of the line.
+        return text.rpartition("/")[2]
     if group == "day":
         moment = datestr.parse_pix(text + "-00:00:00")
         if not moment:
@@ -1173,11 +1153,11 @@ def _access_html(shared: list[str]) -> str:
 
     Three states, and only two of them are visible:
 
-    - **nobody** — a small mark, because that is the work still to do;
-    - **the usual audience, exactly** — nothing at all. If nine files in ten
+    - **nobody** â€” a small mark, because that is the work still to do;
+    - **the usual audience, exactly** â€” nothing at all. If nine files in ten
       say `family`, printing `family` on nine thumbnails in ten is noise
       that tells you nothing you did not already assume;
-    - **anything else** — named, because that is the exception and the whole
+    - **anything else** â€” named, because that is the exception and the whole
       reason to look.
 
     The usual audience is a setting rather than a hard-coded name: which one
@@ -1191,8 +1171,8 @@ def _access_html(shared: list[str]) -> str:
     return _chips_html("who", unusual)
 
 
-def _cell(row: sqlite3.Row, within: str | None = None) -> str:
-    mark = _stack_badge(row, within)
+def _cell(row: sqlite3.Row, view: ix.Filters | None = None) -> str:
+    mark = _stack_badge(row, view or ix.Filters())
     tags = _split(row["tags"])
     shared = _split(row["audience"])
     # Newline-joined, matching what the client splits on. A stray control byte
@@ -1210,7 +1190,8 @@ def _cell(row: sqlite3.Row, within: str | None = None) -> str:
         f'data-date="{_h(str(row["effective_date"] or "no date"))}" '
         f'data-deleted="{"1" if row["deleted"] else ""}" '
         f'data-under="{_h(row["stacked_under"] or "")}" '
-        f'data-behind="{row["behind"] or 0}">'
+        f'data-behind="{row["behind"] or 0}" '
+        f'data-proposed="{_count(row, "proposed")}">'
         f'<img loading="lazy" src="/thumb/{_q(row["folder"])}/{_q(row["name"])}">'
         f'<button class="pick" aria-label="select"></button>'
         + (f'<span class="badge">{_dur(row["duration"])}</span>'
@@ -1221,31 +1202,57 @@ def _cell(row: sqlite3.Row, within: str | None = None) -> str:
     )
 
 
-def _stack_badge(row: sqlite3.Row, within: str | None = None) -> str:
+def _stack_badge(row: sqlite3.Row, view: ix.Filters) -> str:
     """What a thumbnail says about the stack it is part of.
 
-    Two different marks for two different questions. In the ordinary grid, on
-    the file that speaks for others: **how many**, as a link, because opening a
-    stack is a view of the library like any other. Only when it has anything
-    behind it — a count of one is a photograph, not a stack.
+    Two different marks for two different questions. Where the others are out
+    of sight, on the file that speaks for them: **how many**, as a link,
+    because opening a stack is a view of the library like any other. Only when
+    it has anything behind it — a count of one is a photograph, not a stack.
 
-    Inside an opened stack, on the file that is doing the speaking: **which
-    one**. Everything in there looks alike, which is the whole reason they were
-    stacked, so without this there is nothing to tell you which one the grid
-    outside will show. Not the count again: a depth badge inside the thing it
-    measures reads as a stack within a stack, and it would link to where you
-    are already standing.
+    Where the stack is open — one of them by address, or all of them by
+    grouping — on the file that is doing the speaking: **which one**. Everything
+    in there looks alike, which is the whole reason they were stacked, so
+    without this there is nothing to tell you which one the grid outside will
+    show. Not the count again: a depth badge beside the very files it counts
+    reads as a stack within a stack, and it would link to where you already
+    are.
+
+    A guess counts only where the view is folding guesses. With that off the
+    others are on screen as themselves, and a badge saying two photographs are
+    here would be the app describing a stack it has not been allowed to make.
     """
     key = f'{row["folder"]}/{row["name"]}'
-    if within:
-        return ('<span class="top-mark" title="This is the one shown '
-                'outside the stack">Top</span>' if within == key else "")
     behind = row["behind"] or 0
-    if not behind:
+    guessed = _count(row, "proposed") if view.stacks else 0
+    if view.within or view.unfold:
+        speaks = (key == view.within if view.within else
+                  not row["stacked_under"] and not row["suggested_under"])
+        return ('<span class="top-mark" title="This is the one shown '
+                'outside the stack">Top</span>'
+                if speaks and behind + guessed else "")
+    n = behind + guessed
+    if not n:
         return ""
-    return (f'<a class="stack" href="/browse?within={_q(key)}" '
-            f'title="{behind + 1} photographs stacked here">'
-            f'{behind + 1}</a>')
+    # Drawn differently when any of it is the app's own guess, because the two
+    # numbers answer different questions. A decided count says *somebody put
+    # these together*; a guessed one says *these look alike, and nobody has
+    # said yet* — and a curator deciding what to trust needs to see which is
+    # which without opening it.
+    return (f'<a class="stack{" guessed" if guessed else ""}" '
+            f'href="/browse?within={_q(key)}" '
+            f'title="{n + 1} photographs '
+            f'{"that look alike — nobody has said yet" if guessed else ""}'
+            f'{"" if guessed else "stacked here"}">'
+            f'{n + 1}</a>')
+
+
+def _count(row: sqlite3.Row, column: str) -> int:
+    """A counted column, where the query that produced the row had one."""
+    try:
+        return int(row[column] or 0)
+    except IndexError:
+        return 0
 
 
 def _view_dict(view: ix.Filters) -> dict[str, str | None]:
@@ -1260,7 +1267,8 @@ def _chips(user: Principal) -> tuple[tuple[str, str], ...]:
     choice between their whole world and nothing.
     """
     return tuple((col, label) for col, label in _CHIPS
-                 if col not in ("audience", "deleted") or user.is_admin)
+                 if col not in ("audience", "deleted", "stacks")
+                 or user.is_admin)
 
 
 def _group_names() -> list[str]:
@@ -1297,7 +1305,8 @@ _CHIPS: tuple[tuple[str, str], ...] = (
     # judgements about it, and nobody reaches for them mid-cull.
     ("event", "Event"), ("tag", "Tag"), ("date", "Date"),
     ("audience", "Access"),
-    ("kind", "Type"), ("band", "Size"), ("deleted", "Deleted"),
+    ("kind", "Type"), ("band", "Size"), ("stacks", "Stacks"),
+    ("deleted", "Deleted"),
 )
 
 #: Complete vocabularies — these columns cannot hold anything else.
@@ -1308,13 +1317,20 @@ _FIXED: dict[str, tuple[tuple[str, str], ...]] = {
     # Off is the third value and has no entry: clearing the chip is what says
     # *the living*, the same gesture as clearing any other filter.
     "deleted": (("only", "Only deleted"), ("with", "Including deleted")),
+    # Off is a named choice here rather than only the cross, because it is
+    # not the absence of a question — it is one of three answers to *how much
+    # of the app's guessing do you want in this view*, and the one most people
+    # want most of the time. Its value is empty, which is how every other
+    # filter says off, so choosing it clears the chip like the cross does.
+    "stacks": (("with", "Including suggestions"), ("only", "Only suggested"),
+               ("", "Exclude suggestions")),
 }
 
 #: How the grid can be cut up, and what to call each choice.
 _GRID_GROUPS: tuple[tuple[str, str], ...] = (
     ("day", "By day"), ("month", "By month"), ("year", "By year"),
     ("event", "By event"), ("camera", "By camera"), ("kind", "By type"),
-    ("none", "Ungrouped"),
+    ("stack", "By stack"), ("none", "Ungrouped"),
 )
 
 #: Offered *in addition* to whatever already exists. Audience names are free
@@ -1766,12 +1782,18 @@ function drawSel(){
   // The stack actions ask a narrower question than *is anything selected*, so
   // they answer it themselves: two or more to make a stack, one that is in one
   // to promote, anything already stacked to take out.
-  show('stack', live.length > 1);
+  show('stack', live.length > 1 || live.some(tops));
   // Only for a file that is behind something. Offered on the one already
   // showing, it could do nothing but say so — a button whose whole answer is
   // that it should not have been there.
   show('top', live.length === 1 && stacked(live[0]));
-  show('unstack', live.some(c => stacked(c) || tops(c)));
+  // Not for a guess: there is nothing to take apart yet, and undoing
+  // something nobody did would be a button whose whole answer is that it
+  // should not have been there. Refusing is what a guess answers to.
+  show('unstack', live.some(c => stacked(c) || +(c.dataset.behind||0) > 0));
+  // Only where there is a guess to refuse. On a stack somebody made it would
+  // be offering to un-decide a decision, which is what Unstack is for.
+  show('nostack', live.some(guessed));
   // The tick wears the three states of what it would do: nothing selected and
   // it selects everything, anything selected and it clears.
   actions.dataset.state = !picked.size ? 'none'
@@ -2011,61 +2033,17 @@ function sideOf(act,value){
   return ACT_SIDE[act]||'live';
 }
 
-// --- suggested stacks --------------------------------------------------------
-// A proposal, never a decision: the app has noticed that some photographs were
-// taken in the same moment and is asking. The work is scrolling — look, then
-// either say which one to keep or say it is not a stack, and the next one is
-// already on screen.
-document.querySelectorAll('.proposal').forEach(h=>{
-  const files=(h.dataset.files||'').split(',').filter(Boolean);
-  const mine=()=>cells.filter(c=>files.includes(keyOf(c)));
-  h.querySelector('.notastack').onclick=async e=>{
-    e.stopPropagation();
-    const cs=mine();
-    if(!cs.length) return;
-    // Remembered, so it is never proposed again. Scrolling past the same
-    // refusal every time is worse than never having been offered it.
-    const out=await applyToSelection('no_stack',true,undefined,cs);
-    if(out&&out.done){cs.forEach(c=>c.remove());h.remove();
-                      cells=cells.filter(c=>!cs.includes(c));
-                      drawSel();}
-  };
-  // Every photograph in a proposal offers to be the one kept, the same control
-  // and the same gesture as choosing a top anywhere else.
-  mine().forEach(c=>{
-    const b=document.createElement('button');
-    b.className='choose';
-    b.textContent='Keep this one';
-    b.onclick=async ev=>{
-      ev.stopPropagation();
-      const group=mine();
-      const rest=group.filter(x=>x!==c);
-      if(!rest.length) return;
-      const out=await applyToSelection('stacked_under',keyOf(c),undefined,rest);
-      if(out&&out.done){
-        rest.forEach(x=>x.remove());
-        cells=cells.filter(x=>!rest.includes(x));
-        // Answered, so it stops asking. The control lives on the photograph,
-        // so removing the heading leaves it behind — offering to keep the one
-        // already kept, on a proposal that no longer exists.
-        group.forEach(x=>{const q=x.querySelector('.choose');
-                          if(q) q.remove();});
-        h.remove();
-        markStack(c,rest.length);
-        drawSel();
-      }
-    };
-    c.appendChild(b);
-  });
-});
-
 // --- stacks ------------------------------------------------------------------
 // Eight takes of one photograph, one shown and the rest folded behind it. Each
 // of the others records which file it defers to; the top records nothing,
 // because being spoken for is the decision and speaking is what is left.
 function keyOf(c){ return c.dataset.folder+'/'+c.dataset.name; }
 function stacked(c){ return !!c.dataset.under; }
-function tops(c){ return +(c.dataset.behind||0) > 0; }
+// Anything folded behind this one, however it got there. A guessed stack opens
+// like a decided one — the question *which of these do I keep* is the same
+// question, and the answer to it is what turns one into the other.
+function tops(c){ return +(c.dataset.behind||0)+ +(c.dataset.proposed||0) > 0; }
+function guessed(c){ return +(c.dataset.proposed||0) > 0; }
 
 // Stacking asks which one to show, rather than taking the first ticked and
 // hoping. The rule was invisible: nothing on screen said that the order you
@@ -2147,6 +2125,56 @@ function offerChoice(c){
   b.onclick=e=>{e.stopPropagation();chooseTop(c);};
   c.appendChild(b);
   choiceBtns.push(b);
+}
+
+// A guess, refused. Remembered against every photograph in it, so the same
+// group is not offered again tomorrow, and recorded like any other decision —
+// which is the way back when a shelf of them is waved off by mistake.
+//
+// What it was hiding comes back out onto the page. In a view of nothing but
+// guesses there is nothing to come back to: the whole section stops matching
+// and leaves, which the server already reports. In the mixed view the files
+// are still here and still match, and leaving them off the grid until the next
+// reload would be the page quietly holding some of the library back.
+async function notAStack(){
+  const cs=targetsOn('live').filter(guessed);
+  if(!cs.length){say('nothing selected that the app guessed at');return;}
+  const fan=VIEW.stacks==='with'
+    ? new Map(await Promise.all(cs.map(async c=>[c,await behind(c)])))
+    : null;
+  const out=await applyToSelection('no_stack',true,undefined,cs);
+  if(out&&out.done&&fan) cs.forEach(c=>fanOut(c,fan.get(c)));
+}
+
+// Fetched before the refusal is written: afterwards they are nothing's
+// members, and the page would have no way left to ask what it had been hiding.
+async function behind(head){
+  try{
+    const r=await fetch('/api/behind/'+encodeURIComponent(head.dataset.folder)
+                        +'/'+encodeURIComponent(head.dataset.name));
+    if(!r.ok) throw new Error(await r.text());
+    return (await r.json()).cells||'';
+  }catch(e){say('could not open that stack: '+e.message,true);return '';}
+}
+
+function fanOut(head,html){
+  if(!html) return;
+  const holder=document.createElement('div');
+  holder.innerHTML=html;
+  const added=[...holder.children];
+  let after=head;
+  for(const c of added){after.insertAdjacentElement('afterend',c);after=c;}
+  // Spliced where they sit rather than appended: `cells` is the reading order
+  // the viewer and the arrow keys walk, and a file that is on screen here and
+  // last in the order is a preview that opens the wrong photograph.
+  const at=cells.indexOf(head);
+  cells.splice(at<0?cells.length:at+1,0,...added);
+  added.forEach(c=>{wire(c);useSource(c);});
+  const badge=head.querySelector('.stack');
+  if(badge) badge.remove();
+  head.dataset.proposed='0';
+  head.classList.remove('marked');
+  resection(); drawSel();
 }
 
 function endChoosing(restore){
@@ -2601,6 +2629,7 @@ const ACT_COLUMN={tags:'tag', access:'audience', event:'event'};
     if(act==='stack'){closeMenu();stackSelection();return;}
     if(act==='top'){closeMenu();makeTop();return;}
     if(act==='unstack'){closeMenu();unstack();return;}
+    if(act==='nostack'){closeMenu();notAStack();return;}
     if(act==='restore'){closeMenu();applyToSelection('deleted',false);return;}
     if(act==='purge'){closeMenu();purgeSelection();return;}
     openMenu(b, act==='date'
@@ -2747,17 +2776,6 @@ function groupMenu(anchorEl,level,insert){
 
 // Every cell under a heading, down to the next one. There is one heading per
 // section now, so this is simply "until the next heading".
-// The sections of the grid. A proposal is shaped like one — a heading with
-// photographs under it — but it is a question, not a level of the grouping:
-// there is nothing to rename, nothing to select as a block, and a date where a
-// section keeps its count. Handing it to the section wiring put a number over
-// that date and looked for a select-all button that is not there, which threw
-// on load and took every handler on the page with it.
-function sections(){
-  return document.querySelectorAll('.group')
-                 .filter(h=>!h.classList.contains('proposal'));
-}
-
 function sectionCells(h){
   const out=[];
   for(let el=h.nextElementSibling; el; el=el.nextElementSibling){
@@ -2776,7 +2794,7 @@ function sectionCells(h){
 // the section — a running tally would be a second account of the same thing,
 // free to drift from it.
 function resection(){
-  sections().forEach(h=>{
+  document.querySelectorAll('.group').forEach(h=>{
     const mine=sectionCells(h);
     if(!mine.length){ h.remove(); return; }
     const n=h.querySelector('.dim');
@@ -2785,14 +2803,14 @@ function resection(){
 }
 
 function drawGroupPicks(){
-  sections().forEach(h=>{
+  document.querySelectorAll('.group').forEach(h=>{
     const mine=sectionCells(h);
     const n=mine.filter(c=>picked.has(c)).length;
     h.dataset.state=n===0?'none':(n===mine.length?'all':'some');
   });
 }
 
-sections().forEach(h=>{
+document.querySelectorAll('.group').forEach(h=>{
   // Each crumb is two controls: the name changes that level, the cross drops
   // it. Removal is on the crumb rather than inside the menu because *take this
   // away* is a thing you should be able to see, not go and find.
@@ -3059,8 +3077,9 @@ def api_behind(folder: str, name: str,
     key = f"{folder}/{name}"
     rows = [r for r in ix.files(conn, replace(view, within=key, chosen=None),
                                 limit=PAGE_LIMIT)
-            if r["stacked_under"] == key]
-    return JSONResponse({"cells": "".join(_cell(r) for r in rows)})
+            if key in (r["stacked_under"], r["suggested_under"])]
+    return JSONResponse(
+        {"cells": "".join(_cell(r, replace(view, within=key)) for r in rows)})
 
 
 @app.get("/api/events")
@@ -3275,13 +3294,14 @@ def api_decide_bulk(user: Annotated[Principal, Depends(require_admin)],
     # per row dominated the cost — measured at 96ms/file against the NAS, most
     # of it the open rather than the write.
     conn = ix.open_rw(DB_PATH) if DB_PATH.is_file() else None
+    targets = _with_guessed(conn, view, body.files)
     done: list[tuple[str, str]] = []
     undo: list[history.Before] = []
     dropped: list[dict[str, str]] = []
     total: int | None = None
     binned: int | None = None
     try:
-        for target in body.files:
+        for target in targets:
             try:
                 was, _, was_indexed = _decide(target.folder, target.name,
                                               change, conn=conn)
@@ -3470,6 +3490,38 @@ def _decide(folder: str, name: str, change: _Change,
                 if own:
                     conn.close()
     return was, decision, indexed
+
+
+def _with_guessed(conn: sqlite3.Connection | None, view: ix.Filters,
+                  files: Sequence[Target]) -> list[Target]:
+    """The selection, plus whatever a folded view is hiding behind it.
+
+    A guessed stack shows one photograph and hides the rest, and the whole
+    point of that is to work as though there is one file — so a decision made
+    about what is on screen is a decision about all of them. Exactly the rule a
+    real stack follows; the difference is only who did the grouping.
+
+    **Resolved before the first write, not after.** Refusing a guess writes
+    `no_stack` to the photograph that speaks for it, and the index answers by
+    recomputing that group — which would leave the others grouped behind a new
+    leader, still unanswered, ready to be offered again tomorrow. Asked first,
+    the refusal reaches all of them.
+
+    Not when the view is opened by grouping: there the members are on screen
+    and in the selection already, so following them again would be a second
+    write to a file the curator can see they already picked.
+    """
+    if conn is None or not view.stacks or view.unfold:
+        return list(files)
+    out = list(files)
+    seen = {(t.folder, t.name) for t in files}
+    for target in files:
+        for folder, name in ix.proposed(conn, f"{target.folder}/{target.name}"):
+            if (folder, name) in seen:
+                continue
+            seen.add((folder, name))
+            out.append(Target(folder=folder, name=name))
+    return out
 
 
 def _cascade(conn: sqlite3.Connection | None,

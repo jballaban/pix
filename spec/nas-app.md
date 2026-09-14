@@ -1270,6 +1270,42 @@ stack's members follow the file that speaks for them wherever it goes. Out of a
 stack and they come out; into another and they go in. That one rule is also
 what makes taking a whole stack apart a single gesture.
 
+### Suggested stacks — a guess is a view, not a decision
+
+Most of a burst is one photograph shot eight times, and a library holds
+thousands of them. The app can see that — same camera, seconds apart, or the
+generated names that collided because the shutter did — but seeing it is not
+deciding it. `pix:NoStack` records the refusal; nothing records the acceptance,
+because an accepted guess is an ordinary stack made the ordinary way.
+
+It lives in the **index**, as `suggested_under` beside `stacked_under`: a
+projection of the library, rebuilt with it, and never authoritative. That is
+what lets one clause decide what a listing holds — the grid, the header count
+and the *did this leave the view* check cannot disagree, because they all ask
+the same question of the same column. A decision recomputes the guesses around
+the file it touched, so refusing one clears it and taking the refusal back
+brings it back; discovering a *new* one is a build's business, since only a
+build has seen the whole library at once.
+
+It reaches the curator as two controls that already existed, which is why there
+is no review page:
+
+- **The `Stacks` filter** — *exclude* (the default: the library as people left
+  it), *including suggestions* (each guessed group folded behind one of its
+  own, so browsing is reviewing), *only suggested* (the shelf of what is still
+  to answer). Administrators only: it hides photographs on the strength of a
+  guess, and only somebody who can accept or refuse one should be able to turn
+  it on.
+- **Grouping by stack** — sections are stacks, and their members come out from
+  behind what speaks for them. With *only suggested* that is the whole review:
+  every guess, open, one section each, answered by scrolling.
+
+Folded, a guess behaves like a stack in the one way that matters: a decision
+made about what is on screen reaches everything behind it. The badge is the
+difference — the same count in a different colour, because *somebody put these
+together* and *these look alike and nobody has said yet* are different claims,
+and a curator deciding what to trust has to see which is which.
+
 - **Curation UI — what remains.** The model is specced
   ([§8](#8-the-app)): three passes, promote-only, ranges as selection. Still open
   are the visual design itself, the keyboard grammar, and **near-duplicate

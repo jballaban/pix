@@ -49,7 +49,7 @@ from pix.nas.decisions import Decision
 #: Bumped whenever the shape changes. A mismatch drops and rebuilds rather than
 #: migrating: the index is disposable by design, and a migration path is
 #: machinery to maintain for something a `pix2 index` reproduces exactly.
-SCHEMA_VERSION: int = 7
+SCHEMA_VERSION: int = 8
 
 #: `audience` filter value meaning *nobody yet* — the "New" chip in the UI.
 #: A sentinel rather than a separate reviewed flag: a file with no audience
@@ -85,6 +85,23 @@ GROUPINGS: dict[str, str | None] = {
     "event": "COALESCE(files.event, '(none)')",
     "camera": "COALESCE(files.camera, '(unknown)')",
     "kind": "files.kind",
+    # A stack is a section like any other: the file that speaks for the others
+    # and the others themselves, together. Grouping by it is what *opens* every
+    # stack in the view at once — which is the only way to review a shelf of
+    # them, and the reason a suggestion needs no page of its own.
+    #
+    # Only what is actually in one. A photograph that stands alone is not a
+    # stack of one, and giving each its own section would bury the sections
+    # that mean something under a heading per thumbnail.
+    "stack": ("CASE WHEN files.stacked_under IS NOT NULL"
+              "       OR files.suggested_under IS NOT NULL"
+              "       OR EXISTS (SELECT 1 FROM files m"
+              "                  WHERE m.stacked_under ="
+              "                        files.folder || '/' || files.name"
+              "                     OR m.suggested_under ="
+              "                        files.folder || '/' || files.name)"
+              "     THEN COALESCE(files.stacked_under, files.suggested_under,"
+              "                   files.folder || '/' || files.name) END"),
 }
 
 #: Where *small/short*, *medium* and *large/long* fall. One filter whose
@@ -125,6 +142,7 @@ CREATE TABLE IF NOT EXISTS files (
     precision      INTEGER NOT NULL DEFAULT 0,   -- how much of the date is known
     stacked_under  TEXT,          -- decision: `folder/name` this sits behind
     no_stack       INTEGER NOT NULL DEFAULT 0,   -- decision: never suggest this
+    suggested_under TEXT,         -- guessed: the `folder/name` this looks like
     PRIMARY KEY (folder, name)
 );
 CREATE INDEX IF NOT EXISTS files_event ON files(event);
@@ -137,6 +155,8 @@ CREATE INDEX IF NOT EXISTS files_del   ON files(deleted);
 -- Read twice for every listing: once to hide what is stacked, once to count
 -- what is behind each file that is not.
 CREATE INDEX IF NOT EXISTS files_stack ON files(stacked_under);
+-- The same two reads again, for the stacks nobody has confirmed yet.
+CREATE INDEX IF NOT EXISTS files_sugg  ON files(suggested_under);
 CREATE TABLE IF NOT EXISTS file_tags (
     folder TEXT NOT NULL,
     name   TEXT NOT NULL,
@@ -173,6 +193,9 @@ class IndexStats:
     with_sidecar: int = 0
     events: int = 0
     tags: int = 0
+    #: Guessed stacks found — reported because it is the size of a pile of work
+    #: that appeared without anybody asking for it.
+    suggested: int = 0
     skipped: list[str] = field(default_factory=lambda: [])
 
 
@@ -233,6 +256,24 @@ class Filters:
     #: talked into showing what somebody said should be gone.
     deleted: str | None = None
 
+    #: Whether the app's own guesses are folded into the view, and how far.
+    #: `None` — the default — is the library as people left it: a suggestion
+    #: changes nothing until somebody accepts it. `with` folds each guessed
+    #: group behind one of its photographs, so browsing *is* reviewing; `only`
+    #: shows nothing else, which is the shelf of everything still to answer.
+    #:
+    #: Administrators only, like `deleted` and for the same reason: this hides
+    #: photographs from a viewer on the strength of a guess, and only the
+    #: person who can accept or refuse it should be able to turn it on.
+    stacks: str | None = None
+
+    #: **Not a filter** — a consequence of grouping by stack, which opens every
+    #: stack in the view. It lives here because `_always` is the one place that
+    #: decides what a listing holds, and the count, the grid and the *did this
+    #: leave the view* check all have to agree about it. Set from the grouping
+    #: by `web.filters`, never from a query parameter of its own.
+    unfold: bool = False
+
     #: Every filterable column, in the order the top bar shows them, and what
     #: the page is handed so that it can rebuild its own address. `viewer` is
     #: deliberately absent — it is not a question the viewer is allowed to ask.
@@ -243,7 +284,8 @@ class Filters:
     #: decides whether a file has left the view. Restoring a file left it on
     #: screen in a listing of the deleted.
     NAMES: ClassVar[tuple[str, ...]] = ("event", "tag", "date", "audience",
-                                       "kind", "band", "deleted", "within")
+                                       "kind", "band", "deleted", "stacks",
+                                       "within")
 
 
 @dataclass(frozen=True)
@@ -389,6 +431,9 @@ def build(db_path: Path, *, echo: Callable[[str], None] = lambda _: None,
                     if row["event"]:
                         events_seen.add(str(row["event"]))
                 echo(f"indexed {folder}")
+            # Last, because it is a question about the library rather than
+            # about any one file, and it cannot be asked until they are all in.
+            stats.suggested = resuggest(conn)
             conn.execute("INSERT OR REPLACE INTO meta VALUES ('built_at', ?)",
                          (str(int(time.time())),))
     finally:
@@ -442,9 +487,18 @@ def refresh(conn: sqlite3.Connection, folder: str, name: str, *,
     row = _row(folder, record, decided)
     if row is None:
         return False
+    # Which guessed group this file was in, read before the row is replaced —
+    # `_INSERT` does not carry `suggested_under`, so writing the row is already
+    # this file leaving whatever it was part of.
+    before = conn.execute(
+        "SELECT suggested_under FROM files WHERE folder = ? AND name = ?",
+        (folder, name)).fetchone()
+    was = (str(before["suggested_under"])
+           if before and before["suggested_under"] else None)
     with conn:
         conn.execute(_INSERT, row)
         _write_multi(conn, folder, name, decided.get(name))
+        _regroup(conn, folder, name, was)
     return True
 
 
@@ -696,8 +750,20 @@ def _clauses(filters: Filters) -> dict[str, tuple[str, dict[str, Any]]]:
     if filters.within:
         out["within"] = (
             "(files.stacked_under = :f_within "
+            " OR files.suggested_under = :f_within "
             " OR files.folder || '/' || files.name = :f_within)",
             {"f_within": filters.within})
+    if filters.stacks == "only":
+        # Both halves of a guessed group: the photograph that would speak for
+        # it, and the ones that would sit behind it. Which of them a listing
+        # actually shows is `_always`'s business — folded, only the first;
+        # opened, all of them — and saying it once here keeps the two answers
+        # from being two different ideas of what a suggestion is.
+        out["stacks"] = (
+            "(files.suggested_under IS NOT NULL OR EXISTS ("
+            " SELECT 1 FROM files s"
+            " WHERE s.suggested_under = files.folder || '/' || files.name))",
+            {})
     if filters.chosen is not None:
         # One parameter rather than one per file: a single event edit can run
         # to seventeen hundred files, and a placeholder each would be an
@@ -814,8 +880,18 @@ def _always(filters: Filters) -> list[str]:
         out.append("files.deleted = 0")
     # A file stacked behind another does not appear on its own — that is what
     # stacking is. Opening one stack is the exception, and says which.
-    if not filters.within:
+    #
+    # Grouping by stack is the other exception, and a wider one: it opens every
+    # stack in the view at once, each as its own section. That is a listing of
+    # *photographs* rather than of what speaks for them, so nothing is hidden.
+    if not filters.within and not filters.unfold:
         out.append("files.stacked_under IS NULL")
+        # A guess hides nothing until it is turned on. With it on, a guessed
+        # group behaves like a stack — one photograph on screen, the rest
+        # behind it — because a suggestion you have to read as eight separate
+        # files is not a suggestion, it is the pile you already had.
+        if filters.stacks:
+            out.append("files.suggested_under IS NULL")
     return out
 
 
@@ -897,7 +973,7 @@ def files(conn: sqlite3.Connection, filters: Filters | None = None, *,
     ordered = "".join(f"grp{i} IS NULL, grp{i}, " for i in range(len(keys)))
     return list(conn.execute(
         "SELECT files.*, " + _TAGS_COL + ", " + _AUDIENCE_COL
-        + ", " + _BEHIND_COL
+        + ", " + _BEHIND_COL + ", " + _AHEAD_COL
         + (selected or ", NULL AS grp0 ")
         + "FROM files "
         + (f"WHERE {where} " if where else "")
@@ -913,6 +989,13 @@ def files(conn: sqlite3.Connection, filters: Filters | None = None, *,
 _BEHIND_COL: str = (
     "(SELECT COUNT(*) FROM files m "
     " WHERE m.stacked_under = files.folder || '/' || files.name) AS behind")
+
+#: How many files the app *thinks* defer to this one. Beside `behind` rather
+#: than merged into it, because the grid says which of the two it is: a number
+#: nobody has confirmed is drawn differently from one somebody decided.
+_AHEAD_COL: str = (
+    "(SELECT COUNT(*) FROM files g "
+    " WHERE g.suggested_under = files.folder || '/' || files.name) AS proposed")
 
 _TAGS_COL: str = (
     "(SELECT group_concat(ft.tag, char(10)) FROM file_tags ft "
@@ -1022,6 +1105,127 @@ def _merged(groups: dict[str, list[sqlite3.Row]]) -> list[list[sqlite3.Row]]:
         seen.update((str(r["folder"]), str(r["name"])) for r in kept)
         out.append(kept)
     return out
+
+
+def resuggest(conn: sqlite3.Connection) -> int:
+    """Recompute every suggestion in the library. Returns how many it found.
+
+    Run as part of a build, because that is when the set of files changes and
+    a guess about which of them were taken together is a fact about the set.
+    Cheap next to the read that precedes it — the rows are already local by
+    then, and grouping 62k of them is a sort and two passes.
+    """
+    conn.execute("UPDATE files SET suggested_under = NULL")
+    # Never the deleted: they are not in the library any viewer sees, and a
+    # suggestion is an offer to curate what is there.
+    rows = conn.execute("SELECT * FROM files WHERE deleted = 0").fetchall()
+    return _store(conn, suggestions(rows))
+
+
+def _store(conn: sqlite3.Connection,
+           groups: Sequence[Sequence[sqlite3.Row]]) -> int:
+    """Write one guessed group per `groups`, each behind one of its own."""
+    for group in groups:
+        lead = _lead(group)
+        key = f'{lead["folder"]}/{lead["name"]}'
+        conn.executemany(
+            "UPDATE files SET suggested_under = ? WHERE folder = ? AND name = ?",
+            [(key, r["folder"], r["name"]) for r in group if r is not lead])
+    return len(groups)
+
+
+def _lead(group: Sequence[sqlite3.Row]) -> sqlite3.Row:
+    """Which photograph a guessed group speaks through.
+
+    The earliest, which in a burst is the one the shutter was pressed for —
+    the rest are what the camera did afterwards. Nothing rides on it being
+    right: it is what the grid shows until somebody says otherwise, and saying
+    otherwise is one click on the one you meant.
+
+    By name where the clock cannot separate them, so the same library always
+    proposes the same photograph. A leader that moved between two builds would
+    make the grid rearrange itself for no reason anybody could see.
+    """
+    return min(group, key=lambda r: (str(r["effective_date"] or ""),
+                                     str(r["name"])))
+
+
+def _regroup(conn: sqlite3.Connection, folder: str, name: str,
+             was: str | None) -> None:
+    """Recompute the guesses around one file, after its row is rewritten.
+
+    Called on every decision, because a decision is usually an answer to a
+    guess — accepted, and the members are a stack now; refused, and they must
+    never be offered again; and taken back, in which case the guess has to
+    come back with it. A revert that left the shelf empty would be an undo
+    that only undid half of what it said.
+
+    **Around, not within.** Recomputing only the group this file was in could
+    dissolve one but never find one, so anything that made a guess true again
+    left no way to say so short of rebuilding the whole index. The
+    neighbourhood is what the guessing actually reads: the same camera on the
+    same day, the files whose names collided with this one, and whatever was
+    grouped with it before — each of them an indexed range rather than a scan,
+    because this runs once per file of a three-hundred file edit.
+
+    Closed over one more step, so that nothing outside is left pointing at a
+    photograph in here that has stopped speaking for anybody.
+    """
+    seed = _around(conn, folder, name, was)
+    if not seed:
+        return
+    keys = [f'{r["folder"]}/{r["name"]}' for r in seed]
+    rows = {k: r for k, r in zip(keys, seed)}
+    for row in _rows_under(conn, keys):
+        rows.setdefault(f'{row["folder"]}/{row["name"]}', row)
+    conn.executemany(
+        "UPDATE files SET suggested_under = NULL WHERE folder = ? AND name = ?",
+        [(r["folder"], r["name"]) for r in rows.values()])
+    _store(conn, suggestions([r for r in rows.values() if not r["deleted"]]))
+
+
+def _around(conn: sqlite3.Connection, folder: str, name: str,
+            was: str | None) -> list[sqlite3.Row]:
+    """The rows a guess about this file could possibly involve."""
+    row = one(conn, folder, name)
+    if row is None:
+        return []
+    day = str(row["effective_date"] or "")[:10]
+    base = _SUFFIX.sub("", name.rsplit(".", 1)[0])
+    lead_folder, _, lead_name = (was or "").partition("/")
+    return list(conn.execute(
+        "SELECT * FROM files WHERE "
+        # The same moment: the burst pass never reaches across a day.
+        " (:day <> '' AND effective_date >= :day AND effective_date <= :day_hi)"
+        # The same name, suffix and extension aside — a range over the primary
+        # key rather than a LIKE, so it is a seek and not a scan.
+        " OR (folder = :folder AND name >= :base AND name <= :base_hi)"
+        # Whatever this was grouped with, which may be neither by now.
+        " OR suggested_under = :was"
+        " OR (folder = :lead_folder AND name = :lead_name)",
+        {"day": day, "day_hi": day + chr(0xFFFF),
+         "folder": folder, "base": base, "base_hi": base + chr(0xFFFF),
+         "was": was or "", "lead_folder": lead_folder,
+         "lead_name": lead_name}))
+
+
+def _rows_under(conn: sqlite3.Connection,
+                keys: Sequence[str]) -> list[sqlite3.Row]:
+    """Everything currently guessed to sit behind any of `keys`."""
+    holes = ",".join(f":k{i}" for i in range(len(keys)))
+    return list(conn.execute(
+        f"SELECT * FROM files WHERE suggested_under IN ({holes})",
+        {f"k{i}": k for i, k in enumerate(keys)}))
+
+
+def proposed(conn: sqlite3.Connection, key: str) -> list[tuple[str, str]]:
+    """The files the app guesses belong behind `key`, as `(folder, name)`.
+
+    Asked before a decision is written to a file that speaks for a guessed
+    group, so that what it hides is answered along with it.
+    """
+    return [(str(r["folder"]), str(r["name"])) for r in conn.execute(
+        "SELECT folder, name FROM files WHERE suggested_under = ?", (key,))]
 
 
 def members(conn: sqlite3.Connection, key: str) -> list[tuple[str, str]]:
