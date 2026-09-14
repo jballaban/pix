@@ -418,6 +418,10 @@ h3.group[data-state="some"] .grppick { background:var(--top);
          padding:1px 6px; border-radius:3px;
          box-shadow:2px -2px 0 -1px #000b, 4px -4px 0 -2px #000b; }
 .stack:hover { background:var(--accent); color:#0d0f12; text-decoration:none; }
+/* Hidden while its files are on screen being chosen between. An anchor has no
+   display of its own, so the user agent would cover this — but five rules in
+   this file have needed saying, which is enough to stop calling it luck. */
+.stack[hidden] { display:none; }
 /* Inside an opened stack, the one that speaks. Everything in there looks
    alike — that is why they were stacked — so without this there is nothing to
    say which one the grid outside will show. */
@@ -1874,7 +1878,7 @@ function tops(c){ return +(c.dataset.behind||0) > 0; }
 // no address of its own — they are already on screen, so *filter to these* is
 // hiding the others and *back to where you were* is showing them again, with
 // the scroll never having moved.
-let choosing=null, fetched=[];
+let choosing=null, fetched=[], opened=[];
 
 // Merging two stacks has to offer every photograph in both of them as the one
 // to show. Choosing between the two that happen to be speaking is choosing
@@ -1883,7 +1887,7 @@ let choosing=null, fetched=[];
 async function stackSelection(){
   const cs=targetsOn('live');
   if(cs.length<2){say('select the ones to stack');return;}
-  choosing=cs; fetched=[];
+  choosing=cs; fetched=[]; opened=[];
   const keep=new Set(cs);
   cells.forEach(c=>{c.hidden=!keep.has(c);});
   document.querySelectorAll('.group').forEach(h=>{h.hidden=true;});
@@ -1900,6 +1904,12 @@ async function expand(head){
     html=(await r.json()).cells||'';
   }catch(e){say('could not open that stack: '+e.message,true);return;}
   if(!choosing||!html) return;
+  // The depth badge means *there are more of these, somewhere else*. Once they
+  // are sitting beside it that is no longer true, and leaving it there says
+  // the stack is still closed while its files are on screen being chosen
+  // between.
+  const badge=head.querySelector('.stack');
+  if(badge){badge.hidden=true; opened.push(badge);}
   const holder=document.createElement('div');
   holder.innerHTML=html;
   const added=[...holder.children];
@@ -1920,6 +1930,9 @@ function endChoosing(){
   fetched.forEach(c=>{picked.delete(c); c.remove();});
   cells=cells.filter(c=>!fetched.includes(c));
   fetched=[];
+  // Closed again, so the badge means what it says again.
+  opened.forEach(b=>{b.hidden=false;});
+  opened=[];
   cells.forEach(c=>{c.hidden=false;});
   document.querySelectorAll('.group').forEach(h=>{h.hidden=false;});
   drawSel();

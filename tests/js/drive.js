@@ -64,6 +64,7 @@ cells.forEach(c => grid.appendChild(c));
 const actions = mk('actions');
 // A tri-state tick, a count, and two sets of actions — one per side of the
 // deletion line, each shown only when the selection holds files it applies to.
+const badgeOn = c => c.children.find(k => k._classes.has('stack')) || null;
 const tick = new El('button');
 tick.id = 'selall';
 tick.className = 'tick';
@@ -684,6 +685,10 @@ function arrow(key, opts) {
     deselect();
     cells.forEach(c => { c.dataset.under = ''; c.dataset.behind = '0'; });
     cells[0].dataset.behind = '1';    // a.jpg speaks for one more
+    const depth = new El('a');
+    depth.className = 'stack';
+    depth._text = '2';
+    cells[0].appendChild(depth);
     behindCells = '<div class="cell" data-folder="f" data-name="hidden.jpg"'
                 + ' data-kind="image" data-audience="" data-event=""'
                 + ' data-tags="" data-date="2026-01-01" data-deleted=""'
@@ -700,6 +705,11 @@ function arrow(key, opts) {
           grid.children.map(c => c.dataset.name).join(','));
     check('and what came out of it can be chosen',
           !!opened && opened.hidden === false);
+    // The count means *there are more of these, somewhere else*. They are
+    // right here.
+    check('the depth badge goes while its files are on screen',
+          badgeOn(cells[0]) === null || badgeOn(cells[0]).hidden === true,
+          'still claiming a closed stack');
 
     // Choose the file that was hidden inside a stack.
     const n = calls.length;
@@ -774,6 +784,9 @@ function arrow(key, opts) {
     check('and given back',
           !grid.children.find(c => c.dataset.name === 'borrowed.jpg'),
           'a file from inside a stack was left in the grid');
+    check('with the badge saying what it says again',
+          badgeOn(cells[0]) === null || badgeOn(cells[0]).hidden === false,
+          'the stack closed without its count');
     behindCells = '';
     cells[0].dataset.behind = '0';
     deselect();
