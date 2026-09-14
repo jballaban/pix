@@ -360,6 +360,12 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
 .tile .n { font-size:12px; margin-top:3px;
            font-variant-numeric:tabular-nums; }
 .tile .kinds { font-style:normal; color:var(--dim); }
+/* A folder that is one slice of something larger. The two numbers say it
+   without a word — this many here, that many in all — so it needs no colour
+   of its own. On a real library most cards are slices the moment you group by
+   month and event, and a page where most cards are highlighted is a page with
+   no highlight on it. */
+.tile .split i { font-style:normal; color:var(--dim); }
 .tile .kinds::before { content:" · "; }
 /* How much of it is done, as a shape: a year you have finished and a year you
    have not started are the same sentence and different bars. */
@@ -1000,6 +1006,13 @@ def home(request: Request,
     conn = db()
     groups = _groupings(group)
     rows = ix.sections(conn, view, groups=groups, limit=PAGE_LIMIT)
+    # How big each of these is when the levels above it are not cutting it up.
+    # An event running from February into March is two cards, and without this
+    # each of them is a folder saying 312 files with nothing to say it is part
+    # of eleven hundred. Same query, one level: what a thing is on its own.
+    whole = ({r["grp0"]: int(r["n"]) for r in
+              ix.sections(conn, view, groups=groups[-1:], limit=PAGE_LIMIT)}
+             if len(groups) > 1 else {})
     s = ix.summary(conn, view)
 
     open_note = ("" if not (user.is_admin
@@ -1018,7 +1031,7 @@ def home(request: Request,
 
     body = ('<p class="empty">Nothing matches these filters.</p>' if not rows
             else '<div class="grid folders" id="grid">'
-                 + _shelves(rows, groups, view, user) + "</div>")
+                 + _shelves(rows, groups, view, user, whole) + "</div>")
     return _page("pix2",
                  # The shared menu, which every filter and the grouping open
                  # into. Left out, the script threw looking for it the moment
@@ -1033,7 +1046,7 @@ def home(request: Request,
 
 
 def _shelves(rows: list[sqlite3.Row], groups: list[str], view: ix.Filters,
-             user: Principal) -> str:
+             user: Principal, whole: dict[object, int] | None = None) -> str:
     """The folders, under a heading for each level above them.
 
     `year › event` is a row of events under each year, not a flat list of
@@ -1061,12 +1074,13 @@ def _shelves(rows: list[sqlite3.Row], groups: list[str], view: ix.Filters,
         labels.append(dict(_GRID_GROUPS).get(inner, inner))
         out.append(_heading(labels, len(groups), len(shelf), pick=False,
                             cut=True))
-        out.extend(_folder(r, groups, view, user) for r in shelf)
+        out.extend(_folder(r, groups, view, user, whole or {})
+                   for r in shelf)
     return "".join(out)
 
 
 def _folder(row: sqlite3.Row, groups: list[str], view: ix.Filters,
-            user: Principal) -> str:
+            user: Principal, whole: dict[object, int] | None = None) -> str:
     """One section of the grid, drawn as what is worth knowing about it.
 
     Not a photograph. A cover was whichever file happened to be first, which
@@ -1083,6 +1097,11 @@ def _folder(row: sqlite3.Row, groups: list[str], view: ix.Filters,
             if groups else "Everything")
     href = _drill(row, groups, view)
     n = int(row["n"])
+    # An event that runs from February into March is a card under each, and a
+    # folder saying *312 files* with nothing to say it is part of eleven
+    # hundred is a folder describing the grouping rather than the library.
+    # The count says both, which is also the shortest way to say it is split.
+    entire = (whole or {}).get(row[f"grp{last}"], n) if groups else n
     videos = int(row["videos"] or 0)
     left = int(row["unreviewed"] or 0) if user.is_admin else 0
     # Not under a heading that already says it: grouped by day, the name *is*
@@ -1094,7 +1113,10 @@ def _folder(row: sqlite3.Row, groups: list[str], view: ix.Filters,
         f'<b class="name">{_h(name)}</b>'
         + (f'<span class="when">{_h(when)}</span>' if when else
            '<span class="when dim">no dates</span>' if dated else "")
-        + f'<span class="n">{n:,} file{"" if n == 1 else "s"}'
+        + ('<span class="n split" title="Split by the grouping above it — '
+           f'{entire:,} files in all">{n:,} <i>of</i> {entire:,} files'
+           if entire > n else
+           f'<span class="n">{n:,} file{"" if n == 1 else "s"}')
         + (f'<i class="kinds">{videos:,} video{"" if videos == 1 else "s"}</i>'
            if videos else "")
         + "</span>"

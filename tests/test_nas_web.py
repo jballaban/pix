@@ -1244,6 +1244,24 @@ def test_the_landing_page_is_folders_of_whatever_it_is_grouped_by(
     assert "(unknown)" in by_camera
 
 
+def _spread(app_env: dict[str, Path], writable: Path,
+            dates: dict[str, str]) -> None:
+    """Files on given days, in master and in the index."""
+    import json
+
+    from pix.nas import index as ix
+
+    share = app_env["share"]
+    for name, when in dates.items():
+        (writable / name).write_bytes(b"fake")
+        (share / "meta" / "init_2026" / f"{name}.json").write_text(json.dumps({
+            "file": name, "folder": "init_2026", "size": 30, "mtime_ns": 1,
+            "exif": {"EXIF:DateTimeOriginal": when},
+        }), encoding="utf-8")
+    ix.build(app_env["db"], meta_dir=share / "meta",
+             master_dir=share / "master")
+
+
 def _folders(html: str) -> str:
     """Just the folders. The page script is inlined below them and mentions
     `/thumb/` and half the words on the card."""
@@ -1343,6 +1361,59 @@ def test_a_folder_does_not_print_the_date_its_own_name_is(
     # Where the name is not the date, when it happened is worth saying.
     by_event = _folders(client.get("/?group=event").text)
     assert 'class="when"' in by_event
+
+
+def test_a_folder_split_by_the_grouping_says_so(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """An event running from one month into the next is a card under each. A
+    folder saying *2 files* with nothing to say it is part of five is a folder
+    describing the grouping rather than the library."""
+    _spread(app_env, writable, {"jan.jpg": "2026:01:20 10:00:00",
+                                "feb1.jpg": "2026:02:02 10:00:00",
+                                "feb2.jpg": "2026:02:03 10:00:00"})
+    client.post("/api/decide/bulk", json={
+        "event": "Ski Trip",
+        "files": [{"folder": "init_2026", "name": n}
+                  for n in ("jan.jpg", "feb1.jpg", "feb2.jpg")]})
+
+    folders = _folders(client.get("/?date=2026&group=month,event").text)
+
+    assert "1 <i>of</i> 3 files" in folders, folders
+    assert "2 <i>of</i> 3 files" in folders, folders
+    assert "3 files in all" in folders, "no explanation of what it is part of"
+
+
+def test_a_folder_that_is_whole_says_nothing_about_being_split(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """Most cards are slices the moment you group by month and event. The ones
+    that are not have to read as plainly as they ever did."""
+    _spread(app_env, writable, {"feb1.jpg": "2026:02:02 10:00:00",
+                                "feb2.jpg": "2026:02:03 10:00:00"})
+    client.post("/api/decide/bulk", json={
+        "event": "One Weekend",
+        "files": [{"folder": "init_2026", "name": n}
+                  for n in ("feb1.jpg", "feb2.jpg")]})
+
+    folders = _folders(client.get("/?date=2026&group=month,event").text)
+    card = folders[folders.index("One Weekend"):]
+
+    assert "2 files" in card[:200], card[:200]
+    assert "<i>of</i>" not in card[:200], "a whole folder claiming to be a part"
+
+
+def test_nothing_is_split_when_nothing_is_above_it(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """One level of grouping cuts nothing up, so there is nothing to warn
+    about and no second query to run finding that out."""
+    _spread(app_env, writable, {"jan.jpg": "2026:01:20 10:00:00",
+                                "feb1.jpg": "2026:02:02 10:00:00"})
+
+    folders = _folders(client.get("/?date=2026&group=event").text)
+
+    assert "<i>of</i>" not in folders
 
 
 def test_a_folder_says_how_much_of_it_is_done(
