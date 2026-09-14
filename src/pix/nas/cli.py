@@ -13,12 +13,13 @@ from typing import Annotated
 import typer
 
 from pix import banner
-from pix.nas.const import IMPORT_ROOT, MASTER_DIR
+from pix.nas.const import IMPORT_ROOT, MASTER_DIR, MASTER_SHARE
 from pix.nas.folder_import import FolderImportError, run_folder_import
 from pix.nas.derive import run_process
 from pix.nas.device_import import ImportError_, run_device_import
 from pix.nas import ledger
 from pix.nas.ledger import NasUnreachable
+from pix.nas.lock import Locked, ProcessLock
 from pix.nas.upload import run_upload
 
 app: typer.Typer = typer.Typer(
@@ -172,7 +173,13 @@ def process() -> None:
     """
     banner()
     try:
-        summary = run_process(echo=typer.echo)
+        # For the whole run, scan included. A second one decides the same files
+        # are missing and spends the same minutes making them again.
+        with ProcessLock(MASTER_SHARE):
+            summary = run_process(echo=typer.echo)
+    except Locked as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1) from e
     except NasUnreachable as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1) from e
