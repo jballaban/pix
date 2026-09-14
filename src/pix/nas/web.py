@@ -297,8 +297,13 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
 #menu .form label { color:var(--dim); font-size:12px; }
 
 /* grid */
+/* Two sizes, and the larger is half as wide again. Thumbnails are derived at
+   400px, so even the big one is oversampled on a 2x display — the preview tier
+   is not needed to show a grid, only to look at one photograph. */
 .grid { display:grid; gap:6px;
         grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); }
+.grid[data-size="big"] {
+        grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); }
 /* A heading spans every column, so one flow holds headings and thumbnails —
    which keeps arrow-key movement walking straight through the sections
    rather than having to know they are there. */
@@ -859,7 +864,11 @@ def browse(user: Annotated[Principal, Depends(require_user)],
   <button id="workstop">Stop</button>
 </div>""",
         tools=('<div class="chips" id="chips"></div>'
-               + _from_link(op, stale, len(rows))),
+               + _from_link(op, stale, len(rows))
+               # A view control rather than a filter, so it says what it will
+               # do rather than what is true. With two sizes that is the whole
+               # of it: no state to read off a label that might mean either.
+               + '<button id="thumbsize" title="Thumbnail size"></button>'),
         rows=_actions(user),
         script=(
             f"<script>const VIEW={_js(_view_dict(view))},"
@@ -1244,6 +1253,7 @@ const actions=document.getElementById('actions');
 const selcount=document.getElementById('selcount');
 const countEl=document.getElementById('count');
 const binEl=document.getElementById('bincount');
+const sizeBtn=document.getElementById('thumbsize');
 const note=document.getElementById('note');
 const viewer=document.getElementById('viewer');
 const vimg=document.getElementById('vimg'), vvid=document.getElementById('vvid');
@@ -1259,6 +1269,34 @@ let cur=-1, anchor=-1, busy=false;
 // pushes them out of the filters, and indices would then quietly re-point
 // a selection at whatever slid into the gap.
 const picked=new Set();
+
+// --- thumbnail size ----------------------------------------------------------
+// A preference about looking, not about which photographs — so it lives in the
+// browser rather than the URL, beside the details rail. A view is a link; how
+// big you like the thumbnails is not part of where you are.
+let bigThumbs=false;
+try{bigThumbs=localStorage.getItem('pix2.thumb')==='big';}catch(e){}
+
+function drawSize(){
+  if(grid) grid.dataset.size=bigThumbs?'big':'small';
+  if(sizeBtn) sizeBtn.textContent=bigThumbs?'Smaller':'Bigger';
+}
+if(sizeBtn) sizeBtn.onclick=e=>{
+  e.stopPropagation();
+  // Anchored the way a write is: the row heights are about to change under
+  // whatever you were looking at, and the point of a bigger thumbnail is to
+  // look harder at the one you had already found.
+  const at=cells.find(c=>c.getBoundingClientRect().bottom>0);
+  const was=at?at.getBoundingClientRect().top:null;
+  bigThumbs=!bigThumbs;
+  try{localStorage.setItem('pix2.thumb',bigThumbs?'big':'small');}catch(e){}
+  drawSize();
+  if(at&&was!==null){
+    const now=at.getBoundingClientRect().top;
+    if(now!==was) window.scrollBy(0,now-was);
+  }
+};
+drawSize();
 
 // --- filter chips ------------------------------------------------------------
 function url(patch){

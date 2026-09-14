@@ -844,6 +844,18 @@ def test_a_stale_index_cannot_put_a_file_behind_itself(
     assert decisions.read(writable / "b.mp4") is None, "put behind itself"
 
 
+def test_the_grid_has_a_second_thumbnail_size(client: TestClient) -> None:
+    """Half as wide again. Thumbnails are derived at 400px, so even the big one
+    is oversampled on a 2x display — the preview tier is for looking at one
+    photograph, not for showing a grid of them."""
+    html = client.get("/browse?event=Italy%20-%20Sicily").text
+
+    assert 'id="thumbsize"' in html
+    assert "minmax(150px,1fr)" in html
+    assert '.grid[data-size="big"]' in html
+    assert "minmax(230px,1fr)" in html
+
+
 def test_the_grid_draws_no_cursor(client: TestClient) -> None:
     """The dashed ring said which cell the keyboard was on, and the grid has no
     keyboard. It stayed behind after that was removed and turned up unasked on

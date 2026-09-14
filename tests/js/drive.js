@@ -98,7 +98,7 @@ const actBtn = name => actions.querySelectorAll('[data-act]')
 for (const id of ['menu', 'chips', 'selcount', 'count', 'note', 'viewer',
                   'vimg', 'vvid', 'vmeta', 'rail', 'railtoggle', 'viewclose',
                   'working', 'workwhat', 'workbar', 'worktally',
-                  'workstop', 'bincount']) mk(id);
+                  'workstop', 'bincount', 'thumbsize']) mk(id);
 const stage = new El('div');
 stage.className = 'stage';
 document.byId.viewer.appendChild(stage);
@@ -148,7 +148,13 @@ const fetch = async (url, opts) => {
            json: async () => ({ failed: [], dropped: dropping, total: 2,
                                 purged: 1, binned }) };
 };
-const localStorage = { getItem: () => null, setItem: () => {} };
+// A real one, so a preference that is supposed to survive a reload can be
+// checked to survive a reload rather than checked to have been written.
+const stored = {};
+const localStorage = {
+  getItem: k => (k in stored ? stored[k] : null),
+  setItem: (k, v) => { stored[k] = String(v); },
+};
 const listeners = {};
 // Enough of a viewport to check scroll anchoring: `scrolled` is how far down
 // the page is, and the test grid's rectangles are computed from it.
@@ -1076,6 +1082,35 @@ function arrow(key, opts) {
     check('and it says where it got to',
           /stopped/.test(document.byId.note.textContent),
           document.byId.note.textContent);
+  }
+
+  // Thumbnail size is a preference about looking, so it says what it will do
+  // rather than what is true, and it outlives the page.
+  {
+    const btn = document.byId.thumbsize;
+    check('it starts at the ordinary size',
+          grid.dataset.size === 'small' && btn.textContent === 'Bigger',
+          grid.dataset.size + '/' + btn.textContent);
+    btn.click();
+    check('and the grid goes up a size',
+          grid.dataset.size === 'big' && btn.textContent === 'Smaller',
+          grid.dataset.size + '/' + btn.textContent);
+    check('with the choice remembered', stored['pix2.thumb'] === 'big',
+          String(stored['pix2.thumb']));
+    btn.click();
+    check('and back down again', grid.dataset.size === 'small');
+
+    // A fresh page finds the preference where it was left.
+    stored['pix2.thumb'] = 'big';
+    new Function(
+      'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
+      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
+      'GRID_GROUPS', 'GROUPING', 'setTimeout', js,
+    )(document, window, fetch, localStorage, location, confirm,
+      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
+      GRID_GROUPS, GROUPING, fn => fn());
+    check('a new page opens at the size you left it',
+          grid.dataset.size === 'big', grid.dataset.size);
   }
 
   if (failures.length) {
