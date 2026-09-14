@@ -507,6 +507,21 @@ def test_a_stack_is_recorded_and_can_be_put_back(
     assert "b.mp4" in client.get("/browse?event=Italy%20-%20Sicily").text
 
 
+def test_the_page_can_ask_which_photograph_to_show(
+    client: TestClient
+) -> None:
+    """Stacking narrows the grid to the files being stacked and waits for one
+    of them to be chosen, rather than taking whichever was ticked first — a
+    rule nothing on screen ever said."""
+    html = client.get("/browse?event=Italy%20-%20Sicily").text
+
+    assert 'data-side="choose"' in html
+    assert 'id="choosecancel"' in html
+    # And the grid can actually hide what it narrows away. `.cell` sets no
+    # display of its own, but four rules in this file have needed saying so.
+    assert ".cell[hidden]" in html
+
+
 def test_the_grid_draws_no_cursor(client: TestClient) -> None:
     """The dashed ring said which cell the keyboard was on, and the grid has no
     keyboard. It stayed behind after that was removed and turned up unasked on

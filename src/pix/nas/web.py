@@ -360,6 +360,12 @@ h3.group[data-state="some"] .grppick { background:var(--top);
    of its own here — but the flex container gives them one, so say what hidden
    means for them too. */
 #actions button[hidden] { display:none; }
+/* And once more for the grid, which hides everything but the files being
+   stacked while a top is chosen. `.cell` sets no `display`, so the user agent
+   would cover this — but four rules in this file have needed saying and
+   relying on the absence of one is how the fifth gets written. */
+.cell[hidden], h3.group[hidden] { display:none; }
+#actions .grp b { font-weight:600; }
 .cell { position:relative; aspect-ratio:1; background:#0d0f12; overflow:hidden;
         border-radius:3px; cursor:pointer; }
 .cell img { width:100%; height:100%; object-fit:cover; display:block; }
@@ -925,6 +931,10 @@ def _actions(user: Principal) -> str:
   <span class="grp" data-side="gone" hidden>
     <button data-act="restore">Restore</button>
     <button data-act="purge" class="danger">Purge&hellip;</button>
+  </span>
+  <span class="grp" data-side="choose" hidden>
+    <b>Click the one to show</b>
+    <button id="choosecancel">Cancel</button>
   </span>
 </div>"""
 
@@ -1564,8 +1574,15 @@ function drawSel(){
   // where a greyed one says *not yet* — and with a mixed selection both are
   // present and neither is waiting for anything.
   const live=targetsOn('live'), dead=targetsOn('gone').length;
-  for(const g of actions.querySelectorAll('.grp'))
-    g.hidden = !(g.dataset.side==='gone'?dead:live.length);
+  for(const g of actions.querySelectorAll('.grp')){
+    const side=g.dataset.side;
+    // While a top is being chosen there is one question on screen, so there is
+    // one set of controls: the others would be offering to do something else
+    // to a selection that is halfway through becoming a stack.
+    g.hidden = choosing ? side!=='choose'
+             : side==='choose' ? true
+             : !(side==='gone'?dead:live.length);
+  }
   // The stack actions ask a narrower question than *is anything selected*, so
   // they answer it themselves: two or more to make a stack, one that is in one
   // to promote, anything already stacked to take out.
@@ -1588,6 +1605,7 @@ function drawSel(){
 cells.forEach(c=>{
   c.querySelector('.pick').addEventListener('click',e=>{
     e.stopPropagation();
+    if(choosing){chooseTop(c);return;}
     const n=cells.indexOf(c);
     if(n<0) return;
     // The circle is the deliberate gesture: it adds and removes without
@@ -1598,6 +1616,10 @@ cells.forEach(c=>{
   c.addEventListener('click',e=>{
     const n=cells.indexOf(c);
     if(n<0) return;
+    // While a top is being chosen, a click on a photograph says *that one* —
+    // it is the only question on screen, so it is the only thing a click can
+    // mean.
+    if(choosing){e.stopPropagation();chooseTop(c);return;}
     if(e.shiftKey&&anchor>=0){range(anchor,n);setCur(n,true);drawSel();return;}
     if(e.ctrlKey||e.metaKey){togglePick(n);anchor=n;setCur(n,true);drawSel();
                              return;}
@@ -1818,15 +1840,61 @@ function keyOf(c){ return c.dataset.folder+'/'+c.dataset.name; }
 function stacked(c){ return !!c.dataset.under; }
 function tops(c){ return +(c.dataset.behind||0) > 0; }
 
-// The first one ticked. A stack needs one of its files to speak for the rest,
-// and the only ordering the page has is the order they were chosen in — which
-// is also the order somebody picking a keeper would naturally use. Getting it
-// wrong costs one click of *Make top*.
+// Stacking asks which one to show, rather than taking the first ticked and
+// hoping. The rule was invisible: nothing on screen said that the order you
+// happened to click in had decided which photograph spoke for the rest.
+//
+// So the grid narrows to the files being stacked and waits. No round trip and
+// no address of its own — they are already on screen, so *filter to these* is
+// hiding the others and *back to where you were* is showing them again, with
+// the scroll never having moved.
+let choosing=null;
+
 function stackSelection(){
   const cs=targetsOn('live');
-  if(cs.length<2){say('select the ones to stack, keeper first');return;}
-  const top=cs[0];
-  applyToSelection('stacked_under',keyOf(top),undefined,cs.slice(1));
+  if(cs.length<2){say('select the ones to stack');return;}
+  choosing=cs;
+  const keep=new Set(cs);
+  cells.forEach(c=>{c.hidden=!keep.has(c);});
+  document.querySelectorAll('.group').forEach(h=>{h.hidden=true;});
+  say('');
+  drawSel();
+}
+
+function endChoosing(){
+  if(!choosing) return;
+  choosing=null;
+  cells.forEach(c=>{c.hidden=false;});
+  document.querySelectorAll('.group').forEach(h=>{h.hidden=false;});
+  drawSel();
+}
+
+async function chooseTop(top){
+  const family=(choosing||[]).filter(c=>c!==top);
+  if(!family.length){endChoosing();return;}
+  const behind=+(top.dataset.behind||0)+family.length;
+  endChoosing();
+  const out=await applyToSelection('stacked_under',keyOf(top),undefined,family);
+  // The files that went behind it leave the grid on their own — they stopped
+  // matching the moment they were stacked — but the one left standing has to
+  // start saying how many it now speaks for.
+  if(out&&out.done) markStack(top,behind);
+}
+
+// Built here rather than fetched, the way the access and tag chips are: it is
+// one anchor, and a round trip to redraw a badge would be a round trip to
+// redraw a badge.
+function markStack(c,behind){
+  c.dataset.behind=String(behind);
+  let badge=c.querySelector('.stack');
+  if(!badge){
+    badge=document.createElement('a');
+    badge.className='stack';
+    c.appendChild(badge);
+  }
+  badge.href='/browse?within='+encodeURIComponent(keyOf(c));
+  badge.title=(behind+1)+' photographs stacked here';
+  badge.textContent=String(behind+1);
 }
 
 // Which stack a file belongs to, named by the file that currently speaks for
@@ -2097,6 +2165,9 @@ function stopWork(){
 }
 if(workStop) workStop.onclick=e=>{e.stopPropagation();stopWork();};
 
+const chooseCancel=document.getElementById('choosecancel');
+if(chooseCancel) chooseCancel.onclick=e=>{e.stopPropagation();endChoosing();};
+
 // The takeover says the word the control you pressed says — read off the
 // button itself rather than kept as a second vocabulary for the same four
 // actions, which would be free to drift from the one on screen.
@@ -2271,6 +2342,7 @@ document.addEventListener('keydown',e=>{
     // Dismissal rather than navigation. A full-screen viewer with no key out
     // is a trap, even though clicking beside the picture also closes it.
     if(busy){stopWork();return;}
+    if(choosing){endChoosing();return;}
     if(viewer.classList.contains('on')) closeViewer();
     else if(!menu.hidden) closeMenu();
     return;

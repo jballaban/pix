@@ -85,6 +85,11 @@ function actGroup(side, names) {
 const liveActs = actGroup('live',
   ['event', 'tags', 'date', 'access', 'stack', 'top', 'unstack', 'delete']);
 const goneActs = actGroup('gone', ['restore', 'purge']);
+const chooseActs = actGroup('choose', []);
+const cancelBtn = new El('button');
+cancelBtn.id = 'choosecancel';
+document.byId.choosecancel = cancelBtn;
+chooseActs.appendChild(cancelBtn);
 // Buttons are nested in their group now, so they are found by walking rather
 // than by looking at the row's own children.
 const actBtn = name => actions.querySelectorAll('[data-act]')
@@ -527,21 +532,57 @@ function arrow(key, opts) {
     cells[0].querySelector('.pick').click();
     check('two can', actBtn('stack').hidden === false);
 
+    // Stacking asks which one to show rather than taking the first ticked.
     const n = calls.length;
     actBtn('stack').click();
-    await settle(); await settle();
+    await settle();
+    check('it writes nothing yet', calls.slice(n).filter(
+      c => c.url.startsWith('/api/decide')).length === 0);
+    check('the grid narrows to the files being stacked',
+          cells[0].hidden === false && cells[1].hidden === false
+          && heading.hidden === true);
+    check('and the only controls are the ones for choosing',
+          chooseActs.hidden === false && liveActs.hidden === true);
+
+    cells[0].click();          // this one shows
+    for (let i = 0; i < 6; i++) await settle();
     const sent = calls.slice(n).filter(c => c.url.startsWith('/api/decide'));
-    check('stacking sends one write', sent.length === 1, String(sent.length));
+    check('choosing one sends the write', sent.length === 1, String(sent.length));
     if (sent.length) {
       const body = JSON.parse(sent[0].body);
-      check('the keeper is the one ticked first',
-            body.stacked_under === 'f/b.jpg', sent[0].body);
+      check('the others defer to the one chosen',
+            body.stacked_under === 'f/a.jpg', sent[0].body);
       check('and it is not asked to defer to itself',
-            body.files.length === 1 && body.files[0].name === 'a.jpg',
+            body.files.length === 1 && body.files[0].name === 'b.jpg',
             sent[0].body);
     }
+    check('the grid comes back', heading.hidden === false
+          && cells[1].hidden === false);
+    check('and the one left standing says how many it speaks for',
+          cells[0].dataset.behind === '1'
+          && !!cells[0].querySelector('.stack'),
+          cells[0].dataset.behind);
     deselect();
     cells.forEach(c => { c.dataset.under = ''; c.dataset.behind = '0'; });
+  }
+
+  // Changing your mind puts the grid back and writes nothing.
+  {
+    deselect();
+    cells[0].querySelector('.pick').click();
+    cells[1].querySelector('.pick').click();
+    const n = calls.length;
+    actBtn('stack').click();
+    await settle();
+    document.byId.choosecancel.click();
+    await settle();
+    check('cancelling writes nothing', calls.slice(n).filter(
+      c => c.url.startsWith('/api/decide')).length === 0);
+    check('and puts every file back',
+          cells.every(c => c.hidden === false) && heading.hidden === false);
+    check('with the ordinary controls again',
+          liveActs.hidden === false && chooseActs.hidden === true);
+    deselect();
   }
 
   // Taking one out of a stack is offered only for files that are in one.
