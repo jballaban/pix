@@ -175,6 +175,9 @@ _STYLE = """
 :root { color-scheme: dark; --bg:#14161a; --fg:#e7e9ee; --dim:#8b93a3;
         --line:#272b33; --accent:#6aa3ff; --keep:#56c16a; --top:#e3b341; --gone:#e06c5a;
         --panel:#1b1e24;
+        /* Accent at a sixth, for saying *this one* behind a word rather than
+           through it. */
+        --tint:#6aa3ff2b;
         /* The bars are a surface, not part of the page. They were the same
            colour as it, separated by a single line — which put the tick that
            selects *everything* a few pixels from the one that selects the
@@ -190,7 +193,14 @@ _STYLE = """
 body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5
        system-ui,-apple-system,Segoe UI,sans-serif; }
 a { color:var(--accent); text-decoration:none; }
-a:hover { text-decoration:underline; }
+/* Never an underline. It lands across the descenders of the very word you are
+   reading at the moment you are trying to read it, and this page is lists of
+   names — events, days, accounts, cameras — where the letters are the
+   content. A tint behind the word says the same thing and leaves them alone.
+   The `box-shadow` spread is the padding: it gives the tint room to breathe
+   without taking up any, so nothing on the line moves. */
+a:hover { background:var(--tint); box-shadow:0 0 0 3px var(--tint);
+          border-radius:2px; }
 .dim { color:var(--dim); }
 main { padding:16px 20px 40px; }
 
@@ -236,6 +246,7 @@ main { padding:16px 20px 40px; }
 /* Three frames, one in front, with a picture in it — the app in one glyph:
    photographs, and one of them standing for the others. */
 .brand { display:inline-flex; align-items:center; color:var(--fg); }
+.brand:hover { background:none; box-shadow:none; }
 .brand svg { display:block; }
 .brand:hover .front { stroke:var(--accent); }
 .count { font-variant-numeric:tabular-nums; color:var(--dim);
@@ -358,7 +369,8 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
 .tile .bar.done i { background:var(--keep); }
 .tile .left { font-size:11px; color:var(--top); margin-top:4px; }
 .tile .left.all { color:var(--keep); }
-.tile:hover { border-color:var(--accent); background:#20242b; }
+.tile:hover { border-color:var(--accent); background:#20242b;
+             box-shadow:none; }
 /* A section with no address. It is still a real pile of files, so it is still
    shown — it just cannot be opened on its own. */
 .tile.dead { cursor:default; opacity:.7; }
@@ -393,7 +405,8 @@ h3.group > span.dim { font-weight:400;
 /* The name is the control: click it to regroup, `+` to group within it. */
 .grpname { background:none; border:0; padding:0; margin:0; color:inherit;
            font:inherit; cursor:pointer; }
-.grpname:hover { color:var(--accent); text-decoration:underline; }
+.grpname:hover { color:var(--accent); background:var(--tint);
+                 box-shadow:0 0 0 3px var(--tint); border-radius:2px; }
 /* Beside the name it belongs to, not marooned at the end of the row, where it
    went unnoticed. Dim rather than hidden: a control you cannot see until you
    hover the right thing is a control you never learn is there, and a page of
@@ -490,7 +503,7 @@ h3.group[data-state="some"] .grppick { background:var(--top);
          background:#000b; color:var(--fg); font-size:11px; font-weight:600;
          padding:1px 6px; border-radius:3px;
          box-shadow:2px -2px 0 -1px #000b, 4px -4px 0 -2px #000b; }
-.stack:hover { background:var(--accent); color:#0d0f12; text-decoration:none; }
+.stack:hover { background:var(--accent); color:#0d0f12; box-shadow:none; }
 /* Nobody has confirmed this one. The same badge in the colour the app uses for
    *this is the one that speaks* rather than the one it uses for a decision —
    so a shelf of guesses reads as a shelf of guesses at a glance. */
@@ -575,7 +588,7 @@ h2.year span { font-size:13px; font-weight:400; }
 .bellmenu a, .bellmenu .quiet { display:block; padding:6px 10px;
             border-radius:3px; text-decoration:none; color:var(--fg);
             white-space:nowrap; }
-.bellmenu a:hover { background:#242a33; }
+.bellmenu a:hover { background:#242a33; box-shadow:none; }
 .bellmenu .quiet { color:var(--dim); }
 /* One or the other: something to report, or the fact that there is nothing.
    Both at once reads as a bug, and neither leaves an empty box. */
@@ -604,7 +617,8 @@ h2.year span { font-size:13px; font-weight:400; }
           padding:6px 10px; border:0; background:none; color:var(--fg);
           font:inherit; border-radius:3px; text-decoration:none;
           cursor:pointer; }
-.memenu a:hover, .memenu button:hover { background:#242a33; }
+.memenu a:hover, .memenu button:hover { background:#242a33;
+                                        box-shadow:none; }
 .memenu form { margin:0; }
 /* The way out is the one thing in here that is not navigation. */
 .memenu button { color:var(--gone); }

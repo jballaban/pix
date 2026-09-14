@@ -2451,6 +2451,20 @@ def test_the_identity_controls_sit_top_right(client: TestClient) -> None:
     assert bar.index('class="spacer"') < bar.index("Sign out")
 
 
+def test_nothing_is_underlined_on_hover(client: TestClient) -> None:
+    """An underline lands across the descenders of the very word you are
+    reading at the moment you are trying to read it, and these pages are lists
+    of names — events, days, accounts, cameras — where the letters are the
+    content. Everything else here already says *this one* with a border or a
+    background."""
+    css = client.get("/browse").text
+    css = css[css.index("<style>"):css.index("</style>")]
+
+    assert "text-decoration:underline" not in css
+    at = css.index("a:hover {")
+    assert "var(--tint)" in css[at:at + 140], css[at:at + 140]
+
+
 def test_the_page_has_a_mark_of_its_own(client: TestClient) -> None:
     """A word in the corner and a blank tab icon. Both are how you find this
     among twenty other tabs."""
