@@ -847,24 +847,23 @@ def test_a_stale_index_cannot_put_a_file_behind_itself(
 def test_the_grid_has_three_thumbnail_sizes(client: TestClient) -> None:
     """The third is where the thumbnail runs out. Cells stretch past their
     minimum to fill the row, so 230px already renders around 263 on a wide
-    screen — from a 400px derived thumbnail, which is spent at that point.
-    Bigger has to come from the preview tier: four times the edge, eleven times
-    the bytes, and a choice rather than the default."""
+    screen — from a 400px derived thumbnail, which is spent at that point. The
+    largest reads `large`, derived at 1000px for exactly this."""
     html = client.get("/browse?event=Italy%20-%20Sicily").text
 
-    assert 'id="sizes"' in html
+    assert 'id="sizepick"' in html
     # At the far end of the row with the account, not among the filters: it
     # changes how you are looking, never which photographs are here. Past the
     # spacer is what puts it there; after the chips is true of anything in the
     # row.
     row = html[html.index('class="row"'):html.index("</div><main")]
-    assert row.index('id="sizes"') > row.index("spacer")
-    assert row.index('id="sizes"') < row.index("who-link")
+    assert row.index('id="sizepick"') > row.index("spacer")
+    assert row.index('id="sizepick"') < row.index("who-link")
 
     for rule in ("minmax(150px,1fr)", "minmax(230px,1fr)", "minmax(380px,1fr)"):
         assert rule in html, rule
-    for size in ("small", "big", "huge"):
-        assert f'data-size="{size}"' in html, size
+    for size in ("medium", "large"):
+        assert f'.grid[data-size="{size}"]' in html, size
 
 
 def test_the_grid_draws_no_cursor(client: TestClient) -> None:

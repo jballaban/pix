@@ -64,14 +64,8 @@ cells.forEach(c => grid.appendChild(c));
 const actions = mk('actions');
 // A tri-state tick, a count, and two sets of actions — one per side of the
 // deletion line, each shown only when the selection holds files it applies to.
-// The three-way size control, as the page renders it.
-const sizes = mk('sizes');
-for (const name of ['small', 'big', 'huge']) {
-  const b = new El('button');
-  b.dataset.size = name;
-  sizes.appendChild(b);
-}
-const sizeBtn = name => sizes.children.find(b => b.dataset.size === name);
+// One button carrying the current size, as the page renders it.
+const sizePick = mk('sizepick');
 
 const badgeOn = c => c.children.find(k => k._classes.has('stack')) || null;
 const tick = new El('button');
@@ -1113,14 +1107,15 @@ function arrow(key, opts) {
   {
     check('it starts at the ordinary size', grid.dataset.size === 'small',
           grid.dataset.size);
-    check('and says which one that is',
-          sizeBtn('small').classList.contains('on')
-          && !sizeBtn('huge').classList.contains('on'));
+    check('and carries the letter for it', sizePick.textContent === 'S',
+          sizePick.textContent);
 
-    sizeBtn('big').click();
-    check('and the grid goes up a size', grid.dataset.size === 'big',
+    sizePick.click();
+    check('and the grid goes up a size', grid.dataset.size === 'medium',
           grid.dataset.size);
-    check('with the choice remembered', stored['pix2.thumb'] === 'big',
+    check('with the letter following it', sizePick.textContent === 'M',
+          sizePick.textContent);
+    check('with the choice remembered', stored['pix2.thumb'] === 'medium',
           String(stored['pix2.thumb']));
 
     // The biggest is bigger than the thumbnail tier has pixels for, so it
@@ -1133,17 +1128,22 @@ function arrow(key, opts) {
     // A cell the *current* script instance knows about: blocks above this one
     // re-ran the page against a different grid, and `cells` moved with them.
     document.querySelectorAll('.cell')[0].appendChild(img);
-    sizeBtn('huge').click();
+    sizePick.click();                       // medium -> large
     check('the biggest size reads from the tier sized for it',
           img.attrs.src === '/large/f/a.jpg', img.attrs.src);
-    sizeBtn('small').click();
+    check('and is labelled for it', sizePick.textContent === 'L',
+          sizePick.textContent);
+
+    // One button, so it cycles: there is nowhere else to go from the end.
+    sizePick.click();
+    check('the next one round is back to the smallest',
+          grid.dataset.size === 'small', grid.dataset.size);
     check('and the smaller ones go back to the thumbnail',
           img.attrs.src === '/thumb/f/a.jpg', img.attrs.src);
     img.remove();
-    check('and back down again', grid.dataset.size === 'small');
 
     // A fresh page finds the preference where it was left.
-    stored['pix2.thumb'] = 'huge';
+    stored['pix2.thumb'] = 'large';
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
@@ -1152,7 +1152,19 @@ function arrow(key, opts) {
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
       GRID_GROUPS, GROUPING, fn => fn());
     check('a new page opens at the size you left it',
-          grid.dataset.size === 'huge', grid.dataset.size);
+          grid.dataset.size === 'large', grid.dataset.size);
+
+    // What these were called for an afternoon.
+    stored['pix2.thumb'] = 'huge';
+    new Function(
+      'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
+      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
+      'GRID_GROUPS', 'GROUPING', 'setTimeout', js,
+    )(document, window, fetch, localStorage, location, confirm,
+      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
+      GRID_GROUPS, GROUPING, fn => fn());
+    check('and one saved under the old names still opens there',
+          grid.dataset.size === 'large', grid.dataset.size);
   }
 
   if (failures.length) {
