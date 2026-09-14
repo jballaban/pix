@@ -398,6 +398,13 @@ h3.group > span.dim { font-weight:400;
 .crumb { display:inline-flex; align-items:center; }
 .crumbs .sep { color:var(--dim); font-weight:400; }
 .crumb:not(:last-child) .grpname { color:var(--dim); font-weight:400; }
+/* The other way round on a shelf, where the last crumb is the name of the cut
+   rather than a value: *By event* is the same two words over every shelf on
+   the page, and *2025* is the one that says which shelf this is. */
+h3.group.shelf .crumb:not(:last-child) .grpname { color:var(--fg);
+                                                  font-weight:600; }
+h3.group.shelf .crumb:last-child .grpname { color:var(--dim);
+                                            font-weight:400; }
 .rmgrp { background:none; border:0; margin:0; padding:0 4px; color:var(--dim);
          font:inherit; cursor:pointer; opacity:0; transition:opacity .1s; }
 .crumb:hover .rmgrp, .rmgrp:focus { opacity:1; }
@@ -958,10 +965,19 @@ def filters(
                       deleted=_both_sides(deleted, op, user))
 
 
+#: What the front door opens on: this year, by month and then by event.
+#: Applied as a **redirect from a bare `/`** rather than as a default inside
+#: the page, so that everything after it is in the URL where the rest of the
+#: view already lives. A default applied invisibly could not be cleared —
+#: taking the year off would put the year straight back on.
+HOME_GROUPING: str = "month,event"
+
+
 @app.get("/", response_class=HTMLResponse)
-def home(user: Annotated[Principal, Depends(require_user)],
+def home(request: Request,
+         user: Annotated[Principal, Depends(require_user)],
          view: Annotated[ix.Filters, Depends(filters)],
-         group: Annotated[str, Query()] = "year") -> HTMLResponse:
+         group: Annotated[str, Query()] = HOME_GROUPING) -> Response:
     """The same library as `/browse`, one level up: folders instead of files.
 
     It was a fixed table of years and their events, which answered two
@@ -977,6 +993,10 @@ def home(user: Annotated[Principal, Depends(require_user)],
     be expressible as a filter to be drilled into, and why the two that are not
     say so rather than offering a door into somewhere else.
     """
+    if not request.url.query:
+        return RedirectResponse(
+            f"/?date={time.localtime().tm_year}&group={_q(HOME_GROUPING)}",
+            status_code=303)
     conn = db()
     groups = _groupings(group)
     rows = ix.sections(conn, view, groups=groups, limit=PAGE_LIMIT)
@@ -1030,7 +1050,7 @@ def _shelves(rows: list[sqlite3.Row], groups: list[str], view: ix.Filters,
     inner = groups[-1] if groups else ""
     outer = groups[:-1]
     if not groups:
-        return (_heading([], 0, len(rows), pick=False)
+        return (_heading([], 0, len(rows), pick=False, cut=True)
                 + "".join(_folder(r, groups, view, user) for r in rows))
     out: list[str] = []
     for keys, run in groupby(rows, key=lambda r: tuple(
@@ -1039,7 +1059,8 @@ def _shelves(rows: list[sqlite3.Row], groups: list[str], view: ix.Filters,
         labels = [_group_label(k, g, outer[:i], shelf[0])
                   for i, (k, g) in enumerate(zip(keys, outer))]
         labels.append(dict(_GRID_GROUPS).get(inner, inner))
-        out.append(_heading(labels, len(groups), len(shelf), pick=False))
+        out.append(_heading(labels, len(groups), len(shelf), pick=False,
+                            cut=True))
         out.extend(_folder(r, groups, view, user) for r in shelf)
     return "".join(out)
 
@@ -1398,7 +1419,7 @@ def _sections(rows: list[sqlite3.Row], groups: list[str],
 
 
 def _heading(labels: list[str], levels: int, count: int, *,
-             pick: bool = True) -> str:
+             pick: bool = True, cut: bool = False) -> str:
     """One section heading, which is also how grouping is changed.
 
     Each crumb is two controls: the name changes that level, the `Ã—` drops it.
@@ -1415,10 +1436,14 @@ def _heading(labels: list[str], levels: int, count: int, *,
             f'<button class="rmgrp" title="Remove this grouping">&times;</button>'
             f'</span>'
             for i, label in enumerate(labels))
+    # On a shelf the last crumb names the *cut* — "By event" — and it is the
+    # same two words over every shelf on the page. What says where you are is
+    # the value in front of it, so the emphasis runs the other way round.
+    shelf = " shelf" if cut else ""
     add = ("" if levels >= 3 else
            '<button class="addgrp" title="Add a grouping inside this one">'
            "+</button>")
-    return (f'<h3 class="group">'
+    return (f'<h3 class="group{shelf}">'
             + ('<button class="grppick" title="Select this group"></button>'
                if pick else "")
             + f'<span class="crumbs">{crumbs}</span>{add}'
@@ -3108,6 +3133,11 @@ async function purgeSelection(){
 //
 // What stays is what only a key can say once the viewer is full-screen:
 // which way to go, and stop.
+// Whether a photograph is open, on a page that may have nothing to open one
+// in. Asked from the key handler, which is bound to the document and so runs
+// on every page the script is served to.
+function open_(){ return !!viewer&&viewer.classList.contains('on'); }
+
 document.addEventListener('keydown',e=>{
   if(e.target.tagName==='INPUT') return;
   if(e.key==='Escape'){
@@ -3115,11 +3145,14 @@ document.addEventListener('keydown',e=>{
     // is a trap, even though clicking beside the picture also closes it.
     if(busy){stopWork();return;}
     if(choosing){endChoosing(true);return;}
-    if(viewer.classList.contains('on')) closeViewer();
+    // No viewer on the landing page: it is folders, not photographs. Escape
+    // there is still the way out of a menu, and reaching for a viewer that is
+    // not on the page threw every time somebody pressed it.
+    if(open_()) closeViewer();
     else if(!menu.hidden) closeMenu();
     return;
   }
-  if(!viewer.classList.contains('on')) return;
+  if(!open_()) return;
   const step=e.key==='ArrowRight'?1:e.key==='ArrowLeft'?-1:0;
   if(!step) return;
   e.preventDefault();

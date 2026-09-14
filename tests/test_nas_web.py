@@ -9,6 +9,7 @@ curation decisions: an `.xmp` beside the master file, then that file's index row
 from __future__ import annotations
 
 import re
+import time
 
 from collections.abc import Callable
 from pathlib import Path
@@ -1231,7 +1232,7 @@ def test_the_landing_page_is_folders_of_whatever_it_is_grouped_by(
     how to cut a library eight ways, and those are the same questions asked of
     the same files — so this is the grid at a coarser zoom, not a second idea
     of what the library looks like."""
-    by_year = client.get("/").text
+    by_year = client.get("/?group=year").text
     assert 'class="tile"' in by_year
     assert ">2026<" in by_year
 
@@ -1279,6 +1280,41 @@ def test_one_grouping_is_one_shelf(client: TestClient) -> None:
 
     assert folders.count("<h3") == 1
     assert "By year" in folders
+
+
+def test_the_front_door_opens_on_this_year(client: TestClient) -> None:
+    """A library of twenty-five years opened on all of it, which is not where
+    anybody is working. This year, by month and then by event."""
+    r = client.get("/", follow_redirects=False)
+
+    assert r.status_code == 303
+    where = r.headers["location"]
+    assert f"date={time.localtime().tm_year}" in where, where
+    assert "group=month%2Cevent" in where, where
+
+
+def test_the_default_can_be_taken_off(client: TestClient) -> None:
+    """Which is why it is a redirect and not a default inside the page. Taken
+    off invisibly, the year would go straight back on and the chip would be a
+    control that does nothing."""
+    cleared = client.get("/?group=year", follow_redirects=False)
+
+    assert cleared.status_code == 200
+    assert 'class="tile"' in cleared.text
+
+
+def test_the_shelf_reads_the_other_way_round(client: TestClient) -> None:
+    """On a shelf the last crumb names the *cut* — *By event* — and it is the
+    same two words over every shelf on the page. What says which shelf this is
+    is the value in front of it, so the emphasis runs the other way."""
+    html = client.get("/?group=year,event").text
+    css = html[html.index("<style>"):html.index("</style>")]
+
+    assert 'class="group shelf"' in html, "the heading is not marked as one"
+    at = css.index("h3.group.shelf .crumb:last-child .grpname {")
+    assert "var(--dim)" in css[at:at + 110], css[at:at + 110]
+    at = css.index("h3.group.shelf .crumb:not(:last-child) .grpname {")
+    assert "font-weight:600" in css[at:at + 180], css[at:at + 180]
 
 
 def test_a_folder_says_what_is_in_it_rather_than_showing_one_of_it(
@@ -1370,7 +1406,7 @@ def test_an_undated_folder_is_reachable(client: TestClient) -> None:
     """374 of the seeded year have no date; that is a work item, not an
     absence to leave unlinked. A year nobody knows really is *undated* —
     unlike a day nobody knows, which is a file dated to its month."""
-    html = client.get("/").text
+    html = client.get("/?group=year").text
 
     assert "date=%28undated%29" in html
     assert "b.mp4" in client.get("/browse?date=(undated)").text

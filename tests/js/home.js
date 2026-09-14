@@ -98,6 +98,13 @@ const USUAL = 'family';
 const PAGE = '/';
 
 const settle = () => new Promise(r => setImmediate(r));
+// The key handler is bound to the document, so it runs on this page too —
+// with no viewer on it to ask about, and no cells to page through.
+const keys = {};
+const realAdd = document.addEventListener.bind(document);
+document.addEventListener = (t, fn) => { (keys[t] ||= []).push(fn); realAdd(t, fn); };
+const press = key => (keys.keydown || []).forEach(fn => fn(
+  { key, preventDefault() {}, target: { tagName: 'DIV' } }));
 
 (async () => {
   try {
@@ -193,6 +200,23 @@ const settle = () => new Promise(r => setImmediate(r));
   check('the cross drops a level',
         !!went && went.includes('group=none') && went.startsWith('/?'),
         String(went));
+
+  // --- the keyboard -----------------------------------------------------------
+  // Escape is the way out of a menu here as everywhere. It reached for the
+  // viewer first, and there is none on this page — so every press threw, and
+  // an exception in a document handler is invisible until you open the
+  // console.
+  plus().click();
+  await settle();
+  check('a menu is open to escape from', menu.hidden === false);
+  press('Escape');
+  check('escape closes it', menu.hidden === true);
+  // And with nothing open: still no viewer to ask about, still no cells to
+  // page through.
+  press('Escape');
+  press('ArrowRight');
+  press('ArrowLeft');
+  press('i');
 
   if (failures.length) {
     failures.forEach(f => console.log('FAIL ' + f));
