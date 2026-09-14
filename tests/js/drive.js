@@ -188,6 +188,7 @@ const ADMIN = true;
 const USERS = ['family', 'james'];
 const GROUPS = ['family'];
 const USUAL = 'family';
+const PAGE = '/browse';
 
 const settle = () => new Promise(r => setImmediate(r));
 // The control selects everything when nothing is ticked and clears otherwise,
@@ -206,9 +207,9 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS', 'GROUPING',
-      'setTimeout', js,
+      'PAGE', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
-      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, GROUPING, fn => fn());
+      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, GROUPING, PAGE, fn => fn());
   } catch (e) {
     console.log('FAIL the script threw on load: ' + e.message);
     process.exit(1);
@@ -940,10 +941,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, fn => fn());
+      GRID_GROUPS, GROUPING, PAGE, fn => fn());
 
     // One file out of the first section, and the whole of the second.
     s1[0].querySelector('.pick').click();
@@ -1005,10 +1006,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, fn => fn());
+      GRID_GROUPS, GROUPING, PAGE, fn => fn());
 
     // Push the first one out of the view, the way an edit does.
     shelf[0].querySelector('.pick').click();
@@ -1055,10 +1056,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, fn => fn());
+      GRID_GROUPS, GROUPING, PAGE, fn => fn());
 
     // Scrolled a couple of rows down: c2 straddles the top of the screen.
     scrolled = 250;
@@ -1097,10 +1098,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, fn => fn());
+      GRID_GROUPS, GROUPING, PAGE, fn => fn());
 
     document.byId.selall.click();          // all 250
     const n = calls.length;
@@ -1173,10 +1174,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, fn => fn());
+      GRID_GROUPS, GROUPING, PAGE, fn => fn());
     check('a new page opens at the size you left it',
           grid.dataset.size === 'large', grid.dataset.size);
 
@@ -1185,10 +1186,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, fn => fn());
+      GRID_GROUPS, GROUPING, PAGE, fn => fn());
     check('and one saved under the old names still opens there',
           grid.dataset.size === 'large', grid.dataset.size);
   }

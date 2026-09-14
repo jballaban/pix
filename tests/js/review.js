@@ -169,6 +169,7 @@ const ADMIN = true;
 const USERS = ['family'];
 const GROUPS = ['family'];
 const USUAL = 'family';
+const PAGE = '/browse';
 
 const settle = () => new Promise(r => setImmediate(r));
 const keys = {};
@@ -192,10 +193,10 @@ function deselect() {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS,
-      GROUPING, fn => fn());
+      GROUPING, PAGE, fn => fn());
   } catch (e) {
     console.log('FAIL the script threw on load: ' + e.message);
     process.exit(1);

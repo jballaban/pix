@@ -90,6 +90,7 @@ const ADMIN = true;
 const USERS = ['family'];
 const GROUPS = ['family'];
 const USUAL = 'family';
+const PAGE = '/';
 
 const settle = () => new Promise(r => setImmediate(r));
 
@@ -98,10 +99,10 @@ const settle = () => new Promise(r => setImmediate(r));
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS,
-      GROUPING, fn => fn());
+      GROUPING, PAGE, fn => fn());
   } catch (e) {
     console.log('FAIL the script threw on load: ' + e.message);
     process.exit(1);
@@ -131,6 +132,11 @@ const settle = () => new Promise(r => setImmediate(r));
   check('picking one goes to a view that carries both',
         !!went && went.includes('event=Sicily') && went.includes('date=2026'),
         String(went));
+  // On *this* page. Narrowing the library from here and being handed the file
+  // grid instead is indistinguishable from the control doing nothing — except
+  // that the summary you were reading is gone.
+  check('and stays on this page', !!went && went.startsWith('/?'),
+        String(went));
 
   check('the size control says what it will do', !!sizePick.textContent,
         JSON.stringify(sizePick.textContent));
@@ -149,11 +155,27 @@ const settle = () => new Promise(r => setImmediate(r));
         String(levels.length));
   levels[0].click();
   check('and choosing one regroups this page',
-        !!went && went.includes('group='), String(went));
+        !!went && went.includes('group=') && went.startsWith('/?'),
+        String(went));
+
+  // Sub-grouping: a level *inside* the one already there, which is how you go
+  // from a shelf of years to the events within them without losing the years.
+  went = null;
+  addBtn.click();
+  await settle();
+  const inner = document.byId.menu.querySelectorAll('.opt');
+  const byEvent = inner.find(o => o.innerHTML.includes('By event'));
+  check('a level can be added inside the one already there', !!byEvent,
+        inner.map(o => o.innerHTML).join('|'));
+  if (byEvent) byEvent.click();
+  check('and it nests rather than replacing',
+        !!went && went.includes('group=year%2Cevent') && went.startsWith('/?'),
+        String(went));
 
   went = null;
   rm.click();
-  check('the cross drops a level', !!went && went.includes('group=none'),
+  check('the cross drops a level',
+        !!went && went.includes('group=none') && went.startsWith('/?'),
         String(went));
 
   if (failures.length) {

@@ -310,32 +310,31 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
         grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); }
 .grid[data-size="large"] {
         grid-template-columns:repeat(auto-fill,minmax(380px,1fr)); }
-/* A folder: one section of the grid, drawn as what it amounts to. Square like
-   a thumbnail, because it *is* one — the section's first photograph — with
-   what the section is written over the foot of it. */
-.tile { position:relative; display:block; aspect-ratio:1; overflow:hidden;
-        background:#0d0f12; border-radius:2px; text-decoration:none;
-        color:var(--fg); }
-.tile img { width:100%; height:100%; object-fit:cover; display:block; }
-.tile .name, .tile .n { position:absolute; left:0; right:0; padding:5px 8px;
-        font-size:12px; line-height:1.3; }
-.tile .name { bottom:18px; font-weight:600;
-        text-shadow:0 1px 3px #000, 0 0 10px #000; }
-.tile .n { bottom:0; font-size:11px; color:var(--dim);
-           text-shadow:0 1px 3px #000, 0 0 10px #000; }
-/* Read as *what is left here*, so it is the colour of unfinished work and not
-   of a count. */
-.tile .left { font-style:normal; color:var(--top); margin-left:8px; }
-/* Everything below the caption is the photograph; this keeps the text legible
-   over whatever it happens to be. */
-.tile::after { content:""; position:absolute; left:0; right:0; bottom:0;
-        height:50%; background:linear-gradient(transparent,#000c);
-        pointer-events:none; }
-.tile:hover { outline:2px solid var(--accent); outline-offset:-2px; }
+/* A folder: one section of the grid, drawn as what it amounts to. The
+   photograph says which pile it is; the caption says what it is and how much
+   of it there is. Those were laid over the picture and legible over a dark
+   sky and gone over a bright one — and what this page is *for* is the
+   reading, not the picture. */
+.tile { display:flex; flex-direction:column; background:var(--panel);
+        border:1px solid var(--line); border-radius:3px; overflow:hidden;
+        text-decoration:none; color:var(--fg); }
+.tile .shot { display:block; aspect-ratio:4/3; background:#0d0f12; }
+.tile .shot img { width:100%; height:100%; object-fit:cover; display:block; }
+.tile .cap { padding:7px 9px 8px; }
+.tile .name { display:block; font-size:13px; font-weight:600; line-height:1.3;
+              overflow-wrap:anywhere; }
+.tile .name .sep { color:var(--dim); font-style:normal; font-weight:400;
+                   margin:0 4px; }
+.tile .n { display:block; font-size:11px; color:var(--dim); margin-top:3px; }
+/* Read as *what is left here*, so it is the colour of unfinished work rather
+   than of a count. */
+.tile .left { font-style:normal; color:var(--top); }
+.tile .left::before { content:"·"; color:var(--dim); margin:0 5px; }
+.tile:hover { border-color:var(--accent); }
 /* A section with no address. It is still a real pile of files, so it is still
    shown — it just cannot be opened on its own. */
-.tile.dead { cursor:default; opacity:.72; }
-.tile.dead:hover { outline:none; }
+.tile.dead { cursor:default; opacity:.7; }
+.tile.dead:hover { border-color:var(--line); }
 /* A thumbnail with a letter in it. Three words took three buttons' worth of
    bar for something nobody reads twice — the shape says what it is about and
    the letter says where it is, which is all a size control has to say. */
@@ -885,7 +884,7 @@ def home(user: Annotated[Principal, Depends(require_user)],
                  # are without being told twice.
                  right='<button id="sizepick" aria-label="Thumbnail size"></button>',
                  footer='<span id="note" class="note"></span>',
-                 script=_view_script(user, view, groups),
+                 script=_view_script(user, view, groups, page="/"),
                  user=user)
 
 
@@ -903,13 +902,16 @@ def _folder(row: sqlite3.Row, groups: list[str], view: ix.Filters,
     n = int(row["n"])
     left = int(row["unreviewed"] or 0) if user.is_admin else 0
     inner = (
-        f'<img loading="lazy" src="/thumb/{_q(row["folder"])}/{_q(row["name"])}">'
-        + '<span class="name">'
-        + "<span class=\"sep\">&rsaquo;</span>".join(_h(x) for x in labels)
-        + "</span>"
-        f'<span class="n">{n:,} file{"" if n == 1 else "s"}'
+        '<span class="shot"><img loading="lazy" '
+        f'src="/thumb/{_q(row["folder"])}/{_q(row["name"])}"></span>'
+        # Beneath the photograph rather than over it. What a folder *is* was
+        # small text laid on whatever its first picture happened to be, so it
+        # was legible over a dark sky and gone over a bright one.
+        '<span class="cap"><b class="name">'
+        + '<i class="sep">&rsaquo;</i>'.join(_h(x) for x in labels)
+        + f'</b><span class="n">{n:,} file{"" if n == 1 else "s"}'
         + (f'<i class="left">{left:,} undecided</i>' if left else "")
-        + "</span>")
+        + "</span></span>")
     if href is None:
         # Nothing to link to, rather than a link somewhere else. *No day* is
         # every file whose date stops at the month, and there is no filter that
@@ -1038,8 +1040,8 @@ def browse(user: Annotated[Principal, Depends(require_user)],
         user=user)
 
 
-def _view_script(user: Principal, view: ix.Filters,
-                 groups: list[str]) -> str:
+def _view_script(user: Principal, view: ix.Filters, groups: list[str], *,
+                 page: str = "/browse") -> str:
     """The page script, and what it needs to know about this view.
 
     One script for both pages. The landing page and the grid ask the same two
@@ -1057,7 +1059,7 @@ def _view_script(user: Principal, view: ix.Filters,
         f"CHIPS={_js(_chips(user))},FIXED={_js(_FIXED)},"
         f"EXTRA={_js(_EXTRA)},ADMIN={_js(user.is_admin)},"
         f"USERS={_js(_audience_names())},GROUPS={_js(_group_names())},"
-        f"USUAL={_js(store().usual)},"
+        f"USUAL={_js(store().usual)},PAGE={_js(page)},"
         f"GRID_GROUPS={_js(_GRID_GROUPS)},GROUPING={_js(groups)};</script>"
         f"<script>{_BROWSE_JS}</script>")
 
@@ -1573,7 +1575,11 @@ function url(patch){
   // Keep the grouping across a filter change: it is how you are reading the
   // library, not what you are reading.
   q.set('group',GROUPING.join(',')||'none');
-  return '/browse'+(q.toString()?'?'+q:'');
+  // Back to the page you are standing on. Both of these said `/browse`, so
+  // every filter and every regrouping worked perfectly and then left the
+  // landing page — which looks exactly like a control that does nothing,
+  // except that the library you were summarising turns into a wall of files.
+  return PAGE+(q.toString()?'?'+q:'');
 }
 function drawChips(){
   chips.innerHTML='';
@@ -2887,7 +2893,7 @@ function groupUrl(levels){
   const q=new URLSearchParams();
   for(const [k,v] of Object.entries(VIEW)) if(v) q.set(k,v);
   q.set('group',levels.join(',')||'none');
-  return '/browse?'+q;
+  return PAGE+'?'+q;
 }
 
 function groupMenu(anchorEl,level,insert){

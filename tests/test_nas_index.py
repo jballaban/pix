@@ -613,6 +613,45 @@ def test_suggesting_an_unknown_column_is_refused(tree: dict[str, Path]) -> None:
         ix.suggest(ix.connect(tree["db"]), "folder")
 
 
+def test_the_sections_are_narrowed_by_the_filters(
+    tree: dict[str, Path]
+) -> None:
+    """Filter to 2026, cut by event, and the events on offer are the ones that
+    happened in 2026. The summary has to be a summary *of the view* or the
+    landing page is a second, wider library sitting behind the same filters."""
+    for name, when, event in (("a.jpg", "2025:06:01 10:00:00", "Basketball"),
+                              ("b.jpg", "2026:06:01 10:00:00", "Sicily"),
+                              ("c.jpg", "2026:06:02 10:00:00", "Sicily")):
+        _record(tree, "f", name, {"EXIF:DateTimeOriginal": when})
+        _sidecar(tree, "f", name)
+        decisions.write(tree["master"] / "f" / name, Decision(event=event))
+    conn = _built(tree)
+
+    everything = ix.sections(conn, groups=["event"])
+    assert [(r["grp0"], r["n"]) for r in everything] == [("Basketball", 1),
+                                                        ("Sicily", 2)]
+
+    in_2026 = ix.sections(conn, ix.Filters(date="2026"), groups=["event"])
+    assert [(r["grp0"], r["n"]) for r in in_2026] == [("Sicily", 2)]
+
+
+def test_a_section_counts_only_what_the_filters_allow(
+    tree: dict[str, Path]
+) -> None:
+    """A folder saying 90 files and opening onto 12 is worse than no count."""
+    for name, when in (("a.jpg", "2025:06:01 10:00:00"),
+                       ("b.jpg", "2026:06:01 10:00:00")):
+        _record(tree, "f", name, {"EXIF:DateTimeOriginal": when})
+        _sidecar(tree, "f", name)
+        decisions.write(tree["master"] / "f" / name, Decision(event="Sicily"))
+    conn = _built(tree)
+
+    rows = ix.sections(conn, ix.Filters(date="2026"), groups=["event"])
+    assert [r["n"] for r in rows] == [1]
+    assert rows[0]["n"] == ix.count(conn, ix.Filters(date="2026",
+                                                     event="Sicily"))
+
+
 # --- where a file came from ---------------------------------------------------
 
 def _ledger(tree: dict[str, Path], folder: str, name: str,
