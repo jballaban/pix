@@ -23,7 +23,7 @@ import sqlite3
 import threading
 import time
 from urllib.parse import parse_qs, quote
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from itertools import groupby
 from pathlib import Path
 from typing import Annotated, Any, Sequence, cast
@@ -1627,7 +1627,7 @@ function drawSel(){
 // files near the top and every thumbnail below them opened the picture two
 // along. `picked` is keyed by element for exactly this reason; the handlers
 // were the half that still counted.
-cells.forEach(c=>{
+function wire(c){
   c.querySelector('.pick').addEventListener('click',e=>{
     e.stopPropagation();
     if(choosing){chooseTop(c);return;}
@@ -1653,7 +1653,8 @@ cells.forEach(c=>{
     // depends on what was selected before the click.
     anchor=n; openViewer(n);
   });
-});
+}
+cells.forEach(wire);
 // One control for one question. Empty, it selects everything; otherwise it
 // clears — which is what both *Select all* and *Deselect* were for, and it
 // sits beside the count it is about rather than up in the filter bar.
@@ -1873,29 +1874,67 @@ function tops(c){ return +(c.dataset.behind||0) > 0; }
 // no address of its own — they are already on screen, so *filter to these* is
 // hiding the others and *back to where you were* is showing them again, with
 // the scroll never having moved.
-let choosing=null;
+let choosing=null, fetched=[];
 
-function stackSelection(){
+// Merging two stacks has to offer every photograph in both of them as the one
+// to show. Choosing between the two that happen to be speaking is choosing
+// between two of ten, and the other eight are only hidden because stacking
+// them is what hid them.
+async function stackSelection(){
   const cs=targetsOn('live');
   if(cs.length<2){say('select the ones to stack');return;}
-  choosing=cs;
+  choosing=cs; fetched=[];
   const keep=new Set(cs);
   cells.forEach(c=>{c.hidden=!keep.has(c);});
   document.querySelectorAll('.group').forEach(h=>{h.hidden=true;});
-  say('');
-  drawSel();
+  say(''); drawSel();
+  for(const head of cs.filter(c=>tops(c))) await expand(head);
+}
+
+async function expand(head){
+  let html='';
+  try{
+    const r=await fetch('/api/behind/'+encodeURIComponent(head.dataset.folder)
+                        +'/'+encodeURIComponent(head.dataset.name));
+    if(!r.ok) throw new Error(await r.text());
+    html=(await r.json()).cells||'';
+  }catch(e){say('could not open that stack: '+e.message,true);return;}
+  if(!choosing||!html) return;
+  const holder=document.createElement('div');
+  holder.innerHTML=html;
+  const added=[...holder.children];
+  let after=head;
+  for(const c of added){
+    after.insertAdjacentElement('afterend',c);
+    after=c;
+    cells.push(c); choosing.push(c); fetched.push(c); wire(c);
+  }
 }
 
 function endChoosing(){
   if(!choosing) return;
   choosing=null;
+  // Whatever was fetched belongs to a stack, and a stack's files do not sit in
+  // the grid — that is the whole point of one. They were borrowed to be
+  // chosen between.
+  fetched.forEach(c=>{picked.delete(c); c.remove();});
+  cells=cells.filter(c=>!fetched.includes(c));
+  fetched=[];
   cells.forEach(c=>{c.hidden=false;});
   document.querySelectorAll('.group').forEach(h=>{h.hidden=false;});
   drawSel();
 }
 
 async function chooseTop(top){
-  const family=(choosing||[]).filter(c=>c!==top);
+  // Anything already behind this one is where it should be; writing it again
+  // would be an edit that changes nothing and a line in the log saying so.
+  const key=keyOf(top);
+  const family=(choosing||[]).filter(
+    c=>c!==top&&c.dataset.under!==key);
+  // Files were borrowed from other stacks, or the one chosen came from inside
+  // one. Either way the grid is about to hold a different set than the page
+  // was built with, and it can only lose cells on its own.
+  const rearranged=fetched.length>0;
   if(!family.length){endChoosing();return;}
   const behind=+(top.dataset.behind||0)+family.length;
   endChoosing();
@@ -1903,6 +1942,7 @@ async function chooseTop(top){
   // The files that went behind it leave the grid on their own — they stopped
   // matching the moment they were stacked — but the one left standing has to
   // start saying how many it now speaks for.
+  if(out&&out.done&&rearranged){location.reload();return;}
   if(out&&out.done) markStack(top,behind);
   // And the selection is spent. It used to survive, holding the file that had
   // just become a top — so the next things ticked were stacked *with it*, and
@@ -2713,6 +2753,27 @@ def _split(value: object) -> list[str]:
 def _under(root: Path, target: Path) -> bool:
     """Whether `target` really sits inside `root`, after resolving `..`."""
     return root.resolve() in target.resolve().parents
+
+
+@app.get("/api/behind/{folder}/{name}")
+def api_behind(folder: str, name: str,
+               user: Annotated[Principal, Depends(require_user)],
+               view: Annotated[ix.Filters, Depends(filters)]) -> JSONResponse:
+    """The cells for the files stacked behind one — rendered here, not there.
+
+    Merging two stacks has to offer every photograph in both of them as the one
+    to show, and the members are not on the page: that is what stacking them
+    did. So they are fetched, and they come back as the same markup the grid is
+    already made of. A second copy of a cell written in JavaScript would drift
+    from this one, and the first thing to go would be whichever fact was added
+    last.
+    """
+    conn = db()
+    key = f"{folder}/{name}"
+    rows = [r for r in ix.files(conn, replace(view, within=key, chosen=None),
+                                limit=PAGE_LIMIT)
+            if r["stacked_under"] == key]
+    return JSONResponse({"cells": "".join(_cell(r) for r in rows)})
 
 
 @app.get("/api/events")

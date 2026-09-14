@@ -734,6 +734,43 @@ def test_taking_a_stack_apart_is_one_gesture(
         stacked_under="init_2026/a.jpg")
 
 
+def test_the_files_behind_a_stack_can_be_fetched_as_cells(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """Merging two stacks has to offer every photograph in both of them, and
+    the members are not on the page — that is what stacking them did. They come
+    back as the same markup the grid is made of, because a second copy of a
+    cell written in JavaScript would drift from this one."""
+    _three_files(writable, app_env)
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/a.jpg",
+        "files": [{"folder": "init_2026", "name": "b.mp4"},
+                  {"folder": "init_2026", "name": "c.jpg"}]})
+
+    cells = client.get("/api/behind/init_2026/a.jpg").json()["cells"]
+
+    assert 'data-name="b.mp4"' in cells
+    assert 'data-name="c.jpg"' in cells
+    assert 'data-name="a.jpg"' not in cells, "returned the top as well"
+    assert 'class="cell' in cells and 'class="pick"' in cells
+
+
+def test_what_is_behind_a_stack_is_still_scoped_to_the_viewer(
+    client: TestClient, sign_in: "Callable[[str, str], TestClient]",
+    writable: Path, app_env: dict[str, Path]
+) -> None:
+    """Fetching cells is a listing like any other. A stack is not a way to be
+    handed photographs nobody shared with you."""
+    _three_files(writable, app_env)
+    client.post("/accounts/save", data={"name": "kid", "password": "pw"})
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/a.jpg",
+        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
+
+    kid = sign_in("kid", "pw")
+    assert kid.get("/api/behind/init_2026/a.jpg").json()["cells"] == ""
+
+
 def test_the_grid_draws_no_cursor(client: TestClient) -> None:
     """The dashed ring said which cell the keyboard was on, and the grid has no
     keyboard. It stayed behind after that was removed and turned up unasked on
@@ -2224,5 +2261,6 @@ def test_three_levels_is_the_limit(client: TestClient) -> None:
     assert 'data-level="2"' in html
     assert 'data-level="3"' not in html
     assert 'class="addgrp"' not in html
+
 
 

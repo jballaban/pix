@@ -53,6 +53,18 @@ class El {
       this.parent.children = this.parent.children.filter(x => x !== this);
     }
   }
+  // The real API, because the page uses it to put fetched cells where they
+  // belong. A stub that forced a different call would be a stub the page was
+  // written around.
+  get parentNode() { return this.parent; }
+  insertAdjacentElement(where, other) {
+    if (!this.parent) return other;
+    const kin = this.parent.children;
+    const at = kin.indexOf(this);
+    kin.splice(where === 'afterend' ? at + 1 : at, 0, other);
+    other.parent = this.parent;
+    return other;
+  }
   replaceWith(other) {
     if (!this.parent) return;
     const i = this.parent.children.indexOf(this);
@@ -145,6 +157,30 @@ function parseInto(html) {
     while ((a = attrRe.exec(m[2]))) e.attrs[a[1]] = a[2];
     if (e.attrs.value !== undefined) e.value = e.attrs.value;
     document.byId[m[3]] = e;
+    out.push(e);
+  }
+  // Whole elements with their attributes — enough for the cells the page
+  // fetches and inserts, which is the only markup it ever parses rather than
+  // builds. Deliberately not a parser: it reads what this page writes.
+  const tagRe = /<(div|span|a)\s([^>]*class="(?:cell|stack|top-mark)[^"]*"[^>]*)>/g;
+  while ((m = tagRe.exec(html))) {
+    const e = new El(m[1]);
+    const attrRe = /([\w-]+)="([^"]*)"/g;
+    let a;
+    while ((a = attrRe.exec(m[2]))) {
+      if (a[1] === 'class') e.className = a[2];
+      else if (a[1].startsWith('data-')) e.dataset[camel(a[1].slice(5))] = a[2];
+      else e.attrs[a[1]] = a[2];
+    }
+    // The controls a cell carries, so the page can wire what it inserts.
+    const inner = html.slice(tagRe.lastIndex);
+    const stop = inner.indexOf('</div>');
+    for (const kid of (stop < 0 ? inner : inner.slice(0, stop))
+         .matchAll(/<(button|span|a)\s+class="([^"]*)"/g)) {
+      const c = new El(kid[1]);
+      c.className = kid[2];
+      e.appendChild(c);
+    }
     out.push(e);
   }
   const spanRe = /<span class="([^"]*)"[^>]*>([^<]*)<\/span>/g;

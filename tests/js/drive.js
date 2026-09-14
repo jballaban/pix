@@ -122,6 +122,8 @@ const calls = [];
 // to make a write push things out of the view, which is when the grid has to
 // tidy up after itself.
 let dropping = [];
+// What a stack says is behind it, as the markup the grid is made of.
+let behindCells = '';
 // What the server says is waiting in the bin after a write.
 let binned = 0;
 // Pressed while a write is running, to check it stops between chunks.
@@ -134,6 +136,9 @@ const fetch = async (url, opts) => {
   }
   if (url.startsWith('/api/suggest')) {
     return { ok: true, json: async () => [{ value: 'ghost', n: 1, scope: 'all' }] };
+  }
+  if (url.startsWith('/api/behind/')) {
+    return { ok: true, json: async () => ({ cells: behindCells }) };
   }
   if (url.startsWith('/api/file/')) {
     return { ok: true, json: async () => ({ name: 'a.jpg', exif: {}, facts: [] }) };
@@ -152,7 +157,8 @@ const window = {
   scrollBy: (_x, y) => { scrolled += y; window.scrollY = scrolled; },
   addEventListener: (t, fn) => ((listeners[t] ||= []).push(fn)),
 };
-const location = { href: '/browse' };
+let reloaded = 0;
+const location = { href: '/browse', reload: () => { reloaded += 1; } };
 const confirm = () => true;
 const VIEW = { event: null, year: null, tag: null, audience: null, kind: null,
                band: null };
@@ -669,6 +675,107 @@ function arrow(key, opts) {
     }
     cells[0].dataset.behind = '0';
     cells[1].dataset.under = '';
+    deselect();
+  }
+
+  // Merging two stacks offers every photograph in both of them as the one to
+  // show, not just the two that happen to be speaking.
+  {
+    deselect();
+    cells.forEach(c => { c.dataset.under = ''; c.dataset.behind = '0'; });
+    cells[0].dataset.behind = '1';    // a.jpg speaks for one more
+    behindCells = '<div class="cell" data-folder="f" data-name="hidden.jpg"'
+                + ' data-kind="image" data-audience="" data-event=""'
+                + ' data-tags="" data-date="2026-01-01" data-deleted=""'
+                + ' data-under="f/a.jpg" data-behind="0">'
+                + '<button class="pick"></button></div>';
+
+    cells[0].querySelector('.pick').click();
+    cells[1].querySelector('.pick').click();
+    actBtn('stack').click();
+    for (let i = 0; i < 8; i++) await settle();
+
+    const opened = grid.children.find(c => c.dataset.name === 'hidden.jpg');
+    check('the stack being merged is opened up', !!opened,
+          grid.children.map(c => c.dataset.name).join(','));
+    check('and what came out of it can be chosen',
+          !!opened && opened.hidden === false);
+
+    // Choose the file that was hidden inside a stack.
+    const n = calls.length;
+    if (opened) opened.click();
+    for (let i = 0; i < 8; i++) await settle();
+    const sent = calls.slice(n).filter(c => c.url.startsWith('/api/decide'));
+    check('choosing it sends one write', sent.length === 1, String(sent.length));
+    check('and the page is asked for again, since the grid holds a different '
+          + 'set than it was built with', reloaded === 1, String(reloaded));
+    if (sent.length) {
+      const body = JSON.parse(sent[0].body);
+      check('everything else defers to it',
+            body.stacked_under === 'f/hidden.jpg', sent[0].body);
+      check('including both of the ones that were speaking',
+            body.files.length === 2, sent[0].body);
+    }
+    behindCells = '';
+    cells.forEach(c => { c.dataset.under = ''; c.dataset.behind = '0'; });
+    deselect();
+  }
+
+  // Keeping the file that already speaks: what is already behind it stays put
+  // rather than being written the value it already has.
+  {
+    deselect();
+    reloaded = 0;
+    cells.forEach(c => { c.dataset.under = ''; c.dataset.behind = '0'; });
+    cells[0].dataset.behind = '1';
+    behindCells = '<div class="cell" data-folder="f" data-name="already.jpg"'
+                + ' data-kind="image" data-audience="" data-event=""'
+                + ' data-tags="" data-date="2026-01-01" data-deleted=""'
+                + ' data-under="f/a.jpg" data-behind="0">'
+                + '<button class="pick"></button></div>';
+    cells[0].querySelector('.pick').click();
+    cells[1].querySelector('.pick').click();
+    actBtn('stack').click();
+    for (let i = 0; i < 8; i++) await settle();
+
+    const n = calls.length;
+    cells[0].click();                 // keep a.jpg as the one that shows
+    for (let i = 0; i < 8; i++) await settle();
+    const sent = calls.slice(n).filter(c => c.url.startsWith('/api/decide'));
+    if (sent.length) {
+      const named = JSON.parse(sent[0].body).files.map(f => f.name);
+      check('only the file that was not already behind it is written',
+            named.length === 1 && named[0] === 'b.jpg', named.join(','));
+    } else {
+      check('keeping the existing top still writes something', false);
+    }
+    behindCells = '';
+    cells[0].dataset.behind = '0';
+    deselect();
+  }
+
+  // Changing your mind about a merge leaves nothing borrowed behind.
+  {
+    deselect();
+    cells[0].dataset.behind = '1';
+    behindCells = '<div class="cell" data-folder="f" data-name="borrowed.jpg"'
+                + ' data-kind="image" data-audience="" data-event=""'
+                + ' data-tags="" data-date="2026-01-01" data-deleted=""'
+                + ' data-under="f/a.jpg" data-behind="0">'
+                + '<button class="pick"></button></div>';
+    cells[0].querySelector('.pick').click();
+    cells[1].querySelector('.pick').click();
+    actBtn('stack').click();
+    for (let i = 0; i < 8; i++) await settle();
+    check('it was borrowed',
+          !!grid.children.find(c => c.dataset.name === 'borrowed.jpg'));
+    document.byId.choosecancel.click();
+    await settle();
+    check('and given back',
+          !grid.children.find(c => c.dataset.name === 'borrowed.jpg'),
+          'a file from inside a stack was left in the grid');
+    behindCells = '';
+    cells[0].dataset.behind = '0';
     deselect();
   }
 
