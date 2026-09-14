@@ -1313,38 +1313,33 @@ def tag(exif: dict[str, Any], key: str) -> str | None:
     return _tag(exif, key)
 
 
-#: Sorts after every real date, so an undated file is last in its section the
-#: way it is last in the grid — one order, not two.
-_LAST: str = "9999"
-
-
 def sections(conn: sqlite3.Connection, filters: Filters | None = None, *,
              groups: Sequence[str] = (),
              limit: int = 500, offset: int = 0) -> list[sqlite3.Row]:
-    """One row per section of the grid `files` would return: what it holds, how
-    much of it is undecided, and which photograph stands for it.
+    """One row per section of the grid `files` would return, with what is worth
+    knowing about it before you open it.
 
     The landing page is the same library one level up — the same filters, the
     same grouping, a summary of each section instead of its contents. So it is
     the same question asked with a `GROUP BY`, and the sections it names are
     the sections the grid would draw, in the same order, with the same files in
-    them. Anything else and clicking a folder would open something other than
-    what the folder said.
+    them. Anything else and opening a folder would give you something other
+    than what the folder said.
 
-    The cover is the section's **first** photograph, by the grid's own order:
-    the one you would see at the top left if you opened it. That comes free
-    from SQLite's rule that bare columns follow a single `min()` — which is
-    also why there is exactly one aggregate of that kind here, and why the
-    date span this page used to print is not among them.
+    The span is drawn from **dates known to the day**. A file placed only in
+    its month has a fabricated day in `effective_date`, and reading a range off
+    those would print a first and last nobody knows — the same invention
+    grouping is careful not to make.
     """
     view = filters or Filters()
     where, bound = _where(view)
     keys = [GROUPINGS[g] for g in groups if GROUPINGS.get(g)]
     params: dict[str, Any] = {**bound, "limit": limit, "offset": offset,
-                              "last": _LAST}
+                              "day": datestr.DAY}
     selected = "".join(f"{key} AS grp{i}, " for i, key in enumerate(keys))
     grouped = ", ".join(f"grp{i}" for i in range(len(keys)))
     ordered = "".join(f"grp{i} IS NULL, grp{i}, " for i in range(len(keys)))
+    known = ("CASE WHEN files.precision >= :day THEN files.effective_date END")
     return list(conn.execute(
         "SELECT " + (selected or "NULL AS grp0, ")
         + "COUNT(*) AS n, "
@@ -1353,8 +1348,8 @@ def sections(conn: sqlite3.Connection, filters: Filters | None = None, *,
         " SUM(CASE WHEN NOT EXISTS (SELECT 1 FROM file_audience fa "
         "   WHERE fa.folder = files.folder AND fa.name = files.name) "
         " THEN 1 ELSE 0 END) AS unreviewed, "
-        " files.folder AS folder, files.name AS name, "
-        " MIN(COALESCE(files.effective_date, :last) || files.name) AS cover "
+        " SUM(CASE WHEN files.kind = 'video' THEN 1 ELSE 0 END) AS videos, "
+        f" MIN({known}) AS first_seen, MAX({known}) AS last_seen "
         "FROM files "
         + (f"WHERE {where} " if where else "")
         + (f"GROUP BY {grouped} " if grouped else "")

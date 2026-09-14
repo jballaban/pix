@@ -60,7 +60,7 @@ const ids = process.argv[3]
   ? JSON.parse(fs.readFileSync(process.argv[3], 'utf8'))
   : ['grid', 'menu', 'chips', 'note', 'sizepick'];
 for (const id of ids) if (!document.byId[id]) mk(id);
-const sizePick = document.byId.sizepick;
+// No size control here: it is a thumbnail size, and these folders are text.
 
 const calls = [];
 const fetch = async (url, opts) => {
@@ -160,16 +160,6 @@ const settle = () => new Promise(r => setImmediate(r));
   // that the summary you were reading is gone.
   check('and stays on this page', !!went && went.startsWith('/?'),
         String(went));
-
-  check('the page carries the size control', !!sizePick);
-  if (sizePick) {
-    check('which says what it will do', !!sizePick.textContent,
-          JSON.stringify(sizePick.textContent));
-    const was = grid.dataset.size;
-    sizePick.click();
-    check('and changes how big the folders are', grid.dataset.size !== was,
-          `${was} -> ${grid.dataset.size}`);
-  }
 
   // --- the grouping -----------------------------------------------------------
   went = null;

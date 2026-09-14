@@ -1243,23 +1243,94 @@ def test_the_landing_page_is_folders_of_whatever_it_is_grouped_by(
     assert "(unknown)" in by_camera
 
 
-def test_the_landing_page_has_a_way_past_the_folders(
+def _folders(html: str) -> str:
+    """Just the folders. The page script is inlined below them and mentions
+    `/thumb/` and half the words on the card."""
+    return html[html.index('id="grid"'):html.index("</div></main>")]
+
+
+def test_the_outer_groupings_are_shelves_not_prefixes(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """`year › event` is a row of events under each year, not a flat list of
+    cards each repeating which year it is in. The grid reads that way and this
+    is the same library."""
+    _burst(app_env, writable, "x.jpg", "y.jpg")
+    client.post("/api/decide/bulk", json={
+        "event": "Sports Day",
+        "files": [{"folder": "init_2026", "name": "x.jpg"}]})
+
+    folders = _folders(client.get("/?group=year,event").text)
+
+    assert folders.count("<h3") >= 1, "no shelves"
+    # The heading says where you are and what the cards are cut by; either
+    # half can be clicked to change that level.
+    assert ">2026<" in folders and "By event" in folders
+    # And the card says only what it is.
+    names = re.findall(r'<b class="name">([^<]*)</b>', folders)
+    assert "Sports Day" in names, names
+    assert not any("2026" in n for n in names), names
+
+
+def test_one_grouping_is_one_shelf(client: TestClient) -> None:
+    """Nothing above it to say, so the heading is the cut itself — which is
+    still the control, because it is the only way to change it."""
+    folders = _folders(client.get("/?group=year").text)
+
+    assert folders.count("<h3") == 1
+    assert "By year" in folders
+
+
+def test_a_folder_says_what_is_in_it_rather_than_showing_one_of_it(
     client: TestClient
 ) -> None:
-    """Every folder opens the grid at that section. Nothing opened it at what
-    the filters still allow, which is the one view no folder stands for."""
-    html = client.get("/?kind=image").text
+    """A cover was whichever file happened to be first, which said what one
+    picture in there looks like and nothing about the section. What you want
+    before opening a folder is how much, when, and how much is left to do."""
+    folders = _folders(client.get("/?group=event").text)
 
-    assert '"/browse?kind=image"' in html
+    assert "/thumb/" not in folders, "still picking a photograph to stand for it"
+    assert "2 files" in folders
+    assert "1 video" in folders, "no sense of what kind of files"
+    assert "2026" in folders, "no sense of when"
+    assert "undecided" in folders
 
 
-def test_a_folder_is_the_section_it_stands_for(client: TestClient) -> None:
-    """Its cover is that section's first photograph — the one at the top left
-    if you opened it — and its count is how many are inside."""
-    html = client.get("/?group=event").text
+def test_a_folder_does_not_print_the_date_its_own_name_is(
+    client: TestClient
+) -> None:
+    """Grouped by day the name *is* the date, and a card saying it twice looks
+    like it is telling you two different things."""
+    by_day = _folders(client.get("/?group=day").text)
+    assert 'class="when"' not in by_day, "the day is printed twice"
 
-    assert "/thumb/init_2026/a.jpg" in html, "no cover"
-    assert "2 files" in html
+    # Where the name is not the date, when it happened is worth saying.
+    by_event = _folders(client.get("/?group=event").text)
+    assert 'class="when"' in by_event
+
+
+def test_a_folder_says_how_much_of_it_is_done(
+    client: TestClient, writable: Path
+) -> None:
+    """A year you have finished and a year you have not started are the same
+    sentence and different bars."""
+    (writable / "b.mp4").write_bytes(b"fake")
+    folders = _folders(client.get("/?group=event").text)
+    assert 'class="bar"' in folders and "2 undecided" in folders
+
+    client.post("/api/decide/bulk", json={
+        "add_audience": ["family"],
+        "files": [{"folder": "init_2026", "name": "a.jpg"}]})
+    half = _folders(client.get("/?group=event").text)
+    assert "1 undecided" in half
+    assert 'width:50%' in half, "the bar does not move"
+
+    client.post("/api/decide/bulk", json={
+        "add_audience": ["family"],
+        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
+    done = _folders(client.get("/?group=event").text)
+    assert "all decided" in done
+    assert "undecided" not in done
 
 
 def test_opening_a_folder_is_this_view_plus_what_the_folder_is(
@@ -2372,9 +2443,84 @@ def test_counts_and_messages_live_in_the_footer(client: TestClient) -> None:
 
 def test_the_identity_controls_sit_top_right(client: TestClient) -> None:
     html = client.get("/browse").text
+    # The row itself: the stylesheet above it talks about Sign out too, and an
+    # index into the whole document finds that first.
+    bar = html[html.index('class="row"'):html.index("</div><main")]
 
-    assert 'class="spacer"' in html
-    assert html.index('class="spacer"') < html.index('Sign out')
+    assert 'class="spacer"' in bar
+    assert bar.index('class="spacer"') < bar.index("Sign out")
+
+
+def test_the_page_has_a_mark_of_its_own(client: TestClient) -> None:
+    """A word in the corner and a blank tab icon. Both are how you find this
+    among twenty other tabs."""
+    html = client.get("/browse").text
+
+    assert 'rel="icon"' in html and "data:image/svg+xml" in html
+    bar = html[html.index('class="brand"'):html.index("</a>",
+                                                      html.index('class="brand"'))]
+    assert "<svg" in bar, "the brand is still text"
+    assert ">pix2<" not in bar, "the word is still there beside the mark"
+    assert 'aria-label="pix2"' in html, "a mark nothing can read out"
+
+
+def test_what_is_about_you_lives_under_your_name(client: TestClient) -> None:
+    """History, Accounts and the way out are things you do rarely. Spread
+    along the bar they were three permanent controls competing with the
+    filters, which are what the bar is for."""
+    html = client.get("/browse").text
+    bar = html[html.index('class="row"'):html.index("</div><main")]
+
+    menu = bar[bar.index('class="memenu"'):]
+    for item in ("/history", "/accounts", "Sign out"):
+        assert item in menu, f"{item} is not under the name"
+    assert "admin" in bar[:bar.index('class="memenu"')], "the name is hidden"
+
+
+def test_what_is_waiting_is_an_icon_not_a_sentence(
+    client: TestClient, writable: Path
+) -> None:
+    """*8 deleted* stood in the bar on every page whether or not it was news,
+    and the next thing worth reporting would have been a second phrase beside
+    it. The dot is the whole of what you see without asking, so it is the part
+    that has to be right."""
+    quiet = client.get("/browse").text
+    bar = quiet[quiet.index('class="row"'):quiet.index("</div><main")]
+    assert 'class="bell"' in bar
+    assert 'data-any=""' in bar, "a dot with nothing behind it"
+    assert "Nothing waiting" in bar
+
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "deleted": True})
+
+    loud = client.get("/browse").text
+    bar = loud[loud.index('class="row"'):loud.index("</div><main")]
+    assert 'data-any="1"' in bar, "nothing says there is something"
+    assert "1 deleted" in bar
+    assert 'id="bincount"' in bar, "the page can no longer update it"
+
+
+def test_the_dot_follows_a_delete_without_a_reload(client: TestClient) -> None:
+    """The count is rendered with the page, so the write that changes it has
+    to say so — and the dot is what anybody actually sees."""
+    js = web._BROWSE_JS
+    at = js.index("function drawBin(")
+
+    assert "bell.dataset.any" in js[at:at + 400], "the dot is left stale"
+
+
+def test_the_name_menu_needs_no_script(client: TestClient) -> None:
+    """It has to work on /history and /accounts, which carry no page script at
+    all — and a Sign out that only worked where the grid was loaded would be
+    missing from the page you are most likely to be stuck on."""
+    for url in ("/history", "/accounts"):
+        html = client.get(url).text
+        assert 'class="memenu"' in html, url
+        assert "Sign out" in html, url
+
+    css = client.get("/browse").text
+    assert ".me:hover .memenu" in css
+    assert ".me:focus-within .memenu" in css, "unreachable from the keyboard"
 
 
 def test_the_filters_wrap_without_carrying_the_way_out_with_them(

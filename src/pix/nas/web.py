@@ -233,7 +233,11 @@ main { padding:16px 20px 40px; }
    ask for the control *plus* its own chrome. */
 .row + .row { margin-top:8px; border-top:1px solid var(--line); padding-top:8px;
               min-height:calc(var(--ctl) + 8px + 1px); }
-.brand { font-weight:600; letter-spacing:.02em; color:var(--fg); }
+/* Three frames, one in front, with a picture in it — the app in one glyph:
+   photographs, and one of them standing for the others. */
+.brand { display:inline-flex; align-items:center; color:var(--fg); }
+.brand svg { display:block; }
+.brand:hover .front { stroke:var(--accent); }
 .count { font-variant-numeric:tabular-nums; color:var(--dim);
          white-space:nowrap; }
 .spacer { flex:1; }
@@ -328,31 +332,37 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
         grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); }
 .grid[data-size="large"] {
         grid-template-columns:repeat(auto-fill,minmax(380px,1fr)); }
-/* A folder: one section of the grid, drawn as what it amounts to. The
-   photograph says which pile it is; the caption says what it is and how much
-   of it there is. Those were laid over the picture and legible over a dark
-   sky and gone over a bright one — and what this page is *for* is the
-   reading, not the picture. */
-.tile { display:flex; flex-direction:column; background:var(--panel);
-        border:1px solid var(--line); border-radius:3px; overflow:hidden;
-        text-decoration:none; color:var(--fg); }
-.tile .shot { display:block; aspect-ratio:4/3; background:#0d0f12; }
-.tile .shot img { width:100%; height:100%; object-fit:cover; display:block; }
-.tile .cap { padding:7px 9px 8px; }
-.tile .name { display:block; font-size:13px; font-weight:600; line-height:1.3;
+/* A folder: one section of the library, and what is worth knowing about it
+   before you open it. No photograph — a cover was whichever file happened to
+   be first, which said what one picture in there looks like and nothing about
+   the section, and a wall of unrelated pictures is harder to read than a wall
+   of text rather than easier. */
+.grid.folders { grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); }
+.tile { display:flex; flex-direction:column; gap:3px; padding:11px 13px 12px;
+        background:var(--panel); border:1px solid var(--line);
+        border-radius:4px; text-decoration:none; color:var(--fg); }
+.tile .name { font-size:14px; font-weight:600; line-height:1.3;
               overflow-wrap:anywhere; }
 .tile .name .sep { color:var(--dim); font-style:normal; font-weight:400;
-                   margin:0 4px; }
-.tile .n { display:block; font-size:11px; color:var(--dim); margin-top:3px; }
-/* Read as *what is left here*, so it is the colour of unfinished work rather
-   than of a count. */
-.tile .left { font-style:normal; color:var(--top); }
-.tile .left::before { content:"·"; color:var(--dim); margin:0 5px; }
-.tile:hover { border-color:var(--accent); }
+                   margin:0 5px; }
+.tile .when { font-size:11px; color:var(--dim); }
+.tile .n { font-size:12px; margin-top:3px;
+           font-variant-numeric:tabular-nums; }
+.tile .kinds { font-style:normal; color:var(--dim); }
+.tile .kinds::before { content:" · "; }
+/* How much of it is done, as a shape: a year you have finished and a year you
+   have not started are the same sentence and different bars. */
+.tile .bar { height:3px; margin-top:7px; border-radius:2px;
+             background:#2a3038; overflow:hidden; }
+.tile .bar i { display:block; height:100%; background:var(--accent); }
+.tile .bar.done i { background:var(--keep); }
+.tile .left { font-size:11px; color:var(--top); margin-top:4px; }
+.tile .left.all { color:var(--keep); }
+.tile:hover { border-color:var(--accent); background:#20242b; }
 /* A section with no address. It is still a real pile of files, so it is still
    shown — it just cannot be opened on its own. */
 .tile.dead { cursor:default; opacity:.7; }
-.tile.dead:hover { border-color:var(--line); }
+.tile.dead:hover { border-color:var(--line); background:var(--panel); }
 /* A thumbnail with a letter in it. Three words took three buttons' worth of
    bar for something nobody reads twice — the shape says what it is about and
    the letter says where it is, which is all a size control has to say. */
@@ -543,6 +553,61 @@ h2.year span { font-size:13px; font-weight:400; }
 .gate .note, main > .note { margin:8px 0; }
 .warn { color:#e3b341; }
 .who-link { margin-left:10px; display:inline-flex; align-items:center; }
+/* What the library is holding that nobody has looked at, in the space of an
+   icon. The count was a phrase standing in the bar on every page whether or
+   not it was news, and the next thing worth reporting would have been a
+   second phrase beside it. */
+.bell { position:relative; display:inline-flex; align-items:center;
+        margin-left:10px; color:var(--dim); outline:none; cursor:default; }
+.bell:hover, .bell:focus-within { color:var(--fg); }
+.bell .dot { display:none; position:absolute; right:-1px; top:1px;
+             width:7px; height:7px; border-radius:50%;
+             background:var(--gone); border:1.5px solid var(--chrome); }
+.bell[data-any="1"] .dot { display:block; }
+.bell[data-any="1"] { color:var(--fg); }
+.bellmenu { position:absolute; right:0; top:100%; margin-top:6px; z-index:21;
+            min-width:170px; display:none; flex-direction:column;
+            background:var(--panel); border:1px solid var(--line);
+            border-radius:4px; padding:4px; box-shadow:0 10px 24px -8px #000d; }
+.bell:hover .bellmenu, .bell:focus-within .bellmenu { display:flex; }
+.bell::after { content:""; position:absolute; right:0; top:100%;
+               width:100%; height:8px; }
+.bellmenu a, .bellmenu .quiet { display:block; padding:6px 10px;
+            border-radius:3px; text-decoration:none; color:var(--fg);
+            white-space:nowrap; }
+.bellmenu a:hover { background:#242a33; }
+.bellmenu .quiet { color:var(--dim); }
+/* One or the other: something to report, or the fact that there is nothing.
+   Both at once reads as a bug, and neither leaves an empty box. */
+.bell[data-any="1"] .bellmenu .quiet { display:none; }
+
+/* Everything about you, under your name. Opens on hover *and* on focus, with
+   no script, because /history and /accounts carry none — and a Sign out that
+   only worked where the grid was loaded would be missing from the page you
+   are most likely to be stuck on. */
+.me { position:relative; display:inline-flex; align-items:center;
+      outline:none; }
+.me .name { cursor:default; color:var(--fg); gap:5px; }
+.me .caret { font-style:normal; font-size:9px; color:var(--dim);
+             transition:transform .12s; }
+.me:hover .caret, .me:focus-within .caret { transform:rotate(180deg); }
+.memenu { position:absolute; right:0; top:100%; margin-top:6px; z-index:21;
+          min-width:150px; display:none; flex-direction:column;
+          background:var(--panel); border:1px solid var(--line);
+          border-radius:4px; padding:4px; box-shadow:0 10px 24px -8px #000d; }
+.me:hover .memenu, .me:focus-within .memenu { display:flex; }
+/* A hover menu that starts below its own trigger has a gap to cross, and the
+   pointer leaves through it. This is that gap, made part of the control. */
+.me::after { content:""; position:absolute; right:0; top:100%;
+             width:100%; height:8px; }
+.memenu a, .memenu button { display:block; width:100%; text-align:left;
+          padding:6px 10px; border:0; background:none; color:var(--fg);
+          font:inherit; border-radius:3px; text-decoration:none;
+          cursor:pointer; }
+.memenu a:hover, .memenu button:hover { background:#242a33; }
+.memenu form { margin:0; }
+/* The way out is the one thing in here that is not navigation. */
+.memenu button { color:var(--gone); }
 /* Another `display` that would outrank the user agent's `[hidden]`. The bin
    count is hidden at zero and shown the moment something is deleted, without
    a reload, so it has to be hideable. */
@@ -634,9 +699,10 @@ def _page(title: str, body: str, *, tools: str = "", rows: str = "",
     """
     return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{title}</title><style>{_STYLE}</style></head><body>
+<title>{title}</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2028%2028%22%3E%3Crect%20width%3D%2228%22%20height%3D%2228%22%20rx%3D%226%22%20fill%3D%22%2314161a%22%2F%3E%3Crect%20x%3D%229%22%20y%3D%224.4%22%20width%3D%2215.2%22%20height%3D%2211.8%22%20rx%3D%222.3%22%20fill%3D%22none%22%20stroke%3D%22%238b93a3%22%20stroke-width%3D%221.5%22%20opacity%3D%22.45%22%2F%3E%3Crect%20x%3D%226.2%22%20y%3D%227.6%22%20width%3D%2215.2%22%20height%3D%2211.8%22%20rx%3D%222.3%22%20fill%3D%22none%22%20stroke%3D%22%238b93a3%22%20stroke-width%3D%221.5%22%20opacity%3D%22.75%22%2F%3E%3Crect%20x%3D%223.4%22%20y%3D%2210.8%22%20width%3D%2215.2%22%20height%3D%2211.8%22%20rx%3D%222.3%22%20fill%3D%22%231b1e24%22%20stroke%3D%22%23e7e9ee%22%20stroke-width%3D%221.6%22%2F%3E%3Ccircle%20cx%3D%227.8%22%20cy%3D%2214.7%22%20r%3D%221.5%22%20fill%3D%22%23e3b341%22%2F%3E%3Cpath%20d%3D%22M4.8%2020.6%20L8.8%2016.8%20L11.5%2019.3%20L13.6%2017.3%20L17.3%2020.9%22%20fill%3D%22none%22%20stroke%3D%22%236aa3ff%22%20stroke-width%3D%221.6%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3C%2Fsvg%3E"><style>{_STYLE}</style></head><body>
 <div class="topbar">
-<div class="row"><a class="brand" href="/">pix2</a>{tools}
+<div class="row"><a class="brand" href="/" title="pix2" aria-label="pix2"><svg viewBox="0 0 28 28" width="26" height="26" aria-hidden="true"><rect x="9" y="3.6" width="16" height="12.4" rx="2.4" fill="none" stroke="var(--dim)" stroke-width="1.4" opacity=".45"/><rect x="6" y="7" width="16" height="12.4" rx="2.4" fill="none" stroke="var(--dim)" stroke-width="1.4" opacity=".75"/><rect class="front" x="3" y="10.4" width="16" height="12.4" rx="2.4" fill="var(--panel)" stroke="var(--fg)" stroke-width="1.5"/><circle cx="7.6" cy="14.4" r="1.5" fill="var(--top)"/><path d="M4.4 20.6 L8.6 16.6 L11.4 19.2 L13.6 17.2 L17.6 20.8" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a>{tools}
 <span class="spacer"></span><span class="right">{right}{_whoami(user)}</span></div>{rows}
 </div><main>{body}</main>
 <footer class="footbar"><span class="ver">v{_PIX_VERSION}</span>{footer}</footer>
@@ -644,21 +710,34 @@ def _page(title: str, body: str, *, tools: str = "", rows: str = "",
 
 
 def _whoami(user: Principal | None) -> str:
-    """Who you are signed in as, and the way out.
+    """Who you are signed in as, and everything that is about you.
 
-    Always visible because this app is used as two different people — the
-    owner curating, and the admin granting access — and acting as the wrong
-    one is invisible until something is shared with the wrong household.
+    The name is always visible because this app is used as two different
+    people — the owner curating, and the admin granting access — and acting as
+    the wrong one is invisible until something is shared with the wrong
+    household. What sits *under* the name is everything you do rarely:
+    History, Accounts, and the way out. Spread along the bar they were three
+    permanent controls competing with the filters, which are the thing the bar
+    is actually for.
+
+    **No script.** This has to work on `/history` and `/accounts`, which carry
+    no page script at all, so the menu opens on hover and on keyboard focus
+    with CSS alone. A dropdown that worked only where the grid was loaded
+    would be a sign-out button that vanished on the page you were most likely
+    to be stuck on.
     """
     if user is None:
         return '<a class="who-link" href="/login">Sign in</a>'
-    manage = (f'{_bin_link()}'
-              '<a class="who-link" href="/history">History</a>'
-              '<a class="who-link" href="/accounts">Accounts</a>'
-              if user.is_admin else "")
-    return (f'<span class="who-link dim">{_h(user.name)}</span>{manage}'
-            '<form method="post" action="/logout" class="who-link">'
-            '<button>Sign out</button></form>')
+    manage = ('<a href="/history">History</a>'
+              '<a href="/accounts">Accounts</a>' if user.is_admin else "")
+    return (
+        f'{_activity(user)}'
+        f'<span class="me" tabindex="0">'
+        f'<span class="who-link name">{_h(user.name)}'
+        f'<i class="caret">&#9662;</i></span>'
+        f'<span class="memenu">{manage}'
+        f'<form method="post" action="/logout">'
+        f'<button>Sign out</button></form></span></span>')
 
 
 def _both_sides(deleted: str | None, op_id: str | None,
@@ -746,41 +825,63 @@ def _as_decision(row: sqlite3.Row) -> decisions.Decision:
         deleted=bool(row["deleted"]))
 
 
-def _bin_link() -> str:
-    """*8 deleted* — a standing count, and the way to go and deal with them.
+def _binned() -> int:
+    """How many files are in the bin — *8 deleted*, and the way to deal with
+    them.
 
     Deleting is meant to be cheap, which means files accumulate in a state
     nobody is looking at. A link called "Deleted" says nothing about whether
     there is anything to do; a number says there are eight, and says it on
     every page until they are gone.
 
-    It clears the other filters rather than adding to them. Arriving at
-    *8 deleted* and being shown two because last week's event filter was still
-    on would be the count lying, which is the one thing it cannot do.
-
-    Silent at zero: an empty bin is not news, and a nag that is always there
-    stops being read. Rendered anyway and hidden, rather than left out, because
-    deleting something has to light it up without a reload — and an element
-    that is not there cannot be updated.
+    Zero if the index cannot answer. A header that fails to render because a
+    count could not be read would take the whole page with it.
     """
     try:
         conn = db()
     except HTTPException:
-        return ""
+        return 0
     try:
-        n = ix.count(conn, ix.Filters(deleted="only"))
+        return ix.count(conn, ix.Filters(deleted="only"))
     except sqlite3.Error:
-        return ""
+        return 0
     finally:
         conn.close()
-    return bin_link_html(n)
 
 
 def bin_link_html(n: int) -> str:
     """The bin count as the header shows it — and as the page rewrites it."""
-    return (f'<a class="who-link bin-link" id="bincount" '
+    return (f'<a class="bin-link" id="bincount" '
             f'href="/browse?deleted=only"{"" if n else " hidden"}>'
             f'{n:,} deleted</a>')
+
+
+def _activity(user: Principal) -> str:
+    """What the library is holding that nobody has looked at.
+
+    One icon rather than a standing line of counts. *8 deleted* was a phrase
+    sitting in the bar on every page whether or not it was news, and the next
+    thing worth reporting would have been a second phrase beside it. A bell
+    with a dot on it says *there is something* in the space of an icon, and
+    what the something is can be read when you want it.
+
+    The dot, not the words, is the part that has to be right: it is the whole
+    of what you see without asking.
+    """
+    if not user.is_admin:
+        return ""
+    n = _binned()
+    return (f'<span class="bell" id="activity" tabindex="0" '
+            f'data-any="{"1" if n else ""}" '
+            f'title="Activity"><svg viewBox="0 0 24 24" width="17" '
+            f'height="17" aria-hidden="true" fill="none" '
+            f'stroke="currentColor" stroke-width="1.7" '
+            f'stroke-linecap="round" stroke-linejoin="round">'
+            f'<path d="M18 9a6 6 0 1 0-12 0c0 5-2 6-2 6h16s-2-1-2-6"/>'
+            f'<path d="M10.3 20a2 2 0 0 0 3.4 0"/></svg>'
+            f'<i class="dot"></i>'
+            f'<span class="bellmenu">{bin_link_html(n)}'
+            f'<span class="quiet">Nothing waiting</span></span></span>')
 
 
 def filters(
@@ -881,14 +982,9 @@ def home(user: Annotated[Principal, Depends(require_user)],
             f'{s["undated"] or 0:,} undated '
             f'&middot; indexed {_age(ix.built_at(conn))} {open_note}')
 
-    if not rows:
-        body = '<p class="empty">Nothing matches these filters.</p>'
-    else:
-        labels = [dict(_GRID_GROUPS).get(g, g) for g in groups]
-        body = (_heading(labels, len(groups), len(rows), pick=False)
-                + '<div class="grid folders" id="grid">'
-                + "".join(_folder(r, groups, view, user) for r in rows)
-                + "</div>")
+    body = ('<p class="empty">Nothing matches these filters.</p>' if not rows
+            else '<div class="grid folders" id="grid">'
+                 + _shelves(rows, groups, view, user) + "</div>")
     return _page("pix2",
                  # The shared menu, which every filter and the grouping open
                  # into. Left out, the script threw looking for it the moment
@@ -896,46 +992,85 @@ def home(user: Annotated[Principal, Depends(require_user)],
                  # heading never wired looks exactly like a page whose
                  # controls were never built.
                  f'<p class="dim">{head}</p>{body}<div id="menu" hidden></div>',
-                 # The way past the folders. Every one of them opens the grid
-                 # at that section; this opens it at everything the filters
-                 # still allow, which is the one view no folder stands for.
-                 tools=('<div class="chips" id="chips"></div>'
-                        f'<a class="who-link" href="{_h(_browse_url(view, {}))}">'
-                        'All files &rarr;</a>'),
-                 # Folders are photographs too, and 300 days of them at
-                 # thumbnail size is a wall. The same control, remembered in
-                 # the same place, so the two pages agree about how big things
-                 # are without being told twice.
-                 right='<button id="sizepick" aria-label="Thumbnail size"></button>',
+                 tools='<div class="chips" id="chips"></div>',
                  footer='<span id="note" class="note"></span>',
                  script=_view_script(user, view, groups, page="/"),
                  user=user)
 
 
+def _shelves(rows: list[sqlite3.Row], groups: list[str], view: ix.Filters,
+             user: Principal) -> str:
+    """The folders, under a heading for each level above them.
+
+    `year › event` is a row of events under each year, not a flat list of
+    cards each repeating which year it is in. The grid already reads that way
+    and this is the same library, so it is the same shape: the outer levels
+    are headings, and only the innermost is a folder.
+
+    The heading is the grouping control here as it is there, and it carries
+    one crumb per level — values for the levels above, and for the innermost
+    the *name* of the cut, because that level has no single value: it is what
+    the cards are. So `2025 › By event` says where you are and what you are
+    looking at, and either half can be changed by clicking it.
+    """
+    inner = groups[-1] if groups else ""
+    outer = groups[:-1]
+    if not groups:
+        return (_heading([], 0, len(rows), pick=False)
+                + "".join(_folder(r, groups, view, user) for r in rows))
+    out: list[str] = []
+    for keys, run in groupby(rows, key=lambda r: tuple(
+            r[f"grp{i}"] for i in range(len(outer)))):
+        shelf = list(run)
+        labels = [_group_label(k, g, outer[:i], shelf[0])
+                  for i, (k, g) in enumerate(zip(keys, outer))]
+        labels.append(dict(_GRID_GROUPS).get(inner, inner))
+        out.append(_heading(labels, len(groups), len(shelf), pick=False))
+        out.extend(_folder(r, groups, view, user) for r in shelf)
+    return "".join(out)
+
+
 def _folder(row: sqlite3.Row, groups: list[str], view: ix.Filters,
             user: Principal) -> str:
-    """One section of the grid, drawn as the folder it amounts to.
+    """One section of the grid, drawn as what is worth knowing about it.
 
-    The cover is the section's first photograph — the one at the top left if
-    you opened it — so the folder looks like what is inside it rather than like
-    a name somebody chose.
+    Not a photograph. A cover was whichever file happened to be first, which
+    told you what one picture in there looks like and nothing about the
+    section — and a wall of unrelated pictures is harder to read than a wall
+    of text, not easier. What you want before opening a folder is what is in
+    it: how much, when, and how much of it you have not dealt with.
     """
-    labels = [_group_label(row[f"grp{i}"], g, groups[:i], row)
-              for i, g in enumerate(groups)] or ["Everything"]
+    # Only what this card *is*. Which year it falls in is the heading above
+    # it, and a card repeating its own shelf's name is a card saying one thing
+    # and looking like it says two.
+    last = len(groups) - 1
+    name = (_group_label(row[f"grp{last}"], groups[last], groups[:last], row)
+            if groups else "Everything")
     href = _drill(row, groups, view)
     n = int(row["n"])
+    videos = int(row["videos"] or 0)
     left = int(row["unreviewed"] or 0) if user.is_admin else 0
+    # Not under a heading that already says it: grouped by day, the name *is*
+    # the date, and printing it twice is a card that looks like it is telling
+    # you two things.
+    dated = not (groups and groups[-1] == "day")
+    when = _span(row["first_seen"], row["last_seen"]) if dated else ""
     inner = (
-        '<span class="shot"><img loading="lazy" '
-        f'src="/thumb/{_q(row["folder"])}/{_q(row["name"])}"></span>'
-        # Beneath the photograph rather than over it. What a folder *is* was
-        # small text laid on whatever its first picture happened to be, so it
-        # was legible over a dark sky and gone over a bright one.
-        '<span class="cap"><b class="name">'
-        + '<i class="sep">&rsaquo;</i>'.join(_h(x) for x in labels)
-        + f'</b><span class="n">{n:,} file{"" if n == 1 else "s"}'
-        + (f'<i class="left">{left:,} undecided</i>' if left else "")
-        + "</span></span>")
+        f'<b class="name">{_h(name)}</b>'
+        + (f'<span class="when">{_h(when)}</span>' if when else
+           '<span class="when dim">no dates</span>' if dated else "")
+        + f'<span class="n">{n:,} file{"" if n == 1 else "s"}'
+        + (f'<i class="kinds">{videos:,} video{"" if videos == 1 else "s"}</i>'
+           if videos else "")
+        + "</span>"
+        # How much of it is done, as a shape: a year you have finished and a
+        # year you have not started are the same sentence and different bars.
+        + (f'<span class="bar" title="{n - left:,} of {n:,} decided">'
+           f'<i style="width:{round(100 * (n - left) / n) if n else 0}%"></i>'
+           f'</span><span class="left">{left:,} undecided</span>'
+           if left else
+           '<span class="bar done"><i style="width:100%"></i></span>'
+           '<span class="left all">all decided</span>' if user.is_admin else ""))
     if href is None:
         # Nothing to link to, rather than a link somewhere else. *No day* is
         # every file whose date stops at the month, and there is no filter that
@@ -944,6 +1079,26 @@ def _folder(row: sqlite3.Row, groups: list[str], view: ix.Filters,
         return (f'<div class="tile dead" title="There is no filter for this '
                 f'one, so it cannot be opened on its own">{inner}</div>')
     return f'<a class="tile" href="{_h(href)}">{inner}</a>'
+
+
+def _span(first: object, last: object) -> str:
+    """When a section happened, in as few words as it takes to say it.
+
+    Written the way a person would: one day is a day, a fortnight in one month
+    drops the month from the first end, and a year that appears twice is
+    printed once.
+    """
+    start = datestr.parse_pix(str(first)) if first else None
+    end = datestr.parse_pix(str(last)) if last else None
+    if start is None or end is None:
+        return ""
+    if start.date() == end.date():
+        return f"{start.day} {start:%B %Y}"
+    if (start.year, start.month) == (end.year, end.month):
+        return f"{start.day} – {end.day} {end:%B %Y}"
+    if start.year == end.year:
+        return f"{start.day} {start:%b} – {end.day} {end:%b %Y}"
+    return f"{start.day} {start:%b %Y} – {end.day} {end:%b %Y}"
 
 
 #: What each grouping means as a filter, which is what makes a folder openable.
@@ -2742,6 +2897,10 @@ function drawBin(n){
   if(binEl===null||n===null||n===undefined) return;
   binEl.textContent=`${n.toLocaleString()} deleted`;
   binEl.hidden=!n;
+  // The dot is the whole of what you see without asking, so it follows the
+  // count rather than the page load: deleting something has to light it up.
+  const bell=document.getElementById('activity');
+  if(bell) bell.dataset.any=n?'1':'';
 }
 
 function workClose(){
