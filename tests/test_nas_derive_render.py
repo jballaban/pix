@@ -23,7 +23,7 @@ def tiers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
     share = tmp_path / "nas"
     master = share / "master"
     master.mkdir(parents=True)
-    for name in ("thumb", "preview", "meta", "render"):
+    for name in ("thumb", "large", "preview", "meta", "render"):
         monkeypatch.setattr(derive, f"{name.upper()}_DIR", share / name)
     monkeypatch.setattr(derive, "MASTER_DIR", master)
     monkeypatch.setattr(derive, "_scratch", lambda: tmp_path / "scratch")
@@ -111,7 +111,7 @@ def test_scan_finds_a_clip_needing_only_a_render(
 ) -> None:
     """Every image tier present, yet still work to do — the codec question."""
     _clip(tiers, "a.mp4", "hvc1")
-    for tier in ("thumb", "preview"):
+    for tier in ("thumb", "large", "preview"):
         d = tiers["master"].parent / tier / "init_2026"
         d.mkdir(parents=True, exist_ok=True)
         (d / "a.mp4.jpg").write_bytes(b"x")
@@ -121,7 +121,7 @@ def test_scan_finds_a_clip_needing_only_a_render(
 
 def test_scan_leaves_a_finished_h264_clip_alone(tiers: dict[str, Path]) -> None:
     _clip(tiers, "a.mp4", "avc1")
-    for tier in ("thumb", "preview"):
+    for tier in ("thumb", "large", "preview"):
         d = tiers["master"].parent / tier / "init_2026"
         d.mkdir(parents=True, exist_ok=True)
         (d / "a.mp4.jpg").write_bytes(b"x")
@@ -170,12 +170,12 @@ def test_a_clip_needing_only_a_render_is_not_skipped(
 ) -> None:
     """The regression: `pending_files` found all 421, `_derive_one` skipped them.
 
-    `_derive_one` returned early once the thumb, preview and meta tiers were
+    `_derive_one` returned early once the image tiers and meta were
     complete — before it ever reached the render block — so every HEVC clip was
     counted as "already done" and nothing was encoded.
     """
     media = _clip(tiers, "a.mp4", "hvc1")
-    for tier in ("thumb", "preview"):
+    for tier in ("thumb", "large", "preview"):
         d = tiers["master"].parent / tier / "init_2026"
         d.mkdir(parents=True, exist_ok=True)
         (d / "a.mp4.jpg").write_bytes(b"x")
@@ -198,7 +198,7 @@ def test_a_finished_h264_clip_is_still_skipped(
 ) -> None:
     """The early return must still fire for work that is genuinely done."""
     media = _clip(tiers, "a.mp4", "avc1")
-    for tier in ("thumb", "preview"):
+    for tier in ("thumb", "large", "preview"):
         d = tiers["master"].parent / tier / "init_2026"
         d.mkdir(parents=True, exist_ok=True)
         (d / "a.mp4.jpg").write_bytes(b"x")

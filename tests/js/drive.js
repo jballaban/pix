@@ -1124,7 +1124,8 @@ function arrow(key, opts) {
           String(stored['pix2.thumb']));
 
     // The biggest is bigger than the thumbnail tier has pixels for, so it
-    // reads from the preview tier instead.
+    // reads from `large` — sized for exactly this, where the preview it used
+    // to borrow is four times the pixels anybody was going to look at.
     const img = new El('img');
     img.attrs.src = '/thumb/f/a.jpg';
     img.setAttribute = (k, v) => { img.attrs[k] = v; };
@@ -1133,8 +1134,8 @@ function arrow(key, opts) {
     // re-ran the page against a different grid, and `cells` moved with them.
     document.querySelectorAll('.cell')[0].appendChild(img);
     sizeBtn('huge').click();
-    check('the biggest size reads from the preview tier',
-          img.attrs.src === '/preview/f/a.jpg', img.attrs.src);
+    check('the biggest size reads from the tier sized for it',
+          img.attrs.src === '/large/f/a.jpg', img.attrs.src);
     sizeBtn('small').click();
     check('and the smaller ones go back to the thumbnail',
           img.attrs.src === '/thumb/f/a.jpg', img.attrs.src);

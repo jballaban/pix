@@ -56,6 +56,12 @@ MASTER_DIR: Path = MASTER_SHARE / "master"
 #: Derived tiers. Disposable, never backed up, regenerable from master.
 RENDER_DIR: Path = MASTER_SHARE / "render"
 THUMB_DIR: Path = MASTER_SHARE / "thumb"
+#: Between the two, and the reason there are three. A grid cell stretches past
+#: its minimum to fill the row, so the largest thumbnail size renders around
+#: 460px — 920 device pixels on a 2x display, where `thumb` has 400. Serving
+#: `preview` there worked and cost 221KB a cell to show something 106KB
+#: covers; four times the pixels anybody was going to look at.
+LARGE_DIR: Path = MASTER_SHARE / "large"
 PREVIEW_DIR: Path = MASTER_SHARE / "preview"
 
 #: Probed facts, one JSON per master file. Derived like the rest — but it is what

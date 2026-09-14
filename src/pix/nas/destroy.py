@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pix.nas import decisions
-from pix.nas.const import PREVIEW_DIR, THUMB_DIR
+from pix.nas.const import LARGE_DIR, PREVIEW_DIR, THUMB_DIR
 from pix.nas.derive import derived_path, meta_path, render_path
 
 
@@ -57,6 +57,7 @@ def targets(media: Path) -> tuple[Path, ...]:
     drift, and the failure mode is orphaned files nobody ever looks for again.
     """
     return (derived_path(media, THUMB_DIR),
+            derived_path(media, LARGE_DIR),
             derived_path(media, PREVIEW_DIR),
             render_path(media),
             meta_path(media),

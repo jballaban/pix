@@ -46,7 +46,8 @@ from pix.nas import destroy as destroy_mod
 from pix.nas import history
 from pix.nas import index as ix
 from pix.nas.const import (
-    INDEX_DB, MASTER_DIR, META_DIR, PREVIEW_DIR, RENDER_DIR, THUMB_DIR,
+    INDEX_DB, LARGE_DIR, MASTER_DIR, META_DIR, PREVIEW_DIR, RENDER_DIR,
+    THUMB_DIR,
 )
 from pix.nas.decisions import Decision, Unset
 
@@ -1310,14 +1311,14 @@ try{
 }catch(e){}
 
 // The biggest size is bigger than the thumbnail tier has pixels for, so it
-// reads from the preview tier instead. The two routes take the same path after
-// the tier name, so this swaps one segment rather than building an address a
-// second time.
+// reads from `large` — sized for exactly this and nothing else. The media
+// routes take the same path after the tier name, so this swaps one segment
+// rather than building an address a second time.
 function useSource(c){
   const img=c.querySelector('img');
   if(!img) return;
-  const want=thumbSize==='huge'?'/preview/':'/thumb/';
-  const other=want==='/thumb/'?'/preview/':'/thumb/';
+  const want=thumbSize==='huge'?'/large/':'/thumb/';
+  const other=want==='/thumb/'?'/large/':'/thumb/';
   const have=img.getAttribute('src')||'';
   if(have.startsWith(other)) img.setAttribute('src',want+have.slice(other.length));
 }
@@ -2679,6 +2680,16 @@ def thumb(folder: str, name: str,
           user: Annotated[Principal, Depends(require_user)]) -> FileResponse:
     _allowed(user, folder, name)
     return _serve(THUMB_DIR, folder, name)
+
+
+@app.get("/large/{folder}/{name}")
+def large(folder: str, name: str,
+          user: Annotated[Principal, Depends(require_user)]) -> FileResponse:
+    """The grid's largest setting. Between the two others because a cell that
+    stretches to 460px wants 920 device pixels, which `thumb` has not got and
+    `preview` has four times too many of."""
+    _allowed(user, folder, name)
+    return _serve(LARGE_DIR, folder, name)
 
 
 @app.get("/preview/{folder}/{name}")

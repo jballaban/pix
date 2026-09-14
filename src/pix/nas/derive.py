@@ -53,13 +53,19 @@ from pix.markers import EXPORT_TMP_SUFFIX
 from pix.progress import LiveProgress
 from pix.nas import ledger
 from pix.nas.const import (
-    LEDGER_NAME, MASTER_DIR, META_DIR, PREVIEW_DIR, RENDER_DIR, THUMB_DIR,
+    LARGE_DIR, LEDGER_NAME, MASTER_DIR, META_DIR, PREVIEW_DIR, RENDER_DIR,
+    THUMB_DIR,
 )
 
 #: Long-edge pixels. Both are regenerable, but regenerating 62k files is an
 #: afternoon, so they are worth getting roughly right rather than discovering
 #: mid-curation.
 THUMB_PX: int = 400
+#: Sized for the grid's largest setting rather than for looking at one
+#: photograph: ~460px cells on a wide screen, doubled for a 2x display, with a
+#: little left over. Measured at 106KB median against the real library, where
+#: the 1600px preview it replaces there is 221KB.
+LARGE_PX: int = 1000
 PREVIEW_PX: int = 1600
 
 #: JPEG quality for derived images. 82 is visually clean at these sizes and
@@ -180,6 +186,7 @@ class ProcessSummary:
     """What one `process` run did."""
 
     thumbs: int = 0
+    larges: int = 0
     previews: int = 0
     metas: int = 0
     renders: int = 0
@@ -253,14 +260,15 @@ def wants_render(media: Path) -> bool:
     return needs_render(media, video_codec(media))
 
 
-def needs_work(media: Path) -> tuple[bool, bool, bool]:
-    """`(needs thumb, needs preview, needs meta)` — what is missing.
+def needs_work(media: Path) -> tuple[bool, bool, bool, bool]:
+    """`(needs thumb, needs large, needs preview, needs meta)` — what is missing.
 
-    Per-file, so it costs three `stat`s. `pending_files` answers the same
+    Per-file, so it costs four `stat`s. `pending_files` answers the same
     question for a whole run with directory listings instead; use that for
     anything at scale.
     """
     return (not derived_path(media, THUMB_DIR).is_file(),
+            not derived_path(media, LARGE_DIR).is_file(),
             not derived_path(media, PREVIEW_DIR).is_file(),
             not meta_path(media).is_file())
 
@@ -303,6 +311,7 @@ def pending_files(echo: Callable[[str], None] = lambda _: None) -> list[Path]:
         progress.begin("scan")
         for folder in folders:
             thumbs = _names_in(THUMB_DIR / folder.name)
+            larges = _names_in(LARGE_DIR / folder.name)
             previews = _names_in(PREVIEW_DIR / folder.name)
             metas = _names_in(META_DIR / folder.name)
 
@@ -325,7 +334,8 @@ def pending_files(echo: Callable[[str], None] = lambda _: None) -> list[Path]:
                 if name == LEDGER_NAME or name.lower().endswith(".xmp"):
                     continue
                 derived = name + ".jpg"
-                want = (derived not in thumbs or derived not in previews
+                want = (derived not in thumbs or derived not in larges
+                        or derived not in previews
                         or name + ".json" not in metas)
                 # A video may be complete on every image tier and still need a
                 # render — the codec question the extension cannot answer.
@@ -352,7 +362,8 @@ def sweep_partials() -> int:
     _reap_dead_scratch()
 
     removed = 0
-    for root in (THUMB_DIR, PREVIEW_DIR, META_DIR, RENDER_DIR, _scratch()):
+    for root in (THUMB_DIR, LARGE_DIR, PREVIEW_DIR, META_DIR, RENDER_DIR,
+                 _scratch()):
         if not root.is_dir():
             continue
         for tmp in root.rglob(f"*{EXPORT_TMP_SUFFIX}*"):
@@ -472,12 +483,13 @@ def _status(summary: ProcessSummary, total: int, started: float,
 def _derive_one(media: Path, summary: ProcessSummary, lock: threading.Lock,
                 exif: "_ExifPool", state: dict[str, int]) -> None:
     """Make whatever `media` is missing."""
-    want_thumb, want_preview, want_meta = needs_work(media)
+    want_thumb, want_large, want_preview, want_meta = needs_work(media)
     # A video can be complete on every image tier and still need a render — the
     # codec question an extension cannot answer. Leaving this out of the early
     # return dismissed all 421 HEVC clips as "already done".
     want_render = wants_render(media)
-    if not (want_thumb or want_preview or want_meta or want_render):
+    if not (want_thumb or want_large or want_preview or want_meta
+            or want_render):
         with lock:
             summary.skipped += 1
         return
@@ -515,7 +527,7 @@ def _derive_one(media: Path, summary: ProcessSummary, lock: threading.Lock,
                     summary.failed.append(
                         f"{media.name}: render: {type(e).__name__}: {e}")
 
-    if not (want_thumb or want_preview):
+    if not (want_thumb or want_large or want_preview):
         return
 
     ext = media.suffix.lower()
@@ -540,6 +552,10 @@ def _derive_one(media: Path, summary: ProcessSummary, lock: threading.Lock,
                 _resize(source, derived_path(media, THUMB_DIR), THUMB_PX)
                 with lock:
                     summary.thumbs += 1
+            if want_large:
+                _resize(source, derived_path(media, LARGE_DIR), LARGE_PX)
+                with lock:
+                    summary.larges += 1
             if want_preview:
                 _resize(source, derived_path(media, PREVIEW_DIR), PREVIEW_PX)
                 with lock:
