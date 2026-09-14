@@ -418,6 +418,15 @@ h3.group[data-state="some"] .grppick { background:var(--top);
          padding:1px 6px; border-radius:3px;
          box-shadow:2px -2px 0 -1px #000b, 4px -4px 0 -2px #000b; }
 .stack:hover { background:var(--accent); color:#0d0f12; text-decoration:none; }
+/* Inside an opened stack, the one that speaks. Everything in there looks
+   alike — that is why they were stacked — so without this there is nothing to
+   say which one the grid outside will show. */
+.top-mark { position:absolute; right:4px; top:4px; z-index:3;
+            background:var(--accent); color:#0d0f12; font-size:10px;
+            font-weight:700; letter-spacing:.05em; text-transform:uppercase;
+            padding:2px 6px; border-radius:3px; }
+/* Both of them stand where the tags do, and were simply covering them. */
+.cell.marked .tags { padding-right:40px; }
 /* Access bottom-left, tags top-right, duration bottom-right — three corners,
    nothing overlapping. Each value is its own chip: a thumbnail is 150px and
    three role names are not, so one run of text just gets cut off mid-word
@@ -1088,6 +1097,7 @@ def _access_html(shared: list[str]) -> str:
 
 
 def _cell(row: sqlite3.Row, within: str | None = None) -> str:
+    mark = _stack_badge(row, within)
     tags = _split(row["tags"])
     shared = _split(row["audience"])
     # Newline-joined, matching what the client splits on. A stray control byte
@@ -1095,7 +1105,8 @@ def _cell(row: sqlite3.Row, within: str | None = None) -> str:
     # page as one unsplittable blob.
     nl = chr(10)
     return (
-        f'<div class="cell{" gone" if row["deleted"] else ""}" '
+        f'<div class="cell{" gone" if row["deleted"] else ""}'
+        f'{" marked" if mark else ""}" '
         f'data-folder="{_h(row["folder"])}" '
         f'data-name="{_h(row["name"])}" data-kind="{_h(row["kind"])}" '
         f'data-audience="{_h(nl.join(shared))}" '
@@ -1109,29 +1120,33 @@ def _cell(row: sqlite3.Row, within: str | None = None) -> str:
         f'<button class="pick" aria-label="select"></button>'
         + (f'<span class="badge">{_dur(row["duration"])}</span>'
            if row["kind"] == "video" else "")
-        + _stack_badge(row, within)
+        + mark
         + _access_html(shared) + _chips_html("tags", tags)
         + "</div>"
     )
 
 
 def _stack_badge(row: sqlite3.Row, within: str | None = None) -> str:
-    """How many files this one is speaking for, and the way to see them.
+    """What a thumbnail says about the stack it is part of.
 
-    Only on the top of a stack, and only when it has anything behind it: a
-    count of one is a photograph, not a stack. It is a link rather than a
-    button because opening a stack is a view of the library like any other —
-    the ordinary grid, filtered to these files, with everything the grid can do
-    still on the table.
+    Two different marks for two different questions. In the ordinary grid, on
+    the file that speaks for others: **how many**, as a link, because opening a
+    stack is a view of the library like any other. Only when it has anything
+    behind it — a count of one is a photograph, not a stack.
+
+    Inside an opened stack, on the file that is doing the speaking: **which
+    one**. Everything in there looks alike, which is the whole reason they were
+    stacked, so without this there is nothing to tell you which one the grid
+    outside will show. Not the count again: a depth badge inside the thing it
+    measures reads as a stack within a stack, and it would link to where you
+    are already standing.
     """
+    key = f'{row["folder"]}/{row["name"]}'
+    if within:
+        return ('<span class="top-mark" title="This is the one shown '
+                'outside the stack">Top</span>' if within == key else "")
     behind = row["behind"] or 0
     if not behind:
-        return ""
-    key = f'{row["folder"]}/{row["name"]}'
-    # Not on the file whose stack is already open: it would be a link to where
-    # you are standing, and a depth badge inside the thing it measures reads as
-    # a stack within a stack.
-    if within == key:
         return ""
     return (f'<a class="stack" href="/browse?within={_q(key)}" '
             f'title="{behind + 1} photographs stacked here">'

@@ -556,20 +556,46 @@ def test_stacking_a_stack_brings_its_files_up(
     assert 'class="stack"' not in inside
 
 
-def test_the_open_stack_is_not_badged_inside_itself(
+def test_an_open_stack_says_which_one_is_the_top(
     client: TestClient, writable: Path
 ) -> None:
-    """A link to where you are standing, and a depth badge inside the thing it
-    measures reads as a stack within a stack."""
+    """Everything in a stack looks alike — that is why they were stacked — so
+    without this there is nothing to say which one the grid outside will show.
+
+    Not the count again: a depth badge inside the thing it measures reads as a
+    stack within a stack, and it would link to where you are standing."""
     _three_files(writable)
     client.post("/api/decide/bulk", json={
         "stacked_under": "init_2026/a.jpg",
         "files": [{"folder": "init_2026", "name": "b.mp4"}]})
 
-    assert 'class="stack"' in client.get(
-        "/browse?event=Italy%20-%20Sicily").text
-    assert 'class="stack"' not in client.get(
-        "/browse?within=init_2026/a.jpg").text
+    outside = client.get("/browse?event=Italy%20-%20Sicily").text
+    assert 'class="stack"' in outside
+    assert 'class="top-mark"' not in outside, "marked where the count belongs"
+
+    inside = client.get("/browse?within=init_2026/a.jpg").text
+    assert 'class="stack"' not in inside
+    assert inside.count('class="top-mark"') == 1, "one speaks, not none or both"
+    # And it is on the right one.
+    a_cell = inside[inside.index('data-name="a.jpg"'):]
+    assert 'class="top-mark"' in a_cell[:a_cell.index("</div>") + 400]
+
+
+def test_a_stack_mark_does_not_cover_the_tags(
+    client: TestClient, writable: Path
+) -> None:
+    """Both marks stand where the tag chips do, and were simply sitting on top
+    of them."""
+    _three_files(writable)
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/a.jpg",
+        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "add_tags": ["beach"]})
+
+    html = client.get("/browse?event=Italy%20-%20Sicily").text
+    assert "cell marked" in html
+    assert ".cell.marked .tags" in html
 
 
 def test_bringing_a_stack_up_is_part_of_the_same_gesture(
