@@ -310,6 +310,32 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
         grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); }
 .grid[data-size="large"] {
         grid-template-columns:repeat(auto-fill,minmax(380px,1fr)); }
+/* A folder: one section of the grid, drawn as what it amounts to. Square like
+   a thumbnail, because it *is* one — the section's first photograph — with
+   what the section is written over the foot of it. */
+.tile { position:relative; display:block; aspect-ratio:1; overflow:hidden;
+        background:#0d0f12; border-radius:2px; text-decoration:none;
+        color:var(--fg); }
+.tile img { width:100%; height:100%; object-fit:cover; display:block; }
+.tile .name, .tile .n { position:absolute; left:0; right:0; padding:5px 8px;
+        font-size:12px; line-height:1.3; }
+.tile .name { bottom:18px; font-weight:600;
+        text-shadow:0 1px 3px #000, 0 0 10px #000; }
+.tile .n { bottom:0; font-size:11px; color:var(--dim);
+           text-shadow:0 1px 3px #000, 0 0 10px #000; }
+/* Read as *what is left here*, so it is the colour of unfinished work and not
+   of a count. */
+.tile .left { font-style:normal; color:var(--top); margin-left:8px; }
+/* Everything below the caption is the photograph; this keeps the text legible
+   over whatever it happens to be. */
+.tile::after { content:""; position:absolute; left:0; right:0; bottom:0;
+        height:50%; background:linear-gradient(transparent,#000c);
+        pointer-events:none; }
+.tile:hover { outline:2px solid var(--accent); outline-offset:-2px; }
+/* A section with no address. It is still a real pile of files, so it is still
+   shown — it just cannot be opened on its own. */
+.tile.dead { cursor:default; opacity:.72; }
+.tile.dead:hover { outline:none; }
 /* A thumbnail with a letter in it. Three words took three buttons' worth of
    bar for something nobody reads twice — the shape says what it is about and
    the letter says where it is, which is all a size control has to say. */
@@ -748,6 +774,7 @@ def filters(
     audience: Annotated[str | None, Query()] = None,
     kind: Annotated[str | None, Query()] = None,
     band: Annotated[str | None, Query()] = None,
+    camera: Annotated[str | None, Query()] = None,
     deleted: Annotated[str | None, Query()] = None,
     op: Annotated[str | None, Query()] = None,
     stale: Annotated[str | None, Query()] = None,
@@ -793,22 +820,34 @@ def filters(
                       stacks=(stacks if user.is_admin
                               and stacks in ("with", "only") else None),
                       unfold="stack" in _groupings(group),
-                      kind=kind, band=band, viewer=user.scope,
+                      kind=kind, band=band, camera=camera,
+                      viewer=user.scope,
                       deleted=_both_sides(deleted, op, user))
 
 
 @app.get("/", response_class=HTMLResponse)
 def home(user: Annotated[Principal, Depends(require_user)],
-         view: Annotated[ix.Filters, Depends(filters)]) -> HTMLResponse:
-    """The library by year, then by event — the two ways anyone looks for a photo.
+         view: Annotated[ix.Filters, Depends(filters)],
+         group: Annotated[str, Query()] = "year") -> HTMLResponse:
+    """The same library as `/browse`, one level up: folders instead of files.
 
-    Every row is a filter: clicking a year opens that year, clicking an event
-    opens that year *and* event. So the landing page is a shortcut into `/browse`
-    rather than a separate way of seeing things.
+    It was a fixed table of years and their events, which answered two
+    questions well and every other one not at all — *which cameras is this
+    library from*, *what is still undecided in July*, *which days of the trip
+    have the most photographs*. Those are the same questions the grid already
+    answers about files, and the controls that ask them already exist.
+
+    So this is the grid at a coarser zoom. The same filters narrow it, the same
+    grouping cuts it, and each section is drawn as one folder rather than as a
+    heading with its contents beneath. Clicking a folder is the same view with
+    that section's values added to the filters — which is why a grouping has to
+    be expressible as a filter to be drilled into, and why the two that are not
+    say so rather than offering a door into somewhere else.
     """
     conn = db()
+    groups = _groupings(group)
+    rows = ix.sections(conn, view, groups=groups, limit=PAGE_LIMIT)
     s = ix.summary(conn, view)
-    rows = ix.events(conn, view)
 
     open_note = ("" if not (user.is_admin
                             and accounts.admin_password_is_initial(store()))
@@ -825,44 +864,106 @@ def home(user: Annotated[Principal, Depends(require_user)],
             f'&middot; indexed {_age(ix.built_at(conn))} {open_note}')
 
     if not rows:
-        return _page("pix2", '<p class="empty">Nothing indexed yet.</p>',
-                     user=user)
+        body = '<p class="empty">Nothing matches these filters.</p>'
+    else:
+        labels = [dict(_GRID_GROUPS).get(g, g) for g in groups]
+        body = (_heading(labels, len(groups), len(rows), pick=False)
+                + '<div class="grid folders" id="grid">'
+                + "".join(_folder(r, groups, view, user) for r in rows)
+                + "</div>")
+    return _page("pix2", f'<p class="dim">{head}</p>{body}',
+                 # The way past the folders. Every one of them opens the grid
+                 # at that section; this opens it at everything the filters
+                 # still allow, which is the one view no folder stands for.
+                 tools=('<div class="chips" id="chips"></div>'
+                        f'<a class="who-link" href="{_h(_browse_url(view, {}))}">'
+                        'All files &rarr;</a>'),
+                 # Folders are photographs too, and 300 days of them at
+                 # thumbnail size is a wall. The same control, remembered in
+                 # the same place, so the two pages agree about how big things
+                 # are without being told twice.
+                 right='<button id="sizepick" aria-label="Thumbnail size"></button>',
+                 footer='<span id="note" class="note"></span>',
+                 script=_view_script(user, view, groups),
+                 user=user)
 
-    years: dict[str, list[sqlite3.Row]] = {}
-    for row in rows:
-        years.setdefault(str(row["year"]), []).append(row)
 
-    sections = "".join(_year_section(year, group)
-                       for year, group in years.items())
-    return _page("pix2", f"""<p class="dim">{head}</p>
-<p><a href="/browse">Browse everything &rarr;</a></p>{sections}""", user=user)
+def _folder(row: sqlite3.Row, groups: list[str], view: ix.Filters,
+            user: Principal) -> str:
+    """One section of the grid, drawn as the folder it amounts to.
 
-
-def _year_section(year: str, group: list[sqlite3.Row]) -> str:
-    """One year, with its events and how much of it is done.
-
-    The progress reading is **events**, not files: pass 2 finishes an event at a
-    time, so "14 of 22 events" is what tells you the year is being worked
-    through. A file count never lands (§8).
+    The cover is the section's first photograph — the one at the top left if
+    you opened it — so the folder looks like what is inside it rather than like
+    a name somebody chose.
     """
-    files_n = sum(int(r["n"]) for r in group)
-    done = sum(1 for r in group if not r["unreviewed"])
-    rows = "".join(
-        f'<tr><td><a href="/browse?date={_q(year)}&amp;event={_q(r["event"])}">'
-        f'{_h(r["event"])}</a></td>'
-        f'<td class="num">{r["n"]:,}</td>'
-        + ('<td class="num done">done</td>' if not r["unreviewed"] else
-           f'<td class="num dim">{r["unreviewed"]:,}</td>')
-        + f'<td class="dim">{_h(str(r["first_seen"] or "")[:10])}</td>'
-        f'<td class="dim">{_h(str(r["last_seen"] or "")[:10])}</td></tr>'
-        for r in group
-    )
-    return f"""<h2 class="year"><a href="/browse?date={_q(year)}">{_h(year)}</a>
-<span class="dim">{files_n:,} files &middot; {done} of {len(group)}
-events reviewed</span></h2>
-<table><thead><tr><th>Event</th><th class="num">Files</th>
-<th class="num">Undecided</th><th>First</th><th>Last</th></tr></thead>
-<tbody>{rows}</tbody></table>"""
+    labels = [_group_label(row[f"grp{i}"], g, groups[:i], row)
+              for i, g in enumerate(groups)] or ["Everything"]
+    href = _drill(row, groups, view)
+    n = int(row["n"])
+    left = int(row["unreviewed"] or 0) if user.is_admin else 0
+    inner = (
+        f'<img loading="lazy" src="/thumb/{_q(row["folder"])}/{_q(row["name"])}">'
+        + '<span class="name">'
+        + "<span class=\"sep\">&rsaquo;</span>".join(_h(x) for x in labels)
+        + "</span>"
+        f'<span class="n">{n:,} file{"" if n == 1 else "s"}'
+        + (f'<i class="left">{left:,} undecided</i>' if left else "")
+        + "</span>")
+    if href is None:
+        # Nothing to link to, rather than a link somewhere else. *No day* is
+        # every file whose date stops at the month, and there is no filter that
+        # says so — offering the month itself would open a folder holding files
+        # this one does not.
+        return (f'<div class="tile dead" title="There is no filter for this '
+                f'one, so it cannot be opened on its own">{inner}</div>')
+    return f'<a class="tile" href="{_h(href)}">{inner}</a>'
+
+
+#: What each grouping means as a filter, which is what makes a folder openable.
+#: `camera` is here because of this page: it could cut the library by camera
+#: and then had nowhere to send you.
+_DRILL: dict[str, str] = {
+    "day": "date", "month": "date", "year": "date", "event": "event",
+    "camera": "camera", "kind": "kind", "stack": "within",
+}
+
+
+def _drill(row: sqlite3.Row, groups: list[str],
+           view: ix.Filters) -> str | None:
+    """Where one folder leads: this view, plus what the folder is.
+
+    `None` where the section cannot be said as a filter. Only two can't —
+    *no day* and *no month*, which mean *dated less precisely than that*, and
+    the date filter answers `undated` or a prefix and nothing in between.
+    Sending those to the year would open a folder with more in it than the one
+    that was clicked, which is worse than a folder that does not open.
+    """
+    patch: dict[str, str | None] = {}
+    for i, name in enumerate(groups):
+        key = row[f"grp{i}"]
+        column = _DRILL.get(name)
+        if column is None:
+            return None
+        if key is None:
+            # A year nobody knows is genuinely *undated*; a day nobody knows
+            # is a file dated to its month, which is a different thing.
+            if name != "year":
+                return None
+            patch["date"] = ix.UNDATED
+            continue
+        patch[column] = str(key)
+    return _browse_url(view, patch)
+
+
+def _browse_url(view: ix.Filters, patch: dict[str, str | None]) -> str:
+    """The grid, at this view plus `patch`. The page's own `url()` in Python."""
+    query = {**_view_dict(view), **patch}
+    # Joined with a bare `&`: this is a URL, and the one place it becomes
+    # markup escapes it. Building it pre-escaped produced `&amp;amp;` and a
+    # link that carried its second filter as part of the first one's value.
+    return "/browse" + (
+        "?" + "&".join(f"{k}={_q(str(v))}" for k, v in query.items() if v)
+        if any(query.values()) else "")
 
 
 #: How many files one grid renders. Enough to hold the largest seeded event
@@ -925,14 +1026,7 @@ def browse(user: Annotated[Principal, Depends(require_user)],
         # either.
         right=('<button id="sizepick" aria-label="Thumbnail size"></button>'),
         rows=_actions(user),
-        script=(
-            f"<script>const VIEW={_js(_view_dict(view))},"
-            f"CHIPS={_js(_chips(user))},FIXED={_js(_FIXED)},"
-            f"EXTRA={_js(_EXTRA)},ADMIN={_js(user.is_admin)},"
-            f"USERS={_js(_audience_names())},GROUPS={_js(_group_names())},"
-            f"USUAL={_js(store().usual)},"
-            f"GRID_GROUPS={_js(_GRID_GROUPS)},GROUPING={_js(groups)};</script>"
-            f"<script>{_BROWSE_JS}</script>"),
+        script=_view_script(user, view, groups),
         footer=f"""<span class="count" id="count">{shown}</span>
 <span class="hint"><b>click</b> a circle to select &middot;
 <b>shift</b> for a range &middot; <b>ctrl</b> to add &middot;
@@ -940,6 +1034,30 @@ def browse(user: Annotated[Principal, Depends(require_user)],
 <b>&larr; &rarr;</b> page the viewer</span>
 <span class="note" id="note" hidden></span>""",
         user=user)
+
+
+def _view_script(user: Principal, view: ix.Filters,
+                 groups: list[str]) -> str:
+    """The page script, and what it needs to know about this view.
+
+    One script for both pages. The landing page and the grid ask the same two
+    questions — *which files* and *cut how* — and the controls that ask them
+    are the chips and the heading. A second copy of either would be a second
+    place for them to drift, and the chips are the part of this app that has
+    been rewritten most.
+
+    What the grid has and this does not is a selection, a viewer and a set of
+    actions, so the script finds none of those elements and wires none of
+    them. That is a page without photographs on it, not a broken one.
+    """
+    return (
+        f"<script>const VIEW={_js(_view_dict(view))},"
+        f"CHIPS={_js(_chips(user))},FIXED={_js(_FIXED)},"
+        f"EXTRA={_js(_EXTRA)},ADMIN={_js(user.is_admin)},"
+        f"USERS={_js(_audience_names())},GROUPS={_js(_group_names())},"
+        f"USUAL={_js(store().usual)},"
+        f"GRID_GROUPS={_js(_GRID_GROUPS)},GROUPING={_js(groups)};</script>"
+        f"<script>{_BROWSE_JS}</script>")
 
 
 def _from_link(op_id: str | None, stale: str | None, shown: int) -> str:
@@ -1082,7 +1200,8 @@ def _sections(rows: list[sqlite3.Row], groups: list[str],
     return "".join(out)
 
 
-def _heading(labels: list[str], levels: int, count: int) -> str:
+def _heading(labels: list[str], levels: int, count: int, *,
+             pick: bool = True) -> str:
     """One section heading, which is also how grouping is changed.
 
     Each crumb is two controls: the name changes that level, the `Ã—` drops it.
@@ -1103,10 +1222,11 @@ def _heading(labels: list[str], levels: int, count: int) -> str:
            '<button class="addgrp" title="Add a grouping inside this one">'
            "+</button>")
     return (f'<h3 class="group">'
-            f'<button class="grppick" title="Select this group"></button>'
-            f'<span class="crumbs">{crumbs}</span>{add}'
-            f'<span class="dim">{count:,}</span>'
-            f'</h3>')
+            + ('<button class="grppick" title="Select this group"></button>'
+               if pick else "")
+            + f'<span class="crumbs">{crumbs}</span>{add}'
+              f'<span class="dim">{count:,}</span>'
+              f'</h3>')
 
 
 def _group_label(key: object, group: str, outer: Sequence[str] = (),
@@ -1323,8 +1443,8 @@ _CHIPS: tuple[tuple[str, str], ...] = (
     # judgements about it, and nobody reaches for them mid-cull.
     ("event", "Event"), ("tag", "Tag"), ("date", "Date"),
     ("audience", "Access"),
-    ("kind", "Type"), ("band", "Size"), ("stacks", "Stacks"),
-    ("deleted", "Deleted"),
+    ("kind", "Type"), ("band", "Size"), ("camera", "Camera"),
+    ("stacks", "Stacks"), ("deleted", "Deleted"),
 )
 
 #: Complete vocabularies — these columns cannot hold anything else.
@@ -1887,11 +2007,17 @@ function drawRail(){
   railToggle.textContent=railOn?'Hide details':'Details';
   try{localStorage.setItem('pix2.rail',railOn?'1':'0');}catch(e){}
 }
-railToggle.onclick=e=>{e.stopPropagation();railOn=!railOn;drawRail();
+if(railToggle) railToggle.onclick=e=>{
+  e.stopPropagation();railOn=!railOn;drawRail();
                        if(railOn&&cells[cur]) fill(cells[cur]);};
-document.getElementById('viewclose').onclick=e=>{
-  e.stopPropagation(); closeViewer();};
-drawRail();
+const viewClose=document.getElementById('viewclose');
+if(viewClose) viewClose.onclick=e=>{e.stopPropagation(); closeViewer();};
+// Everything above is the viewer, which only a page with photographs on it
+// has. The landing page shows folders: it carries none of these elements, so
+// the script wires none of them. Guarded one statement at a time rather than
+// wrapped in a block, because the functions here are called from the grid and
+// a block would put them out of its reach.
+if(viewer) drawRail();
 
 const details=new Map();
 async function fill(c){
@@ -2006,10 +2132,10 @@ function closeViewer(){ viewer.classList.remove('on'); vvid.pause(); }
 // The stage fills the viewer, so clicking beside the picture lands on it
 // rather than on the viewer itself — the old check never matched and there
 // was no way back out except the keyboard.
-viewer.addEventListener('click',e=>{
+if(viewer) viewer.addEventListener('click',e=>{
   if(e.target===viewer||e.target===stage||e.target===vmeta) closeViewer();
 });
-rail.addEventListener('click',e=>e.stopPropagation());
+if(rail) rail.addEventListener('click',e=>e.stopPropagation());
 
 // --- writing -----------------------------------------------------------------
 // Loud, because the alternative has bitten twice: a write that fails without
@@ -2846,7 +2972,10 @@ document.querySelectorAll('.group').forEach(h=>{
   const add=h.querySelector('.addgrp');
   if(add) add.onclick=e=>{
     e.stopPropagation(); groupMenu(add,GROUPING.length-1,true);};
-  h.querySelector('.grppick').onclick=e=>{
+  // The landing page's heading is the same control minus the selecting: it
+  // is a page of folders, and there is nothing on it to tick.
+  const gp=h.querySelector('.grppick');
+  if(gp) gp.onclick=e=>{
     e.stopPropagation();
     const mine=sectionCells(h);
     const on=mine.some(c=>!picked.has(c));
@@ -2980,7 +3109,8 @@ def api_suggest(user: Annotated[Principal, Depends(require_user)],
     already covering those days. Both or neither — half a range is not a range,
     and guessing the missing end would propose events on evidence nobody gave.
     """
-    if column not in ("event", "tag", "audience", "date", "kind", "band"):
+    if column not in ("event", "tag", "audience", "date", "kind", "band",
+                      "camera"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             f"cannot suggest values for {column!r}")
     near = (near_from, near_to) if near_from and near_to else None

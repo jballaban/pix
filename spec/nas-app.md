@@ -679,6 +679,23 @@ thumbnails down is losing your place. Picking an event on the landing page is
 that page with `?event=`, so there is one surface to learn rather than a
 browser and a separate editor.
 
+**The landing page is the same grid at a coarser zoom.** It was a fixed table
+of years and their events, which answered two questions well and every other
+one not at all: *which cameras is this library from*, *what is still undecided
+in July*, *which days of the trip have the most photographs*. Those are the
+same questions the grid answers about files, asked of the same rows with a
+`GROUP BY` — so the landing page takes the same filters and the same grouping,
+and draws each section as one folder instead of as a heading with its contents
+beneath it. A folder's cover is that section's first photograph, so it looks
+like what is inside it rather than like a name somebody chose.
+
+Opening a folder is this view plus what the folder is, which means **a grouping
+has to be expressible as a filter to be drilled into**. `camera` became one
+because of this page. Two are not: *no day* and *no month* mean *dated less
+precisely than that*, and the date filter answers `undated` or a prefix with
+nothing in between — so those folders say they cannot be opened rather than
+opening something larger than what was clicked.
+
 Filters live in the **URL**, which makes a view a link: shareable,
 bookmarkable, and survivable across a reload. It also makes the browser's
 back button mean *the filter I had before*, which is the only undo a filter

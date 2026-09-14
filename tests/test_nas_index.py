@@ -610,7 +610,7 @@ def test_a_column_ignores_its_own_filter(tree: dict[str, Path]) -> None:
 def test_suggesting_an_unknown_column_is_refused(tree: dict[str, Path]) -> None:
     _build(tree)
     with pytest.raises(ValueError):
-        ix.suggest(ix.connect(tree["db"]), "camera")
+        ix.suggest(ix.connect(tree["db"]), "folder")
 
 
 # --- schema ------------------------------------------------------------------

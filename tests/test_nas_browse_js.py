@@ -67,6 +67,27 @@ def test_the_same_script_folds_and_refuses_the_apps_own_guesses(
 
 @pytest.mark.skipif(shutil.which("node") is None,
                     reason="node is not installed")
+def test_the_same_script_runs_the_landing_page(tmp_path: Path) -> None:
+    """The landing page is the same two controls over folders instead of
+    files, so it is the same script — on a page with no selection, no viewer
+    and no actions to wire.
+
+    Driven rather than read because the failure has no symptom of its own: a
+    page missing one element the script reaches for looks exactly like a page
+    whose chips and grouping menu simply do nothing.
+    """
+    script = tmp_path / "browse.js"
+    script.write_text(web._BROWSE_JS, encoding="utf-8")
+
+    result = subprocess.run(
+        ["node", str(JS_DIR / "home.js"), str(script)],
+        capture_output=True, text=True, timeout=120, cwd=JS_DIR)
+
+    assert result.returncode == 0, (result.stdout + result.stderr)[-2000:]
+
+
+@pytest.mark.skipif(shutil.which("node") is None,
+                    reason="node is not installed")
 def test_the_browse_script_parses(tmp_path: Path) -> None:
     """A syntax error is silent in a browser and total in its effect."""
     script = tmp_path / "browse.js"

@@ -28,13 +28,6 @@ from pix.nas.decisions import Decision
 
 # --- browse ------------------------------------------------------------------
 
-def test_home_lists_events(client: TestClient) -> None:
-    r = client.get("/")
-    assert r.status_code == 200
-    assert "Italy - Sicily" in r.text
-    assert "2 files" in r.text
-
-
 def test_home_names_who_you_are_signed_in_as(client: TestClient) -> None:
     """This app is used as two different people — the owner curating and the
     admin granting access — and acting as the wrong one is invisible until
@@ -1229,26 +1222,126 @@ def test_api_events(client: TestClient) -> None:
     }
 
 
-def test_the_home_page_groups_by_year(client: TestClient) -> None:
-    """A flat list of every event across twenty-five years is a list nobody
-    can find their place in."""
-    html = client.get("/").text
-    assert 'href="/browse?date=2026"' in html
-    assert "events reviewed" in html
-
-
-def test_an_event_row_links_to_that_year_and_event(
+def test_the_landing_page_is_folders_of_whatever_it_is_grouped_by(
     client: TestClient
 ) -> None:
-    html = client.get("/").text
-    assert "date=2026&amp;event=Italy%20-%20Sicily" in html
+    """It was a fixed table of years and their events. The grid already knows
+    how to cut a library eight ways, and those are the same questions asked of
+    the same files — so this is the grid at a coarser zoom, not a second idea
+    of what the library looks like."""
+    by_year = client.get("/").text
+    assert 'class="tile"' in by_year
+    assert ">2026<" in by_year
+
+    by_event = client.get("/?group=event").text
+    assert "Italy - Sicily" in by_event
+    assert ">2026<" not in by_event, "still cut by year"
+
+    by_camera = client.get("/?group=camera").text
+    assert "(unknown)" in by_camera
 
 
-def test_undated_files_are_reachable(client: TestClient) -> None:
+def test_the_landing_page_has_a_way_past_the_folders(
+    client: TestClient
+) -> None:
+    """Every folder opens the grid at that section. Nothing opened it at what
+    the filters still allow, which is the one view no folder stands for."""
+    html = client.get("/?kind=image").text
+
+    assert '"/browse?kind=image"' in html
+
+
+def test_a_folder_is_the_section_it_stands_for(client: TestClient) -> None:
+    """Its cover is that section's first photograph — the one at the top left
+    if you opened it — and its count is how many are inside."""
+    html = client.get("/?group=event").text
+
+    assert "/thumb/init_2026/a.jpg" in html, "no cover"
+    assert "2 files" in html
+
+
+def test_opening_a_folder_is_this_view_plus_what_the_folder_is(
+    client: TestClient
+) -> None:
+    """The point of the page. Every level of the grouping becomes a filter, so
+    what opens is the section that was clicked and nothing else."""
+    html = client.get("/?group=year,event").text
+
+    assert "/browse?event=Italy%20-%20Sicily&amp;date=2026" in html, html[:0]
+    assert "&amp;amp;" not in html, "the link is escaped twice"
+
+
+def test_a_folder_keeps_the_filters_already_set(client: TestClient) -> None:
+    """Narrowing the library and then opening a folder has to give you that
+    folder *within* what you narrowed to — otherwise the filters were a
+    decoration on the way past."""
+    html = client.get("/?group=event&kind=image").text
+
+    assert "kind=image" in html
+    assert "event=Italy%20-%20Sicily" in html
+
+
+def test_a_folder_that_cannot_be_said_as_a_filter_does_not_pretend(
+    client: TestClient
+) -> None:
+    """*No day* means dated less precisely than a day, and the date filter
+    answers `undated` or a prefix with nothing in between. Sending it to the
+    month would open a folder holding more than the one that was clicked."""
+    html = client.get("/?group=day").text
+
+    assert 'class="tile dead"' in html, "offered a door to somewhere else"
+    assert "No day" in html
+
+
+def test_an_undated_folder_is_reachable(client: TestClient) -> None:
     """374 of the seeded year have no date; that is a work item, not an
-    absence to leave unlinked."""
-    assert "(undated)" in client.get("/").text
+    absence to leave unlinked. A year nobody knows really is *undated* —
+    unlike a day nobody knows, which is a file dated to its month."""
+    html = client.get("/").text
+
+    assert "date=%28undated%29" in html
     assert "b.mp4" in client.get("/browse?date=(undated)").text
+
+
+def test_the_landing_page_says_what_is_left_to_do(client: TestClient) -> None:
+    """The one thing the old table was for. Per folder, because that is the
+    unit of work — a year with nothing left in it should look finished."""
+    html = client.get("/").text
+
+    assert "undecided" in html
+
+
+def test_the_same_filters_are_on_both_pages(client: TestClient) -> None:
+    """Learning one teaches the other. They are the same controls over the
+    same library, and a chip that exists on one page and not the other is a
+    filter you have to go somewhere else to set."""
+    home = client.get("/").text
+    grid = client.get("/browse").text
+
+    for page in (home, grid):
+        chips = page[page.index("CHIPS="):page.index("FIXED=")]
+        assert '"event"' in chips and '"camera"' in chips, chips
+    assert 'id="chips"' in home
+
+
+def test_the_camera_a_photograph_came_from_is_a_filter(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """It was a way to cut the library and not a way to narrow it, so the
+    landing page could make a folder per camera and then had nowhere to send
+    you when you opened one."""
+    _burst(app_env, writable, "x.jpg", "y.jpg")
+    assert client.get("/api/suggest?column=camera").status_code == 200
+
+    html = client.get("/browse?camera=iPhone%2017%20Pro").text
+    assert 'data-name="x.jpg"' in html
+    assert 'data-name="a.jpg"' not in html, "not scoped to that camera"
+
+    # The ones nobody recorded a camera for are a section too, and the folder
+    # standing over them has to open like any other.
+    unknown = client.get("/browse?camera=%28unknown%29").text
+    assert 'data-name="a.jpg"' in unknown
+    assert 'data-name="x.jpg"' not in unknown
 
 
 def test_api_files_filters_by_event(client: TestClient) -> None:
@@ -1856,8 +1949,8 @@ def test_half_a_range_is_not_a_range(client: TestClient) -> None:
 
 
 def test_an_unsuggestable_column_is_refused(client: TestClient) -> None:
-    assert client.get("/api/suggest?column=camera").status_code == 400
     assert client.get("/api/suggest?column=folder").status_code == 400
+    assert client.get("/api/suggest?column=size").status_code == 400
 
 
 def test_suggestions_need_auth(app_env: dict[str, Path],

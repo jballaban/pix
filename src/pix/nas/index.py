@@ -219,6 +219,10 @@ class Filters:
     audience: str | None = None
     kind: str | None = None
     band: str | None = None
+    #: Which camera took it. A grouping before it was a filter, which meant the
+    #: landing page could cut the library by camera and then had nowhere to send
+    #: you when you clicked one.
+    camera: str | None = None
 
     #: Restricts every query to what this person may see. **Not a filter** —
     #: it is never read from a URL and cannot be cleared from one. A filter is
@@ -284,8 +288,8 @@ class Filters:
     #: decides whether a file has left the view. Restoring a file left it on
     #: screen in a listing of the deleted.
     NAMES: ClassVar[tuple[str, ...]] = ("event", "tag", "date", "audience",
-                                       "kind", "band", "deleted", "stacks",
-                                       "within")
+                                       "kind", "band", "camera", "deleted",
+                                       "stacks", "within")
 
 
 @dataclass(frozen=True)
@@ -808,6 +812,12 @@ def _clauses(filters: Filters) -> dict[str, tuple[str, dict[str, Any]]]:
         out["kind"] = ("files.kind = :f_kind", {"f_kind": filters.kind})
     if filters.band is not None:
         out["band"] = ("files.band = :f_band", {"f_band": filters.band})
+    if filters.camera is not None:
+        # Through the same placeholder the grouping uses, so *the ones whose
+        # camera nobody recorded* is a section you can click into rather than a
+        # heading over a pile with no address.
+        out["camera"] = ("COALESCE(files.camera, '(unknown)') = :f_camera",
+                         {"f_camera": filters.camera})
     return out
 
 
@@ -1265,6 +1275,55 @@ def tag(exif: dict[str, Any], key: str) -> str | None:
     return _tag(exif, key)
 
 
+#: Sorts after every real date, so an undated file is last in its section the
+#: way it is last in the grid — one order, not two.
+_LAST: str = "9999"
+
+
+def sections(conn: sqlite3.Connection, filters: Filters | None = None, *,
+             groups: Sequence[str] = (),
+             limit: int = 500, offset: int = 0) -> list[sqlite3.Row]:
+    """One row per section of the grid `files` would return: what it holds, how
+    much of it is undecided, and which photograph stands for it.
+
+    The landing page is the same library one level up — the same filters, the
+    same grouping, a summary of each section instead of its contents. So it is
+    the same question asked with a `GROUP BY`, and the sections it names are
+    the sections the grid would draw, in the same order, with the same files in
+    them. Anything else and clicking a folder would open something other than
+    what the folder said.
+
+    The cover is the section's **first** photograph, by the grid's own order:
+    the one you would see at the top left if you opened it. That comes free
+    from SQLite's rule that bare columns follow a single `min()` — which is
+    also why there is exactly one aggregate of that kind here, and why the
+    date span this page used to print is not among them.
+    """
+    view = filters or Filters()
+    where, bound = _where(view)
+    keys = [GROUPINGS[g] for g in groups if GROUPINGS.get(g)]
+    params: dict[str, Any] = {**bound, "limit": limit, "offset": offset,
+                              "last": _LAST}
+    selected = "".join(f"{key} AS grp{i}, " for i, key in enumerate(keys))
+    grouped = ", ".join(f"grp{i}" for i in range(len(keys)))
+    ordered = "".join(f"grp{i} IS NULL, grp{i}, " for i in range(len(keys)))
+    return list(conn.execute(
+        "SELECT " + (selected or "NULL AS grp0, ")
+        + "COUNT(*) AS n, "
+        # The same reading the landing page has always shown: what is left to
+        # decide. Only an administrator sees undecided files at all.
+        " SUM(CASE WHEN NOT EXISTS (SELECT 1 FROM file_audience fa "
+        "   WHERE fa.folder = files.folder AND fa.name = files.name) "
+        " THEN 1 ELSE 0 END) AS unreviewed, "
+        " files.folder AS folder, files.name AS name, "
+        " MIN(COALESCE(files.effective_date, :last) || files.name) AS cover "
+        "FROM files "
+        + (f"WHERE {where} " if where else "")
+        + (f"GROUP BY {grouped} " if grouped else "")
+        + "ORDER BY " + ordered + "n DESC "
+        "LIMIT :limit OFFSET :offset", params))
+
+
 def count(conn: sqlite3.Connection, filters: Filters | None = None) -> int:
     """How many files match, regardless of the page being shown."""
     where, bound = _where(filters or Filters())
@@ -1466,7 +1525,7 @@ def suggest(conn: sqlite3.Connection, column: str,
                # to the end on its own: a bracket is below every digit.
                + "ORDER BY n_all > 0 DESC, n_any > 0 DESC, value DESC "
                  "LIMIT :limit")
-    elif column in ("event", "kind", "band"):
+    elif column in ("event", "kind", "band", "camera"):
         sql = (f"SELECT files.{column} AS value, " + tally
                + "FROM files "
                + visible(f"files.{column} IS NOT NULL")
