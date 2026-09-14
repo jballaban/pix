@@ -64,6 +64,15 @@ cells.forEach(c => grid.appendChild(c));
 const actions = mk('actions');
 // A tri-state tick, a count, and two sets of actions — one per side of the
 // deletion line, each shown only when the selection holds files it applies to.
+// The three-way size control, as the page renders it.
+const sizes = mk('sizes');
+for (const name of ['small', 'big', 'huge']) {
+  const b = new El('button');
+  b.dataset.size = name;
+  sizes.appendChild(b);
+}
+const sizeBtn = name => sizes.children.find(b => b.dataset.size === name);
+
 const badgeOn = c => c.children.find(k => k._classes.has('stack')) || null;
 const tick = new El('button');
 tick.id = 'selall';
@@ -98,7 +107,7 @@ const actBtn = name => actions.querySelectorAll('[data-act]')
 for (const id of ['menu', 'chips', 'selcount', 'count', 'note', 'viewer',
                   'vimg', 'vvid', 'vmeta', 'rail', 'railtoggle', 'viewclose',
                   'working', 'workwhat', 'workbar', 'worktally',
-                  'workstop', 'bincount', 'thumbsize']) mk(id);
+                  'workstop', 'bincount']) mk(id);
 const stage = new El('div');
 stage.className = 'stage';
 document.byId.viewer.appendChild(stage);
@@ -1102,21 +1111,38 @@ function arrow(key, opts) {
   // Thumbnail size is a preference about looking, so it says what it will do
   // rather than what is true, and it outlives the page.
   {
-    const btn = document.byId.thumbsize;
-    check('it starts at the ordinary size',
-          grid.dataset.size === 'small' && btn.textContent === 'Bigger',
-          grid.dataset.size + '/' + btn.textContent);
-    btn.click();
-    check('and the grid goes up a size',
-          grid.dataset.size === 'big' && btn.textContent === 'Smaller',
-          grid.dataset.size + '/' + btn.textContent);
+    check('it starts at the ordinary size', grid.dataset.size === 'small',
+          grid.dataset.size);
+    check('and says which one that is',
+          sizeBtn('small').classList.contains('on')
+          && !sizeBtn('huge').classList.contains('on'));
+
+    sizeBtn('big').click();
+    check('and the grid goes up a size', grid.dataset.size === 'big',
+          grid.dataset.size);
     check('with the choice remembered', stored['pix2.thumb'] === 'big',
           String(stored['pix2.thumb']));
-    btn.click();
+
+    // The biggest is bigger than the thumbnail tier has pixels for, so it
+    // reads from the preview tier instead.
+    const img = new El('img');
+    img.attrs.src = '/thumb/f/a.jpg';
+    img.setAttribute = (k, v) => { img.attrs[k] = v; };
+    img.getAttribute = k => img.attrs[k];
+    // A cell the *current* script instance knows about: blocks above this one
+    // re-ran the page against a different grid, and `cells` moved with them.
+    document.querySelectorAll('.cell')[0].appendChild(img);
+    sizeBtn('huge').click();
+    check('the biggest size reads from the preview tier',
+          img.attrs.src === '/preview/f/a.jpg', img.attrs.src);
+    sizeBtn('small').click();
+    check('and the smaller ones go back to the thumbnail',
+          img.attrs.src === '/thumb/f/a.jpg', img.attrs.src);
+    img.remove();
     check('and back down again', grid.dataset.size === 'small');
 
     // A fresh page finds the preference where it was left.
-    stored['pix2.thumb'] = 'big';
+    stored['pix2.thumb'] = 'huge';
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
@@ -1125,7 +1151,7 @@ function arrow(key, opts) {
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
       GRID_GROUPS, GROUPING, fn => fn());
     check('a new page opens at the size you left it',
-          grid.dataset.size === 'big', grid.dataset.size);
+          grid.dataset.size === 'huge', grid.dataset.size);
   }
 
   if (failures.length) {

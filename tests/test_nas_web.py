@@ -844,23 +844,27 @@ def test_a_stale_index_cannot_put_a_file_behind_itself(
     assert decisions.read(writable / "b.mp4") is None, "put behind itself"
 
 
-def test_the_grid_has_a_second_thumbnail_size(client: TestClient) -> None:
-    """Half as wide again. Thumbnails are derived at 400px, so even the big one
-    is oversampled on a 2x display — the preview tier is for looking at one
-    photograph, not for showing a grid of them."""
+def test_the_grid_has_three_thumbnail_sizes(client: TestClient) -> None:
+    """The third is where the thumbnail runs out. Cells stretch past their
+    minimum to fill the row, so 230px already renders around 263 on a wide
+    screen — from a 400px derived thumbnail, which is spent at that point.
+    Bigger has to come from the preview tier: four times the edge, eleven times
+    the bytes, and a choice rather than the default."""
     html = client.get("/browse?event=Italy%20-%20Sicily").text
 
-    assert 'id="thumbsize"' in html
+    assert 'id="sizes"' in html
     # At the far end of the row with the account, not among the filters: it
-    # changes how you are looking, never which photographs are here.
+    # changes how you are looking, never which photographs are here. Past the
+    # spacer is what puts it there; after the chips is true of anything in the
+    # row.
     row = html[html.index('class="row"'):html.index("</div><main")]
-    # Past the spacer is what puts it at the far end; merely being after the
-    # chips is true of anything in that row.
-    assert row.index("thumbsize") > row.index("spacer")
-    assert row.index("thumbsize") < row.index("who-link")
-    assert "minmax(150px,1fr)" in html
-    assert '.grid[data-size="big"]' in html
-    assert "minmax(230px,1fr)" in html
+    assert row.index('id="sizes"') > row.index("spacer")
+    assert row.index('id="sizes"') < row.index("who-link")
+
+    for rule in ("minmax(150px,1fr)", "minmax(230px,1fr)", "minmax(380px,1fr)"):
+        assert rule in html, rule
+    for size in ("small", "big", "huge"):
+        assert f'data-size="{size}"' in html, size
 
 
 def test_the_grid_draws_no_cursor(client: TestClient) -> None:
