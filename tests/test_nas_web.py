@@ -1416,6 +1416,39 @@ def test_nothing_is_split_when_nothing_is_above_it(
     assert "<i>of</i>" not in folders
 
 
+def test_the_bar_is_this_card_within_its_group(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """The track is the whole group, so the bar answers the question the two
+    numbers beside it ask: *1 of 3* is a third of a bar and looks like one."""
+    _spread(app_env, writable, {"jan.jpg": "2026:01:20 10:00:00",
+                                "feb1.jpg": "2026:02:02 10:00:00",
+                                "feb2.jpg": "2026:02:03 10:00:00"})
+    client.post("/api/decide/bulk", json={
+        "event": "Ski Trip",
+        "files": [{"folder": "init_2026", "name": n}
+                  for n in ("jan.jpg", "feb1.jpg", "feb2.jpg")]})
+
+    folders = _folders(client.get("/?date=2026&group=month,event").text)
+    jan = folders[folders.index("January"):folders.index("February")]
+
+    assert '<i style="width:33%"' in jan, jan
+    assert "1 of 3 files" in jan
+
+
+def test_a_sliver_is_drawn_as_one() -> None:
+    """Two files out of eleven hundred rounds to nothing, and an empty bar
+    reads as *nothing here* rather than as a sliver of something big. Asked of
+    the arithmetic directly, because the ratio that needs saying is one no
+    fixture of a dozen files can produce."""
+    admin = web.Principal(name="admin", is_admin=True, grants=frozenset())
+
+    assert '<i style="width:0%"' not in web._bar(2, 1143, 2, admin)
+    assert '<i style="width:2%"' in web._bar(2, 1143, 2, admin)
+    # And it does not invent a share where there is none to round up.
+    assert '<i style="width:100%"' in web._bar(9, 9, 9, admin)
+
+
 def test_a_folder_says_how_much_of_it_is_done(
     client: TestClient, writable: Path
 ) -> None:

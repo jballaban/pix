@@ -367,12 +367,17 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
    no highlight on it. */
 .tile .split i { font-style:normal; color:var(--dim); }
 .tile .kinds::before { content:" · "; }
-/* How much of it is done, as a shape: a year you have finished and a year you
-   have not started are the same sentence and different bars. */
-.tile .bar { height:3px; margin-top:7px; border-radius:2px;
+/* Two readings in one bar, because they nest. The track is the whole group
+   this card belongs to; the blue is how much of it is in this card; the green
+   inside the blue is how much of *that* has been decided. A year you have
+   finished and a year you have not started are the same sentence and
+   different bars, and so are a whole event and a fortnight of one. */
+.tile .bar { height:4px; margin-top:8px; border-radius:2px;
              background:#2a3038; overflow:hidden; }
-.tile .bar i { display:block; height:100%; background:var(--accent); }
-.tile .bar.done i { background:var(--keep); }
+.tile .bar i { display:block; height:100%; background:var(--accent);
+               border-radius:2px; }
+.tile .bar i b { display:block; height:100%; background:var(--keep);
+                 border-radius:2px; }
 .tile .left { font-size:11px; color:var(--top); margin-top:4px; }
 .tile .left.all { color:var(--keep); }
 .tile:hover { border-color:var(--accent); background:#20242b;
@@ -1120,14 +1125,16 @@ def _folder(row: sqlite3.Row, groups: list[str], view: ix.Filters,
         + (f'<i class="kinds">{videos:,} video{"" if videos == 1 else "s"}</i>'
            if videos else "")
         + "</span>"
-        # How much of it is done, as a shape: a year you have finished and a
-        # year you have not started are the same sentence and different bars.
-        + (f'<span class="bar" title="{n - left:,} of {n:,} decided">'
-           f'<i style="width:{round(100 * (n - left) / n) if n else 0}%"></i>'
-           f'</span><span class="left">{left:,} undecided</span>'
-           if left else
-           '<span class="bar done"><i style="width:100%"></i></span>'
-           '<span class="left all">all decided</span>' if user.is_admin else ""))
+        # Two readings in one bar, because they nest: the whole track is the
+        # group this card is part of, the filled part is how much of it is
+        # here, and inside that sits how much of *this* has been decided. A
+        # card holding all of an event is a full bar; one holding a fortnight
+        # of it is a quarter of one, and the green grows inside either as the
+        # work gets done.
+        + _bar(n, entire, left, user)
+        + (f'<span class="left">{left:,} undecided</span>' if left
+           else '<span class="left all">all decided</span>'
+           if user.is_admin else ""))
     if href is None:
         # Nothing to link to, rather than a link somewhere else. *No day* is
         # every file whose date stops at the month, and there is no filter that
@@ -1136,6 +1143,31 @@ def _folder(row: sqlite3.Row, groups: list[str], view: ix.Filters,
         return (f'<div class="tile dead" title="There is no filter for this '
                 f'one, so it cannot be opened on its own">{inner}</div>')
     return f'<a class="tile" href="{_h(href)}">{inner}</a>'
+
+
+def _bar(n: int, entire: int, left: int, user: Principal) -> str:
+    """This card's share of its group, with the decided part drawn inside it.
+
+    The track is the *whole* group rather than this card, so the bar answers
+    the question the two numbers beside it ask — `312 of 1,143` is a quarter
+    of a bar, and it looks like a quarter. A card that is all of its group
+    fills it, which is the plain reading of a full bar.
+
+    The decided part is nested rather than beside it: it is a share of this
+    card, and this card is a share of the group, so it is drawn as a share of
+    a share and stays true at both levels.
+    """
+    # Two files out of eleven hundred rounds to nothing, and an empty bar
+    # reads as *nothing here* rather than as *a sliver of something big*. A
+    # sliver is what it is, so it gets drawn as one.
+    share = max(round(100 * n / entire), 2) if entire else 0
+    done = round(100 * (n - left) / n) if n and user.is_admin else 0
+    said = f"{n:,} of {entire:,} files" if entire > n else f"{n:,} files"
+    if user.is_admin:
+        said += f" · {n - left:,} decided"
+    return (f'<span class="bar" title="{_h(said)}">'
+            f'<i style="width:{share}%">'
+            f'<b style="width:{done}%"></b></i></span>')
 
 
 def _span(first: object, last: object) -> str:
