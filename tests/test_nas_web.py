@@ -895,6 +895,104 @@ def test_promoting_renames_the_stack_so_its_old_address_empties(
     assert now.count("data-name=") == 3, "the stack is not at its new address"
 
 
+def _burst(app_env: dict[str, Path], writable: Path, *names: str) -> None:
+    """Two files a second apart on one camera, in master and in the index."""
+    import json
+
+    from pix.nas import index as ix
+
+    share = app_env["share"]
+    for i, name in enumerate(names):
+        (writable / name).write_bytes(b"fake")
+        (share / "meta" / "init_2026" / f"{name}.json").write_text(json.dumps({
+            "file": name, "folder": "init_2026", "size": 30, "mtime_ns": 1,
+            "exif": {"EXIF:DateTimeOriginal": f"2026:08:30 11:00:0{i}",
+                     "EXIF:Model": "iPhone 17 Pro"},
+        }), encoding="utf-8")
+    ix.build(app_env["db"], meta_dir=share / "meta",
+             master_dir=share / "master")
+
+
+def test_suggestions_are_shown_open_and_marked_as_proposals(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """Expanded, because the question is *are these the same photograph* and a
+    collapsed stack shows one of them. Marked as a proposal, because nothing
+    here has been decided and a suggestion dressed as a stack would be the app
+    having quietly made up its mind."""
+    _burst(app_env, writable, "x.jpg", "y.jpg")
+
+    html = client.get("/browse?suggest=1").text
+
+    assert "group proposal" in html
+    assert 'data-name="x.jpg"' in html and 'data-name="y.jpg"' in html
+    assert "Not a stack" in html
+    assert "2 photographs" in html
+
+
+def test_the_review_shows_only_what_has_something_to_answer(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """A photograph resembling none of its neighbours has nothing to review."""
+    _burst(app_env, writable, "x.jpg", "y.jpg")
+
+    assert "a.jpg" in client.get("/browse").text, "fixture never held it"
+    assert "a.jpg" not in client.get("/browse?suggest=1").text, (
+        "offered a file with nothing to answer")
+
+
+def test_declining_a_suggestion_is_remembered(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """Scrolling past the same refusal every time is worse than never having
+    been offered it."""
+    _burst(app_env, writable, "x.jpg", "y.jpg")
+    assert "group proposal" in client.get("/browse?suggest=1").text
+
+    client.post("/api/decide/bulk", json={
+        "no_stack": True,
+        "files": [{"folder": "init_2026", "name": "x.jpg"},
+                  {"folder": "init_2026", "name": "y.jpg"}]})
+
+    assert decisions.read(writable / "x.jpg") == Decision(no_stack=True)
+    assert "group proposal" not in client.get("/browse?suggest=1").text
+
+
+def test_accepting_a_suggestion_is_an_ordinary_stack(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """Nothing special is written. A suggestion accepted is a stack, made the
+    way any other is — so it unstacks, reverts and behaves like one."""
+    _burst(app_env, writable, "x.jpg", "y.jpg")
+
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/x.jpg",
+        "files": [{"folder": "init_2026", "name": "y.jpg"}]})
+
+    assert decisions.read(writable / "y.jpg") == Decision(
+        stacked_under="init_2026/x.jpg")
+    assert "group proposal" not in client.get("/browse?suggest=1").text
+
+
+def test_declining_is_recorded_and_can_be_taken_back(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """It is a decision like the others, so it is in the log and revertible —
+    which is the way back if you dismiss a screenful by mistake."""
+    _burst(app_env, writable, "x.jpg", "y.jpg")
+    client.post("/api/decide/bulk", json={
+        "no_stack": True,
+        "files": [{"folder": "init_2026", "name": "x.jpg"},
+                  {"folder": "init_2026", "name": "y.jpg"}]})
+
+    op = history.recent()[0]
+    assert op.summary == "said 2 files are not a stack", op.summary
+
+    client.post("/history/revert", data={"id": op.id})
+    assert decisions.read(writable / "x.jpg") is None
+    assert "group proposal" in client.get("/browse?suggest=1").text
+
+
 def test_the_grid_draws_no_cursor(client: TestClient) -> None:
     """The dashed ring said which cell the keyboard was on, and the grid has no
     keyboard. It stayed behind after that was removed and turned up unasked on

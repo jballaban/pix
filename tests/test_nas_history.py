@@ -102,7 +102,7 @@ def test_previous_values_are_stored_in_full(log: Path) -> None:
     assert line["files"][0]["before"] == {
         "event": "Sicily", "date_override": "1987-*-*-*:*:*",
         "tags": ["beach"], "audience": ["kid"], "deleted": False,
-        "stacked_under": None}
+        "stacked_under": None, "no_stack": False}
 
 
 def test_a_deletion_is_part_of_what_was_there_before(log: Path) -> None:

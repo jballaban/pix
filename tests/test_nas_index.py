@@ -1190,7 +1190,7 @@ def _shot(tree: dict[str, Path], name: str, when: str,
                               "EXIF:Model": camera})
 
 
-def _rows(tree: dict[str, Path]) -> list[Any]:
+def _rows(tree: dict[str, Path]) -> list[sqlite3.Row]:
     _build(tree)
     return ix.files(ix.connect(tree["db"]), limit=1000)
 
@@ -1267,14 +1267,29 @@ def test_a_file_declined_once_is_not_offered_again(
 
 
 def test_a_file_already_stacked_is_not_offered(tree: dict[str, Path]) -> None:
-    """It has been dealt with, by the strongest possible answer."""
-    _shot(tree, "top.jpg", "2026:08:30 10:00:00")
-    _shot(tree, "behind.jpg", "2026:08:30 10:00:01")
-    _sidecar(tree, "f", "behind.jpg")
-    decisions.write(tree["master"] / "f" / "behind.jpg",
-                    Decision(stacked_under="f/top.jpg"))
+    """It has been dealt with, by the strongest possible answer.
 
-    assert ix.suggestions(_rows(tree)) == []
+    Asked of the rows *inside* a stack, because that is the only place the
+    question is live: the library view hides stacked files, so asking it there
+    proves nothing about the suggesting and everything about the query.
+    """
+    _shot(tree, "top.jpg", "2026:08:30 10:00:00")
+    # One a moment after the top, one sharing its name a half-minute later:
+    # between them they are what each of the two signals looks for.
+    for name, when in (("one.jpg", "2026:08:30 10:00:01"),
+                       ("one_001.jpg", "2026:08:30 10:00:30")):
+        _shot(tree, name, when)
+        _sidecar(tree, "f", name)
+        decisions.write(tree["master"] / "f" / name,
+                        Decision(stacked_under="f/top.jpg"))
+    _build(tree)
+    conn = ix.connect(tree["db"])
+
+    inside = ix.files(conn, filters=ix.Filters(within="f/top.jpg"), limit=1000)
+    assert len(inside) == 3, "the stack never held them"
+    assert ix.suggestions(inside) == []
+
+    assert ix.suggestions(ix.files(conn, limit=1000)) == []
 
 
 def test_no_photograph_is_in_two_suggestions(tree: dict[str, Path]) -> None:

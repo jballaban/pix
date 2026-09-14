@@ -44,6 +44,26 @@ def test_the_browse_script_runs_and_does_the_right_thing(
 
 @pytest.mark.skipif(shutil.which("node") is None,
                     reason="node is not installed")
+def test_the_same_script_reviews_suggested_stacks(tmp_path: Path) -> None:
+    """The review page is the same script on a different page: keep one of a
+    proposal, or say it is not a stack, and go down the list.
+
+    Worth driving rather than reading, because the page the script arrives on
+    decides whether it runs at all — a proposal handed to the section wiring
+    threw on load and left a page that silently ignored every click.
+    """
+    script = tmp_path / "browse.js"
+    script.write_text(web._BROWSE_JS, encoding="utf-8")
+
+    result = subprocess.run(
+        ["node", str(JS_DIR / "review.js"), str(script)],
+        capture_output=True, text=True, timeout=120, cwd=JS_DIR)
+
+    assert result.returncode == 0, (result.stdout + result.stderr)[-2000:]
+
+
+@pytest.mark.skipif(shutil.which("node") is None,
+                    reason="node is not installed")
 def test_the_browse_script_parses(tmp_path: Path) -> None:
     """A syntax error is silent in a browser and total in its effect."""
     script = tmp_path / "browse.js"

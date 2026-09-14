@@ -452,6 +452,11 @@ h3.group[data-state="some"] .grppick { background:var(--top);
 .cell:hover .choose, .choose:focus { opacity:1; }
 /* Nothing to select while a top is being chosen, so nothing offers to. */
 .grid[data-choosing] .pick { display:none; }
+/* A proposal, and marked as one: nothing here has been decided, and a
+   suggestion dressed as a stack would be the app having quietly made up its
+   mind. */
+h3.group.proposal { border-left:3px solid var(--top); padding-left:9px; }
+h3.group.proposal .notastack { margin-left:auto; }
 /* Inside an opened stack, the one that speaks. Everything in there looks
    alike — that is why they were stacked — so without this there is nothing to
    say which one the grid outside will show. */
@@ -604,7 +609,9 @@ def _whoami(user: Principal | None) -> str:
     """
     if user is None:
         return '<a class="who-link" href="/login">Sign in</a>'
-    manage = (f'{_bin_link()}<a class="who-link" href="/history">History</a>'
+    manage = (f'{_bin_link()}'
+              '<a class="who-link" href="/browse?suggest=1">Suggestions</a>'
+              '<a class="who-link" href="/history">History</a>'
               '<a class="who-link" href="/accounts">Accounts</a>'
               if user.is_admin else "")
     return (f'<span class="who-link dim">{_h(user.name)}</span>{manage}'
@@ -860,7 +867,8 @@ def browse(user: Annotated[Principal, Depends(require_user)],
            view: Annotated[ix.Filters, Depends(filters)],
            group: Annotated[str, Query()] = "day",
            op: Annotated[str | None, Query()] = None,
-           stale: Annotated[str | None, Query()] = None) -> HTMLResponse:
+           stale: Annotated[str | None, Query()] = None,
+           suggest: Annotated[str | None, Query()] = None) -> HTMLResponse:
     """The one grid, filtered — select files, then say something about them.
 
     Selecting an event on the landing page is just this page with `?event=`, so
@@ -871,11 +879,25 @@ def browse(user: Annotated[Principal, Depends(require_user)],
     rows = ix.files(conn, view, groups=groups, limit=PAGE_LIMIT)
     total = ix.count(conn, view)
 
-    cells = _sections(rows, groups, view.within)
+    lead = ""
+    if suggest:
+        # A review rather than a listing: only what has something to answer.
+        proposals = ix.suggestions(rows)
+        rows = [r for g in proposals for r in g]
+        cells = "".join(_proposal(g) for g in proposals)
+        lead = (f'<p class="dim">{len(proposals):,} groups of photographs '
+                f'taken in the same moment, {len(rows):,} files. Nothing here '
+                f'has been decided — keep one of each, or say it is not a '
+                f'stack and it will not be offered again.</p>'
+                if proposals else
+                '<p class="empty">Nothing left to review.</p>')
+    else:
+        cells = _sections(rows, groups, view.within)
     shown = (f"{total:,} files" if total <= PAGE_LIMIT else
              f"{len(rows):,} of {total:,} files")
-    body = (f'<div class="grid" id="grid">{cells}</div>'
-            if rows else '<p class="empty">Nothing matches these filters.</p>')
+    body = (lead + f'<div class="grid" id="grid">{cells}</div>'
+            if rows else
+            lead or '<p class="empty">Nothing matches these filters.</p>')
     return _page("pix2 browse", f"""{body}
 <div id="viewer">
   <div class="stage"><img id="vimg">
@@ -1058,6 +1080,31 @@ def _sections(rows: list[sqlite3.Row], groups: list[str],
         out.append(_heading(labels, len(groups), len(batch)))
         out.extend(_cell(r, within) for r in batch)
     return "".join(out)
+
+
+def _proposal(group: list[sqlite3.Row]) -> str:
+    """One suggested stack, open, with the two answers it can be given.
+
+    Expanded rather than collapsed, because the question is *are these the same
+    photograph* and a collapsed stack shows one of them. The work is scrolling:
+    look, then either say which one to keep or say it is not a stack, and the
+    next one is already on screen.
+
+    Marked as a proposal and not as a stack — nothing here has been decided,
+    and a suggestion that looked like a stack would be the app having quietly
+    made up its mind.
+    """
+    keys = ",".join(f'{r["folder"]}/{r["name"]}' for r in group)
+    when = str(group[0]["effective_date"] or "")[:16].replace("-", " ", 3)
+    return (
+        f'<h3 class="group proposal" data-files="{_h(keys)}">'
+        f'<span class="crumbs"><span class="crumb">'
+        f'<span class="grpname">{len(group)} photographs</span></span>'
+        f'<span class="sep">&rsaquo;</span><span class="crumb">'
+        f'<span class="grpname dim">{_h(when)}</span></span></span>'
+        f'<button class="notastack">Not a stack</button>'
+        f'</h3>'
+        + "".join(_cell(r) for r in group))
 
 
 def _heading(labels: list[str], levels: int, count: int) -> str:
@@ -1964,6 +2011,54 @@ function sideOf(act,value){
   return ACT_SIDE[act]||'live';
 }
 
+// --- suggested stacks --------------------------------------------------------
+// A proposal, never a decision: the app has noticed that some photographs were
+// taken in the same moment and is asking. The work is scrolling — look, then
+// either say which one to keep or say it is not a stack, and the next one is
+// already on screen.
+document.querySelectorAll('.proposal').forEach(h=>{
+  const files=(h.dataset.files||'').split(',').filter(Boolean);
+  const mine=()=>cells.filter(c=>files.includes(keyOf(c)));
+  h.querySelector('.notastack').onclick=async e=>{
+    e.stopPropagation();
+    const cs=mine();
+    if(!cs.length) return;
+    // Remembered, so it is never proposed again. Scrolling past the same
+    // refusal every time is worse than never having been offered it.
+    const out=await applyToSelection('no_stack',true,undefined,cs);
+    if(out&&out.done){cs.forEach(c=>c.remove());h.remove();
+                      cells=cells.filter(c=>!cs.includes(c));
+                      drawSel();}
+  };
+  // Every photograph in a proposal offers to be the one kept, the same control
+  // and the same gesture as choosing a top anywhere else.
+  mine().forEach(c=>{
+    const b=document.createElement('button');
+    b.className='choose';
+    b.textContent='Keep this one';
+    b.onclick=async ev=>{
+      ev.stopPropagation();
+      const group=mine();
+      const rest=group.filter(x=>x!==c);
+      if(!rest.length) return;
+      const out=await applyToSelection('stacked_under',keyOf(c),undefined,rest);
+      if(out&&out.done){
+        rest.forEach(x=>x.remove());
+        cells=cells.filter(x=>!rest.includes(x));
+        // Answered, so it stops asking. The control lives on the photograph,
+        // so removing the heading leaves it behind — offering to keep the one
+        // already kept, on a proposal that no longer exists.
+        group.forEach(x=>{const q=x.querySelector('.choose');
+                          if(q) q.remove();});
+        h.remove();
+        markStack(c,rest.length);
+        drawSel();
+      }
+    };
+    c.appendChild(b);
+  });
+});
+
 // --- stacks ------------------------------------------------------------------
 // Eight takes of one photograph, one shown and the rest folded behind it. Each
 // of the others records which file it defers to; the top records nothing,
@@ -2652,6 +2747,17 @@ function groupMenu(anchorEl,level,insert){
 
 // Every cell under a heading, down to the next one. There is one heading per
 // section now, so this is simply "until the next heading".
+// The sections of the grid. A proposal is shaped like one — a heading with
+// photographs under it — but it is a question, not a level of the grouping:
+// there is nothing to rename, nothing to select as a block, and a date where a
+// section keeps its count. Handing it to the section wiring put a number over
+// that date and looked for a select-all button that is not there, which threw
+// on load and took every handler on the page with it.
+function sections(){
+  return document.querySelectorAll('.group')
+                 .filter(h=>!h.classList.contains('proposal'));
+}
+
 function sectionCells(h){
   const out=[];
   for(let el=h.nextElementSibling; el; el=el.nextElementSibling){
@@ -2670,7 +2776,7 @@ function sectionCells(h){
 // the section — a running tally would be a second account of the same thing,
 // free to drift from it.
 function resection(){
-  document.querySelectorAll('.group').forEach(h=>{
+  sections().forEach(h=>{
     const mine=sectionCells(h);
     if(!mine.length){ h.remove(); return; }
     const n=h.querySelector('.dim');
@@ -2679,14 +2785,14 @@ function resection(){
 }
 
 function drawGroupPicks(){
-  document.querySelectorAll('.group').forEach(h=>{
+  sections().forEach(h=>{
     const mine=sectionCells(h);
     const n=mine.filter(c=>picked.has(c)).length;
     h.dataset.state=n===0?'none':(n===mine.length?'all':'some');
   });
 }
 
-document.querySelectorAll('.group').forEach(h=>{
+sections().forEach(h=>{
   // Each crumb is two controls: the name changes that level, the cross drops
   // it. Removal is on the crumb rather than inside the menu because *take this
   // away* is a thing you should be able to see, not go and find.
@@ -2984,6 +3090,7 @@ class DecideBody(BaseModel):
     remove_audience: list[str] = []
     deleted: bool | None = None
     stacked_under: str | None = None
+    no_stack: bool | None = None
 
 
 @app.post("/api/decide")
@@ -3123,6 +3230,7 @@ class DecideBulkBody(BaseModel):
     remove_audience: list[str] = []
     deleted: bool | None = None
     stacked_under: str | None = None
+    no_stack: bool | None = None
 
 
 #: Bounds one request rather than the whole gesture. Finishing a 1,766-file
@@ -3243,6 +3351,7 @@ class _Change:
     remove_audience: Sequence[str] = field(default_factory=tuple)
     deleted: bool | Unset = decisions.UNSET
     stacked_under: str | None | Unset = decisions.UNSET
+    no_stack: bool | Unset = decisions.UNSET
 
 
 def _change(body: DecideBody | DecideBulkBody) -> _Change:
@@ -3264,7 +3373,8 @@ def _change(body: DecideBody | DecideBulkBody) -> _Change:
                    add_audience=tuple(body.add_audience),
                    remove_audience=tuple(body.remove_audience),
                    deleted=_flag(got("deleted")),
-                   stacked_under=got("stacked_under"))
+                   stacked_under=got("stacked_under"),
+                   no_stack=_flag(got("no_stack")))
 
 
 def _recorded(change: _Change) -> dict[str, Any]:
@@ -3276,7 +3386,7 @@ def _recorded(change: _Change) -> dict[str, Any]:
     """
     out: dict[str, Any] = {}
     for name in ("event", "date_override", "tags", "audience", "deleted",
-                 "stacked_under"):
+                 "stacked_under", "no_stack"):
         value: Any = getattr(change, name)
         if isinstance(value, Unset):
             continue
@@ -3334,7 +3444,8 @@ def _decide(folder: str, name: str, change: _Change,
                 add_audience=change.add_audience,
                 remove_audience=change.remove_audience,
                 deleted=change.deleted,
-                stacked_under=change.stacked_under)
+                stacked_under=change.stacked_under,
+                no_stack=change.no_stack)
         except decisions.DecisionError as e:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
         except OSError as e:
@@ -3448,6 +3559,9 @@ def _summary(change: _Change) -> str:
         return f"tagged {files} {', '.join(change.add_tags)}"
     if change.remove_tags:
         return f"untagged {', '.join(change.remove_tags)} on {files}"
+    if not isinstance(change.no_stack, Unset):
+        return (f"said {files} are not a stack" if change.no_stack
+                else f"let {files} be suggested again")
     if not isinstance(change.stacked_under, Unset):
         return (f"stacked {files} under {change.stacked_under.rpartition('/')[2]}"
                 if change.stacked_under else f"unstacked {files}")

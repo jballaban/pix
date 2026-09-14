@@ -194,7 +194,7 @@ def get(op_id: str, *, path: Path | None = None) -> Operation | None:
 
 #: The scalar decisions: one value, replaced outright.
 _SCALARS: tuple[str, ...] = ("event", "date_override", "deleted",
-                             "stacked_under")
+                             "stacked_under", "no_stack")
 
 #: The multi-valued ones, as (whole-list key, add key, remove key, attribute).
 _LISTS: tuple[tuple[str, str, str, str], ...] = (
@@ -259,9 +259,16 @@ def undo(did: dict[str, Any], before: Decision | None) -> dict[str, Any]:
     return out
 
 
+#: Scalars the decision holds as a flag, not as text. A `True` read back from
+#: the log is `True` on the decision, and comparing it against `"True"` made
+#: every one of them look like a file that had changed since — so nothing was
+#: ever put back.
+_FLAGS: frozenset[str] = frozenset({"deleted", "no_stack"})
+
+
 def _norm(value: object, name: str) -> object:
     """A stored value as the decision would hold it."""
-    if name == "deleted":
+    if name in _FLAGS:
         return bool(value)
     return str(value) if value else None
 
@@ -305,7 +312,8 @@ def _decision_json(decision: Decision | None) -> dict[str, Any] | None:
     return {"event": decision.event, "date_override": decision.date_override,
             "tags": list(decision.tags), "audience": list(decision.audience),
             "deleted": decision.deleted,
-            "stacked_under": decision.stacked_under}
+            "stacked_under": decision.stacked_under,
+            "no_stack": decision.no_stack}
 
 
 def _render(summary: str, n: int) -> str:
@@ -380,4 +388,5 @@ def _decision_from(raw: object) -> Decision | None:
         deleted=bool(d.get("deleted")),
         stacked_under=(str(d["stacked_under"])
                        if d.get("stacked_under") else None),
+        no_stack=bool(d.get("no_stack")),
     )
