@@ -1962,18 +1962,18 @@ async function chooseTop(top){
   const key=keyOf(top);
   const family=(choosing||[]).filter(
     c=>c!==top&&c.dataset.under!==key);
-  // Files were borrowed from other stacks, or the one chosen came from inside
-  // one. Either way the grid is about to hold a different set than the page
-  // was built with, and it can only lose cells on its own.
-  const rearranged=fetched.length>0;
-  if(!family.length){endChoosing();return;}
+  if(!family.length){endChoosing(true);return;}
   const behind=+(top.dataset.behind||0)+family.length;
+  // If the one chosen came out of a stack it stays — it is a file that speaks
+  // for others now, which is exactly what the grid shows. Everything else
+  // borrowed goes back. The server takes it out of whatever it was behind.
+  fetched=fetched.filter(c=>c!==top);
+  top.dataset.under='';
   endChoosing();
   const out=await applyToSelection('stacked_under',keyOf(top),undefined,family);
   // The files that went behind it leave the grid on their own — they stopped
   // matching the moment they were stacked — but the one left standing has to
   // start saying how many it now speaks for.
-  if(out&&out.done&&rearranged){location.reload();return;}
   if(out&&out.done) markStack(top,behind);
   // And the selection is spent. It used to survive, holding the file that had
   // just become a top — so the next things ticked were stacked *with it*, and
@@ -2018,11 +2018,10 @@ async function makeTop(){
   // screen because promoting happens inside an opened stack.
   const family=cells.filter(c=>c!==top&&stackKey(c)===key);
   if(!family.length){say('nothing else is in that stack');return;}
-  // One gesture, so one entry in the log — the two writes carry the same id
-  // for the same reason chunks of a bulk edit do.
-  const batch=newBatch();
-  if(await applyToSelection('stacked_under',keyOf(top),undefined,family,batch))
-    await applyToSelection('stacked_under',null,undefined,[top],batch);
+  // One write. The other half — taking the new top out of what it was behind —
+  // is the server's, because a file everything defers to cannot be left
+  // deferring to one of them whoever asks for it.
+  await applyToSelection('stacked_under',keyOf(top),undefined,family);
 }
 
 async function unstack(){
@@ -3037,6 +3036,16 @@ def api_decide_bulk(user: Annotated[Principal, Depends(require_admin)],
             done.append((target.folder, target.name))
             undo.append(history.Before(target.folder, target.name, was,
                                        did=did))
+        # The file everything is being stacked onto stops being stacked
+        # itself. Promoting one photograph out of a stack is exactly this —
+        # the others come to defer to it, and it has to stop deferring to the
+        # one it is replacing, or the stack is a ring nothing can show.
+        if (conn is not None and done
+                and not isinstance(change.stacked_under, Unset)
+                and change.stacked_under):
+            promoted = _promote(conn, change.stacked_under)
+            undo.extend(promoted)
+            done.extend((b.folder, b.name) for b in promoted)
         # Before asking what left the view, because bringing a stack's
         # members up changes the answer for them too.
         if (conn is not None and done
@@ -3225,7 +3234,14 @@ def _cascade(conn: sqlite3.Connection | None,
     if conn is None:
         return []
     moved: list[history.Before] = []
-    written = {f"{f}/{n}" for f, n in done}
+    # Never the file being stacked *onto*: it is the one that speaks now, and
+    # pointing it at itself hides it from every listing at once — a file behind
+    # itself is behind something, so nothing shows it, and everything deferring
+    # to it goes with it. Promoting one photograph out of a stack did exactly
+    # that, and the whole stack vanished.
+    written: set[str] = {f"{f}/{n}" for f, n in done}
+    if top:
+        written.add(top)
     for folder, name in done:
         for m_folder, m_name in ix.members(conn, f"{folder}/{name}"):
             if f"{m_folder}/{m_name}" in written:
@@ -3238,6 +3254,27 @@ def _cascade(conn: sqlite3.Connection | None,
             moved.append(history.Before(m_folder, m_name, was,
                                         did={"stacked_under": top}))
     return moved
+
+
+def _promote(conn: sqlite3.Connection, top: str) -> list[history.Before]:
+    """Take the file that is about to speak out of whatever it was behind.
+
+    A top is a file nothing is behind. Stacking onto one that is itself stacked
+    leaves a ring — it defers to the file now deferring to it — and a ring
+    shows nowhere, because every file in it is behind something.
+    """
+    folder, _, name = top.partition("/")
+    if not folder or not name:
+        return []
+    try:
+        media = _master_file(folder, name)
+    except HTTPException:
+        return []
+    current = decisions.read(media)
+    if current is None or not current.stacked_under:
+        return []
+    was, _, _ = _decide(folder, name, _Change(stacked_under=None), conn=conn)
+    return [history.Before(folder, name, was, did={"stacked_under": None})]
 
 
 def _summary(change: _Change) -> str:

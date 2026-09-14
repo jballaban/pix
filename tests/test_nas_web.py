@@ -771,6 +771,79 @@ def test_what_is_behind_a_stack_is_still_scoped_to_the_viewer(
     assert kid.get("/api/behind/init_2026/a.jpg").json()["cells"] == ""
 
 
+def test_promoting_a_file_does_not_leave_it_behind_itself(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """A top is a file nothing is behind. Stacking onto one that is itself
+    stacked left a ring — it deferred to the file now deferring to it — and a
+    ring shows nowhere, because every file in it is behind something. The whole
+    stack vanished from the library."""
+    _three_files(writable, app_env)
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/a.jpg",
+        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
+
+    # Promote b.mp4: everything else comes to defer to it.
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/b.mp4",
+        "files": [{"folder": "init_2026", "name": "a.jpg"}]})
+
+    assert decisions.read(writable / "b.mp4") is None, "left behind itself"
+    assert decisions.read(writable / "a.jpg") == Decision(
+        stacked_under="init_2026/b.mp4")
+    # And the stack is on screen, with the promoted file speaking for it.
+    html = client.get("/browse?event=Italy%20-%20Sicily").text
+    assert "b.mp4" in html
+    assert "a.jpg" not in html
+    assert 'class="stack"' in html
+
+
+def test_taking_a_file_out_of_a_stack_is_part_of_promoting_it(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """One gesture, so one entry — and putting it back puts the stack back the
+    way round it was."""
+    _three_files(writable, app_env)
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/a.jpg",
+        "files": [{"folder": "init_2026", "name": "b.mp4"},
+                  {"folder": "init_2026", "name": "c.jpg"}]})
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/b.mp4",
+        "files": [{"folder": "init_2026", "name": "a.jpg"}]})
+
+    op = history.recent()[0]
+    assert {f.name for f in op.files} == {"a.jpg", "b.mp4", "c.jpg"}, [
+        f.name for f in op.files]
+
+    client.post("/history/revert", data={"id": op.id})
+    assert decisions.read(writable / "b.mp4") == Decision(
+        stacked_under="init_2026/a.jpg")
+    assert decisions.read(writable / "a.jpg") is None
+
+
+def test_a_stale_index_cannot_put_a_file_behind_itself(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """The cascade asks the index what is behind a file, and the index is
+    allowed to be behind — that is the whole bargain. So the two can disagree
+    about whether the file being stacked onto is already in the stack, and the
+    one that thinks it is would write it behind itself."""
+    _three_files(writable, app_env)
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/a.jpg",
+        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
+
+    # Master says b.mp4 is free; the index still says it is behind a.jpg.
+    decisions.sidecar_path(writable / "b.mp4").unlink()
+
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/b.mp4",
+        "files": [{"folder": "init_2026", "name": "a.jpg"}]})
+
+    assert decisions.read(writable / "b.mp4") is None, "put behind itself"
+
+
 def test_the_grid_draws_no_cursor(client: TestClient) -> None:
     """The dashed ring said which cell the keyboard was on, and the grid has no
     keyboard. It stayed behind after that was removed and turned up unasked on

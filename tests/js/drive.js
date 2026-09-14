@@ -658,21 +658,16 @@ function arrow(key, opts) {
     actBtn('top').click();
     for (let i = 0; i < 8; i++) await settle();
     const sent = calls.slice(n).filter(c => c.url.startsWith('/api/decide'));
-    check('it takes two writes, one each way', sent.length === 2,
-          String(sent.length));
-    if (sent.length === 2) {
-      const first = JSON.parse(sent[0].body);
-      const second = JSON.parse(sent[1].body);
+    // One write. Taking the new top out of what it was behind is the
+    // server's half: a file everything defers to cannot be left deferring to
+    // one of them, whoever asked for it.
+    check('promoting takes one write', sent.length === 1, String(sent.length));
+    if (sent.length === 1) {
+      const body = JSON.parse(sent[0].body);
       check('the old top starts deferring to the new one',
-            first.stacked_under === 'f/b.jpg'
-            && first.files.length === 1 && first.files[0].name === 'a.jpg',
+            body.stacked_under === 'f/b.jpg'
+            && body.files.length === 1 && body.files[0].name === 'a.jpg',
             sent[0].body);
-      check('and the new one stops deferring to anything',
-            second.stacked_under === null
-            && second.files.length === 1 && second.files[0].name === 'b.jpg',
-            sent[1].body);
-      check('both halves are one gesture in the log',
-            first.batch === second.batch, first.batch + ' vs ' + second.batch);
     }
     cells[0].dataset.behind = '0';
     cells[1].dataset.under = '';
@@ -726,8 +721,14 @@ function arrow(key, opts) {
     for (let i = 0; i < 8; i++) await settle();
     const sent = calls.slice(n).filter(c => c.url.startsWith('/api/decide'));
     check('choosing it sends one write', sent.length === 1, String(sent.length));
-    check('and the page is asked for again, since the grid holds a different '
-          + 'set than it was built with', reloaded === 1, String(reloaded));
+    // No reload: the grid loses the files that went behind it and keeps the
+    // one that came out, so the page never has to be fetched again and never
+    // jumps back to the top.
+    check('the page is not thrown away to do it', reloaded === 0,
+          String(reloaded));
+    check('and the one chosen stays, now speaking for the rest',
+          !!grid.children.find(c => c.dataset.name === 'hidden.jpg'),
+          'the promoted file was given back with the borrowed ones');
     if (sent.length) {
       const body = JSON.parse(sent[0].body);
       check('everything else defers to it',
@@ -735,6 +736,10 @@ function arrow(key, opts) {
       check('including both of the ones that were speaking',
             body.files.length === 2, sent[0].body);
     }
+    // It belongs in the grid now, but the blocks after this one count the
+    // section it landed in.
+    const stayed = grid.children.find(c => c.dataset.name === 'hidden.jpg');
+    if (stayed) stayed.remove();
     behindCells = '';
     cells.forEach(c => { c.dataset.under = ''; c.dataset.behind = '0'; });
     deselect();
