@@ -1233,7 +1233,42 @@ or dies on, and it is the largest remaining unknown in [§15](#15-open-questions
 *(Resolved in discussion: import-ledger identity — [§9](#9-ingest--the-desktop-cli);
 distributions and the curation scale — [§7](#7-distributions); multi-user, auth and
 Synology Photos write-back — [§8](#8-the-app); Btrfs — [§10](#10-hardware);
-the sidecar/index model — [§4](#4-metadata--xmp-sidecars); seeding — [§14](#14-seeding-the-existing-library).)*
+the sidecar/index model — [§4](#4-metadata--xmp-sidecars); seeding — [§14](#14-seeding-the-existing-library);
+**where a judgement about a set lives** — see stacks, below.)*
+
+### Stacks — and why they are flat
+
+*"These two are the same shot"* looked like it had nowhere to live. It is a
+human decision, so [§4](#4-metadata--xmp-sidecars) puts it in master — but it is
+about a *set*, and a per-file sidecar seemed an awkward home for a fact about
+several files.
+
+It was never about the set. Each file records the one it defers to
+(`pix:StackedUnder`); the file that speaks records nothing, because being
+spoken for is the decision and speaking is what is left. So it is per file after
+all, and losing a folder costs those files and their deference together — the
+rule everything else here already follows.
+
+**Stacks do not nest**, and that is a decision rather than an omission. It was
+reconsidered once and kept, for two reasons that are about the interface rather
+than the storage — the sidecar model allows nesting perfectly well, so this
+stays reversible:
+
+- **A count would stop being answerable.** A badge saying *4 photographs
+  stacked here* can promise either what is directly behind the file or what is
+  anywhere beneath it. The first lets a stack of two hold twenty; the second
+  means opening it shows fewer than it said. The honest version needs a
+  recursive count on every thumbnail in a two-thousand-cell grid.
+- **`Unstack` would stop meaning one thing.** Flat, it is unambiguous: on a
+  file behind another, take that one out; on the file that speaks, take the
+  stack apart. Nested, the same click on the same file could mean *lift this
+  and its own members out of the stack it is in* or *dissolve it*, and both
+  read correctly.
+
+Stacking a stack therefore **merges**: its members come up with it, because a
+stack's members follow the file that speaks for them wherever it goes. Out of a
+stack and they come out; into another and they go in. That one rule is also
+what makes taking a whole stack apart a single gesture.
 
 - **Curation UI — what remains.** The model is specced
   ([§8](#8-the-app)): three passes, promote-only, ranges as selection. Still open
@@ -1262,9 +1297,6 @@ the sidecar/index model — [§4](#4-metadata--xmp-sidecars); seeding — [§14]
   itself is settled ([§4](#4-metadata--xmp-sidecars)); what is still open is
   whether the delivery copy carries the tier that selected it. Nothing reads it
   there, but it costs nothing and aids debugging.
-- **Where dedupe judgments live.** "These two are the same shot" is a human
-  decision, so by the rule above it belongs in master — but it is inherently about
-  a *pair*, and a per-file sidecar is an awkward home for it.
 - **Face detection** remains deferred, and `{person}` depends on it — which is what
   the people-grouped ad-hoc distribution would need.
 - **Reclaiming space on the NAS.** Emptying `#recycle` did not return space;
