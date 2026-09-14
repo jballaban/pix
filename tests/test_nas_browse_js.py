@@ -15,13 +15,19 @@ dependency either.
 
 from __future__ import annotations
 
+import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from pix.nas import web
+
+if TYPE_CHECKING:
+    from fastapi.testclient import TestClient
 
 JS_DIR = Path(__file__).parent / "js"
 
@@ -67,20 +73,42 @@ def test_the_same_script_folds_and_refuses_the_apps_own_guesses(
 
 @pytest.mark.skipif(shutil.which("node") is None,
                     reason="node is not installed")
-def test_the_same_script_runs_the_landing_page(tmp_path: Path) -> None:
+def _element_ids(html: str) -> list[str]:
+    """The ids of the page's real elements.
+
+    The script is inlined into the page, so its own `getElementById('menu')`
+    strings are in the HTML too — and a stage built from those would contain
+    every element the script *wants* rather than every element the page
+    *has*, which is the one difference worth knowing.
+    """
+    markup = re.sub(r"<script.*?</script>", "", html, flags=re.S)
+    return sorted(set(re.findall(r'id="([^"]+)"', markup)))
+
+
+@pytest.mark.skipif(shutil.which("node") is None,
+                    reason="node is not installed")
+def test_the_same_script_runs_the_landing_page(
+    tmp_path: Path, client: "TestClient"
+) -> None:
     """The landing page is the same two controls over folders instead of
     files, so it is the same script — on a page with no selection, no viewer
     and no actions to wire.
 
-    Driven rather than read because the failure has no symptom of its own: a
-    page missing one element the script reaches for looks exactly like a page
-    whose chips and grouping menu simply do nothing.
+    **Staged from the page the server actually sends.** The element list used
+    to be written out by hand here, and it held a `#menu` the landing page did
+    not render: the script threw reaching for it on load, which takes every
+    handler on the page with it, and this test went on passing because its own
+    stage had one. A page whose chips never draw and whose grouping never
+    wires looks exactly like a page whose controls were never built.
     """
     script = tmp_path / "browse.js"
     script.write_text(web._BROWSE_JS, encoding="utf-8")
+    ids = tmp_path / "ids.json"
+    ids.write_text(json.dumps(_element_ids(client.get("/").text)),
+                   encoding="utf-8")
 
     result = subprocess.run(
-        ["node", str(JS_DIR / "home.js"), str(script)],
+        ["node", str(JS_DIR / "home.js"), str(script), str(ids)],
         capture_output=True, text=True, timeout=120, cwd=JS_DIR)
 
     assert result.returncode == 0, (result.stdout + result.stderr)[-2000:]

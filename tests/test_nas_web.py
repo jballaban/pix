@@ -1311,6 +1311,26 @@ def test_the_landing_page_says_what_is_left_to_do(client: TestClient) -> None:
     assert "undecided" in html
 
 
+def test_both_pages_carry_the_controls_the_script_wires(
+    client: TestClient
+) -> None:
+    """One script serves both pages, so an element it reaches for has to be on
+    both of them. The landing page shipped without `#menu`: the script threw
+    on load, every handler died with it, and the page looked like one whose
+    filters and grouping had simply never been built.
+
+    The script's own `getElementById` strings are inlined into the HTML, so
+    the scripts are cut out before looking — otherwise every page contains
+    every id it merely mentions.
+    """
+    shared = {"grid", "menu", "chips", "note"}
+    for url in ("/", "/browse"):
+        markup = re.sub(r"<script.*?</script>", "",
+                        client.get(url).text, flags=re.S)
+        have = set(re.findall(r'id="([^"]+)"', markup))
+        assert shared <= have, f"{url} is missing {sorted(shared - have)}"
+
+
 def test_the_same_filters_are_on_both_pages(client: TestClient) -> None:
     """Learning one teaches the other. They are the same controls over the
     same library, and a chip that exists on one page and not the other is a

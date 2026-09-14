@@ -51,11 +51,16 @@ for (const name of ['2025', '2026']) {
   grid.appendChild(t);
 }
 
-mk('menu');
-mk('chips');
-mk('note');
-// Folders are photographs too, so the size control is here and wires up.
-const sizePick = mk('sizepick');
+// **Every element the real page has, and no others.** This stage used to be a
+// hand-picked list, which is how it came to hold a `#menu` the landing page
+// did not render: the script threw reaching for it on load, every handler on
+// the page died with it, and the harness went on passing because its own
+// stage had one. The ids now come from the served HTML.
+const ids = process.argv[3]
+  ? JSON.parse(fs.readFileSync(process.argv[3], 'utf8'))
+  : ['grid', 'menu', 'chips', 'note', 'sizepick'];
+for (const id of ids) if (!document.byId[id]) mk(id);
+const sizePick = document.byId.sizepick;
 
 const calls = [];
 const fetch = async (url, opts) => {
@@ -138,12 +143,15 @@ const settle = () => new Promise(r => setImmediate(r));
   check('and stays on this page', !!went && went.startsWith('/?'),
         String(went));
 
-  check('the size control says what it will do', !!sizePick.textContent,
-        JSON.stringify(sizePick.textContent));
-  const was = grid.dataset.size;
-  sizePick.click();
-  check('and changes how big the folders are', grid.dataset.size !== was,
-        `${was} -> ${grid.dataset.size}`);
+  check('the page carries the size control', !!sizePick);
+  if (sizePick) {
+    check('which says what it will do', !!sizePick.textContent,
+          JSON.stringify(sizePick.textContent));
+    const was = grid.dataset.size;
+    sizePick.click();
+    check('and changes how big the folders are', grid.dataset.size !== was,
+          `${was} -> ${grid.dataset.size}`);
+  }
 
   // --- the grouping -----------------------------------------------------------
   went = null;

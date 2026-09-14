@@ -871,7 +871,13 @@ def home(user: Annotated[Principal, Depends(require_user)],
                 + '<div class="grid folders" id="grid">'
                 + "".join(_folder(r, groups, view, user) for r in rows)
                 + "</div>")
-    return _page("pix2", f'<p class="dim">{head}</p>{body}',
+    return _page("pix2",
+                 # The shared menu, which every filter and the grouping open
+                 # into. Left out, the script threw looking for it the moment
+                 # it loaded, and a page whose chips never drew and whose
+                 # heading never wired looks exactly like a page whose
+                 # controls were never built.
+                 f'<p class="dim">{head}</p>{body}<div id="menu" hidden></div>',
                  # The way past the folders. Every one of them opens the grid
                  # at that section; this opens it at everything the filters
                  # still allow, which is the one view no folder stands for.
