@@ -51,6 +51,7 @@ from pix.exiftool_session import ExifToolSession, ExifToolTimeout
 from pix.duration import format_duration_compact
 from pix.markers import EXPORT_TMP_SUFFIX
 from pix.progress import LiveProgress
+from pix.nas import identity
 from pix.nas import ledger
 from pix.nas.const import (
     LARGE_DIR, LEDGER_NAME, MASTER_DIR, META_DIR, PREVIEW_DIR, RENDER_DIR,
@@ -578,13 +579,21 @@ def _write_meta(media: Path, exif: "_ExifPool") -> bool:
     except OSError:
         return False
 
+    # Identity, taken here because this is the one moment the whole library is
+    # being read anyway (spec/nas-app.md §15). The perceptual hash is for
+    # images only: a clip needs a frame extracted before it has pixels to
+    # compare, which is ffmpeg work this path deliberately does not do, and
+    # `video_fingerprint` already answers that question its own way.
     payload: dict[str, object] = {
         "file": media.name,
         "folder": media.parent.name,
         "size": stat.st_size,
         "mtime_ns": stat.st_mtime_ns,
+        "content_hash": identity.content_hash(media),
         "exif": data,
     }
+    if media.suffix.lower() in _IMAGE_EXTS:
+        payload["phash"] = identity.perceptual_hash(media)
     dest = meta_path(media)
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(dest.name + EXPORT_TMP_SUFFIX)

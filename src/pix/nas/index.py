@@ -153,6 +153,7 @@ CREATE TABLE IF NOT EXISTS files (
     stacked_under  TEXT,          -- decision: `folder/name` this sits behind
     no_stack       INTEGER NOT NULL DEFAULT 0,   -- decision: never suggest this
     source         TEXT,          -- what it was imported as: the ledger's name
+    content_hash   TEXT,          -- fact: the coded image, metadata excluded
     suggested_under TEXT,         -- guessed: the `folder/name` this looks like
     PRIMARY KEY (folder, name)
 );
@@ -169,6 +170,9 @@ CREATE INDEX IF NOT EXISTS files_del   ON files(deleted);
 CREATE INDEX IF NOT EXISTS files_stack ON files(stacked_under);
 -- The same two reads again, for the stacks nobody has confirmed yet.
 CREATE INDEX IF NOT EXISTS files_sugg  ON files(suggested_under);
+-- Duplicates are a GROUP BY over this and nothing else (spec §15), so the whole
+-- question costs one scan of one index rather than a pass over the library.
+CREATE INDEX IF NOT EXISTS files_chash ON files(content_hash);
 CREATE TABLE IF NOT EXISTS file_tags (
     folder TEXT NOT NULL,
     name   TEXT NOT NULL,
@@ -484,11 +488,12 @@ _INSERT: str = (
     "INSERT OR REPLACE INTO files "
     "(folder, name, size, mtime_ns, kind, capture_date, camera, width, height, "
     " duration, event, date_override, effective_date, year, band, "
-    " has_sidecar, deleted, precision, stacked_under, no_stack, source) "
+    " has_sidecar, deleted, precision, stacked_under, no_stack, source, "
+    " content_hash) "
     "VALUES (:folder, :name, :size, :mtime_ns, :kind, :capture_date, :camera, "
     " :width, :height, :duration, :event, :date_override, "
     " :effective_date, :year, :band, :has_sidecar, :deleted, :precision,"
-    " :stacked_under, :no_stack, :source)"
+    " :stacked_under, :no_stack, :source, :content_hash)"
 )
 
 
@@ -702,6 +707,10 @@ def _row(folder: str, record: dict[str, Any],
         "precision": datestr.precision(captured, override),
         "stacked_under": decision.stacked_under if decision else None,
         "no_stack": 1 if (decision and decision.no_stack) else 0,
+        # A fact read straight through: `process` took it, nothing here can
+        # improve on it, and a row without one simply has not been processed
+        # since identity existed.
+        "content_hash": record.get("content_hash"),
     }
 
 

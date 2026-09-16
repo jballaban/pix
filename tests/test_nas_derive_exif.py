@@ -157,3 +157,32 @@ def test_failures_outside_a_cancel_are_reported(
 
     assert len(summary.failed) == 1
     assert "something real" in summary.failed[0]
+
+
+def test_the_meta_tier_records_what_the_file_is(tiers: dict[str, Path]) -> None:
+    """Identity rides with the metadata, because it *is* metadata — and because
+    this is the one moment the whole library is being read (spec §15).
+
+    Two copies of one photograph carrying different tags is the case the whole
+    duplicate design rests on, so it is checked end to end here rather than only
+    against the hash in isolation: what lands in the meta tier has to agree.
+    """
+    import json
+
+    folder = tiers["master"] / "legacy_2026"
+    folder.mkdir(parents=True)
+    im = Image.new("RGB", (60, 45), (30, 90, 140))
+    im.save(folder / "first.jpg", "JPEG", quality=88)
+    im.save(folder / "second.jpg", "JPEG", quality=88,
+            comment=b"copied, and tagged on the way")
+
+    derive.run_process()
+
+    meta = tiers["master"].parent / "meta" / "legacy_2026"
+    first = json.loads((meta / "first.jpg.json").read_text(encoding="utf-8"))
+    second = json.loads((meta / "second.jpg.json").read_text(encoding="utf-8"))
+
+    assert str(first["content_hash"]).startswith("j:")
+    assert first["content_hash"] == second["content_hash"], "tags moved it"
+    assert first["size"] != second["size"], "the files were identical anyway"
+    assert len(str(first["phash"])) == 16
