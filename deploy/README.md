@@ -6,8 +6,9 @@ never decodes anything — `process` already made everything it displays. That i
 what keeps it viable on the RS820+'s no-AVX Atom, and why the image needs neither
 Pillow nor ffmpeg.
 
-**The image is self-contained.** Import it, create a container with one volume,
-start it. Nothing to copy onto the share.
+**The image is self-contained.** Import it, create the container, start it. The
+source mount below is what makes later deployments cheap, not what makes the
+image work.
 
 ---
 
@@ -20,7 +21,8 @@ docker build -f deploy/Dockerfile -t pix2-app:latest .
 docker save pix2-app:latest -o pix2-app.tar
 ```
 
-~60 MB. Rebuild whenever you want to ship a code change.
+~60 MB. Needed once, and again only when the Python dependencies change —
+[Shipping a change](#shipping-a-change) explains why code changes do not.
 
 ## 2. Import it
 
@@ -32,19 +34,25 @@ Copy `pix2-app.tar` to the NAS, then Container Manager → **Image** → **Add**
 Container Manager → **Container** → **Create** → `pix2-app:latest`.
 
 - **General**: enable *Auto-restart*
-- **Port settings**: local `8800` → container `8000`
-- **Volume settings** — add **one** folder mount:
+- **Port settings**: local `8000` → container `8000`
+- **Volume settings** — add **two** folder mounts:
 
   | Mount path | Container path | Access |
   |---|---|---|
   | `/pix2` | `/volume1/pix2` | **Read/Write** |
+  | `/pix2/app/src` | `/app/src` | Read-only |
 
-  Read/write because curation will write `.xmp` decisions into master. It is the
-  only writer there besides `upload`.
+  Read/write on the archive because curation will write `.xmp` decisions into
+  master. It is the only writer there besides `upload`.
+
+  The second mount is what makes every later deployment a file copy rather than
+  a rebuild — see [Shipping a change](#shipping-a-change). Nothing breaks
+  without it; you simply pay an image rebuild for every code change, which is
+  how the NAS fell a long way behind the desktop once already.
 
 - **Environment**: nothing required. Accounts are managed in the app.
 
-Start it. The app is on `http://<nas>:8800`.
+Start it. The app is on `http://<nas>:8000`.
 
 If it will not start, the log says why in plain words — Container Manager →
 `pix2` → **Log**. The two things it checks are the archive mount and, if you
@@ -117,18 +125,30 @@ Build an image only when a change is ready to live on the NAS.
 
 ## Shipping a change
 
-Rebuild, save, re-import, recreate the container. A couple of minutes.
+With the source mount in place it is a copy and a restart, measured at 1.4s
+from restart to serving the new code:
 
-If you are iterating and that becomes tiresome, mount the source to shadow the
-baked copy:
+```powershell
+robocopy F:\code\pix\src \\nas\pix2\app\src /MIR /XD __pycache__
+Select-String '\\nas\pix2\app\src\pix\__init__.py' -Pattern '__version__'
+```
 
-1. Copy the repo's `src/` **contents** to `/volume1/pix2/app/src/`, so that
-   `/volume1/pix2/app/src/pix/nas/web.py` exists.
-2. Add a second volume: `/pix2/app/src` → `/app/src` (read-only).
+then **Restart** in Container Manager. `PYTHONPATH` puts `/app/src` ahead of the
+baked copy, so the mount wins whenever it is present.
 
-Then deploying is copying `.py` files and hitting **Restart** — seconds, no
-rebuild. `PYTHONPATH` puts `/app/src` ahead of the baked copy, so the mount wins
-whenever it is present.
+`/MIR` rather than a plain copy, because it mirrors: a module you rename or
+delete otherwise lingers on the share and goes on being imported in preference
+to the baked copy. The second line is not ceremony — a copy that silently does
+nothing is indistinguishable from a deploy that did not take, and the version
+in the footer is the only thing that tells them apart. Check it before you
+restart, not after you are confused.
+
+**Rebuild the image only when the Python dependencies change** — when `fastapi`
+or `uvicorn` themselves move. Then it is build, save, import, and *recreate* the
+container: Container Manager can edit a container's ports and volumes but not
+its image, so pointing it at a new one means deleting it and creating it again.
+That costs nothing, since the index, `users.json`, the operations log and the
+archive all live on the share rather than in the container.
 
 ## Accounts
 
@@ -151,15 +171,36 @@ shared with `family` reaches everyone holding that role.
 Passwords are scrypt-hashed and never stored in the clear: a credentials file on
 a share reachable over SMB is exactly how a reused password leaks.
 
-## Exposing it beyond the LAN
+## Giving it a name
 
-DSM → Control Panel → Login Portal → Advanced → **Reverse Proxy**, pointing a
-hostname at `localhost:8800`. You do **not** need Web Station; that is for
-hosting PHP and static sites.
+DSM → Control Panel → Login Portal → Advanced → **Reverse Proxy** → Create,
+with source `pix.ballaban.ca` / HTTP / `80` and destination `localhost` / `8000`,
+plus an A record for that name on the router. You do **not** need Web Station;
+that is for hosting PHP and static sites.
+
+**Fill the source hostname in.** DSM rejects port 80 with *this port number is
+reserved for system use* when the hostname is left blank, because a wildcard
+entry there would take over the port its own nginx answers on. Named, it is
+allowed, and the routing stays scoped — a request for any other hostname gets
+DSM's 404 rather than the app.
+
+The `Host` header is what routes, so the proxy can be tested before DNS exists
+anywhere:
+
+```
+curl -H "Host: pix.ballaban.ca" http://<nas>/healthz
+```
+
+Nothing about the container changes for this. Every redirect the app issues is
+a relative path and its session cookie is host-only, so it needs no
+`--proxy-headers` and no custom headers; there is no WebSocket or SSE in it to
+forward. `http://<nas>:8000` keeps working as the bypass for when the proxy
+itself is what you are debugging.
 
 **Change the admin password first**, and give everyone their own account. The
-reverse proxy terminates TLS and routes — it does not authenticate — so the
-app's own login is the only thing in front of your photographs.
+reverse proxy routes, and terminates TLS if you give it a certificate — it does
+not authenticate — so the app's own login is the only thing in front of your
+photographs.
 
 The session cookie is not marked `secure`, because the app is served over
 plain HTTP on the LAN and a cookie marked secure would simply never be sent —
@@ -172,7 +213,7 @@ that is worth revisiting.
 cannot log in:
 
 ```
-curl http://<nas>:8800/healthz
+curl http://<nas>:8000/healthz
 {"ok":true,"index":true}
 ```
 
