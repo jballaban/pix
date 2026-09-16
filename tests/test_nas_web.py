@@ -1113,13 +1113,34 @@ def test_an_opened_stack_holds_what_it_hides_however_it_got_there(
     client: TestClient, writable: Path, app_env: dict[str, Path]
 ) -> None:
     """Opening one is how the choosing works, and a guessed stack is chosen
-    between exactly like a decided one."""
+    between exactly like a decided one — in a view that is folding guesses."""
     _burst(app_env, writable, "x.jpg", "y.jpg")
 
-    behind = client.get("/api/behind/init_2026/x.jpg").json()["cells"]
+    behind = client.get("/api/behind/init_2026/x.jpg?stacks=with").json()["cells"]
 
     assert 'data-name="y.jpg"' in behind
     assert 'data-name="x.jpg"' not in behind, "the stack holds itself"
+
+
+def test_a_guess_is_nothing_at_all_until_it_is_turned_on(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """The badge said nothing and the grid treated the file as a stack: no
+    mark on it, but *Stack* opened it and more photographs came back than had
+    been selected. One rule decides whether a guess counts, and the cell the
+    page is built from has to answer to it like everything else."""
+    _burst(app_env, writable, "x.jpg", "y.jpg")
+
+    html = client.get("/browse").text
+    assert 'data-proposed="0"' in html
+    assert 'data-proposed="1"' not in html, "the grid sees a stack nobody drew"
+
+    # And nothing is gathered up by opening the file it resembles.
+    assert client.get("/api/behind/init_2026/x.jpg").json()["cells"] == ""
+
+    # Turned on, it is a stack in every sense at once.
+    on = client.get("/browse?stacks=with").text
+    assert 'data-proposed="1"' in on and "stack guessed" in on
 
 
 def test_the_grid_draws_no_cursor(client: TestClient) -> None:

@@ -793,10 +793,15 @@ def _clauses(filters: Filters) -> dict[str, tuple[str, dict[str, Any]]]:
     """Each active filter as a SQL fragment plus its parameters."""
     out: dict[str, tuple[str, dict[str, Any]]] = {}
     if filters.within:
+        # A guessed member only belongs to the stack while the view is
+        # folding guesses. With them off it is an ordinary photograph sitting
+        # in the grid on its own, and opening the file it resembles must not
+        # gather it up — that is the app acting on a guess nobody accepted.
+        guessed = (" OR files.suggested_under = :f_within "
+                   if filters.stacks else "")
         out["within"] = (
-            "(files.stacked_under = :f_within "
-            " OR files.suggested_under = :f_within "
-            " OR files.folder || '/' || files.name = :f_within)",
+            "(files.stacked_under = :f_within " + guessed
+            + " OR files.folder || '/' || files.name = :f_within)",
             {"f_within": filters.within})
     if filters.stacks == "only":
         # Both halves of a guessed group: the photograph that would speak for

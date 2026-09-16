@@ -1605,7 +1605,7 @@ def _cell(row: sqlite3.Row, view: ix.Filters | None = None) -> str:
         f'data-deleted="{"1" if row["deleted"] else ""}" '
         f'data-under="{_h(row["stacked_under"] or "")}" '
         f'data-behind="{row["behind"] or 0}" '
-        f'data-proposed="{_count(row, "proposed")}">'
+        f'data-proposed="{_guessed(row, view or ix.Filters())}">'
         f'<img loading="lazy" src="/thumb/{_q(row["folder"])}/{_q(row["name"])}">'
         f'<button class="pick" aria-label="select"></button>'
         + (f'<span class="badge">{_dur(row["duration"])}</span>'
@@ -1638,7 +1638,7 @@ def _stack_badge(row: sqlite3.Row, view: ix.Filters) -> str:
     """
     key = f'{row["folder"]}/{row["name"]}'
     behind = row["behind"] or 0
-    guessed = _count(row, "proposed") if view.stacks else 0
+    guessed = _guessed(row, view)
     if view.within or view.unfold:
         speaks = (key == view.within if view.within else
                   not row["stacked_under"] and not row["suggested_under"])
@@ -1659,6 +1659,21 @@ def _stack_badge(row: sqlite3.Row, view: ix.Filters) -> str:
             f'{"that look alike — nobody has said yet" if guessed else ""}'
             f'{"" if guessed else "stacked here"}">'
             f'{n + 1}</a>')
+
+
+def _guessed(row: sqlite3.Row, view: ix.Filters) -> int:
+    """How many files this one speaks for **in this view**.
+
+    Nothing, unless the view is folding the app's guesses. A guess changes
+    nothing about the library until somebody turns it on — so with it off the
+    others are on screen as themselves, and this file has nobody behind it.
+
+    Read by the badge *and* by the cell the page is built from, because the
+    two disagreeing is the whole of a bug worth not having again: the badge
+    showed nothing and the grid treated the file as a stack, so *Stack* opened
+    it and more photographs came back than had been selected.
+    """
+    return _count(row, "proposed") if view.stacks else 0
 
 
 def _count(row: sqlite3.Row, column: str) -> int:
