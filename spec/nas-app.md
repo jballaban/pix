@@ -1312,15 +1312,24 @@ build has seen the whole library at once.
 It reaches the curator as two controls that already existed, which is why there
 is no review page:
 
-- **The `Stacks` filter** — *exclude* (the default: the library as people left
-  it), *including suggestions* (each guessed group folded behind one of its
-  own, so browsing is reviewing), *only suggested* (the shelf of what is still
-  to answer). Administrators only: it hides photographs on the strength of a
-  guess, and only somebody who can accept or refuse one should be able to turn
-  it on.
+- **The `Stacks` filter**, which is about stacks in general, a guess being one
+  the app made rather than you: *everything* (the default — every stack folded
+  behind the photograph that speaks for it, guesses included), *only stacks*,
+  *only suggested* (the shelf of what is still to answer), *no suggestions*
+  (the stacks a person made, and nothing else).
 - **Grouping by stack** — sections are stacks, and their members come out from
   behind what speaks for them. With *only suggested* that is the whole review:
   every guess, open, one section each, answered by scrolling.
+
+The filter narrows and the grouping arranges, which is the same division every
+other pair of controls here follows.
+
+**Folding is the default, and a viewer never gets it.** Most of a burst is one
+photograph shot eight times, and a library that shows all eight is the pile you
+started with — so the app folds on its own evidence. That is a curator's call:
+somebody who cannot accept or refuse a guess has no way to see what was folded
+away, so for them a stack is only ever one a person made. It is not enough to
+drop the parameter for them now that folding is what the default does.
 
 Folded, a guess behaves like a stack in the one way that matters: a decision
 made about what is on screen reaches everything behind it. The badge is the

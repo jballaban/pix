@@ -277,16 +277,32 @@ class Filters:
     #: talked into showing what somebody said should be gone.
     deleted: str | None = None
 
-    #: Whether the app's own guesses are folded into the view, and how far.
-    #: `None` — the default — is the library as people left it: a suggestion
-    #: changes nothing until somebody accepts it. `with` folds each guessed
-    #: group behind one of its photographs, so browsing *is* reviewing; `only`
-    #: shows nothing else, which is the shelf of everything still to answer.
+    #: What to do with stacks — the ones somebody made and the ones the app
+    #: proposes, which are the same thing decided by different parties.
     #:
-    #: Administrators only, like `deleted` and for the same reason: this hides
-    #: photographs from a viewer on the strength of a guess, and only the
-    #: person who can accept or refuse it should be able to turn it on.
+    #: `None`, the default, folds every stack behind the photograph that
+    #: speaks for it, guesses included: most of a burst is one photograph shot
+    #: eight times, and a library showing all eight is the pile you started
+    #: with. `only` narrows to what is in a stack at all; `guesses` to the
+    #: ones nobody has answered yet, which is the shelf of work; `firm` counts
+    #: only the stacks a person made.
+    #:
+    #: Administrators only, like `deleted` and for the same reason: folding on
+    #: a guess hides photographs from a viewer, and only the person who can
+    #: accept or refuse one should be able to change what it does.
     stacks: str | None = None
+
+    @property
+    def folds_guesses(self) -> bool:
+        """Whether a proposed stack behaves as one.
+
+        Everywhere at once or nowhere: what the badge counts, what the grid
+        hides, what an opened stack holds, and what a decision reaches. The
+        grid once answered this differently from the badge, and the result was
+        a photograph with no mark on it that opened into somebody else's.
+        """
+        return self.stacks != "firm"
+
 
     #: **Not a filter** — a consequence of grouping by stack, which opens every
     #: stack in the view. It lives here because `_always` is the one place that
@@ -797,23 +813,26 @@ def _clauses(filters: Filters) -> dict[str, tuple[str, dict[str, Any]]]:
         # folding guesses. With them off it is an ordinary photograph sitting
         # in the grid on its own, and opening the file it resembles must not
         # gather it up — that is the app acting on a guess nobody accepted.
-        guessed = (" OR files.suggested_under = :f_within "
-                   if filters.stacks else "")
+        within_guessed = (" OR files.suggested_under = :f_within "
+                          if filters.folds_guesses else "")
         out["within"] = (
-            "(files.stacked_under = :f_within " + guessed
+            "(files.stacked_under = :f_within " + within_guessed
             + " OR files.folder || '/' || files.name = :f_within)",
             {"f_within": filters.within})
-    if filters.stacks == "only":
-        # Both halves of a guessed group: the photograph that would speak for
-        # it, and the ones that would sit behind it. Which of them a listing
-        # actually shows is `_always`'s business — folded, only the first;
-        # opened, all of them — and saying it once here keeps the two answers
-        # from being two different ideas of what a suggestion is.
-        out["stacks"] = (
-            "(files.suggested_under IS NOT NULL OR EXISTS ("
-            " SELECT 1 FROM files s"
-            " WHERE s.suggested_under = files.folder || '/' || files.name))",
-            {})
+    # Both halves of a stack: the photograph that speaks for it and the ones
+    # sitting behind it. Which of them a listing actually shows is `_always`'s
+    # business — folded, only the first; opened, all of them — and saying it
+    # once here keeps the two answers from being two ideas of what a stack is.
+    guessed = ("files.suggested_under IS NOT NULL OR EXISTS ("
+               " SELECT 1 FROM files s"
+               " WHERE s.suggested_under = files.folder || '/' || files.name)")
+    decided = ("files.stacked_under IS NOT NULL OR EXISTS ("
+               " SELECT 1 FROM files m"
+               " WHERE m.stacked_under = files.folder || '/' || files.name)")
+    if filters.stacks == "guesses":
+        out["stacks"] = (f"({guessed})", {})
+    elif filters.stacks == "only":
+        out["stacks"] = (f"({decided} OR {guessed})", {})
     if filters.chosen is not None:
         # One parameter rather than one per file: a single event edit can run
         # to seventeen hundred files, and a placeholder each would be an
@@ -945,11 +964,10 @@ def _always(filters: Filters) -> list[str]:
     # *photographs* rather than of what speaks for them, so nothing is hidden.
     if not filters.within and not filters.unfold:
         out.append("files.stacked_under IS NULL")
-        # A guess hides nothing until it is turned on. With it on, a guessed
-        # group behaves like a stack — one photograph on screen, the rest
-        # behind it — because a suggestion you have to read as eight separate
-        # files is not a suggestion, it is the pile you already had.
-        if filters.stacks:
+        # A guessed group behaves like a stack — one photograph on screen and
+        # the rest behind it — because a suggestion you have to read as eight
+        # separate files is not a suggestion, it is the pile you already had.
+        if filters.folds_guesses:
             out.append("files.suggested_under IS NULL")
     return out
 

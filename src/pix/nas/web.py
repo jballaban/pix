@@ -772,6 +772,24 @@ def _whoami(user: Principal | None) -> str:
         f'<button>Sign out</button></form></span></span>')
 
 
+def _stacks(stacks: str | None, user: Principal) -> str | None:
+    """What this person's view does with stacks.
+
+    **A guess never hides a photograph from a viewer.** Folding one is the app
+    deciding, on its own evidence, that several files are one — which is a
+    curator's call, and a viewer has no way to make it and no way to see what
+    was folded away. So they get `firm`: the stacks somebody actually made,
+    and nothing else. Dropping the parameter would not be enough now that
+    folding is what the default does.
+
+    An administrator gets what they asked for, and anything unrecognised
+    reads as the default rather than as some fifth thing.
+    """
+    if not user.is_admin:
+        return "firm"
+    return stacks if stacks in ("only", "guesses", "firm") else None
+
+
 def _both_sides(deleted: str | None, op_id: str | None,
                 user: Principal) -> str | None:
     """Which side of the deletion line to show — and *both*, following a link
@@ -968,8 +986,7 @@ def filters(
     return ix.Filters(event=event, date=ix.date_prefix(date), tag=tag,
                       audience=audience, chosen=_from_operation(op, stale),
                       within=within,
-                      stacks=(stacks if user.is_admin
-                              and stacks in ("with", "only") else None),
+                      stacks=_stacks(stacks, user),
                       unfold="stack" in _groupings(group),
                       kind=kind, band=band, camera=camera, source=source,
                       viewer=user.scope,
@@ -1673,7 +1690,7 @@ def _guessed(row: sqlite3.Row, view: ix.Filters) -> int:
     showed nothing and the grid treated the file as a stack, so *Stack* opened
     it and more photographs came back than had been selected.
     """
-    return _count(row, "proposed") if view.stacks else 0
+    return _count(row, "proposed") if view.folds_guesses else 0
 
 
 def _count(row: sqlite3.Row, column: str) -> int:
@@ -1747,13 +1764,13 @@ _FIXED: dict[str, tuple[tuple[str, str], ...]] = {
     # Off is the third value and has no entry: clearing the chip is what says
     # *the living*, the same gesture as clearing any other filter.
     "deleted": (("only", "Only deleted"), ("with", "Including deleted")),
-    # Off is a named choice here rather than only the cross, because it is
-    # not the absence of a question — it is one of three answers to *how much
-    # of the app's guessing do you want in this view*, and the one most people
-    # want most of the time. Its value is empty, which is how every other
-    # filter says off, so choosing it clears the chip like the cross does.
-    "stacks": (("with", "Including suggestions"), ("only", "Only suggested"),
-               ("", "Exclude suggestions")),
+    # Four answers to one question — *what about the stacks* — with the
+    # ordinary one named rather than left as the absence of a choice, because
+    # it is a choice: fold them, and count the app's proposals as stacks while
+    # you are at it. Its value is empty, which is how every other filter says
+    # off, so picking it clears the chip like the cross does.
+    "stacks": (("", "Everything"), ("only", "Only stacks"),
+               ("guesses", "Only suggested"), ("firm", "No suggestions")),
 }
 
 #: How the grid can be cut up, and what to call each choice.
@@ -2626,7 +2643,10 @@ function offerChoice(c){
 async function notAStack(){
   const cs=targetsOn('live').filter(guessed);
   if(!cs.length){say('nothing selected that the app guessed at');return;}
-  const fan=VIEW.stacks==='with'
+  // Only in the ordinary view. Where the view is *only stacks* or *only
+  // suggested*, refusing takes the whole thing out of it — the server says so
+  // and the grid drops it — so there is nothing to fan back out into.
+  const fan=!VIEW.stacks
     ? new Map(await Promise.all(cs.map(async c=>[c,await behind(c)])))
     : null;
   const out=await applyToSelection('no_stack',true,undefined,cs);
@@ -4011,7 +4031,7 @@ def _with_guessed(conn: sqlite3.Connection | None, view: ix.Filters,
     and in the selection already, so following them again would be a second
     write to a file the curator can see they already picked.
     """
-    if conn is None or not view.stacks or view.unfold:
+    if conn is None or not view.folds_guesses or view.unfold:
         return list(files)
     out = list(files)
     seen = {(t.folder, t.name) for t in files}

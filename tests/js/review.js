@@ -153,17 +153,17 @@ const window = {
   scrollBy: () => {}, scrollTo: () => {},
   addEventListener: (t, fn) => ((listeners[t] ||= []).push(fn)),
 };
-const location = { href: '/browse?stacks=with', reload: () => {} };
+const location = { href: '/browse', reload: () => {} };
 const confirm = () => true;
 const VIEW = { event: null, date: null, tag: null, audience: null, kind: null,
-               band: null, deleted: null, stacks: 'with', within: null };
+               band: null, deleted: null, stacks: null, within: null };
 const GRID_GROUPS = [['day', 'By day'], ['stack', 'By stack'],
                      ['none', 'Ungrouped']];
 const GROUPING = ['day'];
 const CHIPS = [['event', 'Event'], ['stacks', 'Stacks']];
-const FIXED = { stacks: [['with', 'Including suggestions'],
-                         ['only', 'Only suggested'],
-                         ['', 'Exclude suggestions']] };
+const FIXED = { stacks: [['', 'Everything'], ['only', 'Only stacks'],
+                         ['guesses', 'Only suggested'],
+                         ['firm', 'No suggestions']] };
 const EXTRA = {};
 const ADMIN = true;
 const USERS = ['family'];

@@ -835,8 +835,9 @@ def test_a_section_with_no_value_comes_last(tree: dict[str, Path]) -> None:
 def test_names_still_read_forwards(tree: dict[str, Path]) -> None:
     """*September before August* is a library read backwards from now, where
     *Banff before Apricot* would be the alphabet upside down."""
-    for name, event in (("a.jpg", "Zebra"), ("b.jpg", "Apricot")):
-        _record(tree, "f", name, {"EXIF:DateTimeOriginal": "2026:03:02 10:00:00"})
+    for name, event, when in (("a.jpg", "Zebra", "2026:03:02 10:00:00"),
+                              ("b.jpg", "Apricot", "2026:03:04 10:00:00")):
+        _record(tree, "f", name, {"EXIF:DateTimeOriginal": when})
         _sidecar(tree, "f", name)
         decisions.write(tree["master"] / "f" / name, Decision(event=event))
     conn = _built(tree)
@@ -1406,8 +1407,12 @@ def _shot(tree: dict[str, Path], name: str, when: str,
 
 
 def _rows(tree: dict[str, Path]) -> list[sqlite3.Row]:
+    """Every file, guesses counting for nothing — which is what the engine
+    itself is handed. Feeding it the folded view would be circular: the rows
+    it is asked to find groups in would already have the groups taken out."""
     _build(tree)
-    return ix.files(ix.connect(tree["db"]), limit=1000)
+    return ix.files(ix.connect(tree["db"]), ix.Filters(stacks="firm"),
+                    limit=1000)
 
 
 def _built(tree: dict[str, Path]) -> sqlite3.Connection:
