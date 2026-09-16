@@ -172,6 +172,45 @@ def db() -> sqlite3.Connection:
     return ix.open_ro(DB_PATH)
 
 
+@app.exception_handler(ix.StaleIndex)
+async def shapes_disagree(request: Request, exc: Exception) -> Response:
+    """Say that the two halves disagree, rather than failing in the middle.
+
+    The desktop builds the index and the container reads it, and they are
+    updated by two different acts on two different machines. So they *will* go
+    out of step — most often while the app is being worked on, when a rebuild
+    from the desktop lands under a container still running last week's code.
+
+    Without this the disagreement surfaced wherever a query happened to touch a
+    column that had moved: a 500 and a traceback in a log nobody is watching,
+    which reads as *the app is broken* rather than as *these two need to be the
+    same age*. A page that names both shapes and says which side to move is the
+    difference between a five-second fix and an afternoon.
+
+    **503, not 500**, because nothing here is wrong — the app is answering, and
+    what it is answering is that it cannot read what it was given.
+    """
+    stale = cast("ix.StaleIndex", exc)
+    if stale.app_is_behind:
+        what = ("The archive has moved on without this app. Its index was "
+                "written by a newer pix than the one serving this page.")
+        fix = ("Update the app: copy <code>src</code> onto the share and "
+               "restart the container, or import a newer image if the "
+               "dependencies have changed too.")
+    else:
+        what = ("The index was built by an older pix than the one serving this "
+                "page, so it does not have the shape this build reads.")
+        fix = ("Rebuild it from the desktop: <code>pix2 index</code>. Nothing "
+               "is lost — the index is a projection, and every decision it "
+               "holds lives in master.")
+    return _page("pix2 — out of step", f"""<div class="gate">
+<h2>Out of step</h2>
+<p class="dim">{_h(what)}</p>
+<p class="dim">{fix}</p>
+<p class="dim" style="margin-top:14px">{_h(stale.say())}</p>
+</div>""" + f"<style>{_LOGIN_CSS}</style>", status_code=503)
+
+
 # --- pages -------------------------------------------------------------------
 
 _STYLE = """
@@ -820,7 +859,8 @@ def _brand(zoom: str) -> str:
 
 def _page(title: str, body: str, *, tools: str = "", rows: str = "",
           right: str = "", footer: str = "", script: str = "",
-          zoom: str = "", user: Principal | None = None) -> HTMLResponse:
+          zoom: str = "", status_code: int = 200,
+          user: Principal | None = None) -> HTMLResponse:
     """One shell.
 
     `tools` sits beside the brand on the first row, `right` is pushed to the far
@@ -844,7 +884,7 @@ def _page(title: str, body: str, *, tools: str = "", rows: str = "",
     message line into the footer left both as `null`, and the first thing every
     write did was set a message — so nothing was ever sent, silently.
     """
-    return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8">
+    return HTMLResponse(status_code=status_code, content=f"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title}</title>
 <link rel="icon" href="{_FAVICON}"><style>{_STYLE}</style></head><body>
@@ -4683,8 +4723,24 @@ def _master_file(folder: str, name: str) -> Path:
 
 @app.get("/healthz")
 def healthz() -> dict[str, Any]:
-    """Liveness for Container Manager — deliberately unauthenticated."""
-    return {"ok": True, "index": DB_PATH.is_file()}
+    """Liveness for Container Manager — deliberately unauthenticated.
+
+    `ok` stays true through a shape disagreement: the app is running and
+    answering, it simply cannot read the projection it was given. Reporting that
+    as *dead* would have Container Manager restart a container that is working
+    perfectly, over and over, and the restart would not fix it.
+    """
+    state: dict[str, Any] = {"ok": True, "index": DB_PATH.is_file()}
+    if DB_PATH.is_file():
+        try:
+            ix.open_ro(DB_PATH).close()
+        except ix.StaleIndex as stale:
+            state["index"] = False
+            state["says"] = stale.say()
+        except sqlite3.Error as e:
+            state["index"] = False
+            state["says"] = f"{type(e).__name__}: {e}"
+    return state
 
 
 # --- helpers -----------------------------------------------------------------

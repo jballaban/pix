@@ -49,7 +49,7 @@ from pix.nas.decisions import Decision
 #: Bumped whenever the shape changes. A mismatch drops and rebuilds rather than
 #: migrating: the index is disposable by design, and a migration path is
 #: machinery to maintain for something a `pix2 index` reproduces exactly.
-SCHEMA_VERSION: int = 9
+SCHEMA_VERSION: int = 10
 
 #: `audience` filter value meaning *nobody yet* — the "New" chip in the UI.
 #: A sentinel rather than a separate reviewed flag: a file with no audience
@@ -413,7 +413,32 @@ def open_rw(db_path: Path) -> sqlite3.Connection:
 
 
 class StaleIndex(RuntimeError):
-    """The index on disk predates the code reading it."""
+    """The index on disk and the code reading it disagree about its shape.
+
+    Carries which way round, because the fix is opposite in each direction and
+    guessing wrong costs an afternoon: an index built by a *newer* pix cannot be
+    repaired by rebuilding it with the old one, and an old index is not fixed by
+    updating the app.
+    """
+
+    def __init__(self, found: int | None, wanted: int) -> None:
+        self.found = found
+        self.wanted = wanted
+        super().__init__(self.say())
+
+    @property
+    def app_is_behind(self) -> bool:
+        """True when the index was written by a build newer than this one."""
+        return self.found is not None and self.found > self.wanted
+
+    def say(self) -> str:
+        """What went wrong and what to do about it, in one line."""
+        if self.app_is_behind:
+            return (f"the index is shape v{self.found}, and this build reads "
+                    f"v{self.wanted} — it was written by a newer pix, so this "
+                    "one needs updating")
+        return (f"index is shape v{self.found}, this build reads "
+                f"v{self.wanted} — run `pix2 index` to rebuild it")
 
 
 def _require_current(conn: sqlite3.Connection) -> None:
@@ -428,9 +453,7 @@ def _require_current(conn: sqlite3.Connection) -> None:
     found = _stored_version(conn)
     if found == SCHEMA_VERSION:
         return
-    raise StaleIndex(
-        f"index is schema v{found}, this build reads v{SCHEMA_VERSION} — "
-        "run `pix2 index` to rebuild it")
+    raise StaleIndex(found, SCHEMA_VERSION)
 
 
 def build(db_path: Path, *, echo: Callable[[str], None] = lambda _: None,

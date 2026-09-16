@@ -3483,3 +3483,70 @@ def test_three_levels_is_the_limit(client: TestClient) -> None:
 
 
 
+
+
+def _stamp_shape(db: Path, shape: int) -> None:
+    """Write a shape number into an index, as a build of that age would."""
+    import sqlite3
+
+    conn = sqlite3.connect(db)
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO meta VALUES ('schema', ?)",
+                     (str(shape),))
+    conn.close()
+
+
+def test_an_app_older_than_the_index_says_so_rather_than_breaking(
+    client: TestClient, app_env: dict[str, Path]
+) -> None:
+    """The desktop rebuilds the index and the container reads it, and the two
+    are updated by different acts on different machines — so they go out of
+    step, most often while the app is being worked on.
+
+    Before this it surfaced wherever a query first touched a column that had
+    moved: a 500 and a traceback in a log nobody is watching, which reads as
+    *the app is broken*.
+    """
+    _stamp_shape(app_env["db"], ix.SCHEMA_VERSION + 1)
+
+    r = client.get("/browse", follow_redirects=False)
+
+    assert r.status_code == 503, r.status_code
+    assert "Out of step" in r.text
+    assert "needs updating" in r.text, "told the wrong side to move"
+    assert "pix2 index" not in r.text, "rebuilding cannot fix a newer index"
+
+
+def test_an_index_older_than_the_app_asks_for_a_rebuild(
+    client: TestClient, app_env: dict[str, Path]
+) -> None:
+    """The opposite direction, and the opposite fix. Guessing wrong here is
+    what costs the afternoon."""
+    _stamp_shape(app_env["db"], 1)
+
+    r = client.get("/browse", follow_redirects=False)
+
+    assert r.status_code == 503
+    assert "pix2 index" in r.text
+    assert "needs updating" not in r.text
+
+
+def test_health_reports_the_disagreement_without_calling_itself_dead(
+    client: TestClient, app_env: dict[str, Path]
+) -> None:
+    """`ok` stays true: the app is running and answering. Reporting it as dead
+    would have Container Manager restart a container that works perfectly, and
+    the restart would not fix it."""
+    _stamp_shape(app_env["db"], ix.SCHEMA_VERSION + 1)
+
+    body = client.get("/healthz").json()
+
+    assert body["ok"] is True
+    assert body["index"] is False
+    assert "newer pix" in body["says"]
+
+
+def test_health_is_plain_when_the_two_agree(client: TestClient) -> None:
+    body = client.get("/healthz").json()
+
+    assert body == {"ok": True, "index": True}
