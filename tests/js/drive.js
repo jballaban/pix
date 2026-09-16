@@ -1194,6 +1194,56 @@ function arrow(key, opts) {
           grid.dataset.size === 'large', grid.dataset.size);
   }
 
+  // --- paging while a stack is open -------------------------------------------
+  // The rest of the grid is hidden while a top is being chosen, not removed —
+  // it comes back when you are done. So it is still in `cells`, and paging the
+  // viewer walked straight through the stack and on into files that were not
+  // on screen.
+  {
+    const room = new El('div');
+    room.id = 'grid';
+    document.byId.grid = room;
+    const three = [cell('t1.jpg', ''), cell('t2.jpg', ''), cell('t3.jpg', '')];
+    three.forEach(c => room.appendChild(c));
+    document.querySelectorAll = sel => (sel === '.cell' ? three
+                                      : sel === '.group' ? []
+                                      : sel === '.stage' ? [stage] : realQsa(sel));
+    // Only this run's handlers: the ones from the stages above close over
+    // their own grids and would answer the same key press.
+    keys.keydown = [];
+    behindCells = '';
+    new Function(
+      'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
+      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'setTimeout', js,
+    )(document, window, fetch, localStorage, location, confirm,
+      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
+      GRID_GROUPS, GROUPING, PAGE, fn => fn());
+
+    three[0].querySelector('.pick').click();
+    three[1].querySelector('.pick').click();
+    actBtn('stack').click();
+    for (let i = 0; i < 8; i++) await settle();
+    check('the file outside the stack is off screen', three[2].hidden === true);
+
+    three[1].click();
+    await settle();
+    const showing = () => document.byId.vmeta.textContent.split(' ')[0];
+    check('opening one of them shows it', showing() === 't2.jpg', showing());
+    arrow('ArrowRight');
+    await settle();
+    check('paging on cannot reach what is off screen', showing() === 't2.jpg',
+          showing());
+    arrow('ArrowLeft');
+    await settle();
+    check('and paging back stays inside the stack', showing() === 't1.jpg',
+          showing());
+    arrow('ArrowLeft');
+    await settle();
+    check('as does paging back off the front', showing() === 't1.jpg',
+          showing());
+  }
+
   if (failures.length) {
     failures.forEach(f => console.log('FAIL ' + f));
     process.exit(1);

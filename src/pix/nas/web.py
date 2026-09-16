@@ -2231,6 +2231,18 @@ function setCur(n,keep){
   }
   if(viewer.classList.contains('on')) load(cells[cur]);
 }
+// The next photograph you can actually see, or -1 where there is none that
+// way. While a stack is open the rest of the grid is still in `cells` — hidden
+// rather than removed, because it comes back when you are done — and paging
+// walked straight through it into files that were not on screen.
+function nextShown(from,dir){
+  const start=from<0?(dir>0?-1:cells.length):from;
+  for(let i=start+dir;i>=0&&i<cells.length;i+=dir){
+    if(!cells[i].hidden) return i;
+  }
+  return -1;
+}
+
 function togglePick(n,on){
   const c=cells[n]; if(!c) return;
   if(on===undefined) on=!picked.has(c);
@@ -3245,8 +3257,10 @@ document.addEventListener('keydown',e=>{
   const step=e.key==='ArrowRight'?1:e.key==='ArrowLeft'?-1:0;
   if(!step) return;
   e.preventDefault();
+  const to=nextShown(cur,step);
+  if(to<0) return;
   // Paging is looking, not choosing, so whatever is selected stays selected.
-  setCur((cur<0?0:cur)+step, true);
+  setCur(to, true);
   drawSel();
 });
 
