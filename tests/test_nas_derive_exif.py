@@ -186,3 +186,54 @@ def test_the_meta_tier_records_what_the_file_is(tiers: dict[str, Path]) -> None:
     assert first["content_hash"] == second["content_hash"], "tags moved it"
     assert first["size"] != second["size"], "the files were identical anyway"
     assert len(str(first["phash"])) == 16
+
+
+def test_a_render_made_later_is_recorded_on_the_metadata(
+    tiers: dict[str, Path]
+) -> None:
+    """The copy the app hands out is the one that comes back, so it needs an
+    identity of its own (spec §15).
+
+    Metadata is written before the render exists — meta comes first in a run so
+    that a file whose pixels will not decode still has its facts recorded — so
+    the render patches the record on its way out. ffmpeg's output is stood in
+    for here; what is being tested is the bookkeeping, and the encoder has no
+    opinion about it.
+    """
+    import json
+
+    from pix.nas import identity
+
+    folder = tiers["master"] / "legacy_2026"
+    folder.mkdir(parents=True)
+    media = folder / "clip-that-needed-one.jpg"
+    Image.new("RGB", (40, 30), (90, 20, 20)).save(media, "JPEG")
+    derive.run_process()
+
+    meta = tiers["master"].parent / "meta" / "legacy_2026" / f"{media.name}.json"
+    assert "render_hash" not in json.loads(meta.read_text(encoding="utf-8"))
+
+    rendered = derive.render_path(media)
+    rendered.parent.mkdir(parents=True, exist_ok=True)
+    rendered.write_bytes(b"\x00\x00\x00\x14ftypisom"
+                         + b"\x00\x00\x01\x00mdat" + b"\xab" * 240)
+    derive._note_render(media)
+
+    record = json.loads(meta.read_text(encoding="utf-8"))
+    assert record["render_hash"] == identity.content_hash(rendered)
+    assert record["content_hash"] == identity.content_hash(media), "clobbered"
+
+
+def test_noting_a_render_before_there_is_metadata_is_not_an_error(
+    tiers: dict[str, Path]
+) -> None:
+    """A record that is not there yet is not a failure: the next run writes it,
+    and picks the render up while it does."""
+    folder = tiers["master"] / "legacy_2026"
+    folder.mkdir(parents=True)
+    media = folder / "a.jpg"
+    Image.new("RGB", (10, 10)).save(media, "JPEG")
+
+    derive._note_render(media)
+
+    assert not derive.meta_path(media).exists(), "invented a record"

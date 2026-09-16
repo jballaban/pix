@@ -1291,12 +1291,19 @@ expressible: that is what an event and a tag are, and folding a grouping in the
 grid is what collapsing one looks like. Making it exclusive and hierarchical
 would produce a worse stack; making it many-to-many would produce a worse tag.
 
-### Two hashes, in the meta tier
+### Identity, in the meta tier
 
 `process` already opens every master file to derive from it, so identity costs
-one more pass over bytes that are already in hand. Both hashes are ordinary
-metadata and live where the rest of it does — beside the probed facts in
+one more pass over bytes that are already in hand. These are ordinary metadata
+and live where the rest of it does — beside the probed facts in
 [`meta`](#2-tier-layout), and so in the index that is built from them.
+
+One record carries three: the master's **content hash** and **perceptual hash**,
+and the content hash of its **render**. The third is there because a render is
+the file that leaves the building — it is what the app hands out, so it is what
+comes back — and its bytes are a re-encode, which means the master's own hash
+cannot recognise it. It is written when the render is made, and picked up from
+an existing render whenever the record is rebuilt.
 
 **The content hash covers the coded image data only** — the quantisation and
 Huffman tables, the frame header and the entropy-coded scan for JPEG; the
@@ -1442,6 +1449,15 @@ would have discarded that edit silently.
 **Masters need no stamp.** A downloaded original that comes home is caught by the
 content hash already, even if something re-tagged it in transit — which is
 precisely what a metadata-blind hash is for.
+
+**Nor does a render depend on its stamp.** The stamp is metadata, and metadata
+is exactly what a messaging app strips on the way through; the render's content
+hash is intrinsic to the file and survives anything short of re-encoding it. So
+an import is checked against **both** columns, and a match on a render resolves
+to the master that render belongs to — which is always present, because
+destroying a master sweeps its render with it. The stamp remains worth writing:
+it is what distinguishes an untouched round trip from one that was edited after
+it left, which no hash of the incoming file can answer on its own.
 
 **The stamp is an optimisation, not a guarantee.** Messaging strips metadata, so
 a render sent to family and sent back arrives bare and falls through to the

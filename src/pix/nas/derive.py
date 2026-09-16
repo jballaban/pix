@@ -594,6 +594,12 @@ def _write_meta(media: Path, exif: "_ExifPool") -> bool:
     }
     if media.suffix.lower() in _IMAGE_EXTS:
         payload["phash"] = identity.perceptual_hash(media)
+    # A render already made is hashed here; one made later patches this record
+    # on its way out. Either way the two identities of one photograph sit in the
+    # same place.
+    rendered = render_path(media)
+    if rendered.is_file():
+        payload["render_hash"] = identity.content_hash(rendered)
     dest = meta_path(media)
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(dest.name + EXPORT_TMP_SUFFIX)
@@ -620,6 +626,44 @@ def _resize(source: Path, dest: Path, long_edge: int) -> None:
             img = img.convert("RGB")
         img.save(tmp, "JPEG", quality=QUALITY, optimize=True)
     tmp.replace(dest)
+
+
+def _note_render(media: Path) -> None:
+    """Record a freshly made render's identity on the metadata already written.
+
+    **A render is a duplicate waiting to happen** (spec/nas-app.md §15): it is
+    the file the app hands out, so it is the one that comes back — downloaded,
+    passed around, and re-imported by somebody who no longer remembers where it
+    came from. Its bytes are a re-encode, so the master's content hash cannot
+    recognise it and only what pix itself recorded can.
+
+    That is also why this is a hash and not only the `pix:ArtifactId` stamp the
+    render carries. A stamp is metadata, and metadata is exactly what a
+    messaging app strips on the way through; the hash is the file, and survives
+    anything that does not re-encode it.
+
+    Written by patching rather than by rebuilding the record, because the
+    metadata was written before the render existed — meta comes first in a run
+    so that a file whose pixels will not decode still has its facts recorded.
+    A record that is not there yet is not an error: the next run writes it, and
+    picks the render up while it does.
+    """
+    dest = meta_path(media)
+    try:
+        raw: object = json.loads(dest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(raw, dict):
+        return
+    payload = cast("dict[str, object]", raw)
+    payload["render_hash"] = identity.content_hash(render_path(media))
+    tmp = dest.with_name(dest.name + EXPORT_TMP_SUFFIX)
+    try:
+        tmp.write_text(json.dumps(payload, indent=1, default=str),
+                       encoding="utf-8")
+        tmp.replace(dest)
+    except OSError:
+        tmp.unlink(missing_ok=True)
 
 
 def render_video(media: Path, *, timeout: float = _ENCODE_TIMEOUT) -> bool:
@@ -673,6 +717,7 @@ def render_video(media: Path, *, timeout: float = _ENCODE_TIMEOUT) -> bool:
             continue
         if proc.returncode == 0 and tmp.is_file() and tmp.stat().st_size > 0:
             tmp.replace(dest)
+            _note_render(media)
             return True
         tmp.unlink(missing_ok=True)
     return False
