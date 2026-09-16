@@ -338,7 +338,7 @@ already delivery-ready. One per file — no size or quality profiles.
 - Renders carry **no pix metadata**. Metadata is baked at distribution time
   instead, which means a tag change never invalidates a render and never
   re-transcodes anything. (If non-destructive editing is ever built
-  ([§15](#15-open-questions)), an *edit* change would invalidate a render — a tag
+  ([§16](#16-open-questions)), an *edit* change would invalidate a render — a tag
   change still would not.)
 - Whether a render is needed is an **extension** question for images and a
   **codec** question for video: an `.mp4` containing HEVC still needs one.
@@ -1264,11 +1264,220 @@ significance is different.
 The app is not a convenience layer over a mostly-curated library. Its entire job
 is making **61,846 uncategorized decisions tractable** — hundreds per event down
 to 20-50. That moves the curation UI from a detail to the thing the project lives
-or dies on, and it is the largest remaining unknown in [§15](#15-open-questions).
+or dies on, and it is the largest remaining unknown in [§16](#16-open-questions).
 
-## 15. Open questions
+## 15. Identity — when two files are the same photograph
 
-*(Resolved in discussion: import-ledger identity — [§9](#9-ingest--the-desktop-cli);
+**Status: designed in discussion, nothing built.** Duplicates are specified to
+completion below; the other three are named and bounded so that the first does
+not accidentally decide them.
+
+Recorded 2026-09-16.
+
+"Are these the same?" is four questions, and the mistake would be to answer them
+all with a stack. They differ in what the claim *is* — fact or judgement — and
+therefore in who gets to make it.
+
+| | The claim | Test | Gesture |
+|---|---|---|---|
+| **Duplicate** | the same coded image, twice | content hashes match | keep one, remove the rest |
+| **Derivative** | the same photograph, degraded | perceptual match, one strictly poorer | remove the poorer — *only* if the better one is here |
+| **Stack** | the same shot, several frames | capture window, one camera | one speaks for the rest |
+| **Round trip** | something pix itself made, come home | its own stamp | skip, and say so |
+
+**Association is not on this list**, and deliberately. "Several photographs of
+the same general thing" is an *intent*, it is many-to-many, and it is already
+expressible: that is what an event and a tag are, and folding a grouping in the
+grid is what collapsing one looks like. Making it exclusive and hierarchical
+would produce a worse stack; making it many-to-many would produce a worse tag.
+
+### Two hashes, in the meta tier
+
+`process` already opens every master file to derive from it, so identity costs
+one more pass over bytes that are already in hand. Both hashes are ordinary
+metadata and live where the rest of it does — beside the probed facts in
+[`meta`](#2-tier-layout), and so in the index that is built from them.
+
+**The content hash covers the coded image data only** — the quantisation and
+Huffman tables, the frame header and the entropy-coded scan for JPEG; the
+primary item's coded extents for HEIC; the `mdat` samples for MP4, MOV and
+`.insv`. Every `APPn` segment is skipped: EXIF, XMP, ICC and embedded
+thumbnails.
+
+That exclusion is the whole point. The case this exists for is a photograph
+AirDropped to a second phone and imported from there — the second device
+re-wraps the file, rewrites its metadata and renames it, and changes not one bit
+of the image the camera encoded. A hash of the file says *different*; a person
+says *obviously the same*. Skipping the metadata makes the machine agree with
+the person, with no threshold to tune.
+
+**Not a hash of the decoded pixels**, which is the obvious alternative and is
+equally free at process time. Two versions of libjpeg can differ in the last bit
+of an IDCT, so a decoder upgrade would silently change every hash in the archive
+with nothing to distinguish that from a real change. The coded stream needs no
+decoder at all and is therefore stable for the life of the archive, which is the
+property an archive wants.
+
+**The perceptual hash is stored at the same time and used by nothing yet.** It is
+what a derivative needs, and `process` holds the decoded pixels exactly once in
+the life of a file. Deciding later costs a full re-read of 2.3TB off spinning
+disks behind the Atom; deciding now costs a column.
+
+### Duplicates
+
+Two master files whose content hashes match. This is a **fact**, not a guess —
+no distance, no threshold, and nothing to refuse on the grounds that the app got
+it wrong. The only judgement is which copy stays.
+
+Two independent choices, and running them together is what made this look hard:
+
+**Which file survives** — the oldest import. For a true duplicate the images are
+interchangeable, so nothing is at stake in the picture; what is at stake is
+provenance, and the earlier folder is the closer record of how the photograph
+arrived.
+
+**Which facts survive** — layered, which is the read-through
+[§4](#4-metadata--xmp-sidecars) already applies to one file, applied across a
+set:
+
+1. **Decisions from any copy.** They are sidecar facts, so carrying them costs
+   nothing and touches no bytes. Tags and audience **union** — a set cannot
+   conflict with itself.
+2. **Single-valued decisions** — event, date override, stack membership —
+   resolve by **latest wins**, then the survivor's, then the oldest file's, then
+   lexicographically by `folder/name`. The ladder terminates, so every group
+   gets a complete proposal and none ever lands on a human being told *I cannot
+   tell*.
+3. **Embedded metadata** — the survivor's own EXIF wins wherever it has any.
+   Where the survivor is silent and another copy is not, that value lands as an
+   **override** on the survivor's sidecar, attributed, because the survivor's
+   file never said it and must not be made to appear to.
+4. **Live beats binned** — if one copy is in the bin and another is live, the
+   live one wins. Merging a living photograph into a purge candidate would
+   delete it as a side effect of tidying.
+
+*Latest wins* requires a time, and a sidecar carries none: the fields are event,
+date override, tags, audience, deleted, stacked-under and no-stack. So the
+sidecar gains **`xmp:MetadataDate`**, the standard tag for exactly this, written
+on every decision. It follows the pattern §4 already uses — a `pix:` field
+beside its standard twin — and being standard it is readable by everything that
+reads the rest of the sidecar.
+
+The alternative was to need no timestamp at all: *the survivor's decision wins*.
+It was rejected because it loses the case that motivated the merge — the newer
+copy is often the one that has been curated, and the point of the exercise is
+that choosing the older **file** must not throw away the newer **thinking**.
+
+#### The page, and why this one earns a page
+
+Suggestions reach the curator through controls that already exist, which is why
+[stacks have no review page](#suggested-stacks--a-guess-is-a-view-not-a-decision).
+Duplicates are the exception, for a reason specific to them: **they are visually
+identical by construction.** A grid of thumbnails shows the same photograph
+twice and communicates nothing. What has to be on screen is what *differs* — the
+folders, the dates, the decisions, which is older — and that is a table.
+
+One row per group: the proposed survivor preselected, the losers beside it, and
+only the fields that actually differ, each showing the values found and which
+one won. Reading that list *is* the review. Accept is one click; accept-all is
+one more.
+
+Two overrides, each one click: **choose a different file to win**, and **choose
+a different value** among those present.
+
+**This page chooses between values that exist; it never invents one.** No text
+fields, no tag picker, no access menu — one control per differing field and
+nothing else. A value neither copy has is an ordinary edit: accept the merge,
+then edit the survivor in the grid, where that already works. Without this line
+the page grows into a second, worse copy of the editing surface.
+
+**Rejecting a group means *keep both*, and that is a decision.** It needs
+recording the way `pix:NoStack` records the refusal of a suggestion, or the next
+index build proposes it again and the queue never empties.
+
+### Purging leaves a tombstone
+
+Deleting is already two states: **binned** keeps the photograph and hides it;
+**purged** removes it. So by the time something is purged there is only one
+reason left — the bytes are not wanted — and a tombstone needs no field saying
+which of several reasons applied, because there are not several. Unwanted and
+redundant both end in the same act, and anything worth keeping was never purged.
+
+`.removed.jsonl`, one per master folder beside `.import.jsonl`: both hashes, the
+name, the capture date, when it was purged and by whom. One line each, in the
+same append-only, readable-without-pix shape the import ledger already has.
+
+This makes purging **idempotent**, which today it is not: purge a file, re-import
+the folder it came from, and it returns with nobody any the wiser.
+
+A file matching a tombstone **imports, and is then presented for decision.** It
+is not refused at the door. A refusal would be a silent discard, and a photograph
+that disappears without anyone learning it did is the failure this architecture
+exists to prevent — the same reasoning that makes a skipped import a recorded
+skip rather than a quiet one.
+
+### Round trips
+
+A render downloaded from the app and re-imported is a duplicate no hash can see:
+it is a different encode, so its content hash differs from the master's by
+design. Nothing links it back except what pix chooses to write.
+
+So renders and delivery copies are stamped when they are **made** — by `process`
+and by the bake in [§7](#7-distributions), never at download time. Stamping on
+the way out would mean rewriting metadata per request on the Atom, and would
+stop *download the original* from returning quite the original.
+
+- **`pix:SourceId`** — the content hash of the master it came from. An identity
+  rather than a path, so it survives any later reorganisation.
+- **`pix:ArtifactId`** — the content hash of the artifact itself, as made.
+- **`pix:SourceFile`** — the readable `folder/name`, for a human holding the file
+  in twenty years with no pix to ask.
+
+Then the import needs nothing but the file in hand. Its own coded data still
+matching `ArtifactId` means an untouched round trip: skip it, and record the
+skip. Not matching means it was edited after it left — a crop, a trim — which
+makes it a new photograph that happens to know its parent. A stamp-only rule
+would have discarded that edit silently.
+
+**Masters need no stamp.** A downloaded original that comes home is caught by the
+content hash already, even if something re-tagged it in transit — which is
+precisely what a metadata-blind hash is for.
+
+**The stamp is an optimisation, not a guarantee.** Messaging strips metadata, so
+a render sent to family and sent back arrives bare and falls through to the
+perceptual path like any other derivative. Every mechanism here is a cheaper
+route to an answer the perceptual hash reaches more slowly.
+
+### Derivatives — named, not designed
+
+A photograph re-encoded and downscaled by WhatsApp or a text message: same image,
+stripped metadata, strictly poorer. It is not a duplicate — recompression changes
+the coded data — and it is not a burst, because it is the same frame rather than
+another one.
+
+Two things are already known about it, recorded here so the work above does not
+quietly decide them:
+
+- **Today's suggestions cannot see these files at all.** Stack guesses are
+  metadata-only — a capture window on one camera, plus colliding names — and a
+  messaging copy has neither a camera nor a full-precision date. They are not
+  slipping through the net; they were never eligible for it.
+- **A derivative whose original is absent is not a duplicate — it is the only
+  copy.** A photograph a cousin took and sent is a real photograph in the
+  library. The gesture can only ever be *remove the poorer when the better one is
+  present*, never *remove derivatives*.
+
+### What this does not change
+
+Stacks keep their definition, their flatness and their controls. The `band`
+filter keeps finding re-compressed messaging images by weight, which is a crude
+handle on derivatives and stays useful until identity gives a precise one.
+
+## 16. Open questions
+
+*(Resolved in discussion: **what makes two files the same photograph, and what
+to do about each kind** — [§15](#15-identity--when-two-files-are-the-same-photograph);
+import-ledger identity — [§9](#9-ingest--the-desktop-cli);
 distributions and the curation scale — [§7](#7-distributions); multi-user, auth and
 Synology Photos write-back — [§8](#8-the-app); Btrfs — [§10](#10-hardware);
 the sidecar/index model — [§4](#4-metadata--xmp-sidecars); seeding — [§14](#14-seeding-the-existing-library);
