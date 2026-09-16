@@ -44,7 +44,7 @@ from pix import datestr
 from pix.nas import accounts
 from pix.nas import auth
 from pix.nas import decisions
-from pix.nas import derive
+from pix.nas import paths
 from pix.nas import destroy as destroy_mod
 from pix.nas import history
 from pix.nas import index as ix
@@ -1271,9 +1271,9 @@ def _browse_url(view: ix.Filters, patch: dict[str, str | None]) -> str:
 #: is arithmetic there rather than a second copy of these numbers — they are
 #: `derive`'s to choose and have already changed once.
 _TIERS: tuple[tuple[str, int], ...] = (
-    ("/thumb/", derive.THUMB_PX),
-    ("/large/", derive.LARGE_PX),
-    ("/preview/", derive.PREVIEW_PX),
+    ("/thumb/", paths.THUMB_PX),
+    ("/large/", paths.LARGE_PX),
+    ("/preview/", paths.PREVIEW_PX),
 )
 
 #: How many files one grid renders. Enough to hold the largest seeded event
@@ -1715,8 +1715,9 @@ def _has_render(row: sqlite3.Row) -> bool:
     if row["kind"] != "video":
         return False
     try:
-        return derive.render_path(
-            MASTER_DIR / str(row["folder"]) / str(row["name"])).is_file()
+        return paths.render_path(
+            MASTER_DIR / str(row["folder"]) / str(row["name"]),
+            RENDER_DIR).is_file()
     except OSError:
         return False
 
@@ -3654,7 +3655,7 @@ def _to_send(folder: str, name: str, original: bool) -> tuple[Path, str]:
     """
     media = _master_file(folder, name)
     if not original:
-        render = derive.render_path(media)
+        render = paths.render_path(media, RENDER_DIR)
         if render.is_file():
             return render, Path(name).with_suffix(render.suffix).name
     return media, name

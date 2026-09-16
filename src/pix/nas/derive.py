@@ -57,16 +57,13 @@ from pix.nas.const import (
     THUMB_DIR,
 )
 
-#: Long-edge pixels. Both are regenerable, but regenerating 62k files is an
-#: afternoon, so they are worth getting roughly right rather than discovering
-#: mid-curation.
-THUMB_PX: int = 400
-#: Sized for the grid's largest setting rather than for looking at one
-#: photograph: ~460px cells on a wide screen, doubled for a 2x display, with a
-#: little left over. Measured at 106KB median against the real library, where
-#: the 1600px preview it replaces there is 221KB.
-LARGE_PX: int = 1000
-PREVIEW_PX: int = 1600
+# Sizes and layout live in `paths`, which the app imports without this module's
+# decoding stack behind it. Re-exported so `derive.THUMB_PX` and
+# `derive.derived_path` keep meaning what they always did.
+from pix.nas.paths import (  # noqa: F401
+    LARGE_PX, PREVIEW_PX, THUMB_PX, derived_path,
+)
+from pix.nas import paths
 
 #: JPEG quality for derived images. 82 is visually clean at these sizes and
 #: keeps both tiers near 20GB for the whole library.
@@ -213,23 +210,14 @@ def master_files() -> Iterator[Path]:
             yield path
 
 
-def derived_path(media: Path, root: Path) -> Path:
-    """Where `media`'s derived image lives, mirroring master's folder layout.
-
-    Always `.jpg`: the derived tiers are for looking at, so a HEIC's thumbnail
-    and an MP4's poster frame are both just JPEGs.
-    """
-    return root / media.parent.name / (media.name + ".jpg")
-
-
 def meta_path(media: Path) -> Path:
-    """Where `media`'s probed-facts JSON lives, mirroring master's layout."""
-    return META_DIR / media.parent.name / (media.name + ".json")
+    """Where `media`'s probed-facts JSON lives, against *this* module's tier."""
+    return paths.meta_path(media, META_DIR)
 
 
 def render_path(media: Path) -> Path:
-    """Where `media`'s playable rendition lives, mirroring master's layout."""
-    return RENDER_DIR / media.parent.name / (media.name + ".mp4")
+    """Where `media`'s playable rendition lives, against *this* module's tier."""
+    return paths.render_path(media, RENDER_DIR)
 
 
 def needs_render(media: Path, codec: str | None) -> bool:
