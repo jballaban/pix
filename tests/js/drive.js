@@ -1191,10 +1191,20 @@ function arrow(key, opts) {
     check('a video frame runs out a step earlier than a photograph does',
           d === 'preview', d);
 
+    // Covering the cell to the pixel is not enough: shown at 1:1 a video
+    // frame looks nothing like the same cell filled from a photograph with
+    // half again as many pixels to give away.
+    shown._rect = { left: 0, top: 0, width: 380, height: 380 };
+    const tight = source(1, 1);
+    check('a source that only just covers the cell is not good enough',
+          tight === 'large', tight);
+    shown._rect = { left: 0, top: 0, width: 400, height: 400 };
+
     // One button, so it cycles: there is nowhere else to go from the end.
     window.devicePixelRatio = 1;
     shown.dataset.ar = '1';
     shown._rect = { left: 0, top: 0, width: 150, height: 150 };
+    while (grid.dataset.size !== 'large') sizePick.click();
     sizePick.click();
     check('the next one round is back to the smallest',
           grid.dataset.size === 'small', grid.dataset.size);

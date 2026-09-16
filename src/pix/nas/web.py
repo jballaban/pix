@@ -1879,9 +1879,16 @@ function cellPixels(){
 // grid on a retina screen needs twice the pixels for the same inch of glass,
 // and reading `large` there was asking a 563-pixel square to cover 830 — soft
 // in exactly the way a photograph never is in the viewer.
+// With a fifth to spare, not to the pixel. A source that only just covers the
+// cell is being shown at very nearly 1:1, which on a video frame — already
+// soft, already compressed once — looks nothing like the same cell filled
+// from a photograph with half again as many pixels to give away. The margin
+// is what makes the two look alike.
+const SPARE=1.2;
+
 function sourceFor(c,px){
   const ar=+(c.dataset.ar||1)||1;
-  for(const [dir,cap] of TIERS) if(cap*ar>=px) return dir;
+  for(const [dir,cap] of TIERS) if(cap*ar>=px*SPARE) return dir;
   return TIERS[TIERS.length-1][0];
 }
 
