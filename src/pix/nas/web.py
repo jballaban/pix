@@ -2105,11 +2105,13 @@ function drawChips(){
     if(!v) continue;
     const b=document.createElement('button');
     b.className='chip on';
+    const up=wider(col,v);
     b.innerHTML=label+`<span class="val">${esc(labelFor(col,v))}</span>`
-                     +'<span class="x">&times;</span>';
+                     +`<span class="x" title="${up?'Up to '+esc(up):'Clear'}">`
+                     +'&times;</span>';
     b.onclick=e=>{
       e.stopPropagation();
-      if(e.target.classList.contains('x')){location.href=url({[col]:null});return;}
+      if(e.target.classList.contains('x')){location.href=url({[col]:up});return;}
       openMenu(b,{column:col,mode:'filter'});
     };
     chips.appendChild(b);
@@ -2189,6 +2191,19 @@ function placeMenu(anchorEl){
   menu.style.left=Math.min(r.left,window.innerWidth-316)+'px';
   menu.style.top=(r.bottom+window.scrollY+4)+'px';
   menu.hidden=false;
+}
+
+// One step wider, or nothing where there is no such step.
+//
+// A date is a prefix — `2026`, `2026-09`, `2026-09-15` — so it is the one
+// filter that is a hierarchy rather than a value, and closing it should mean
+// *out of September*, not *out of dates altogether*. Going all the way is then
+// two more clicks, where the old behaviour had no way back to the year but
+// retyping it.
+function wider(col,v){
+  if(col!=='date') return null;
+  const at=String(v).lastIndexOf('-');
+  return at<0?null:String(v).slice(0,at);
 }
 
 function labelFor(col,v){
@@ -2315,9 +2330,6 @@ async function openMenu(anchorEl,ctx){
     const hits=opts.filter(o=>o.label.toLowerCase().includes(t));
     const list=document.createElement('div');
     list.id='menulist';
-    if(ctx.mode==='filter'&&VIEW[ctx.column]){
-      list.appendChild(opt({label:'Any',n:null},()=>choose(null)));
-    }
     const typed=(text||'').trim();
     // Tags are invented as you go; access is not. Somebody who can be given
     // access is an account or a role, made under Accounts — offering to

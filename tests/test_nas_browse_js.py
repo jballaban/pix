@@ -96,6 +96,34 @@ def test_the_same_script_says_which_stack_you_are_in_and_lets_you_leave(
 
 @pytest.mark.skipif(shutil.which("node") is None,
                     reason="node is not installed")
+@pytest.mark.parametrize(("start", "after"), [
+    ("2026-09-15", "2026-09"),
+    ("2026-09", "2026"),
+    ("2026", "gone"),
+])
+def test_closing_a_date_goes_up_a_level_and_no_menu_offers_everything(
+    tmp_path: Path, start: str, after: str
+) -> None:
+    """A date is a prefix, so it is the one filter that is a hierarchy: closing
+    `2026-09` means *out of September*, not *out of dates*. Each rung is its
+    own page, so each is its own run.
+
+    The same scenario checks that no menu offers a value meaning everything.
+    Both are states rather than markup — a chip's cross and a menu row a click
+    apart — which is why they are driven rather than asserted on the HTML.
+    """
+    script = tmp_path / "browse.js"
+    script.write_text(web._BROWSE_JS, encoding="utf-8")
+
+    result = subprocess.run(
+        ["node", str(JS_DIR / "chips.js"), str(script), start, after],
+        capture_output=True, text=True, timeout=120, cwd=JS_DIR)
+
+    assert result.returncode == 0, (result.stdout + result.stderr)[-2000:]
+
+
+@pytest.mark.skipif(shutil.which("node") is None,
+                    reason="node is not installed")
 def _element_ids(html: str) -> list[str]:
     """The ids of the page's real elements.
 

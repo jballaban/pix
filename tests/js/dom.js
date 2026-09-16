@@ -127,7 +127,12 @@ class El {
     (this._listeners.click || []).forEach(fn => fn(e));
     let p = this.parent;
     while (p && !stopped) {
-      (p._listeners.click || []).forEach(fn => fn(e));
+      // Both kinds, because a browser bubbles to both. The chips put their
+      // handler on the button and their cross *inside* it, so a shim that
+      // bubbled only to `addEventListener` handlers reported a cross that
+      // did nothing — when the thing being tested was what it does.
+      if (p.onclick) p.onclick(e);
+      if (!stopped) (p._listeners.click || []).forEach(fn => fn(e));
       p = p.parent;
     }
     if (!stopped) (document._listeners.click || []).forEach(fn => fn(e));
