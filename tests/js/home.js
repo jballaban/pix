@@ -73,7 +73,7 @@ const localStorage = {
   setItem: (k, v) => { stored[k] = String(v); },
 };
 const window = {
-  innerWidth: 1400, scrollY: 0,
+  innerWidth: 1400, scrollY: 0, devicePixelRatio: 1,
   scrollBy: () => {}, scrollTo: () => {},
   addEventListener: () => {},
 };
@@ -96,6 +96,9 @@ const USERS = ['family'];
 const GROUPS = ['family'];
 const USUAL = 'family';
 const PAGE = '/';
+// What each derived tier is capped at, longest edge.
+const TIERS = [['/thumb/', 400], ['/large/', 1000],
+               ['/preview/', 1600]];
 
 const settle = () => new Promise(r => setImmediate(r));
 // The key handler is bound to the document, so it runs on this page too —
@@ -111,10 +114,10 @@ const press = key => (keys.keydown || []).forEach(fn => fn(
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS,
-      GROUPING, PAGE, fn => fn());
+      GROUPING, PAGE, TIERS, fn => fn());
   } catch (e) {
     console.log('FAIL the script threw on load: ' + e.message);
     process.exit(1);

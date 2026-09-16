@@ -168,7 +168,7 @@ const listeners = {};
 // the page is, and the test grid's rectangles are computed from it.
 let scrolled = 0;
 const window = {
-  innerWidth: 1400, scrollY: 0,
+  innerWidth: 1400, scrollY: 0, devicePixelRatio: 1,
   scrollBy: (_x, y) => { scrolled += y; window.scrollY = scrolled; },
   scrollTo: (_x, y) => { scrolled = y; window.scrollY = y; },
   addEventListener: (t, fn) => ((listeners[t] ||= []).push(fn)),
@@ -189,6 +189,9 @@ const USERS = ['family', 'james'];
 const GROUPS = ['family'];
 const USUAL = 'family';
 const PAGE = '/browse';
+// What each derived tier is capped at, longest edge.
+const TIERS = [['/thumb/', 400], ['/large/', 1000],
+               ['/preview/', 1600]];
 
 const settle = () => new Promise(r => setImmediate(r));
 // The control selects everything when nothing is ticked and clears otherwise,
@@ -207,9 +210,9 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS', 'GROUPING',
-      'PAGE', 'setTimeout', js,
+      'PAGE', 'TIERS', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
-      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, GROUPING, PAGE, fn => fn());
+      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, GROUPING, PAGE, TIERS, fn => fn());
   } catch (e) {
     console.log('FAIL the script threw on load: ' + e.message);
     process.exit(1);
@@ -941,10 +944,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, fn => fn());
+      GRID_GROUPS, GROUPING, PAGE, TIERS, fn => fn());
 
     // One file out of the first section, and the whole of the second.
     s1[0].querySelector('.pick').click();
@@ -1006,10 +1009,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, fn => fn());
+      GRID_GROUPS, GROUPING, PAGE, TIERS, fn => fn());
 
     // Push the first one out of the view, the way an edit does.
     shelf[0].querySelector('.pick').click();
@@ -1056,10 +1059,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, fn => fn());
+      GRID_GROUPS, GROUPING, PAGE, TIERS, fn => fn());
 
     // Scrolled a couple of rows down: c2 straddles the top of the screen.
     scrolled = 250;
@@ -1098,10 +1101,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, fn => fn());
+      GRID_GROUPS, GROUPING, PAGE, TIERS, fn => fn());
 
     document.byId.selall.click();          // all 250
     const n = calls.length;
@@ -1145,39 +1148,70 @@ function arrow(key, opts) {
     check('with the choice remembered', stored['pix2.thumb'] === 'medium',
           String(stored['pix2.thumb']));
 
-    // The biggest is bigger than the thumbnail tier has pixels for, so it
-    // reads from `large` — sized for exactly this, where the preview it used
-    // to borrow is four times the pixels anybody was going to look at.
+    // Which tier a thumbnail is read from is not the size on the label. The
+    // grid shows squares and the tiers are capped on the long edge, so the
+    // square taken out of a 16:9 frame in the 1000px tier is 563 across — and
+    // the same inch of glass wants twice the pixels on a retina screen. Both
+    // of those are arithmetic the page can do and a fixed tier per size
+    // cannot, which is why a video thumbnail went soft a size before a
+    // photograph did.
     const img = new El('img');
     img.attrs.src = '/thumb/f/a.jpg';
     img.setAttribute = (k, v) => { img.attrs[k] = v; };
     img.getAttribute = k => img.attrs[k];
     // A cell the *current* script instance knows about: blocks above this one
     // re-ran the page against a different grid, and `cells` moved with them.
-    document.querySelectorAll('.cell')[0].appendChild(img);
+    const shown = document.querySelectorAll('.cell')[0];
+    shown.appendChild(img);
+    shown._rect = { left: 0, top: 0, width: 400, height: 400 };
+    // Every redraw goes through the one control there is, so each of these
+    // also advances the size — which the stub has no layout to care about:
+    // the cell is whatever `_rect` says.
+    const source = (ar, dpr) => {
+      shown.dataset.ar = String(ar);
+      window.devicePixelRatio = dpr;
+      sizePick.click();
+      return img.attrs.src.split('/')[1];
+    };
+
     sizePick.click();                       // medium -> large
-    check('the biggest size reads from the tier sized for it',
-          img.attrs.src === '/large/f/a.jpg', img.attrs.src);
     check('and is labelled for it', sizePick.textContent === 'L',
           sizePick.textContent);
+    // 400 across at one device pixel each. A 4:3 photograph in the 400px tier
+    // is 300 on its short edge, which is not enough.
+    const a = source(0.75, 1);
+    check('a photograph too big for the thumbnail tier reads the next one up',
+          a === 'large', a);
+    // The same cell on a retina screen is 800 device pixels, and the square
+    // out of the 1000px tier is 750.
+    const b = source(0.75, 2);
+    check('and on a retina screen the one above that', b === 'preview', b);
+    // 16:9 gives 563 out of the same tier, so it runs out one step sooner.
+    const d = source(0.5625, 1.5);
+    check('a video frame runs out a step earlier than a photograph does',
+          d === 'preview', d);
 
     // One button, so it cycles: there is nowhere else to go from the end.
+    window.devicePixelRatio = 1;
+    shown.dataset.ar = '1';
+    shown._rect = { left: 0, top: 0, width: 150, height: 150 };
     sizePick.click();
     check('the next one round is back to the smallest',
           grid.dataset.size === 'small', grid.dataset.size);
-    check('and the smaller ones go back to the thumbnail',
+    check('and a small square cell is what the thumbnail tier is for',
           img.attrs.src === '/thumb/f/a.jpg', img.attrs.src);
     img.remove();
+    delete shown._rect;
 
     // A fresh page finds the preference where it was left.
     stored['pix2.thumb'] = 'large';
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, fn => fn());
+      GRID_GROUPS, GROUPING, PAGE, TIERS, fn => fn());
     check('a new page opens at the size you left it',
           grid.dataset.size === 'large', grid.dataset.size);
 
@@ -1186,10 +1220,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, fn => fn());
+      GRID_GROUPS, GROUPING, PAGE, TIERS, fn => fn());
     check('and one saved under the old names still opens there',
           grid.dataset.size === 'large', grid.dataset.size);
   }
@@ -1215,10 +1249,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, fn => fn());
+      GRID_GROUPS, GROUPING, PAGE, TIERS, fn => fn());
 
     three[0].querySelector('.pick').click();
     three[1].querySelector('.pick').click();

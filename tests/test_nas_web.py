@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 
 from pix.nas import accounts
 from pix.nas import decisions
+from pix.nas import derive
 from pix.nas import history
 from pix.nas import index as ix
 from pix.nas import web
@@ -2699,6 +2700,51 @@ def test_nothing_is_underlined_on_hover(client: TestClient) -> None:
     assert "text-decoration:underline" not in css
     at = css.index("a:hover {")
     assert "var(--tint)" in css[at:at + 140], css[at:at + 140]
+
+
+def _shaped(app_env: dict[str, Path], writable: Path, name: str,
+            w: int, h: int) -> None:
+    """A file of known proportions, in master and in the index."""
+    import json
+
+    share = app_env["share"]
+    (writable / name).write_bytes(b"fake")
+    (share / "meta" / "init_2026" / f"{name}.json").write_text(json.dumps({
+        "file": name, "folder": "init_2026", "size": 30, "mtime_ns": 1,
+        "exif": {"EXIF:DateTimeOriginal": "2026:08:30 11:00:00",
+                 "File:ImageWidth": w, "File:ImageHeight": h},
+    }), encoding="utf-8")
+    ix.build(app_env["db"], meta_dir=share / "meta",
+             master_dir=share / "master")
+
+
+def test_a_cell_says_what_shape_it_is(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """The grid shows squares and the tiers are capped on the long edge, so
+    the square taken out of a 16:9 frame in the 1000px tier is 563 across —
+    a bit over half the number the tier is named for. The page cannot pick a
+    tier from the cap alone, so each cell carries its own proportions."""
+    html = client.get("/browse").text
+
+    # Nothing known about a file's size is a square, which asks the tiers for
+    # the most they can give rather than assuming they have it.
+    assert 'data-ar="1"' in html
+
+    _shaped(app_env, writable, "wide.jpg", 3840, 2160)
+    wide = client.get("/browse").text
+    assert 'data-ar="0.56' in wide, wide[wide.index("data-ar"):][:40]
+
+
+def test_the_page_is_told_what_each_tier_holds(client: TestClient) -> None:
+    """Arithmetic there rather than a second copy of these numbers here —
+    they are `derive`'s to choose, and have already changed once."""
+    html = client.get("/browse").text
+    tiers = html[html.index("TIERS="):html.index("GRID_GROUPS=")]
+
+    assert str(derive.THUMB_PX) in tiers and str(derive.LARGE_PX) in tiers
+    assert str(derive.PREVIEW_PX) in tiers, tiers
+    assert "/preview/" in tiers
 
 
 def test_the_page_has_a_mark_of_its_own(client: TestClient) -> None:

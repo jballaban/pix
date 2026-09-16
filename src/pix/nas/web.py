@@ -42,6 +42,7 @@ from pix import datestr
 from pix.nas import accounts
 from pix.nas import auth
 from pix.nas import decisions
+from pix.nas import derive
 from pix.nas import destroy as destroy_mod
 from pix.nas import history
 from pix.nas import index as ix
@@ -1255,6 +1256,16 @@ def _browse_url(view: ix.Filters, patch: dict[str, str | None]) -> str:
         if any(query.values()) else "")
 
 
+#: The derived tiers a thumbnail can be drawn from, smallest first, with what
+#: each one is capped at. Sent to the page so that *which tier is big enough*
+#: is arithmetic there rather than a second copy of these numbers — they are
+#: `derive`'s to choose and have already changed once.
+_TIERS: tuple[tuple[str, int], ...] = (
+    ("/thumb/", derive.THUMB_PX),
+    ("/large/", derive.LARGE_PX),
+    ("/preview/", derive.PREVIEW_PX),
+)
+
 #: How many files one grid renders. Enough to hold the largest seeded event
 #: (1,766) in a single page, because paging through a cull loses your place.
 PAGE_LIMIT: int = 2000
@@ -1345,6 +1356,7 @@ def _view_script(user: Principal, view: ix.Filters, groups: list[str], *,
         f"EXTRA={_js(_EXTRA)},ADMIN={_js(user.is_admin)},"
         f"USERS={_js(_audience_names())},GROUPS={_js(_group_names())},"
         f"USUAL={_js(store().usual)},PAGE={_js(page)},"
+        f"TIERS={_js(_TIERS)},"
         f"GRID_GROUPS={_js(_GRID_GROUPS)},GROUPING={_js(groups)};</script>"
         f"<script>{_BROWSE_JS}</script>")
 
@@ -1621,6 +1633,7 @@ def _cell(row: sqlite3.Row, view: ix.Filters | None = None) -> str:
         f'data-date="{_h(str(row["effective_date"] or "no date"))}" '
         f'data-deleted="{"1" if row["deleted"] else ""}" '
         f'data-under="{_h(row["stacked_under"] or "")}" '
+        f'data-ar="{_squareness(row)}" '
         f'data-behind="{row["behind"] or 0}" '
         f'data-proposed="{_guessed(row, view or ix.Filters())}">'
         f'<img loading="lazy" src="/thumb/{_q(row["folder"])}/{_q(row["name"])}">'
@@ -1676,6 +1689,22 @@ def _stack_badge(row: sqlite3.Row, view: ix.Filters) -> str:
             f'{"that look alike — nobody has said yet" if guessed else ""}'
             f'{"" if guessed else "stacked here"}">'
             f'{n + 1}</a>')
+
+
+def _squareness(row: sqlite3.Row) -> str:
+    """The short edge over the long one, or `1` where nothing is known.
+
+    The grid shows squares, so a thumbnail is cropped to its short edge — but
+    the tiers are capped on the **long** one. A 16:9 frame in the 1000px tier
+    is 1000x563, and the square taken out of it is 563 across: a bit over half
+    the number the tier is named for. That is why a video thumbnail went soft
+    a size before a photograph did, and why the page cannot pick a tier from
+    the cap alone.
+    """
+    w, h = row["width"] or 0, row["height"] or 0
+    if not w or not h:
+        return "1"
+    return f"{min(w, h) / max(w, h):.3f}"
 
 
 def _guessed(row: sqlite3.Row, view: ix.Filters) -> int:
@@ -1837,13 +1866,33 @@ try{
 // reads from `large` — sized for exactly this and nothing else. The media
 // routes take the same path after the tier name, so this swaps one segment
 // rather than building an address a second time.
-function useSource(c){
+// How wide a cell is drawn, in the pixels the screen actually has. Measured
+// once rather than per cell: every cell in the grid is the same width, and
+// asking two thousand of them costs a layout each.
+function cellPixels(){
+  const c=cells.find(x=>!x.hidden)||cells[0];
+  const w=c?c.getBoundingClientRect().width:0;
+  return Math.round((w||150)*(window.devicePixelRatio||1));
+}
+
+// The smallest tier that can fill it. Not a fixed tier per size: the same
+// grid on a retina screen needs twice the pixels for the same inch of glass,
+// and reading `large` there was asking a 563-pixel square to cover 830 — soft
+// in exactly the way a photograph never is in the viewer.
+function sourceFor(c,px){
+  const ar=+(c.dataset.ar||1)||1;
+  for(const [dir,cap] of TIERS) if(cap*ar>=px) return dir;
+  return TIERS[TIERS.length-1][0];
+}
+
+function useSource(c,px){
   const img=c.querySelector('img');
   if(!img) return;
-  const want=thumbSize==='large'?'/large/':'/thumb/';
-  const other=want==='/thumb/'?'/large/':'/thumb/';
   const have=img.getAttribute('src')||'';
-  if(have.startsWith(other)) img.setAttribute('src',want+have.slice(other.length));
+  const at=have.indexOf('/',1);
+  if(at<0) return;
+  const want=sourceFor(c,px===undefined?cellPixels():px);
+  if(!have.startsWith(want)) img.setAttribute('src',want+have.slice(at+1));
 }
 
 function drawSize(){
@@ -1852,7 +1901,10 @@ function drawSize(){
     sizePick.textContent=LABEL[thumbSize];
     sizePick.title=SIZE_NAME[thumbSize]+' — click for the next size';
   }
-  cells.forEach(useSource);
+  // After the grid has been told its new size, or every cell is measured at
+  // the width it is about to stop being.
+  const px=cellPixels();
+  cells.forEach(c=>useSource(c,px));
 }
 
 if(sizePick) sizePick.onclick=e=>{
