@@ -714,9 +714,113 @@ h2.year span { font-size:13px; font-weight:400; }
 """
 
 
+def _folder_path(x: float, y: float, w: float = 16, h: float = 12.4,
+                 r: float = 2.4) -> str:
+    """One folder outline, drawn exactly where a card of the same size sits.
+
+    Same box as the cards in `_FILES_MARK`, so the two marks are the same
+    three shapes at the same three offsets and only their *kind* differs —
+    which is the whole point of a toggle you read at a glance.
+    """
+    # `:g` throughout: plain arithmetic on these puts 20.400000000000002 into
+    # the markup, which renders identically and reads like a mistake.
+    return (f"M{x + r:g} {y:g}h5.2l1.4 1.8H{x + w - r:g}"
+            f"a{r:g} {r:g} 0 0 1 {r:g} {r:g}V{y + h - r:g}"
+            f"a{r:g} {r:g} 0 0 1 {-r:g} {r:g}H{x + r:g}"
+            f"a{r:g} {r:g} 0 0 1 {-r:g} {-r:g}V{y + r:g}"
+            f"a{r:g} {r:g} 0 0 1 {r:g} {-r:g}z")
+
+
+#: The library as files: three photographs, the front one showing.
+_FILES_MARK = (
+    '<svg viewBox="0 0 28 28" width="26" height="26" aria-hidden="true">'
+    '<rect x="9" y="3.6" width="16" height="12.4" rx="2.4" fill="none" '
+    'stroke="var(--dim)" stroke-width="1.4" opacity=".45"/>'
+    '<rect x="6" y="7" width="16" height="12.4" rx="2.4" fill="none" '
+    'stroke="var(--dim)" stroke-width="1.4" opacity=".75"/>'
+    '<rect class="front" x="3" y="10.4" width="16" height="12.4" rx="2.4" '
+    'fill="var(--panel)" stroke="var(--fg)" stroke-width="1.5"/>'
+    '<circle cx="7.6" cy="14.4" r="1.5" fill="var(--top)"/>'
+    '<path d="M4.4 20.6 L8.6 16.6 L11.4 19.2 L13.6 17.2 L17.6 20.8" '
+    'fill="none" stroke="var(--accent)" stroke-width="1.5" '
+    'stroke-linecap="round" stroke-linejoin="round"/></svg>')
+
+#: The same library as folders: the same three shapes, with tabs.
+_FOLDERS_MARK = (
+    '<svg viewBox="0 0 28 28" width="26" height="26" aria-hidden="true">'
+    f'<path d="{_folder_path(9, 3.6)}" fill="none" stroke="var(--dim)" '
+    'stroke-width="1.4" opacity=".45"/>'
+    f'<path d="{_folder_path(6, 7)}" fill="none" stroke="var(--dim)" '
+    'stroke-width="1.4" opacity=".75"/>'
+    f'<path class="front" d="{_folder_path(3, 10.4)}" fill="var(--panel)" '
+    'stroke="var(--fg)" stroke-width="1.5" stroke-linejoin="round"/>'
+    '<path d="M6.4 17.6H13.2" stroke="var(--accent)" stroke-width="1.5" '
+    'stroke-linecap="round"/>'
+    '<path d="M6.4 20.2H10.6" stroke="var(--dim)" stroke-width="1.5" '
+    'stroke-linecap="round"/></svg>')
+
+
+def _logo_mark(size: int) -> str:
+    """The logo: one photograph, on its own.
+
+    Deliberately *not* the three-shape marks above. Those became a control the
+    moment the corner started toggling between files and folders, and a control
+    that changes under you cannot also be what the app is called. This is what
+    stays still — the favicon and the sign-in page — and one card reads at 16
+    pixels where a stack of three is mush.
+    """
+    return (f'<svg viewBox="0 0 28 28" width="{size}" height="{size}" '
+            'aria-hidden="true">'
+            '<rect x="4" y="6" width="20" height="16" rx="3" '
+            'fill="var(--panel)" stroke="var(--fg)" stroke-width="1.6"/>'
+            '<circle cx="9.2" cy="11" r="1.8" fill="var(--top)"/>'
+            '<path d="M5.6 20.4 L11 14.6 L14.4 18.2 L17.2 15.4 L22.4 20.8" '
+            'fill="none" stroke="var(--accent)" stroke-width="1.6" '
+            'stroke-linecap="round" stroke-linejoin="round"/></svg>')
+
+
+#: The same mark with the colours written out, because a favicon is a document
+#: of its own and never sees this page's variables. On a tile, because that is
+#: what a browser puts in a tab strip and a bookmark bar.
+_FAVICON = "data:image/svg+xml," + quote(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 28 28">'
+    '<rect width="28" height="28" rx="6" fill="#14161a"/>'
+    '<rect x="4" y="6" width="20" height="16" rx="3" fill="#1b1e24" '
+    'stroke="#e7e9ee" stroke-width="1.6"/>'
+    '<circle cx="9.2" cy="11" r="1.8" fill="#e3b341"/>'
+    '<path d="M5.6 20.4 L11 14.6 L14.4 18.2 L17.2 15.4 L22.4 20.8" '
+    'fill="none" stroke="#6aa3ff" stroke-width="1.6" '
+    'stroke-linecap="round" stroke-linejoin="round"/></svg>', safe="")
+
+
+def _brand(zoom: str) -> str:
+    """The corner: on the two library pages a control, everywhere else the logo.
+
+    `zoom` is where the *other* view of this same library is — the identical
+    query against the other page — and its being a `/browse` address is what
+    says the page showing it is the folders one. One parameter rather than a
+    mode beside it, because two would be two things that could disagree about
+    which way round the corner is.
+
+    It shows **what you are looking at** and says what it will do, which is the
+    opposite way round from the size control beside the account. That is not an
+    inconsistency: size has no shape on screen to read, and this does — the
+    corner is a picture of the grid under it, and a picture that disagreed with
+    the page would be worse than no picture.
+    """
+    if not zoom:
+        return (f'<a class="brand" href="/" title="pix2" aria-label="pix2">'
+                f'{_logo_mark(26)}</a>')
+    folders = zoom.startswith("/browse")
+    say = "Show the files" if folders else "Show the folders"
+    return (f'<a class="brand" href="{_h(zoom)}" title="{say}" '
+            f'aria-label="{say}">'
+            f'{_FOLDERS_MARK if folders else _FILES_MARK}</a>')
+
+
 def _page(title: str, body: str, *, tools: str = "", rows: str = "",
           right: str = "", footer: str = "", script: str = "",
-          user: Principal | None = None) -> HTMLResponse:
+          zoom: str = "", user: Principal | None = None) -> HTMLResponse:
     """One shell.
 
     `tools` sits beside the brand on the first row, `right` is pushed to the far
@@ -743,9 +847,9 @@ def _page(title: str, body: str, *, tools: str = "", rows: str = "",
     return HTMLResponse(f"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title}</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2028%2028%22%3E%3Crect%20width%3D%2228%22%20height%3D%2228%22%20rx%3D%226%22%20fill%3D%22%2314161a%22%2F%3E%3Crect%20x%3D%229%22%20y%3D%224.4%22%20width%3D%2215.2%22%20height%3D%2211.8%22%20rx%3D%222.3%22%20fill%3D%22none%22%20stroke%3D%22%238b93a3%22%20stroke-width%3D%221.5%22%20opacity%3D%22.45%22%2F%3E%3Crect%20x%3D%226.2%22%20y%3D%227.6%22%20width%3D%2215.2%22%20height%3D%2211.8%22%20rx%3D%222.3%22%20fill%3D%22none%22%20stroke%3D%22%238b93a3%22%20stroke-width%3D%221.5%22%20opacity%3D%22.75%22%2F%3E%3Crect%20x%3D%223.4%22%20y%3D%2210.8%22%20width%3D%2215.2%22%20height%3D%2211.8%22%20rx%3D%222.3%22%20fill%3D%22%231b1e24%22%20stroke%3D%22%23e7e9ee%22%20stroke-width%3D%221.6%22%2F%3E%3Ccircle%20cx%3D%227.8%22%20cy%3D%2214.7%22%20r%3D%221.5%22%20fill%3D%22%23e3b341%22%2F%3E%3Cpath%20d%3D%22M4.8%2020.6%20L8.8%2016.8%20L11.5%2019.3%20L13.6%2017.3%20L17.3%2020.9%22%20fill%3D%22none%22%20stroke%3D%22%236aa3ff%22%20stroke-width%3D%221.6%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3C%2Fsvg%3E"><style>{_STYLE}</style></head><body>
+<link rel="icon" href="{_FAVICON}"><style>{_STYLE}</style></head><body>
 <div class="topbar">
-<div class="row"><a class="brand" href="/" title="pix2" aria-label="pix2"><svg viewBox="0 0 28 28" width="26" height="26" aria-hidden="true"><rect x="9" y="3.6" width="16" height="12.4" rx="2.4" fill="none" stroke="var(--dim)" stroke-width="1.4" opacity=".45"/><rect x="6" y="7" width="16" height="12.4" rx="2.4" fill="none" stroke="var(--dim)" stroke-width="1.4" opacity=".75"/><rect class="front" x="3" y="10.4" width="16" height="12.4" rx="2.4" fill="var(--panel)" stroke="var(--fg)" stroke-width="1.5"/><circle cx="7.6" cy="14.4" r="1.5" fill="var(--top)"/><path d="M4.4 20.6 L8.6 16.6 L11.4 19.2 L13.6 17.2 L17.6 20.8" fill="none" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a>{tools}
+<div class="row">{_brand(zoom)}{tools}
 <span class="spacer"></span><span class="right">{right}{_whoami(user)}</span></div>{rows}
 </div><main>{body}</main>
 <footer class="footbar"><span class="ver">v{_PIX_VERSION}</span>{footer}</footer>
@@ -1065,6 +1169,10 @@ def home(request: Request,
     body = ('<p class="empty">Nothing matches these filters.</p>' if not rows
             else '<div class="grid folders" id="grid">'
                  + _shelves(rows, groups, view, user, whole) + "</div>")
+    # The same query against the other page: the corner is a zoom control, and
+    # a zoom that dropped the filters would be a different library rather than
+    # the same one seen closer.
+    q = request.url.query
     return _page("pix2",
                  # The shared menu, which every filter and the grouping open
                  # into. Left out, the script threw looking for it the moment
@@ -1075,6 +1183,7 @@ def home(request: Request,
                  tools='<div class="chips" id="chips"></div>',
                  footer='<span id="note" class="note"></span>',
                  script=_view_script(user, view, groups, page="/"),
+                 zoom="/browse" + (f"?{q}" if q else ""),
                  user=user)
 
 
@@ -1288,7 +1397,8 @@ def event_grid(event: str) -> RedirectResponse:
 
 
 @app.get("/browse", response_class=HTMLResponse)
-def browse(user: Annotated[Principal, Depends(require_user)],
+def browse(request: Request,
+           user: Annotated[Principal, Depends(require_user)],
            view: Annotated[ix.Filters, Depends(filters)],
            group: Annotated[str, Query()] = "day",
            op: Annotated[str | None, Query()] = None,
@@ -1337,6 +1447,13 @@ def browse(user: Annotated[Principal, Depends(require_user)],
         # either.
         right=('<button id="sizepick" aria-label="Thumbnail size"></button>'),
         rows=_actions(user),
+        # Up a zoom: the same query, minus the stack. A folder view of one
+        # stack is the stack, so the only thing the coarser view can say about
+        # `within` is nothing — and leaving a stack is its own gesture, on the
+        # bar, rather than a side effect of changing how you are reading.
+        zoom="/" + (lambda q: f"?{q}" if q else "")(
+            "&".join(x for x in request.url.query.split("&")
+                     if x and not x.startswith("within="))),
         script=_view_script(user, view, groups),
         footer=f"""<span class="count" id="count">{shown}</span>
 <span class="hint"><b>click</b> a circle to select &middot;
@@ -4613,6 +4730,12 @@ def _dur(seconds: object) -> str:
 
 _LOGIN_CSS = """
 .gate { max-width:320px; margin:14vh auto; }
+.gate .logo { display:flex; align-items:center; gap:11px; margin:0 0 22px; }
+/* Wide, because three letters at this size need the air, and the accent falls
+   on the one letter that is a shape rather than a stroke. */
+.gate .logo .word { font-size:31px; font-weight:600; letter-spacing:.16em;
+                    line-height:1; color:var(--fg); }
+.gate .logo .word b { color:var(--accent); font-weight:600; }
 .gate h2 { font-size:16px; margin:0 0 14px; }
 .gate label { display:block; color:var(--dim); font-size:12px; margin:10px 0 3px; }
 .gate input { width:100%; background:#14161a; color:var(--fg);
@@ -4635,6 +4758,7 @@ def login_form(request: Request,
             '<p class="dim" style="margin-top:14px">First run: sign in as '
             '<b>admin</b> with the password <b>admin</b>, then change it.</p>')
     return _page("Sign in", f"""<div class="gate">
+<div class="logo">{_logo_mark(34)}<span class="word">pi<b>x</b></span></div>
 <h2>Sign in</h2>{warn}
 <form method="post" action="/login">
 <input type="hidden" name="next" value="{_h(_safe_next(next))}">

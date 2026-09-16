@@ -2942,17 +2942,68 @@ def test_the_page_is_told_what_each_tier_holds(client: TestClient) -> None:
     assert "/preview/" in tiers
 
 
+def _corner(html: str) -> str:
+    """The mark in the top-left, with whatever it is wrapped in."""
+    at = html.index('class="brand"')
+    return html[html.index("<a", at - 40):html.index("</a>", at) + 4]
+
+
 def test_the_page_has_a_mark_of_its_own(client: TestClient) -> None:
-    """A word in the corner and a blank tab icon. Both are how you find this
-    among twenty other tabs."""
+    """A mark in the corner and a tab icon. Both are how you find this among
+    twenty other tabs."""
     html = client.get("/browse").text
 
     assert 'rel="icon"' in html and "data:image/svg+xml" in html
-    bar = html[html.index('class="brand"'):html.index("</a>",
-                                                      html.index('class="brand"'))]
+    bar = _corner(html)
     assert "<svg" in bar, "the brand is still text"
     assert ">pix2<" not in bar, "the word is still there beside the mark"
-    assert 'aria-label="pix2"' in html, "a mark nothing can read out"
+    assert "aria-label=" in bar, "a mark nothing can read out"
+
+
+def test_the_corner_is_the_way_between_files_and_folders(
+    client: TestClient
+) -> None:
+    """The same library at two zooms, and the corner is how you change which.
+
+    It carries the view across, because a zoom that dropped the filters would
+    be a different library rather than the same one seen closer — and it says
+    what it will do, since the mark under the pointer is a picture of the page
+    rather than of the destination.
+    """
+    grid = _corner(client.get("/browse?event=Italy+-+Sicily&group=day").text)
+    assert 'href="/?event=Italy+-+Sicily&amp;group=day"' in grid, grid
+    assert "Show the folders" in grid, grid
+
+    folders = _corner(client.get("/?event=Italy+-+Sicily&group=event").text)
+    assert 'href="/browse?event=Italy+-+Sicily&amp;group=event"' in folders
+    assert "Show the files" in folders, folders
+
+
+def test_a_stack_is_not_carried_up_to_the_folders(client: TestClient) -> None:
+    """A folder view of one stack is the stack, so there is nothing coarser to
+    show. Everything else about the view goes up with you."""
+    bar = _corner(client.get("/browse?event=Italy+-+Sicily&within=x%2Fy.jpg"
+                             "&group=day").text)
+
+    assert "within" not in bar, bar
+    assert 'href="/?event=Italy+-+Sicily&amp;group=day"' in bar, bar
+
+
+def test_the_sign_in_page_still_carries_the_logo(
+    app_env: dict[str, Path]
+) -> None:
+    """The corner became a control on the library pages, so what the app *is*
+    has to be somewhere that never changes under you.
+
+    Signed out deliberately: the form redirects away for anyone who is not, so
+    the shared client would be handed the grid and this would pass on a page
+    that has no logo on it at all.
+    """
+    html = TestClient(web.app).get("/login").text
+
+    assert "pi<b>x</b>" in html, "no wordmark on the way in"
+    assert "Show the folders" not in html and "Show the files" not in html
+    assert "<svg" in _corner(html), "no mark beside it"
 
 
 def test_what_is_about_you_lives_under_your_name(client: TestClient) -> None:
