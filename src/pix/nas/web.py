@@ -2006,6 +2006,40 @@ function drawChips(){
     add.onclick=e=>{e.stopPropagation();filterMenu(add,spare);};
     chips.appendChild(add);
   }
+  // An opened stack, said the way an operation is: not a chip, because a chip
+  // is a value picked from a list and there is no list of stacks to pick from
+  // — you arrive inside one by opening it. But it has to say where you are
+  // and be dismissable for the same reason the chips are, because a filter
+  // you cannot see is a library that looks smaller than it is. Until this,
+  // the only way out of a stack was the browser's own back button.
+  if(VIEW.within){
+    const back=url({within:null});
+    const s=document.createElement('span');
+    s.className='chip on from-op';
+    s.textContent='in a stack';
+    const n=document.createElement('span');
+    n.className='val';
+    n.textContent=String(cells.length);
+    s.appendChild(n);
+    const out=document.createElement('a');
+    out.className='x';
+    out.href=back;
+    out.title='Leave this stack';
+    out.textContent='×';
+    out.onclick=e=>{
+      e.stopPropagation();
+      // Back out the way you came in, when that is how you got here: the same
+      // address reached afresh is the same photographs at the top of the
+      // page, and the top of the page is not where you were standing. A path
+      // match rather than a parsed URL because a referrer from somewhere else
+      // costs nothing here — the link below is where it lands instead.
+      if(document.referrer&&document.referrer.endsWith(back)){
+        e.preventDefault(); history.back();
+      }
+    };
+    s.appendChild(out);
+    chips.appendChild(s);
+  }
 }
 
 // Which question to ask, and then what to answer — two steps, because the
@@ -2421,6 +2455,11 @@ function wire(c){
     setCur(n,true); drawSel();
   });
   c.addEventListener('click',e=>{
+    // A link inside the cell is somewhere to go, not a photograph to open.
+    // The stack badge did both: the viewer opened over the grid and then the
+    // page left for the stack underneath it, so coming back restored a page
+    // with a photograph on it that nobody had asked to see.
+    if(e.target.closest('a')) return;
     const n=cells.indexOf(c);
     if(n<0) return;
     if(e.shiftKey&&anchor>=0){range(anchor,n);setCur(n,true);drawSel();return;}
@@ -2623,6 +2662,12 @@ if(viewer) viewer.addEventListener('click',e=>{
   if(e.target===viewer||e.target===stage||e.target===vmeta) closeViewer();
 });
 if(rail) rail.addEventListener('click',e=>e.stopPropagation());
+// A page restored from the back/forward cache comes back exactly as it left,
+// an open viewer included. Leaving a grid with one open is ordinary, and
+// arriving back at that grid to find a photograph over it reads as the app
+// having opened something on its own. Belt to the braces above: that stops
+// the viewer opening on the way out, this closes it whatever opened it.
+if(viewer) window.addEventListener('pageshow',e=>{if(e.persisted) closeViewer();});
 
 // --- writing -----------------------------------------------------------------
 // Loud, because the alternative has bitten twice: a write that fails without

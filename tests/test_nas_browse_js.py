@@ -73,6 +73,29 @@ def test_the_same_script_folds_and_refuses_the_apps_own_guesses(
 
 @pytest.mark.skipif(shutil.which("node") is None,
                     reason="node is not installed")
+def test_the_same_script_says_which_stack_you_are_in_and_lets_you_leave(
+    tmp_path: Path
+) -> None:
+    """A grid standing inside an opened stack: it says so, it offers the way
+    out, and the badge that got you here does not also open the viewer.
+
+    Driven rather than read, because the bug it locks down was invisible in the
+    markup. Opening a stack left the viewer open behind the navigation, so the
+    browser's back button — the only way out there was — restored a page with
+    a photograph over the grid that nobody had asked to see.
+    """
+    script = tmp_path / "browse.js"
+    script.write_text(web._BROWSE_JS, encoding="utf-8")
+
+    result = subprocess.run(
+        ["node", str(JS_DIR / "stack.js"), str(script)],
+        capture_output=True, text=True, timeout=120, cwd=JS_DIR)
+
+    assert result.returncode == 0, (result.stdout + result.stderr)[-2000:]
+
+
+@pytest.mark.skipif(shutil.which("node") is None,
+                    reason="node is not installed")
 def _element_ids(html: str) -> list[str]:
     """The ids of the page's real elements.
 

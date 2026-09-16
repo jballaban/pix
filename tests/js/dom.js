@@ -82,6 +82,15 @@ class El {
     while (p) { if (p === this) return true; p = p.parent; }
     return false;
   }
+  // The real API, because the grid asks whether a click landed on a link
+  // before it treats it as a click on the cell. Without it that question was
+  // a TypeError, which is not an answer a browser would ever give.
+  matches(sel) { return matchesSel(this, sel); }
+  closest(sel) {
+    let e = this;
+    while (e) { if (matchesSel(e, sel)) return e; e = e.parent; }
+    return null;
+  }
   get nextElementSibling() {
     if (!this.parent) return null;
     const kin = this.parent.children;
@@ -98,28 +107,9 @@ class El {
   querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
   querySelectorAll(sel) {
     const out = [];
-    const byId = sel.startsWith('#');
-    const byClass = sel.startsWith('.');
-    const byAttr = sel.startsWith('[');
-    const want = sel.slice(byId || byClass ? 1 : 0);
-    // `[data-act]` and `[data-act="stack"]` are different questions, and
-    // answering both with the first was how a lookup for one button kept
-    // finding another.
-    const spec = byAttr ? sel.slice(1, -1).split('=') : null;
-    const attr = spec ? spec[0] : null;
-    const want_val = spec && spec.length > 1
-      ? spec.slice(1).join('=').replace(/^["']|["']$/g, '') : null;
     const walk = e => {
       for (const c of e.children) {
-        if (byId && c.id === want) out.push(c);
-        else if (byClass && c._classes.has(want)) out.push(c);
-        else if (byAttr) {
-          const have = c.dataset[camel(attr.replace(/^data-/, ''))];
-          if (have !== undefined && (want_val === null || have === want_val)) {
-            out.push(c);
-          }
-        } else if (!byId && !byClass && !byAttr
-                   && c.tagName === sel.toUpperCase()) out.push(c);
+        if (matchesSel(c, sel)) out.push(c);
         walk(c);
       }
     };
@@ -142,6 +132,26 @@ class El {
     }
     if (!stopped) (document._listeners.click || []).forEach(fn => fn(e));
   }
+}
+
+// One element against one simple selector — id, class, `[data-x]`, `[data-x="v"]`
+// or a tag name. Shared by `querySelectorAll`, `matches` and `closest` rather
+// than written out in each: three copies of this rule would be three places for
+// it to disagree about what a selector means.
+//
+// `[data-act]` and `[data-act="stack"]` are different questions, and answering
+// both with the first was how a lookup for one button kept finding another.
+function matchesSel(el, sel) {
+  if (sel.startsWith('#')) return el.id === sel.slice(1);
+  if (sel.startsWith('.')) return el._classes.has(sel.slice(1));
+  if (sel.startsWith('[')) {
+    const spec = sel.slice(1, -1).split('=');
+    const have = el.dataset[camel(spec[0].replace(/^data-/, ''))];
+    if (have === undefined) return false;
+    return spec.length === 1
+      || have === spec.slice(1).join('=').replace(/^["']|["']$/g, '');
+  }
+  return el.tagName === sel.toUpperCase();
 }
 
 // Elements carrying an id have to become findable, the way a real innerHTML
