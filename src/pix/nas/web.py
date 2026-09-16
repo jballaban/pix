@@ -1764,13 +1764,13 @@ _FIXED: dict[str, tuple[tuple[str, str], ...]] = {
     # Off is the third value and has no entry: clearing the chip is what says
     # *the living*, the same gesture as clearing any other filter.
     "deleted": (("only", "Only deleted"), ("with", "Including deleted")),
-    # Four answers to one question — *what about the stacks* — with the
-    # ordinary one named rather than left as the absence of a choice, because
-    # it is a choice: fold them, and count the app's proposals as stacks while
-    # you are at it. Its value is empty, which is how every other filter says
-    # off, so picking it clears the chip like the cross does.
-    "stacks": (("", "Everything"), ("only", "Only stacks"),
-               ("guesses", "Only suggested"), ("firm", "No suggestions")),
+    # No entry for the ordinary view, the same as every other chip: *not
+    # filtering on this* is what the cross says, and a value that only clears
+    # the filter is a second way to say it — which is one more thing to read
+    # in the list of the ones that do something. It was named while off meant
+    # something of its own; folding is the default now, so it does not.
+    "stacks": (("only", "Only stacks"), ("guesses", "Only suggested"),
+               ("firm", "No suggestions")),
 }
 
 #: How the grid can be cut up, and what to call each choice.

@@ -161,7 +161,7 @@ const GRID_GROUPS = [['day', 'By day'], ['stack', 'By stack'],
                      ['none', 'Ungrouped']];
 const GROUPING = ['day'];
 const CHIPS = [['event', 'Event'], ['stacks', 'Stacks']];
-const FIXED = { stacks: [['', 'Everything'], ['only', 'Only stacks'],
+const FIXED = { stacks: [['only', 'Only stacks'],
                          ['guesses', 'Only suggested'],
                          ['firm', 'No suggestions']] };
 const EXTRA = {};

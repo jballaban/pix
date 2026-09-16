@@ -991,17 +991,20 @@ def test_only_stacks_is_every_stack_however_it_was_made(
     assert 'data-name="a.jpg"' not in guesses, "already answered"
 
 
-def test_the_stacks_chip_reads_in_four_short_words(
+def test_the_stacks_chip_offers_only_what_narrows_the_view(
     client: TestClient
 ) -> None:
-    """One question — *what about the stacks* — with the ordinary answer
-    named rather than left as the absence of a choice, because it is one."""
+    """Three short answers to one question — *what about the stacks* — and no
+    entry for the ordinary view, the same as every other chip. *Not filtering
+    on this* is what the cross says, and a value that only clears the filter
+    is a second way to say it sitting among the ones that do something."""
     html = client.get("/browse").text
     fixed = html[html.index("FIXED="):html.index("EXTRA=")]
+    stacks = fixed[fixed.index('"stacks"'):]
 
-    for label in ("Everything", "Only stacks", "Only suggested",
-                  "No suggestions"):
-        assert label in fixed, fixed
+    for label in ("Only stacks", "Only suggested", "No suggestions"):
+        assert label in stacks, stacks
+    assert '[""' not in stacks and '""]' not in stacks, "a value that clears"
     assert "Including suggestions" not in fixed, "the long way round"
 
 
