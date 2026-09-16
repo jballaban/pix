@@ -8,6 +8,9 @@ curation decisions: an `.xmp` beside the master file, then that file's index row
 
 from __future__ import annotations
 
+import io
+import json
+import zipfile
 import re
 import time
 
@@ -353,9 +356,12 @@ def test_the_actions_and_filters_ask_the_same_questions_in_the_same_order(
     acts = re.findall(r'data-act="(\w+)"', html)
     # What a file is, then which of them speaks for the rest, then what
     # happens to it.
-    assert acts[:9] == ["event", "tags", "date", "access",
-                        "stack", "top", "unstack", "nostack",
-                        "delete"], acts
+    assert acts[:10] == ["event", "tags", "date", "access",
+                         "stack", "top", "unstack", "nostack",
+                         # Taking a copy away is not doing anything to the
+                         # library, so it sits with the rest rather than over
+                         # the bar with the one thing that is.
+                         "download", "delete"], acts
 
     chips = html[html.index("CHIPS="):html.index("FIXED=")]
     for earlier, later in (("event", "tag"), ("tag", "date"),
@@ -2444,6 +2450,195 @@ def test_an_empty_batch_reports_nothing_dropped(client: TestClient,
     r = client.post("/api/decide/bulk", json={"add_audience": ["private"], "files": []})
 
     assert r.json()["dropped"] == []
+
+
+# --- taking a copy away -------------------------------------------------------
+
+
+def _render_for(name: str) -> Path:
+    """The playable copy of one master file, made to exist."""
+    from pix.nas import derive
+
+    at = derive.render_path(derive.MASTER_DIR / "init_2026" / name)
+    at.parent.mkdir(parents=True, exist_ok=True)
+    at.write_bytes(b"h264 copy")
+    return at
+
+
+def test_a_photograph_downloads_as_itself(
+    client: TestClient, writable: Path
+) -> None:
+    """There is nothing to convert: the original is the file anything opens,
+    so *original or copy* is not a question about it."""
+    r = client.get("/download/init_2026/a.jpg")
+
+    assert r.status_code == 200
+    assert r.content == (writable / "a.jpg").read_bytes()
+    assert "attachment" in r.headers["content-disposition"]
+    assert "a.jpg" in r.headers["content-disposition"]
+
+
+def test_a_clip_downloads_as_the_copy_that_plays(
+    client: TestClient, writable: Path
+) -> None:
+    """The H.264 rendition, because what you want from *download* is a file
+    that opens — and the original is the one a browser would not play, which
+    is why the copy exists at all."""
+    (writable / "b.mp4").write_bytes(b"hevc original")
+    _render_for("b.mp4")
+
+    r = client.get("/download/init_2026/b.mp4")
+
+    assert r.content == b"h264 copy"
+
+
+def test_the_original_can_be_asked_for(
+    client: TestClient, writable: Path
+) -> None:
+    """Master is the archive. Anything that hands out *the file* has to be
+    able to hand out that one."""
+    (writable / "b.mp4").write_bytes(b"hevc original")
+    _render_for("b.mp4")
+
+    r = client.get("/download/init_2026/b.mp4?original=1")
+
+    assert r.content == b"hevc original"
+
+
+def test_a_clip_with_no_copy_downloads_as_itself(
+    client: TestClient, writable: Path
+) -> None:
+    """A third of the clips here were already H.264 and were never rendered."""
+    (writable / "b.mp4").write_bytes(b"already h264")
+
+    assert client.get("/download/init_2026/b.mp4").content == b"already h264"
+
+
+def test_a_viewer_cannot_download_what_was_not_shared(
+    client: TestClient, writable: Path,
+    sign_in: "Callable[[str, str], TestClient]",
+    add_user: "Callable[..., None]"
+) -> None:
+    """The same check as every other route that serves bytes. A grid that
+    omits a photograph while this hands it over is not access control."""
+    (writable / "b.mp4").write_bytes(b"fake")
+    add_user("kid", "pw")
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "add_audience": ["kid"]})
+    kid = sign_in("kid", "pw")
+
+    assert kid.get("/download/init_2026/a.jpg").status_code == 200
+    assert kid.get("/download/init_2026/b.mp4").status_code == 404
+
+
+def test_a_selection_comes_back_as_one_zip(
+    client: TestClient, writable: Path
+) -> None:
+    """A browser cannot be asked to start two hundred downloads at once, and
+    a folder of files is what you wanted anyway."""
+    (writable / "b.mp4").write_bytes(b"a clip")
+
+    r = client.post("/download.zip", data={"files": json.dumps([
+        {"folder": "init_2026", "name": "a.jpg"},
+        {"folder": "init_2026", "name": "b.mp4"}])})
+
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/zip"
+    assert ".zip" in r.headers["content-disposition"]
+    with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+        assert zf.namelist() == ["init_2026/a.jpg", "init_2026/b.mp4"]
+        assert zf.read("init_2026/b.mp4") == b"a clip"
+
+
+def test_a_zip_holds_the_folder_each_file_came_from(
+    client: TestClient, writable: Path
+) -> None:
+    """Two master folders can hold the same name, and a flat zip would quietly
+    keep one of them."""
+    r = client.post("/download.zip", data={"files": json.dumps([
+        {"folder": "init_2026", "name": "a.jpg"}])})
+
+    with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+        assert zf.namelist() == ["init_2026/a.jpg"]
+
+
+def test_a_zip_is_stored_rather_than_deflated(
+    client: TestClient, writable: Path
+) -> None:
+    """Every file in here is already compressed, so deflating spends the
+    processor to save nothing on the one path where throughput is the whole
+    experience."""
+    r = client.post("/download.zip", data={"files": json.dumps([
+        {"folder": "init_2026", "name": "a.jpg"}])})
+
+    with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+        assert zf.infolist()[0].compress_type == zipfile.ZIP_STORED
+
+
+def test_a_zip_of_copies_or_of_originals(
+    client: TestClient, writable: Path
+) -> None:
+    (writable / "b.mp4").write_bytes(b"hevc original")
+    _render_for("b.mp4")
+    files = json.dumps([{"folder": "init_2026", "name": "b.mp4"}])
+
+    copies = client.post("/download.zip", data={"files": files})
+    with zipfile.ZipFile(io.BytesIO(copies.content)) as zf:
+        assert zf.read(zf.namelist()[0]) == b"h264 copy"
+
+    originals = client.post("/download.zip",
+                            data={"files": files, "original": "1"})
+    with zipfile.ZipFile(io.BytesIO(originals.content)) as zf:
+        assert zf.read(zf.namelist()[0]) == b"hevc original"
+
+
+def test_a_viewer_cannot_zip_what_was_not_shared(
+    client: TestClient, writable: Path,
+    sign_in: "Callable[[str, str], TestClient]",
+    add_user: "Callable[..., None]"
+) -> None:
+    """Asking for a hundred files is not a way round the check that is made
+    for one."""
+    (writable / "b.mp4").write_bytes(b"fake")
+    add_user("kid", "pw")
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "add_audience": ["kid"]})
+
+    r = sign_in("kid", "pw").post("/download.zip", data={"files": json.dumps([
+        {"folder": "init_2026", "name": "a.jpg"},
+        {"folder": "init_2026", "name": "b.mp4"}])})
+
+    assert r.status_code == 404
+
+
+def test_too_many_files_are_refused_rather_than_started(
+    client: TestClient, writable: Path
+) -> None:
+    """A selection runs to thousands, and a download nobody meant to start is
+    one nobody can stop without noticing it is running."""
+    many = json.dumps([{"folder": "init_2026", "name": "a.jpg"}]
+                      * (web.ZIP_LIMIT + 1))
+
+    r = client.post("/download.zip", data={"files": many})
+
+    assert r.status_code == 400
+    assert str(web.ZIP_LIMIT) in r.text
+
+
+def test_a_cell_says_whether_a_copy_of_it_exists(
+    client: TestClient, writable: Path
+) -> None:
+    """So the page asks *original or copy* only where there is an answer, and
+    downloads without asking everywhere else."""
+    (writable / "b.mp4").write_bytes(b"fake")
+
+    plain = client.get("/browse").text
+    assert 'data-copy=""' in plain
+    assert 'data-copy="1"' not in plain
+
+    _render_for("b.mp4")
+    with_copy = client.get("/browse").text
+    assert 'data-copy="1"' in with_copy
 
 
 # --- access ------------------------------------------------------------------

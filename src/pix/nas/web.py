@@ -20,19 +20,21 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import zipfile
 import threading
 import time
 from urllib.parse import parse_qs, quote
 from dataclasses import dataclass, field, replace
 from itertools import groupby
 from pathlib import Path
-from typing import Annotated, Any, Sequence, cast
+from typing import Annotated, Any, Iterator, Sequence, cast
 
 from fastapi import (
     Body, Depends, FastAPI, HTTPException, Query, Request, status,
 )
 from fastapi.responses import (
     FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response,
+    StreamingResponse,
 )
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
@@ -685,7 +687,15 @@ h2.year span { font-size:13px; font-weight:400; }
               margin:0; opacity:.75; }
 #viewclose { position:absolute; top:10px; left:12px; z-index:2; margin:0;
              opacity:.75; font-size:17px; line-height:1; padding:2px 10px; }
-#railtoggle:hover, #viewclose:hover { opacity:1; }
+/* Beside Details, because it is the same kind of thing: something you reach
+   for about the photograph you are looking at, rather than a way out of it. */
+#viewget { position:absolute; top:10px; right:112px; z-index:2; margin:0;
+           opacity:.75; border:1px solid var(--line); border-radius:3px;
+           padding:3px 10px; font-size:13px; background:var(--chrome);
+           color:var(--fg); }
+#railtoggle:hover, #viewclose:hover, #viewget:hover { opacity:1; }
+#viewget:hover { border-color:var(--accent); background:var(--chrome);
+                 box-shadow:none; }
 .rail-h { color:var(--dim); font-size:11px; text-transform:uppercase;
           letter-spacing:.07em; margin:16px 0 5px; }
 .rail-h:first-child { margin-top:0; }
@@ -1305,6 +1315,7 @@ def browse(user: Annotated[Principal, Depends(require_user)],
   <div class="meta" id="vmeta"></div></div>
   <button id="viewclose" title="Close (Esc)">&times;</button>
   <button id="railtoggle" title="Details (I)">Details</button>
+  <a id="viewget" class="who-link" download>Download</a>
   <aside id="rail"></aside>
 </div>
 <div id="menu" hidden></div>
@@ -1423,6 +1434,7 @@ def _actions(user: Principal) -> str:
     <button data-act="top">Make top</button>
     <button data-act="unstack">Unstack</button>
     <button data-act="nostack">Not a stack</button>
+    <button data-act="download">Download</button>
     <span class="sep"></span>
     <button data-act="delete" class="danger">Delete</button>
   </span>
@@ -1634,6 +1646,7 @@ def _cell(row: sqlite3.Row, view: ix.Filters | None = None) -> str:
         f'data-deleted="{"1" if row["deleted"] else ""}" '
         f'data-under="{_h(row["stacked_under"] or "")}" '
         f'data-ar="{_squareness(row)}" '
+        f'data-copy="{"1" if _has_render(row) else ""}" '
         f'data-behind="{row["behind"] or 0}" '
         f'data-proposed="{_guessed(row, view or ix.Filters())}">'
         f'<img loading="lazy" src="/thumb/{_q(row["folder"])}/{_q(row["name"])}">'
@@ -1689,6 +1702,23 @@ def _stack_badge(row: sqlite3.Row, view: ix.Filters) -> str:
             f'{"that look alike — nobody has said yet" if guessed else ""}'
             f'{"" if guessed else "stacked here"}">'
             f'{n + 1}</a>')
+
+
+def _has_render(row: sqlite3.Row) -> bool:
+    """Whether a playable copy of this file exists and differs from it.
+
+    Only for the clips a browser will not play as they are. For every
+    photograph here, and the third of the clips that were already H.264, the
+    original *is* the playable file — so *original or copy* is not a question
+    to ask about them, and the page only asks it where there is an answer.
+    """
+    if row["kind"] != "video":
+        return False
+    try:
+        return derive.render_path(
+            MASTER_DIR / str(row["folder"]) / str(row["name"])).is_file()
+    except OSError:
+        return False
 
 
 def _squareness(row: sqlite3.Row) -> str:
@@ -2363,6 +2393,9 @@ function drawSel(){
   // Only where there is a guess to refuse. On a stack somebody made it would
   // be offering to un-decide a decision, which is what Unstack is for.
   show('nostack', live.some(guessed));
+  // Anything selected can be downloaded, deleted or not: what it is on the
+  // disk does not depend on what has been decided about it.
+  show('download', live.length + dead > 0);
   // The tick wears the three states of what it would do: nothing selected and
   // it selects everything, anything selected and it clears.
   actions.dataset.state = !picked.size ? 'none'
@@ -2423,6 +2456,7 @@ function load(c){
     vvid.classList.remove('on'); vimg.classList.add('on');
     vimg.src=`/preview/${f}/${n}`;
   }
+  drawGet(c);
   vmeta.textContent=`${c.dataset.name} — ${c.dataset.date}`
                    +(c.dataset.tags?' — '+c.dataset.tags.split('\\n').join(', '):'');
   fill(c);
@@ -2443,6 +2477,27 @@ if(railToggle) railToggle.onclick=e=>{
                        if(railOn&&cells[cur]) fill(cells[cur]);};
 const viewClose=document.getElementById('viewclose');
 if(viewClose) viewClose.onclick=e=>{e.stopPropagation(); closeViewer();};
+// Where you have decided you want this one. A link rather than a button, so
+// the browser does the transfer and a right-click still offers *save as*.
+const viewGet=document.getElementById('viewget');
+function drawGet(c){
+  if(!viewGet||!c) return;
+  const at='/download/'+encodeURIComponent(c.dataset.folder)
+          +'/'+encodeURIComponent(c.dataset.name);
+  viewGet.setAttribute('href',at);
+  // The original is a second thing to want only where it is a different file
+  // — which is the clips a browser will not play as they are, and nothing
+  // else in the library.
+  viewGet.textContent=c.dataset.copy?'Download copy':'Download';
+  viewGet.title=c.dataset.copy
+    ? 'The H.264 copy. Hold shift for the original off the camera.'
+    : 'The file as it came off the camera.';
+  viewGet.onclick=e=>{
+    e.stopPropagation();
+    if(e.shiftKey&&c.dataset.copy) viewGet.setAttribute('href',at+'?original=1');
+    else viewGet.setAttribute('href',at);
+  };
+}
 // Everything above is the viewer, which only a page with photographs on it
 // has. The landing page shows folders: it carries none of these elements, so
 // the script wires none of them. Guarded one statement at a time rather than
@@ -2753,6 +2808,66 @@ function fanOut(head,html){
   head.dataset.proposed='0';
   head.classList.remove('marked');
   resection(); drawSel();
+}
+
+// --- downloading -------------------------------------------------------------
+// Two things can be meant by *the file*: what came off the camera, and the
+// H.264 copy the app made so a browser can play it. They differ only for the
+// clips a browser will not play as they are — so the choice is offered only
+// when the selection holds one, and the rest of the time pressing Download
+// downloads.
+function downloadMenu(anchorEl){
+  const cs=targets();
+  if(!cs.length){say('nothing selected');return;}
+  if(!cs.some(c=>c.dataset.copy)){closeMenu();getFiles(cs,false);return;}
+  const key='download';
+  if(menuCtx&&menuCtx.key===key&&!menu.hidden){closeMenu();return;}
+  menu.innerHTML='<div id="menulist"></div>';
+  const list=menu.querySelector('#menulist');
+  const head=document.createElement('div');
+  head.className='band';
+  head.textContent='Download';
+  list.appendChild(head);
+  for(const [label,orig] of [['Playable copies',false],['Originals',true]]){
+    const d=document.createElement('div');
+    d.className='opt';
+    d.innerHTML=`<span>${esc(label)}</span>`;
+    d.onclick=e=>{e.stopPropagation();closeMenu();getFiles(cs,orig);};
+    list.appendChild(d);
+  }
+  placeMenu(anchorEl);
+  menuCtx={key};
+}
+
+// One file is a link; a selection is a posted form. Not a fetch either way:
+// the browser has to own the transfer, or every byte of a selection of video
+// is held in this page's memory before a file appears anywhere.
+function getFiles(cs,original){
+  if(cs.length===1){
+    const c=cs[0];
+    location.href='/download/'+encodeURIComponent(c.dataset.folder)
+                 +'/'+encodeURIComponent(c.dataset.name)
+                 +(original?'?original=1':'');
+    say('downloading 1 file');
+    return;
+  }
+  const form=document.createElement('form');
+  form.method='post';
+  form.action='/download.zip';
+  const files=document.createElement('input');
+  files.type='hidden'; files.name='files';
+  files.value=JSON.stringify(cs.map(
+    c=>({folder:c.dataset.folder,name:c.dataset.name})));
+  form.appendChild(files);
+  if(original){
+    const flag=document.createElement('input');
+    flag.type='hidden'; flag.name='original'; flag.value='1';
+    form.appendChild(flag);
+  }
+  document.body.appendChild(form);
+  form.submit();
+  form.remove();
+  say(`downloading ${cs.length.toLocaleString()} files as a zip`);
 }
 
 function endChoosing(restore){
@@ -3212,6 +3327,7 @@ const ACT_COLUMN={tags:'tag', access:'audience', event:'event'};
     if(act==='top'){closeMenu();makeTop();return;}
     if(act==='unstack'){closeMenu();unstack();return;}
     if(act==='nostack'){closeMenu();notAStack();return;}
+    if(act==='download'){downloadMenu(b);return;}
     if(act==='restore'){closeMenu();applyToSelection('deleted',false);return;}
     if(act==='purge'){closeMenu();purgeSelection();return;}
     openMenu(b, act==='date'
@@ -3523,6 +3639,154 @@ def _serve(root: Path, folder: str, name: str) -> FileResponse:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "not derived yet")
     return FileResponse(target, media_type="image/jpeg",
                         headers={"Cache-Control": "public, max-age=86400"})
+
+
+def _to_send(folder: str, name: str, original: bool) -> tuple[Path, str]:
+    """The file to hand over and what to call it.
+
+    Two things can be meant by *the file*. The **original** is what came off
+    the camera and is what master holds; the playable copy is the H.264
+    rendition the app made of it, which exists only where the original is
+    something a browser will not play. For everything else — every photograph
+    here, and the third of the clips that were already H.264 — they are the
+    same file, and offering a choice between them would be offering a choice
+    that is not there.
+    """
+    media = _master_file(folder, name)
+    if not original:
+        render = derive.render_path(media)
+        if render.is_file():
+            return render, Path(name).with_suffix(render.suffix).name
+    return media, name
+
+
+@app.get("/download/{folder}/{name}")
+def download(folder: str, name: str,
+             user: Annotated[Principal, Depends(require_user)],
+             original: Annotated[str | None, Query()] = None) -> FileResponse:
+    """One file, as a download rather than as something to look at.
+
+    The same access check as every other byte-serving route: a grid that omits
+    a photograph while this hands it over is not access control.
+    """
+    _allowed(user, folder, name)
+    target, called = _to_send(folder, name, bool(original))
+    if not target.is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such file")
+    return FileResponse(target, filename=called,
+                        media_type="application/octet-stream")
+
+
+#: How many files one zip will hold. Not a technical limit — the stream is
+#: constant-memory whatever goes through it — but a selection can run to
+#: thousands, and a download nobody meant to start is a download nobody can
+#: stop without noticing it is running.
+ZIP_LIMIT: int = 500
+
+
+@app.post("/download.zip")
+async def download_zip(
+    request: Request,
+    user: Annotated[Principal, Depends(require_user)],
+) -> StreamingResponse:
+    """A selection, as one zip.
+
+    **A form post rather than a fetch**, because the browser has to own this:
+    a fetch would hold every byte in memory before the file appeared, and a
+    selection of video runs to gigabytes. Posted rather than linked because
+    five hundred names do not fit in an address.
+
+    **Stored, not deflated.** Every file in here is already compressed — JPEG
+    or H.264 — so deflating spends the processor to save nothing, on the one
+    path where throughput is the whole experience.
+    """
+    form = await _form(request)
+    original = bool(form.get("original"))
+    try:
+        raw: object = json.loads(form.get("files", "[]"))
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "bad file list") from None
+    wanted = cast("list[dict[str, str]]", raw) if isinstance(raw, list) else []
+    if not wanted:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "nothing chosen")
+    if len(wanted) > ZIP_LIMIT:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"{len(wanted):,} files in one download — "
+            f"take at most {ZIP_LIMIT:,} at a time")
+
+    picked: list[tuple[str, Path]] = []
+    for item in wanted:
+        folder, name = str(item.get("folder", "")), str(item.get("name", ""))
+        _allowed(user, folder, name)
+        target, called = _to_send(folder, name, original)
+        if target.is_file():
+            # Foldered inside the zip, because two master folders can hold the
+            # same name and a flat zip would quietly keep one of them.
+            picked.append((f"{folder}/{called}", target))
+    if not picked:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "nothing to send")
+
+    stamp = time.strftime("%Y-%m-%d")
+    return StreamingResponse(
+        _zipped(picked), media_type="application/zip",
+        headers={"Content-Disposition":
+                 f'attachment; filename="pix-{stamp}.zip"'})
+
+
+class _Sink:
+    """A file object for `zipfile` that hands back what it is given.
+
+    `zipfile` writes; the generator below drains. Nothing is held but the
+    chunk in flight, which is what lets a thirty-gigabyte selection through a
+    process that must also still be serving pages.
+    """
+
+    def __init__(self) -> None:
+        self._buf = bytearray()
+        self._at = 0
+
+    def write(self, data: bytes) -> int:
+        self._buf += data
+        self._at += len(data)
+        return len(data)
+
+    def tell(self) -> int:
+        return self._at
+
+    def flush(self) -> None:
+        return None
+
+    def drain(self) -> bytes:
+        out = bytes(self._buf)
+        del self._buf[:]
+        return out
+
+
+def _zipped(picked: Sequence[tuple[str, Path]]) -> Iterator[bytes]:
+    """The zip, a chunk at a time."""
+    sink = _Sink()
+    # `zipfile` wants a file; `_Sink` is one in every way it uses — write,
+    # tell, flush — and in none of the ways the type says.
+    with zipfile.ZipFile(cast("Any", sink), "w", zipfile.ZIP_STORED) as zf:
+        for arcname, path in picked:
+            try:
+                with zf.open(arcname, "w") as into, path.open("rb") as src:
+                    while True:
+                        chunk = src.read(1 << 20)
+                        if not chunk:
+                            break
+                        into.write(chunk)
+                        got = sink.drain()
+                        if got:
+                            yield got
+            except OSError:
+                # One unreadable file does not cost the other four hundred.
+                continue
+            got = sink.drain()
+            if got:
+                yield got
+    yield sink.drain()
 
 
 # --- api ---------------------------------------------------------------------

@@ -701,6 +701,22 @@ precisely than that*, and the date filter answers `undated` or a prefix with
 nothing in between — so those folders say they cannot be opened rather than
 opening something larger than what was clicked.
 
+**Taking a copy away** is one gesture with two possible meanings, and the app
+only asks which where there are two. The *original* is what came off the camera
+and is what master holds; the *playable copy* is the H.264 rendition, which
+exists only for the clips a browser will not play as they are. For every
+photograph, and for the third of the clips that were already H.264, they are
+the same file — so Download downloads, and the choice appears only when the
+selection holds something the question applies to.
+
+One file is a link. A selection is a **posted form**, streamed back as a zip:
+posted because five hundred names do not fit in an address, a form rather than
+a fetch because the browser has to own the transfer — a fetch holds every byte
+in this page's memory before a file appears anywhere. Stored rather than
+deflated, since everything in the archive is already compressed and deflating
+would spend the processor to save nothing on the one path where throughput is
+the whole experience.
+
 Filters live in the **URL**, which makes a view a link: shareable,
 bookmarkable, and survivable across a reload. It also makes the browser's
 back button mean *the filter I had before*, which is the only undo a filter

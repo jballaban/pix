@@ -89,6 +89,9 @@ class El {
   }
   scrollIntoView() {}
   focus() {}
+  // A form posts by leaving the page, which is the whole point of using one:
+  // the browser owns the transfer. The stub records it instead.
+  submit() { (document.submitted ||= []).push(this); }
   setAttribute(k, v) { this.attrs[k] = v; }
   removeAttribute(k) { delete this.attrs[k]; }
   get clientWidth() { return 900; }
@@ -194,6 +197,9 @@ function parseInto(html) {
 }
 
 const document = new El('document');
+// A real page always has one, and a form has to be in the document before it
+// can be posted.
+document.body = document;
 document._listeners = {};
 document.byId = {};
 document.getElementById = id => document.byId[id] || null;

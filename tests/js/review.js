@@ -91,7 +91,7 @@ function actGroup(side, acts) {
   return g;
 }
 actGroup('live', ['event', 'tags', 'date', 'access', 'stack', 'top', 'unstack',
-                  'nostack', 'delete']);
+                  'nostack', 'download', 'delete']);
 actGroup('gone', ['restore', 'purge']);
 const chooseActs = actGroup('choose', []);
 const cancelBtn = new El('button');

@@ -92,7 +92,8 @@ function actGroup(side, names) {
   return g;
 }
 const liveActs = actGroup('live',
-  ['event', 'tags', 'date', 'access', 'stack', 'top', 'unstack', 'delete']);
+  ['event', 'tags', 'date', 'access', 'stack', 'top', 'unstack',
+   'nostack', 'download', 'delete']);
 const goneActs = actGroup('gone', ['restore', 'purge']);
 const chooseActs = actGroup('choose', []);
 const cancelBtn = new El('button');
@@ -174,7 +175,12 @@ const window = {
   addEventListener: (t, fn) => ((listeners[t] ||= []).push(fn)),
 };
 let reloaded = 0;
-const location = { href: '/browse', reload: () => { reloaded += 1; } };
+// Where the page was sent, which for a download is the whole gesture: the
+// browser takes the transfer and the page stays where it is.
+let went = null;
+const location = { get href() { return went === null ? '/browse' : went; },
+                   set href(v) { went = v; },
+                   reload: () => { reloaded += 1; } };
 const confirm = () => true;
 const VIEW = { event: null, year: null, tag: null, audience: null, kind: null,
                band: null };
@@ -1286,6 +1292,83 @@ function arrow(key, opts) {
     await settle();
     check('as does paging back off the front', showing() === 't1.jpg',
           showing());
+  }
+
+  // --- taking a copy away -----------------------------------------------------
+  {
+    const room = new El('div');
+    room.id = 'grid';
+    document.byId.grid = room;
+    const two = [cell('a.jpg', ''), cell('b.mp4', '')];
+    two.forEach(c => room.appendChild(c));
+    document.querySelectorAll = sel => (sel === '.cell' ? two
+                                      : sel === '.group' ? []
+                                      : sel === '.stage' ? [stage] : realQsa(sel));
+    keys.keydown = [];
+    new Function(
+      'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
+      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'setTimeout', js,
+    )(document, window, fetch, localStorage, location, confirm,
+      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
+      GRID_GROUPS, GROUPING, PAGE, TIERS, fn => fn());
+
+    const get = actBtn('download');
+    check('nothing selected offers no download', get.hidden === true);
+
+    two[0].querySelector('.pick').click();
+    check('one file does', get.hidden === false);
+
+    // Nothing in this library has a playable copy of its own, so there is no
+    // question to ask: pressing it downloads.
+    went = null;
+    get.click();
+    await settle();
+    check('and pressing it downloads that file',
+          !!went && went.startsWith('/download/f/a.jpg'), String(went));
+    check('without asking which of two identical things you meant',
+          menu.hidden === true);
+
+    // A clip a browser will not play has both, and only then is it a choice.
+    two[0].dataset.copy = '1';
+    went = null;
+    get.click();
+    await settle();
+    check('a file with a copy of its own asks which', menu.hidden === false);
+    const rows = menu.querySelectorAll('.opt');
+    const labels = rows.map(
+      o => (o.innerHTML.match(/<span>([^<]*)<\/span>/) || [])[1]);
+    check('offering the copy and the original',
+          labels.join(',') === 'Playable copies,Originals', labels.join(','));
+    if (rows.length > 1) {
+      rows[1].click();
+      await settle();
+      check('and the original is asked for by name',
+            !!went && went.includes('original=1'), String(went));
+    }
+    delete two[0].dataset.copy;
+
+    // More than one cannot be a link: a browser will not start two hundred
+    // downloads, and a folder of files is what you wanted anyway.
+    document.submitted = [];
+    went = null;
+    two[1].querySelector('.pick').click();
+    get.click();
+    await settle();
+    check('two files go as one posted form', document.submitted.length === 1,
+          String(document.submitted.length));
+    const form = document.submitted[0];
+    if (form) {
+      check('posted, because five hundred names do not fit in an address',
+            form.method === 'post', String(form.method));
+      check('to the zip', form.action === '/download.zip', String(form.action));
+      const field = form.children.find(k => k.name === 'files');
+      check('carrying what was selected',
+            !!field && JSON.parse(field.value).length === 2,
+            field && field.value);
+    }
+    check('and the page does not go anywhere itself', went === null,
+          String(went));
   }
 
   if (failures.length) {
