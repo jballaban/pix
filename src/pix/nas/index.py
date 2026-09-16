@@ -119,6 +119,12 @@ GROUPINGS: dict[str, str | None] = {
 #: 500KB is well below anything a camera produces — it finds screenshots and
 #: re-compressed messaging images rather than early-2000s originals, which
 #: matters because those are still to be seeded.
+#: The groupings that are dates, and so run **newest first**. A library is
+#: read backwards from now: what you are curating is what you have just taken,
+#: and a shelf that opens on 2001 is one you scroll past every time. The rest
+#: — events, cameras, sources, kinds — are names, and names read forwards.
+NEWEST_FIRST: frozenset[str] = frozenset({"day", "month", "year"})
+
 SHORT_VIDEO_SECONDS: float = 5.0
 LONG_VIDEO_SECONDS: float = 60.0
 SMALL_IMAGE_BYTES: int = 500_000
@@ -1005,20 +1011,21 @@ def files(conn: sqlite3.Connection, filters: Filters | None = None, *,
           limit: int = 500, offset: int = 0) -> list[sqlite3.Row]:
     """Files matching every active filter, in effective-date order.
 
-    Undated files sort last rather than scattering through the grid: they are a
-    work item of their own, not a date that happens to be small.
+    **Newest first**, because a library is read backwards from now: what you
+    are curating is what you have just taken. Undated files sort last either
+    way — they are a work item of their own, not a date that happens to be
+    small, or large.
 
     `groups` names one or more keys — `("event", "day")` — and adds a `grp0`,
     `grp1` … column for each, sorting by them outermost-first. A page can then
     cut the grid into nested sections without a second query or a second idea
-    of the order. Within the innermost section the order is unchanged:
-    chronological, because that is how a day of photographs reads.
+    of the order.
     """
     where, bound = _where(filters or Filters())
     keys = [GROUPINGS[g] for g in groups if GROUPINGS.get(g)]
     params: dict[str, Any] = {**bound, "limit": limit, "offset": offset}
     selected = "".join(f", {key} AS grp{i} " for i, key in enumerate(keys))
-    ordered = "".join(f"grp{i} IS NULL, grp{i}, " for i in range(len(keys)))
+    ordered = _ordering(groups)
     return list(conn.execute(
         "SELECT files.*, " + _TAGS_COL + ", " + _AUDIENCE_COL
         + ", " + _BEHIND_COL + ", " + _AHEAD_COL
@@ -1026,7 +1033,9 @@ def files(conn: sqlite3.Connection, filters: Filters | None = None, *,
         + "FROM files "
         + (f"WHERE {where} " if where else "")
         + "ORDER BY " + ordered
-        + "effective_date IS NULL, effective_date, name "
+        # Undated last either way: they are a work item of their own, not a
+        # date that happens to be small — or large.
+        + "effective_date IS NULL, effective_date DESC, name "
         "LIMIT :limit OFFSET :offset", params
     ))
 
@@ -1338,7 +1347,7 @@ def sections(conn: sqlite3.Connection, filters: Filters | None = None, *,
                               "day": datestr.DAY}
     selected = "".join(f"{key} AS grp{i}, " for i, key in enumerate(keys))
     grouped = ", ".join(f"grp{i}" for i in range(len(keys)))
-    ordered = "".join(f"grp{i} IS NULL, grp{i}, " for i in range(len(keys)))
+    ordered = _ordering(groups)
     known = ("CASE WHEN files.precision >= :day THEN files.effective_date END")
     return list(conn.execute(
         "SELECT " + (selected or "NULL AS grp0, ")
@@ -1355,6 +1364,23 @@ def sections(conn: sqlite3.Connection, filters: Filters | None = None, *,
         + (f"GROUP BY {grouped} " if grouped else "")
         + "ORDER BY " + ordered + "n DESC "
         "LIMIT :limit OFFSET :offset", params))
+
+
+def _ordering(groups: Sequence[str]) -> str:
+    """`ORDER BY` for the grouping levels, outermost first.
+
+    Date levels descend and the rest do not, because they are different kinds
+    of key: *September before August* is a library read backwards from now,
+    where *Banff before Apricot* would be the alphabet upside down.
+
+    `grp IS NULL` leads either way, so a section with no value at that level —
+    the files with no day, the ones in no stack — stays at the end.
+    """
+    out = ""
+    for i, name in enumerate(g for g in groups if GROUPINGS.get(g)):
+        out += f"grp{i} IS NULL, grp{i}"
+        out += " DESC, " if name in NEWEST_FIRST else ", "
+    return out
 
 
 def count(conn: sqlite3.Connection, filters: Filters | None = None) -> int:

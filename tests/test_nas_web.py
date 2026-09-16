@@ -1262,6 +1262,13 @@ def _spread(app_env: dict[str, Path], writable: Path,
              master_dir=share / "master")
 
 
+def _shelf(folders: str, heading: str) -> str:
+    """One shelf of the landing page, from its heading to the next."""
+    at = folders.index(heading)
+    end = folders.find("<h3", at)
+    return folders[at:end if end > 0 else len(folders)]
+
+
 def _folders(html: str) -> str:
     """Just the folders. The page script is inlined below them and mentions
     `/thumb/` and half the words on the card."""
@@ -1430,7 +1437,7 @@ def test_the_bar_is_this_card_within_its_group(
                   for n in ("jan.jpg", "feb1.jpg", "feb2.jpg")]})
 
     folders = _folders(client.get("/?date=2026&group=month,event").text)
-    jan = folders[folders.index("January"):folders.index("February")]
+    jan = _shelf(folders, "January")
 
     assert '<i style="width:33%"' in jan, jan
     assert "1 of 3 files" in jan

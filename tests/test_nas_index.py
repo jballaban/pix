@@ -782,6 +782,69 @@ def test_an_old_schema_is_dropped_not_migrated(tree: dict[str, Path]) -> None:
 
 # --- the landing page grouping -----------------------------------------------
 
+def test_the_grid_reads_backwards_from_now(tree: dict[str, Path]) -> None:
+    """A library is read backwards from now: what you are curating is what you
+    have just taken, and a grid that opens on 2001 is one you scroll past
+    every time."""
+    for name, when in (("old.jpg", "2025:01:02 10:00:00"),
+                       ("mid.jpg", "2025:06:02 10:00:00"),
+                       ("new.jpg", "2026:03:02 10:00:00")):
+        _record(tree, "f", name, {"EXIF:DateTimeOriginal": when})
+    _record(tree, "f", "none.jpg", {})
+    conn = _built(tree)
+
+    assert [r["name"] for r in ix.files(conn)] == [
+        "new.jpg", "mid.jpg", "old.jpg",
+        # Undated last either way: a work item of its own, not a date that
+        # happens to be small — or large.
+        "none.jpg"]
+
+
+def test_the_sections_read_backwards_too(tree: dict[str, Path]) -> None:
+    """Both halves of one order. A newest-first grid under oldest-first
+    headings is a page that disagrees with itself."""
+    for name, when in (("a.jpg", "2025:01:02 10:00:00"),
+                       ("b.jpg", "2026:03:02 10:00:00")):
+        _record(tree, "f", name, {"EXIF:DateTimeOriginal": when})
+    conn = _built(tree)
+
+    for level in ("year", "month", "day"):
+        rows = ix.sections(conn, groups=[level])
+        assert [r["grp0"] for r in rows] == sorted(
+            (r["grp0"] for r in rows), reverse=True), level
+
+
+def test_a_section_with_no_value_comes_last(tree: dict[str, Path]) -> None:
+    """*Not in a stack* is the rest of the library, and the rest of the
+    library is not the first thing to read. It sorts last whichever way the
+    level it sits at runs — which for an ascending one means saying so, since
+    a NULL would otherwise lead.
+    """
+    _shot(tree, "top.jpg", "2026:08:30 10:00:00")
+    _shot(tree, "behind.jpg", "2026:08:30 10:00:01")
+    _sidecar(tree, "f", "behind.jpg")
+    decisions.write(tree["master"] / "f" / "behind.jpg",
+                    Decision(stacked_under="f/top.jpg"))
+    _shot(tree, "alone.jpg", "2026:08:30 14:00:00")
+    conn = _built(tree)
+
+    rows = ix.sections(conn, ix.Filters(unfold=True), groups=["stack"])
+    assert [r["grp0"] for r in rows][-1] is None, [r["grp0"] for r in rows]
+
+
+def test_names_still_read_forwards(tree: dict[str, Path]) -> None:
+    """*September before August* is a library read backwards from now, where
+    *Banff before Apricot* would be the alphabet upside down."""
+    for name, event in (("a.jpg", "Zebra"), ("b.jpg", "Apricot")):
+        _record(tree, "f", name, {"EXIF:DateTimeOriginal": "2026:03:02 10:00:00"})
+        _sidecar(tree, "f", name)
+        decisions.write(tree["master"] / "f" / name, Decision(event=event))
+    conn = _built(tree)
+
+    assert [r["grp0"] for r in ix.sections(conn, groups=["event"])] == [
+        "Apricot", "Zebra"]
+
+
 def test_events_group_by_year_newest_first(tree: dict[str, Path]) -> None:
     _record(tree, "init_2026", "new.jpg",
             {"EXIF:DateTimeOriginal": "2026:01:04 14:51:34",
