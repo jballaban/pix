@@ -650,11 +650,19 @@ def render_video(media: Path, *, timeout: float = _ENCODE_TIMEOUT) -> bool:
     tmp = dest.with_name(dest.name + EXPORT_TMP_SUFFIX + ".mp4")
 
     base = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(media)]
+    # H.264 in a browser is shown as ordinary picture, so an HDR clip has to
+    # be brought down to that before it is encoded — or the render is the same
+    # washed-out grey the thumbnails were, and playing it back would disagree
+    # with the original on every screen.
+    tone = ["-vf", _TONEMAP] if is_hdr(media) else []
     tail = ["-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart",
             "-map_metadata", "0", str(tmp)]
     attempts = [
-        [*base, "-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr",
+        [*base, *tone, "-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr",
          "-cq", _CQ, "-b:v", "0", "-pix_fmt", "yuv420p", *tail],
+        [*base, *tone, "-c:v", "libx264", "-preset", "medium", "-crf", _CQ,
+         "-pix_fmt", "yuv420p", *tail],
+        # Without the tone map, if this build has no zimg in it.
         [*base, "-c:v", "libx264", "-preset", "medium", "-crf", _CQ,
          "-pix_fmt", "yuv420p", *tail],
     ]
@@ -671,6 +679,66 @@ def render_video(media: Path, *, timeout: float = _ENCODE_TIMEOUT) -> bool:
             return True
         tmp.unlink(missing_ok=True)
     return False
+
+
+#: Transfer functions that are not display-referred. The picture in the file
+#: is stored for a screen far brighter than the one a JPEG assumes, so reading
+#: it as though it were ordinary gives a flat, grey, washed-out frame — which
+#: is what 196 of this library's 1,069 clips were getting, nearly all of them
+#: from one phone.
+_HDR: tuple[str, ...] = ("hlg", "arib", "2100", "2084", "pq", "bt2020")
+
+#: Bring an HDR picture down to the range a JPEG and a browser can show.
+#:
+#: Linear light first, because tone mapping is arithmetic on brightness and
+#: the stored signal is a curve; then the tone map itself; then back to the
+#: ordinary transfer, primaries and range. Hable because it keeps highlights
+#: rather than clipping them, and `desat=0` because desaturating on the way
+#: down is the washed-out look this exists to fix.
+_TONEMAP: str = (
+    "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,"
+    "tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,"
+    "format=yuv420p")
+
+
+def is_hdr(media: Path) -> bool:
+    """Whether this clip stores more brightness than a screen will show.
+
+    Read from the meta tier where it is there, the way `video_codec` does and
+    for the same reason: the common case is a small local JSON rather than
+    opening a multi-gigabyte file over SMB.
+    """
+    meta = meta_path(media)
+    if meta.is_file():
+        try:
+            parsed: object = json.loads(meta.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            parsed = None
+        if isinstance(parsed, dict):
+            exif = cast("dict[str, Any]", parsed).get("exif")
+            if isinstance(exif, dict):
+                said = " ".join(
+                    str(v) for k, v in cast("dict[str, Any]", exif).items()
+                    if "TransferCharacteristics" in k or "ColorPrimaries" in k)
+                if said:
+                    return any(w in said.lower() for w in _HDR)
+    return _probed_hdr(media)
+
+
+def _probed_hdr(media: Path) -> bool:
+    """The same question asked of the file itself."""
+    ffprobe = shutil.which("ffprobe") or shutil.which("ffprobe.exe")
+    if ffprobe is None:
+        return False
+    try:
+        proc = subprocess.run(
+            [ffprobe, "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=color_transfer,color_primaries",
+             "-of", "default=nw=1:nk=1", str(media)],
+            capture_output=True, text=True, timeout=_FFMPEG_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return any(w in proc.stdout.lower() for w in _HDR)
 
 
 def _poster_frame(media: Path) -> Path | None:
@@ -693,17 +761,23 @@ def _poster_frame(media: Path) -> Path | None:
     tmp = _scratch() / (stem + ".poster" + EXPORT_TMP_SUFFIX + ".jpg")
     tmp.parent.mkdir(parents=True, exist_ok=True)
 
-    cmd = [ffmpeg, "-v", "error", "-ss", f"{offset:.3f}", "-i", str(media),
-           "-frames:v", "1", "-y", str(tmp)]
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True,
-                              timeout=_FFMPEG_TIMEOUT)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if proc.returncode != 0 or not tmp.is_file() or tmp.stat().st_size == 0:
+    head = [ffmpeg, "-v", "error", "-ss", f"{offset:.3f}", "-i", str(media)]
+    tail = ["-frames:v", "1", "-y", str(tmp)]
+    # The plain command second, not instead: `zscale` needs an ffmpeg built
+    # with zimg, and a washed-out thumbnail beats none at all.
+    tries = ([[*head, "-vf", _TONEMAP, *tail], [*head, *tail]]
+             if is_hdr(media) else [[*head, *tail]])
+    for cmd in tries:
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True,
+                                  timeout=_FFMPEG_TIMEOUT)
+        except (OSError, subprocess.TimeoutExpired):
+            tmp.unlink(missing_ok=True)
+            continue
+        if proc.returncode == 0 and tmp.is_file() and tmp.stat().st_size > 0:
+            return tmp
         tmp.unlink(missing_ok=True)
-        return None
-    return tmp
+    return None
 
 
 def video_codec(media: Path) -> str | None:
