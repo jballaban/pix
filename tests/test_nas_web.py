@@ -3662,3 +3662,24 @@ def test_the_chrome_keeps_clear_of_the_notch(client: TestClient) -> None:
 
     assert "env(safe-area-inset-top)" in css
     assert "env(safe-area-inset-bottom)" in css
+
+
+def test_the_install_offer_is_on_every_page(client: TestClient) -> None:
+    """In the shell rather than in the grid's script, so it works on the pages
+    that carry no page script at all — the same reason the account menu opens
+    on CSS alone."""
+    for path in ("/browse", "/history", "/accounts"):
+        assert "pix2.install" in client.get(path).text, path
+
+
+def test_the_offer_is_not_made_to_a_desktop_browser(client: TestClient) -> None:
+    """Asserted on the snippet rather than on a rendered page, because the
+    decision is the browser's to make at run time: the server sends the same
+    HTML to every device."""
+    js = web._INSTALL_JS
+
+    assert "iPhone|iPad|iPod" in js and "/Android/" in js
+    assert "if (!ios && !android) return;" in js
+    # And never inside the thing it is offering.
+    assert "display-mode: standalone" in js
+    assert "navigator.standalone" in js

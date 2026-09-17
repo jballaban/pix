@@ -124,6 +124,33 @@ def test_closing_a_date_goes_up_a_level_and_no_menu_offers_everything(
 
 @pytest.mark.skipif(shutil.which("node") is None,
                     reason="node is not installed")
+@pytest.mark.parametrize("device", [
+    "android", "android-no-api", "ios", "ipad", "desktop", "installed",
+    "said-no",
+])
+def test_the_home_screen_offer_asks_once_and_only_where_it_can_be_taken_up(
+    tmp_path: Path, device: str
+) -> None:
+    """One device per run, because every branch is a guess about somebody's
+    phone and none of them shows in the markup.
+
+    The case that matters most is `said-no`: a prompt that comes back is worse
+    than no prompt, because it teaches people to dismiss the bar without
+    reading it — and then the next thing to appear there is dismissed too.
+    Nothing about the served HTML would ever reveal that it returns.
+    """
+    script = tmp_path / "install.js"
+    script.write_text(web._INSTALL_JS, encoding="utf-8")
+
+    result = subprocess.run(
+        ["node", str(JS_DIR / "install.js"), str(script), device],
+        capture_output=True, text=True, timeout=120, cwd=JS_DIR)
+
+    assert result.returncode == 0, (result.stdout + result.stderr)[-2000:]
+
+
+@pytest.mark.skipif(shutil.which("node") is None,
+                    reason="node is not installed")
 def _element_ids(html: str) -> list[str]:
     """The ids of the page's real elements.
 

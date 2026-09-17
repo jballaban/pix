@@ -316,6 +316,20 @@ main { padding:16px 20px 40px; }
            display:flex; gap:14px; align-items:baseline;
            flex-wrap:wrap; font-size:12px; }
 .footbar:empty { display:none; }
+/* The install offer, above the footer rather than over the photographs. It is
+   an aside, not a decision to make, so it has the weight of one: panel colours,
+   one line, and a way to end it permanently. */
+.install { position:fixed; left:12px; right:12px; z-index:6;
+           bottom:calc(40px + env(safe-area-inset-bottom));
+           display:flex; gap:10px; align-items:center; font-size:13px;
+           background:var(--panel); border:1px solid var(--line);
+           border-radius:8px; padding:9px 11px;
+           box-shadow:0 12px 30px -14px #000; }
+.install .say { flex:1 1 auto; }
+.install button { font:inherit; }
+.install .no { background:none; border:none; color:var(--dim);
+               cursor:pointer; padding:4px 6px; }
+.install .no:hover { color:var(--fg); }
 .footbar .note { margin:0; margin-left:auto; }
 .ver { color:var(--dim); font-variant-numeric:tabular-nums;
        white-space:nowrap; }
@@ -863,6 +877,111 @@ def _brand(zoom: str) -> str:
             f'{_FOLDERS_MARK if folders else _FILES_MARK}</a>')
 
 
+#: Offering the home screen, once (spec/nas-app.md §8).
+#:
+#: **Only where it can be taken up, and only until it is answered.** A prompt
+#: that returns every visit is worse than no prompt: it teaches people to
+#: dismiss the bar without reading it, and the next thing that appears there is
+#: dismissed too. So there is one answer, it is remembered, and there is no
+#: *not now* — a *not now* that comes back tomorrow is the pestering this is
+#: trying not to do.
+#:
+#: Android is offered a real button, because Chrome hands the page the install
+#: prompt and one tap is a better offer than a sentence about a menu. iOS has no
+#: such API, so it gets the sentence — and the sentence has to name the Share
+#: menu, because *Add to Home Screen* lives nowhere else and is not findable by
+#: guessing.
+#:
+#: It lives in the shell rather than in the grid's script, so it works on
+#: `/history` and `/accounts`, which carry no page script at all.
+_INSTALL_JS: str = """
+(function () {
+  var KEY = 'pix2.install';
+  function answered() {
+    try { return localStorage.getItem(KEY) === 'no'; } catch (e) { return false; }
+  }
+  function remember() {
+    try { localStorage.setItem(KEY, 'no'); } catch (e) {}
+  }
+
+  // Already installed: the offer would be absurd inside the thing it offers.
+  // `display-mode` is the standard reading; `navigator.standalone` is how iOS
+  // has always said it and still does.
+  var inApp = (window.matchMedia
+               && window.matchMedia('(display-mode: standalone)').matches)
+              || navigator.standalone === true;
+  if (inApp || answered()) return;
+
+  var ua = navigator.userAgent || '';
+  // iPadOS reports itself as a Mac, and has done for years; touch points are
+  // what tell a tablet from a desktop that happens to have a trackpad.
+  var ios = /iPhone|iPad|iPod/.test(ua)
+            || (/Macintosh/.test(ua) && (navigator.maxTouchPoints || 0) > 1);
+  var android = /Android/.test(ua);
+  if (!ios && !android) return;
+
+  var strip = null, prompter = null;
+
+  function close() {
+    remember();
+    if (strip && strip.remove) strip.remove();
+    strip = null;
+  }
+
+  function show() {
+    if (strip) return;
+    strip = document.createElement('div');
+    strip.className = 'install';
+    strip.id = 'install';
+
+    var say = document.createElement('span');
+    say.className = 'say';
+    say.textContent = ios
+      ? 'Add pix to your home screen: tap Share, then Add to Home Screen.'
+      : (prompter ? 'Add pix to your home screen.'
+                  : 'Add pix to your home screen from your browser menu.');
+    strip.appendChild(say);
+
+    if (prompter) {
+      var go = document.createElement('button');
+      go.className = 'primary go';
+      go.textContent = 'Install';
+      go.onclick = function () {
+        // Whatever they answer, they have answered: a prompt dismissed at the
+        // system level must not bring this bar back on the next page.
+        var asked = prompter;
+        prompter = null;
+        close();
+        if (asked && asked.prompt) asked.prompt();
+      };
+      strip.appendChild(go);
+    }
+
+    var no = document.createElement('button');
+    no.className = 'no';
+    no.textContent = 'No thanks';
+    no.onclick = close;
+    strip.appendChild(no);
+
+    document.body.appendChild(strip);
+  }
+
+  // Chrome offers the prompt to the page instead of showing its own; taking it
+  // is what turns the sentence into a button. It may never arrive — Firefox
+  // and Samsung Internet do not send it — which is why the bar does not wait
+  // for it.
+  window.addEventListener('beforeinstallprompt', function (e) {
+    if (e.preventDefault) e.preventDefault();
+    prompter = e;
+    if (strip && strip.remove) { strip.remove(); strip = null; }
+    show();
+  });
+  window.addEventListener('appinstalled', close);
+  show();
+})();
+"""
+
+
 def _page(title: str, body: str, *, tools: str = "", rows: str = "",
           right: str = "", footer: str = "", script: str = "",
           zoom: str = "", status_code: int = 200,
@@ -910,6 +1029,7 @@ def _page(title: str, body: str, *, tools: str = "", rows: str = "",
 {script}
 <script>if('serviceWorker' in navigator)window.addEventListener('load',function(){{
   navigator.serviceWorker.register('/sw.js').catch(function(){{}});}});</script>
+<script>{_INSTALL_JS}</script>
 </body></html>""")
 
 
