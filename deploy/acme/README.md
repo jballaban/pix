@@ -26,17 +26,33 @@ normalized name matches `_acme-challenge.*`. It cannot change an MX record, an A
 record, a CNAME, or a TXT record at the apex — so Proton Mail's delivery, SPF,
 DKIM and DMARC are out of its reach by construction rather than by convention.
 
-Verify that rather than trusting it. With the key configured, try to change
-something else and confirm `AccessDenied`:
+Verify that rather than trusting it. In a terminal of your own — not one that
+records what you type — with the key in the environment:
 
-```
-aws route53 change-resource-record-sets --hosted-zone-id <ZONE> \
-  --change-batch '{"Changes":[{"Action":"UPSERT","ResourceRecordSet":
-    {"Name":"probe.ballaban.ca","Type":"A","TTL":60,
-     "ResourceRecords":[{"Value":"192.0.2.1"}]}}]}'
+```powershell
+$env:AWS_ACCESS_KEY_ID = 'AKIA...'
+$env:AWS_SECRET_ACCESS_KEY = '...'
+$env:AWS_DEFAULT_REGION = 'us-east-1'   # Route 53 is global; this is convention
+
+# Should succeed: the credential can read the zone.
+aws route53 list-resource-record-sets `
+  --hosted-zone-id Z03980672KUERFJORTYH3 --max-items 3
+
+# Should fail with AccessDenied: it may write nothing but a challenge.
+aws route53 change-resource-record-sets `
+  --hosted-zone-id Z03980672KUERFJORTYH3 `
+  --change-batch file://deploy/acme/deny-probe.json
 ```
 
-If that succeeds, the policy is not doing what this file claims.
+The first proves the credential works at all. Without it a refusal on the
+second proves nothing, because a scoped policy and a mistyped key give the same
+kind of error. If the **second** succeeds, the policy is not doing what this
+file claims, and nothing should be deployed until it does.
+
+[`deny-probe.json`](deny-probe.json) writes an ordinary A record at a name
+nothing uses, pointing at `192.0.2.1` — a documentation address that routes
+nowhere. Harmless in the one case where it matters, which is the case where the
+policy failed.
 
 ## Steps
 
