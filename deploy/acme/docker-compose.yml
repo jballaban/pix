@@ -49,24 +49,32 @@ services:
       # an account in the administrators group. So make one that does nothing
       # else, and give it a password used nowhere else.
       #
-      # `SYNO_Hostname` is the NAS's own address rather than localhost, because
+      # `SYNO_HOSTNAME` is the NAS's own address rather than localhost, because
       # localhost inside a container is the container. Port 5000 over http is
       # the LAN-side DSM port; this never leaves the machine.
-      SYNO_Scheme: http
-      SYNO_Hostname: 192.168.1.140
-      SYNO_Port: "5000"
-      SYNO_Username: REPLACE_ME
-      SYNO_Password: REPLACE_ME
+      SYNO_SCHEME: http
+      SYNO_HOSTNAME: 192.168.1.140
+      SYNO_PORT: "5000"
+      SYNO_USERNAME: REPLACE_ME
+      SYNO_PASSWORD: REPLACE_ME
       # What the certificate is called in Control Panel → Security → Certificate.
       # It must match an existing description to replace that one in place;
-      # `SYNO_Create` lets it make the entry the first time.
-      SYNO_Certificate: ballaban.ca wildcard
-      SYNO_Create: "1"
-      # If that DSM account has two-factor enabled, the hook needs its TOTP
-      # secret as well — the seed, not a six-digit code. Leaving the account
-      # without 2FA and unable to do anything but install certificates is the
-      # simpler trade; decide deliberately rather than by omission.
+      # `SYNO_CREATE` lets it make the entry the first time.
+      SYNO_CERTIFICATE: ballaban.ca wildcard
+      SYNO_CREATE: "1"
+      # If that DSM account has two-factor enabled the hook needs a code, and a
+      # six-digit code is no use to something that runs unattended in sixty
+      # days' time. `SYNO_TOTP_SECRET` is the seed, from which it derives one
+      # each run. An account that can do nothing but install certificates and
+      # has no 2FA is the simpler trade — but decide it deliberately.
       # SYNO_TOTP_SECRET: REPLACE_ME
+      #
+      # There is a third way that stores no password at all: SYNO_USE_TEMP_ADMIN
+      # makes the hook create a throwaway admin for the minute it needs one. It
+      # does that with DSM's own `synouser`, which exists on the NAS and not
+      # inside a container — so it is available to acme.sh run natively under
+      # Task Scheduler, and not to this. Worth knowing if the stored password
+      # ever stops being acceptable.
 
     # It talks to Route 53 and to DSM, holds a handful of files, and sleeps.
     mem_limit: 128m

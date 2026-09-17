@@ -49,6 +49,13 @@ If that succeeds, the policy is not doing what this file claims.
    with a password used nowhere else.
 4. **Start the container** with the four real values in Container Manager's
    environment fields.
+   Verified against the image rather than assumed: `acme.sh` lives at
+   `/usr/local/bin/acme.sh`, its hooks are baked in at `/acmebin/dnsapi/dns_aws.sh`
+   and `/acmebin/deploy/synology_dsm.sh`, and `LE_CONFIG_HOME` is `/acme.sh` —
+   which is what the volume above mounts, and therefore the only state worth
+   keeping. `daemon` runs supercronic against a crontab it writes on first
+   start, checking four times a day and renewing at sixty.
+
 5. **Choose the CA.** `acme.sh` defaults to ZeroSSL, which wants a registration
    step; Let's Encrypt is what everything else here already trusts:
 
