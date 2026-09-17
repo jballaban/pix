@@ -1268,11 +1268,13 @@ or dies on, and it is the largest remaining unknown in [§16](#16-open-questions
 
 ## 15. Identity — when two files are the same photograph
 
-**Status: designed in discussion, nothing built.** Duplicates are specified to
-completion below; the other three are named and bounded so that the first does
-not accidentally decide them.
+**Status: identity is built; resolving duplicates is deferred.** `process`
+writes the hashes and the index carries them (v0.1.344–346), so the library can
+be *asked* the question. Grouping, the proposal and the page are specified below
+and not built. The other three relations are named and bounded so that building
+the first does not accidentally decide them.
 
-Recorded 2026-09-16.
+Recorded 2026-09-16, amended 2026-09-17.
 
 "Are these the same?" is four questions, and the mistake would be to answer them
 all with a stack. They differ in what the claim *is* — fact or judgement — and
@@ -1401,6 +1403,28 @@ the page grows into a second, worse copy of the editing surface.
 **Rejecting a group means *keep both*, and that is a decision.** It needs
 recording the way `pix:NoStack` records the refusal of a suggestion, or the next
 index build proposes it again and the queue never empties.
+
+Accepting is an ordinary write, so it lands in the operation log with its undo
+like every other one, and the page can say what it has already done rather than
+only what is left.
+
+#### The grid is left alone
+
+Folding a duplicate behind its survivor was considered and **deferred**. The
+precedent points that way — guessed stacks fold by default, on weaker evidence
+than this — and folding a duplicate is the safer of the two, because the images
+are identical by construction and so nothing visible is lost.
+
+It is still a change to what the library looks like in exchange for tidying
+something that is, by the numbers, rare: the seeded library holds **zero**
+duplicate groups across 10,126 files. Both copies stay on screen, and the
+backlog is reported instead by the **activity bell** — which is what that
+control is for, and what its own note anticipated when it said the next thing
+worth reporting would otherwise have become a second phrase in the bar.
+
+That also disposes of a question folding would have forced: what a folded row
+shows when the two copies disagree. Nothing is folded, so both say what they
+say, and the merge is a proposal on a page rather than a preview in a grid.
 
 ### Purging leaves a tombstone
 
