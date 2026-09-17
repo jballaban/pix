@@ -248,8 +248,13 @@ main { padding:16px 20px 40px; }
 
 /* The bar never leaves: filters are the address of what you are looking at,
    and losing them 2,000 thumbnails down is losing your place. */
+/* Installed on a phone, the page owns the whole screen — including the strip
+   behind the clock and the one the home indicator sits on. `env()` is zero in a
+   browser tab, so this costs nothing there and is the difference between an app
+   and a web page in a window everywhere else. */
 .topbar { position:sticky; top:0; z-index:5; background:var(--chrome);
-          border-bottom:1px solid #0008; padding:9px 20px;
+          border-bottom:1px solid #0008;
+          padding:calc(9px + env(safe-area-inset-top)) 20px 9px;
           /* It scrolls over the grid, so it reads as a layer above it rather
              than as the first thing in it. */
           box-shadow:0 8px 16px -12px #000c; }
@@ -307,7 +312,8 @@ main { padding:16px 20px 40px; }
    every row of chrome up there is a row of photographs pushed off. */
 .footbar { position:fixed; left:0; right:0; bottom:0; z-index:4;
            background:var(--chrome); border-top:1px solid #0008;
-           padding:6px 20px; display:flex; gap:14px; align-items:baseline;
+           padding:6px 20px calc(6px + env(safe-area-inset-bottom));
+           display:flex; gap:14px; align-items:baseline;
            flex-wrap:wrap; font-size:12px; }
 .footbar:empty { display:none; }
 .footbar .note { margin:0; margin-left:auto; }
@@ -885,7 +891,15 @@ def _page(title: str, body: str, *, tools: str = "", rows: str = "",
     write did was set a message — so nothing was ever sent, silently.
     """
     return HTMLResponse(status_code=status_code, content=f"""<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#14161a">
+<meta name="color-scheme" content="dark">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="pix">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
 <title>{title}</title>
 <link rel="icon" href="{_FAVICON}"><style>{_STYLE}</style></head><body>
 <div class="topbar">
@@ -893,7 +907,10 @@ def _page(title: str, body: str, *, tools: str = "", rows: str = "",
 <span class="spacer"></span><span class="right">{right}{_whoami(user)}</span></div>{rows}
 </div><main>{body}</main>
 <footer class="footbar"><span class="ver">v{_PIX_VERSION}</span>{footer}</footer>
-{script}</body></html>""")
+{script}
+<script>if('serviceWorker' in navigator)window.addEventListener('load',function(){{
+  navigator.serviceWorker.register('/sw.js').catch(function(){{}});}});</script>
+</body></html>""")
 
 
 def _whoami(user: Principal | None) -> str:
@@ -4719,6 +4736,135 @@ def _master_file(folder: str, name: str) -> Path:
     if not target.is_file():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "not in master")
     return target
+
+
+# --- installing it on a phone -------------------------------------------------
+#
+# What separates an app from a bookmark is three files and a header: a manifest
+# saying what to call it and which icon to use, a service worker so the browser
+# will offer to install it at all, and icons that survive being cropped to
+# whatever shape the launcher likes. None of it is authenticated — a manifest and
+# an icon say nothing about the library, and a login wall in front of them would
+# only mean the install prompt never appears.
+
+#: Pre-rendered, and committed, because the container has no Pillow in it: the
+#: app never decodes anything, which is what keeps it viable on the Atom.
+#: `tools/make_icons.py` re-emits them from the same geometry as `_logo_mark`.
+_ICONS: Path = Path(__file__).parent / "icons"
+
+_MANIFEST: dict[str, object] = {
+    "id": "/",
+    "name": "pix",
+    "short_name": "pix",
+    "description": "The library, at home.",
+    "start_url": "/",
+    "scope": "/",
+    # Standalone, not fullscreen: the status bar is worth keeping — knowing the
+    # time and the battery while you cull for half an hour is not a loss of
+    # screen worth arguing about.
+    "display": "standalone",
+    "orientation": "any",
+    # Both the same, and both the page's own background: a launch screen that
+    # flashes white before a dark app is the tell that something is a web page.
+    "background_color": "#14161a",
+    "theme_color": "#14161a",
+    "icons": [
+        {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png",
+         "purpose": "any"},
+        {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png",
+         "purpose": "any"},
+        {"src": "/icon-maskable-512.png", "sizes": "512x512",
+         "type": "image/png", "purpose": "maskable"},
+    ],
+}
+
+#: What the worker keeps. Deliberately not the pages.
+#:
+#: **The page script is inlined into its HTML**, so a cached page is a cached
+#: *build* — and a tab serving last week's script against this week's API is the
+#: failure this project has already spent an afternoon on. Navigations therefore
+#: go to the network every time, and fall back to one honest offline page rather
+#: than to a stale copy of the library.
+_SERVICE_WORKER: str = """
+const SHELL = 'pix2-shell-v1';
+const KEEP = ['/offline', '/manifest.webmanifest', '/icon-192.png',
+              '/icon-512.png', '/icon-maskable-512.png',
+              '/apple-touch-icon.png'];
+
+self.addEventListener('install', e => {
+  e.waitUntil(caches.open(SHELL).then(c => c.addAll(KEEP))
+                                .then(() => self.skipWaiting()));
+});
+
+// Old shells go on activation, so a worker update cannot leave a previous
+// version's files answering for this one.
+self.addEventListener('activate', e => {
+  e.waitUntil(caches.keys()
+    .then(names => Promise.all(names.filter(n => n !== SHELL)
+                                    .map(n => caches.delete(n))))
+    .then(() => self.clients.claim()));
+});
+
+self.addEventListener('fetch', e => {
+  const req = e.request;
+  if (req.method !== 'GET') return;
+  // A page is always fetched fresh: its script is inside it, and a cached page
+  // is a cached build. Offline, say so plainly instead of showing a library
+  // that may no longer be what is there.
+  if (req.mode === 'navigate') {
+    e.respondWith(fetch(req).catch(() => caches.match('/offline')));
+    return;
+  }
+  // Everything else is either one of the shell files or a photograph, and the
+  // browser's own cache already handles photographs perfectly well.
+  if (KEEP.indexOf(new URL(req.url).pathname) >= 0) {
+    e.respondWith(caches.match(req).then(hit => hit || fetch(req)));
+  }
+});
+"""
+
+
+@app.get("/manifest.webmanifest")
+def manifest() -> Response:
+    """What to call this and which icon to use, for a launcher."""
+    return JSONResponse(_MANIFEST, media_type="application/manifest+json")
+
+
+@app.get("/sw.js")
+def service_worker() -> Response:
+    """Served from the root, which is what gives it the whole app as its scope.
+
+    A worker can only ever control paths below where it was served from, so this
+    cannot live under `/static/` without also sending a header to widen it —
+    a detail that is invisible until installing silently does nothing.
+    """
+    return Response(_SERVICE_WORKER, media_type="application/javascript",
+                    headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/offline", response_class=HTMLResponse)
+def offline() -> HTMLResponse:
+    """The one page the worker keeps, for when the NAS cannot be reached.
+
+    It says the library is elsewhere rather than pretending to be it. An app on
+    a phone that has left the house is not broken, and the honest thing to
+    report is where the photographs are.
+    """
+    return _page("pix", """<div class="gate">
+<h2>Not on the network</h2>
+<p class="dim">The library lives on the NAS at home, and this device cannot
+reach it. Nothing is wrong; reconnect and it will be here.</p>
+</div>""" + f"<style>{_LOGIN_CSS}</style>")
+
+
+@app.get("/{icon}.png")
+def icon(icon: str) -> Response:
+    """One of the home-screen icons, by name."""
+    path = (_ICONS / f"{icon}.png").resolve()
+    if path.parent != _ICONS.resolve() or not path.is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such icon")
+    return FileResponse(path, media_type="image/png",
+                        headers={"Cache-Control": "public, max-age=604800"})
 
 
 @app.get("/healthz")

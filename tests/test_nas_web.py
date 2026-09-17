@@ -3550,3 +3550,115 @@ def test_health_is_plain_when_the_two_agree(client: TestClient) -> None:
     body = client.get("/healthz").json()
 
     assert body == {"ok": True, "index": True}
+
+
+# --- installing it on a phone -------------------------------------------------
+
+def test_the_manifest_says_what_to_install(app_env: dict[str, Path]) -> None:
+    """Signed out on purpose: a launcher fetches these before anybody has typed
+    a password, and a login wall in front of them means the install prompt
+    simply never appears."""
+    anon = TestClient(web.app)
+
+    r = anon.get("/manifest.webmanifest")
+
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/manifest+json")
+    body = r.json()
+    assert body["name"] == "pix" and body["short_name"] == "pix"
+    assert body["display"] == "standalone"
+    assert body["start_url"] == "/" and body["scope"] == "/"
+    # A launch that flashes white before a dark app is the tell that something
+    # is a web page rather than an app.
+    assert body["background_color"] == body["theme_color"] == "#14161a"
+
+
+def test_every_icon_the_manifest_names_is_actually_there(
+    app_env: dict[str, Path]
+) -> None:
+    """The classic reason an install offer never appears: a manifest naming an
+    icon that 404s. Nothing says so — the prompt just does not happen."""
+    anon = TestClient(web.app)
+    icons = anon.get("/manifest.webmanifest").json()["icons"]
+
+    assert {i["sizes"] for i in icons} >= {"192x192", "512x512"}
+    assert any(i["purpose"] == "maskable" for i in icons), "no cropped shape"
+
+    for spec in [*icons, {"src": "/apple-touch-icon.png"}]:
+        got = anon.get(str(spec["src"]))
+        assert got.status_code == 200, spec["src"]
+        assert got.headers["content-type"] == "image/png", spec["src"]
+        assert got.content[:8] == b"\x89PNG\r\n\x1a\n", spec["src"]
+
+
+def test_an_icon_that_is_not_ours_is_not_served(
+    app_env: dict[str, Path]
+) -> None:
+    """The route takes a name, so it has to refuse one that walks out of the
+    directory it owns."""
+    anon = TestClient(web.app)
+
+    assert anon.get("/nothing-like-this.png").status_code == 404
+    assert anon.get("/..%2F..%2Fusers.png").status_code in (404, 400)
+
+
+def test_the_worker_is_served_from_the_root(app_env: dict[str, Path]) -> None:
+    """A worker controls only what sits below where it was served from, so this
+    one has to come from `/` — and a browser will not offer to install an app
+    whose worker has no fetch handler."""
+    anon = TestClient(web.app)
+
+    r = anon.get("/sw.js")
+
+    assert r.status_code == 200
+    assert "javascript" in r.headers["content-type"]
+    assert "addEventListener('fetch'" in r.text
+
+
+def test_the_worker_never_keeps_a_page(app_env: dict[str, Path]) -> None:
+    """The page script is inlined into its HTML, so a cached page is a cached
+    *build* — and a tab running last week's script against this week's API is
+    the failure this project has already lost an afternoon to."""
+    body = TestClient(web.app).get("/sw.js").text
+    kept = body.split("KEEP = [")[1].split("]")[0]
+
+    assert "/browse" not in kept and "'/'" not in kept
+    assert "/offline" in kept
+    # Navigations go to the network and fall back to the offline page.
+    assert "req.mode === 'navigate'" in body
+    assert "fetch(req).catch(() => caches.match('/offline'))" in body
+
+
+def test_the_offline_page_does_not_pretend_to_be_the_library(
+    app_env: dict[str, Path]
+) -> None:
+    anon = TestClient(web.app)
+
+    r = anon.get("/offline")
+
+    assert r.status_code == 200
+    assert "Not on the network" in r.text
+    assert 'class="grid"' not in r.text
+
+
+def test_the_page_head_offers_the_app_to_both_phones(
+    client: TestClient
+) -> None:
+    """Android reads the manifest; iOS reads its own tags and ignores it."""
+    head = client.get("/browse").text.split("</head>")[0]
+
+    assert '<link rel="manifest" href="/manifest.webmanifest">' in head
+    assert '<meta name="theme-color" content="#14161a">' in head
+    assert '<link rel="apple-touch-icon" href="/apple-touch-icon.png">' in head
+    assert 'name="apple-mobile-web-app-capable"' in head
+    # Without this the page stops at the notch and the app looks inset.
+    assert "viewport-fit=cover" in head
+
+
+def test_the_chrome_keeps_clear_of_the_notch(client: TestClient) -> None:
+    """`env()` is zero in a browser tab, so this costs nothing there and is the
+    difference between an app and a web page in a window everywhere else."""
+    css = client.get("/browse").text
+
+    assert "env(safe-area-inset-top)" in css
+    assert "env(safe-area-inset-bottom)" in css
