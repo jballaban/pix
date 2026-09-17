@@ -72,28 +72,48 @@ policy failed.
    keeping. `daemon` runs supercronic against a crontab it writes on first
    start, checking four times a day and renewing at sixty.
 
-5. **Choose the CA.** `acme.sh` defaults to ZeroSSL, which wants a registration
-   step; Let's Encrypt is what everything else here already trusts:
+5. **Open a shell — as `sh`.** The image is Alpine and has **no bash**, while
+   Container Manager's terminal launches `bash` by default. The symptom is a
+   session that opens and sits there saying nothing, which reads as a hung
+   command rather than a missing shell. Set the launch command to `sh`.
 
-   ```
-   docker exec acme acme.sh --set-default-ca --server letsencrypt
-   ```
+   With no SSH on the NAS this is the only exec path, so the fallback is worth
+   knowing: the entrypoint runs whatever arguments it is given and treats only
+   `daemon` specially, so a command can be run by temporarily replacing the
+   container's execution command and reading the Log tab.
 
 6. **Issue it:**
 
    ```
-   docker exec acme acme.sh --issue --dns dns_aws -d '*.ballaban.ca'
+   acme.sh --issue --dns dns_aws -d '*.ballaban.ca' --server letsencrypt
    ```
+
+   `--server letsencrypt` per-certificate rather than `--set-default-ca`: one
+   command instead of two, and it records the CA in the certificate's own
+   config where a later reader can see it. Without it you get ZeroSSL, which is
+   acme.sh's default and nobody's intention here.
 
    Watch it write `_acme-challenge.ballaban.ca`, wait for the change, and clean
    up after itself. A wildcard's challenge is at the bare name — there is no
    `_acme-challenge.*.ballaban.ca`.
 
-7. **Install it into DSM:**
+7. **Install it into DSM, as a separate command:**
 
    ```
-   docker exec acme acme.sh --deploy -d '*.ballaban.ca' --deploy-hook synology_dsm
+   acme.sh --deploy -d '*.ballaban.ca' --deploy-hook synology_dsm
    ```
+
+   **Not as `--deploy-hook` on the issue above**, which is the obvious way to
+   save a step and does not work: issuance reports success, the hook is never
+   recorded, and DSM goes on serving the old certificate while every message on
+   screen says the thing worked. Check `Le_DeployHook` in the certificate's
+   `.conf` afterwards — if it is absent, renewals will issue and never install,
+   which is a failure that waits sixty days to appear.
+
+7b. **Assign it.** The hook imports the certificate; it does not put it into
+   service, and a newly created one starts unassigned. Control Panel → Security
+   → Certificate → **Settings**, and point every service at it. Until then DSM
+   holds the new certificate and serves the old one.
 
 8. **Verify before removing anything.** DSM holds several certificates at once,
    so the old one is still there and this is reversible until step 10:
@@ -122,6 +142,20 @@ policy failed.
     unambiguous. Until step 10 it is neither.
 
 12. **Close the port-80 forward.** Nothing needs it any more.
+
+12b. **Rehearse the renewal, before trusting the CAA records.** A wrong CAA
+    does not fail now; it fails at renewal, silently, and is discovered by the
+    whole household at once. Force one while you are watching:
+
+    ```
+    acme.sh --renew -d '*.ballaban.ca' --force
+    ```
+
+    It exercises everything in one go — the IAM policy writing the challenge,
+    Let's Encrypt checking CAA against the account, the deploy hook reinstalling
+    the result. `Le_NextRenewTimeStr` moving is the proof that a certificate was
+    issued *after* the CAA existed. Five duplicate certificates a week are
+    allowed, so this costs nothing.
 
 13. **Add an expiry check.** A manual renewal fails loudly, because you are
     standing there; an automatic one fails quietly and is discovered ninety days
