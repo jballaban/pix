@@ -157,10 +157,31 @@ policy failed.
     issued *after* the CAA existed. Five duplicate certificates a week are
     allowed, so this costs nothing.
 
-13. **Add an expiry check.** A manual renewal fails loudly, because you are
+13. **Add the expiry check.** A manual renewal fails loudly, because you are
     standing there; an automatic one fails quietly and is discovered ninety days
-    later by everybody at once. Whatever form it takes, it should say how many
-    days are left and complain below about twenty.
+    later by everybody at once. This is what makes the automation strictly
+    better rather than merely quieter.
+
+    [`expiry-check.sh`](expiry-check.sh) is on the share at
+    `/volume1/pix2/app/acme/expiry-check.sh`. Control Panel → Task Scheduler →
+    Create → Scheduled Task → User-defined script:
+
+    ```
+    User:     root
+    Schedule: weekly
+    Command:  sh /volume1/pix2/app/acme/expiry-check.sh
+    Settings: "Send run details by email", and
+              "only when the script terminates abnormally"
+    ```
+
+    Silence when it is fine, an email when it is not. A weekly *still fine*
+    message is one you would filter within a month, and then not see the one
+    that mattered.
+
+    It checks what is **being served**, not what acme.sh holds on disk — those
+    are different facts, and the gap between them is the failure worth catching:
+    a renewal that issued a certificate and never installed it looks perfect
+    from acme.sh's side.
 
 ## What changes about the old certificate
 
