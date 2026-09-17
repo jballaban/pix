@@ -4906,7 +4906,7 @@ _MANIFEST: dict[str, object] = {
 #: go to the network every time, and fall back to one honest offline page rather
 #: than to a stale copy of the library.
 _SERVICE_WORKER: str = """
-const SHELL = 'pix2-shell-v1';
+const SHELL = 'pix2-shell-v2';
 const KEEP = ['/offline', '/manifest.webmanifest', '/icon-192.png',
               '/icon-512.png', '/icon-maskable-512.png',
               '/apple-touch-icon.png'];
@@ -4944,6 +4944,78 @@ self.addEventListener('fetch', e => {
 """
 
 
+#: What the offline page does when it opens (spec/nas-app.md §8).
+#:
+#: A worker knows only that `fetch` rejected, and it rejects the same way for a
+#: device with no network, a name that will not resolve, a certificate the
+#: browser refused and a NAS that is switched off. Asserting one of them is how
+#: this page came to say *not on the network* to somebody whose phone was on
+#: wifi the whole time and whose DNS was the actual fault.
+#:
+#: So it asks `/healthz` — unauthenticated, tiny, and already reporting whether
+#: the index can be read. Three answers come back from one question: it replies
+#: and is well, it replies and says the app and the archive are out of step, or
+#: it does not reply at all. Only the last is *offline*, and `navigator.onLine`
+#: then separates having no network from having one that cannot reach home.
+_OFFLINE_JS: str = """
+(function () {
+  var head = document.getElementById('offhead');
+  var say = document.getElementById('offsay');
+  var go = document.getElementById('offgo');
+
+  function show(title, text, retry) {
+    head.textContent = title;
+    say.textContent = text;
+    go.hidden = !retry;
+  }
+
+  if (go) go.onclick = function () { location.reload(); };
+
+  function look() {
+    show('One moment', 'Finding out what happened.', false);
+    // `no-store` because the answer to *can I reach home* must never come from
+    // a cache that was filled at home.
+    fetch('/healthz', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (state) {
+        if (state && state.index === false) {
+          // Reachable, and telling us something specific: the app and the
+          // projection it reads disagree about their shape. Naming that is the
+          // difference between a five-second fix and an afternoon.
+          show('The app needs updating',
+               state.says || 'This app and the archive are out of step.',
+               true);
+          return;
+        }
+        // It answered and it is well, so whatever failed has stopped failing.
+        show('It is back', 'The library is reachable again.', true);
+      })
+      .catch(function () {
+        if (navigator.onLine === false) {
+          show('No network',
+               'This device is not on a network at all. The library is at '
+               + 'home and will be here when you are back on one.',
+               true);
+        } else {
+          // The distinction that matters on a phone: connected to something,
+          // but not to home. Naming the two ways back is more use than any
+          // description of the failure.
+          show('Not at home',
+               'This device is on a network, but the library cannot be '
+               + 'reached from it. It lives on the NAS at home — connect to '
+               + 'that network, or to the VPN, and it will be here.',
+               true);
+        }
+      });
+  }
+
+  // A phone that rejoins a network should not need to be told to try again.
+  window.addEventListener('online', look);
+  look();
+})();
+"""
+
+
 @app.get("/manifest.webmanifest")
 def manifest() -> Response:
     """What to call this and which icon to use, for a launcher."""
@@ -4964,17 +5036,21 @@ def service_worker() -> Response:
 
 @app.get("/offline", response_class=HTMLResponse)
 def offline() -> HTMLResponse:
-    """The one page the worker keeps, for when the NAS cannot be reached.
+    """The one page the worker keeps, for when a request did not get through.
 
-    It says the library is elsewhere rather than pretending to be it. An app on
-    a phone that has left the house is not broken, and the honest thing to
-    report is where the photographs are.
+    **It finds out which kind of not-getting-through, rather than guessing.** A
+    service worker cannot tell *no network* from *name will not resolve* from
+    *server refused* — `fetch` rejects identically for all three — so the first
+    version of this page asserted the most likely one and was wrong in a way
+    that cost an afternoon of diagnosis. This one asks `/healthz`, which answers
+    all three questions at once by either replying or not.
     """
     return _page("pix", """<div class="gate">
-<h2>Not on the network</h2>
-<p class="dim">The library lives on the NAS at home, and this device cannot
-reach it. Nothing is wrong; reconnect and it will be here.</p>
-</div>""" + f"<style>{_LOGIN_CSS}</style>")
+<h2 id="offhead">One moment</h2>
+<p class="dim" id="offsay">Finding out what happened.</p>
+<button class="primary" id="offgo" hidden>Try again</button>
+</div>""" + f"<style>{_LOGIN_CSS}</style>"
+                 + f"<script>{_OFFLINE_JS}</script>")
 
 
 @app.get("/{icon}.png")

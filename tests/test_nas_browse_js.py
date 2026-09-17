@@ -151,6 +151,30 @@ def test_the_home_screen_offer_asks_once_and_only_where_it_can_be_taken_up(
 
 @pytest.mark.skipif(shutil.which("node") is None,
                     reason="node is not installed")
+@pytest.mark.parametrize("state", ["back", "stale", "nonetwork", "elsewhere"])
+def test_the_offline_page_finds_out_which_kind_of_failure_it_is(
+    tmp_path: Path, state: str
+) -> None:
+    """`fetch` rejects identically for no network, a name that will not resolve,
+    a refused certificate and a NAS that is off — so the page asks `/healthz`
+    rather than asserting.
+
+    The `elsewhere` case is the one that was got wrong in the field: a phone on
+    wifi, a DNS answer at fault, and a page confidently reporting *not on the
+    network*, which sent the diagnosis in the wrong direction for an afternoon.
+    """
+    script = tmp_path / "offline.js"
+    script.write_text(web._OFFLINE_JS, encoding="utf-8")
+
+    result = subprocess.run(
+        ["node", str(JS_DIR / "offline.js"), str(script), state],
+        capture_output=True, text=True, timeout=120, cwd=JS_DIR)
+
+    assert result.returncode == 0, (result.stdout + result.stderr)[-2000:]
+
+
+@pytest.mark.skipif(shutil.which("node") is None,
+                    reason="node is not installed")
 def _element_ids(html: str) -> list[str]:
     """The ids of the page's real elements.
 

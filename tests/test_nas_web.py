@@ -3632,13 +3632,30 @@ def test_the_worker_never_keeps_a_page(app_env: dict[str, Path]) -> None:
 def test_the_offline_page_does_not_pretend_to_be_the_library(
     app_env: dict[str, Path]
 ) -> None:
+    """It carries the three elements it fills in, and none of the library."""
     anon = TestClient(web.app)
 
     r = anon.get("/offline")
 
     assert r.status_code == 200
-    assert "Not on the network" in r.text
+    assert 'id="offhead"' in r.text and 'id="offsay"' in r.text
+    assert 'id="offgo"' in r.text, "no way to retry"
     assert 'class="grid"' not in r.text
+    # Cached by the worker, so it must decide at run time rather than be
+    # served knowing the answer.
+    assert "/healthz" in r.text
+
+
+def test_the_worker_cache_is_bumped_when_the_shell_changes(
+    app_env: dict[str, Path]
+) -> None:
+    """An installed app keeps the shell it cached. Changing the offline page
+    without changing the cache name leaves every phone in the house holding the
+    old one — which, for a page whose whole job is to explain a failure, means
+    explaining it the wrong way for as long as the install lasts."""
+    body = TestClient(web.app).get("/sw.js").text
+
+    assert "pix2-shell-v2" in body, "shell cache not bumped"
 
 
 def test_the_page_head_offers_the_app_to_both_phones(
