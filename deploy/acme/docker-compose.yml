@@ -1,0 +1,72 @@
+# A certificate that renews itself, without opening anything.
+#
+# `acme.sh` proves control of ballaban.ca by writing a TXT record through the
+# Route 53 API, so nothing has to be reachable from the internet and no port is
+# opened — which is what lets the public `pix.ballaban.ca` record be deleted,
+# and that record is the whole cause of the split-DNS trouble it replaces.
+#
+# It then installs the result into DSM through DSM's own API, keeping the
+# service assignments the reverse proxy already has.
+#
+#   docker compose up -d
+#
+# **No secrets in this file.** Every value below is a placeholder; the real ones
+# go into Container Manager's own environment fields, where they stay out of the
+# repository. If you prefer compose, put them in an adjacent `.env` that is not
+# committed.
+
+services:
+  acme:
+    image: neilpang/acme.sh:latest
+    container_name: acme
+    restart: unless-stopped
+
+    # Daemon mode runs acme.sh's own scheduler, which checks daily and renews at
+    # 60 days. A container that exits after issuing would leave nothing to renew
+    # and nothing to notice that it had not.
+    command: daemon
+
+    volumes:
+      # Account key, certificates and the renewal schedule. **Keep this.**
+      # Losing it does not lose the certificate DSM is serving, but it does lose
+      # the account registration and the renewal timetable, and the next issue
+      # starts from scratch against Let's Encrypt's rate limits.
+      - /volume1/pix2/app/acme:/acme.sh
+
+    environment:
+      TZ: America/Toronto
+
+      # --- who may change DNS ------------------------------------------------
+      # The IAM user from route53-policy.json, which can write TXT records named
+      # `_acme-challenge.*` and nothing else. It cannot touch the MX records
+      # Proton Mail relies on, or any A record, even if this key leaks off the
+      # NAS — that is the point of the policy, and worth verifying once by hand.
+      AWS_ACCESS_KEY_ID: REPLACE_ME
+      AWS_SECRET_ACCESS_KEY: REPLACE_ME
+
+      # --- who may install a certificate -------------------------------------
+      # DSM has no scoped permission for this: importing a certificate requires
+      # an account in the administrators group. So make one that does nothing
+      # else, and give it a password used nowhere else.
+      #
+      # `SYNO_Hostname` is the NAS's own address rather than localhost, because
+      # localhost inside a container is the container. Port 5000 over http is
+      # the LAN-side DSM port; this never leaves the machine.
+      SYNO_Scheme: http
+      SYNO_Hostname: 192.168.1.140
+      SYNO_Port: "5000"
+      SYNO_Username: REPLACE_ME
+      SYNO_Password: REPLACE_ME
+      # What the certificate is called in Control Panel → Security → Certificate.
+      # It must match an existing description to replace that one in place;
+      # `SYNO_Create` lets it make the entry the first time.
+      SYNO_Certificate: ballaban.ca wildcard
+      SYNO_Create: "1"
+      # If that DSM account has two-factor enabled, the hook needs its TOTP
+      # secret as well — the seed, not a six-digit code. Leaving the account
+      # without 2FA and unable to do anything but install certificates is the
+      # simpler trade; decide deliberately rather than by omission.
+      # SYNO_TOTP_SECRET: REPLACE_ME
+
+    # It talks to Route 53 and to DSM, holds a handful of files, and sleeps.
+    mem_limit: 128m
