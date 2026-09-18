@@ -3834,3 +3834,86 @@ def test_a_dropdown_row_outranks_the_rule_above_it() -> None:
     assert ".memenu button:not(.tick):not(.grppick):not(.pick)" in rows
     # Equal weight, so the later one counts — and it has to be the later one.
     assert coarse.index("button:not(.tick)") < coarse.index(".memenu button:not(")
+
+
+# --- the filters are drawn, not spelled out -----------------------------------
+
+def test_every_filter_has_a_drawing() -> None:
+    """The bar says which question a chip asks by drawing it, so a filter
+    added to `_CHIPS` without a mark is a button with nothing in it. The page
+    falls back to the name rather than rendering an empty control — this is
+    what stops that fallback from being the thing anybody actually sees."""
+    missing = [col for col, _ in web._CHIPS if col not in web._FILTER_MARKS]
+
+    assert not missing, f"no drawing for: {', '.join(missing)}"
+
+
+def test_no_two_filters_are_drawn_the_same() -> None:
+    """They are told apart at seventeen pixels and only by their shape."""
+    marks = [web._FILTER_MARKS[col] for col, _ in web._CHIPS]
+
+    assert len(set(marks)) == len(marks)
+
+
+def test_a_drawing_takes_the_colour_of_whatever_it_is_in() -> None:
+    """`currentColor` throughout, so a chip that is doing something and one
+    that is not are the same drawing and not two of them — and the dim state,
+    the hover and the accent all come free."""
+    svg = web._mark("event")
+
+    assert 'stroke="currentColor"' in svg and "fill=\"none\"" in svg
+    # The same grid and weight as the bell in the bar beside them, which is
+    # what makes the set read as one family.
+    assert 'viewBox="0 0 24 24"' in svg and 'stroke-width="1.7"' in svg
+
+
+def test_an_unknown_name_draws_nothing_rather_than_a_broken_shape() -> None:
+    assert web._mark("nonesuch") == ""
+
+
+def test_the_footer_carries_no_instructions(client: TestClient) -> None:
+    """A standing sentence about clicking and holding is read once and then
+    occupies a fixed strip at the bottom of every screen for as long as the
+    app exists — which on a phone was three lines of it."""
+    html = client.get("/browse").text
+    footer = html[html.index('<footer'):html.index("</footer>")]
+
+    assert "shift" not in footer and "circle to select" not in footer
+    # What is left is what this page is now.
+    assert 'id="count"' in footer and 'id="note"' in footer
+
+
+def test_taking_a_copy_away_is_drawn_too(client: TestClient) -> None:
+    """One mark for it on every platform, because it is one gesture: into
+    something, downwards. The word stays beside it in the bar — it is one of
+    ten actions there and the other nine are words — and goes in the viewer,
+    where three controls sit across the top of a photograph."""
+    html = client.get("/browse").text
+
+    assert '<button data-act="download" class="get"><svg' in html
+    assert '<span class="word">Download</span>' in html
+    assert '<a id="viewget" class="who-link" download><svg' in html
+
+
+def test_details_is_a_tab_where_there_is_no_room_for_a_column() -> None:
+    """330px of rail on a 393px phone leaves sixty pixels of photograph, which
+    is the thing the viewer is for. So the two stop sharing: the control that
+    opened the column switches between them instead."""
+    narrow = _media_block(web._STYLE, "(max-width: 720px)")
+
+    assert "#viewer:not(.norail) .stage { display:none; }" in narrow
+    # And the rail takes the whole of it rather than a slice.
+    assert "max-height:none" in narrow
+
+
+def test_the_unused_filters_fold_away_where_they_do_not_fit() -> None:
+    """Ten glyphs fit across a desktop bar and do not fit across a phone. Both
+    the glyphs and the `+` are always rendered and the stylesheet picks, since
+    which one applies can change while the page is open by turning the phone
+    over."""
+    narrow = _media_block(web._STYLE, "(max-width: 720px)")
+
+    assert ".chips .spare { display:none; }" in narrow
+    assert ".chips .addchip { display:inline-flex; }" in narrow
+    # The other way round outside it.
+    assert ".chips .addchip { display:none; }" in web._STYLE

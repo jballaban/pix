@@ -314,6 +314,7 @@ main { padding:16px max(var(--gut),env(safe-area-inset-right)) 40px
 /* The filters you are not using are a list of everything the app can ask,
    which is not a thing to read past on the way to the ones you are. The same
    `+` the grouping heading uses, for the same gesture: one more of these. */
+.chips .addchip { display:none; }
 .addchip { padding:3px 9px; font-weight:600; color:var(--dim); }
 .addchip:hover { color:var(--fg); border-color:var(--dim); }
 /* Counts and messages along the bottom, so the header is only controls:
@@ -346,14 +347,32 @@ main { padding:16px max(var(--gut),env(safe-area-inset-right)) 40px
 .note.loud { background:#5a1d16; color:#ffd9d2; padding:2px 8px;
              border-radius:3px; font-weight:600; }
 main { padding-bottom:48px; }
+/* Still used inside the date menu, which explains what an empty box will
+   do — a sentence about the control you are looking at, which is not the
+   same thing as a standing list of gestures along the bottom of the app. */
 .hint { color:var(--dim); font-size:12px; }
-/* One of the two, never both: the page carries a sentence for a keyboard and
-   a sentence for a finger, and only the device knows which it is. */
-.hint.touch { display:none; }
 .hint b { color:var(--fg); font-weight:600; }
 
 button, .chip { background:#222833; color:var(--fg); border:1px solid var(--line);
         border-radius:4px; padding:4px 10px; font:inherit; cursor:pointer; }
+/* A chip is a drawing, a value and a cross in a row, so it lays them out
+   rather than relying on them being inline. `gap` is what stops the glyph
+   sitting against the number it belongs to. */
+.chip { display:inline-flex; align-items:center; gap:5px; }
+.chip svg, .opt .mark svg { display:block; flex:none; }
+/* A filter that is not doing anything: its question, and nothing else. Dim,
+   because the ones that *are* doing something are what the bar is for and
+   these must not compete with them — a row where everything is lit is a row
+   with nothing highlighted. */
+.chip.off { color:var(--dim); padding:4px 7px; }
+.chip.off:hover { color:var(--fg); }
+/* The list is the only place that shows a glyph and its name together, which
+   makes it where the glyphs are learnt. */
+.opt .mark { color:var(--dim); flex:none; display:block; }
+/* Buttons that are a drawing and a word — the drawing needs the same air from
+   the word that the chips give theirs. */
+#actions button svg { display:block; flex:none; }
+#actions .get { display:inline-flex; align-items:center; gap:6px; }
 button:hover:not(:disabled), .chip:hover { border-color:var(--accent); }
 button:disabled { opacity:.4; cursor:default; }
 button.primary { background:var(--accent); color:#0d0f12; border-color:var(--accent);
@@ -827,15 +846,24 @@ h2.year span { font-size:13px; font-weight:400; }
   /* Above the footer rather than across it. */
   .install { bottom:calc(46px + env(safe-area-inset-bottom)); }
 
-  /* The details rail was a 330px column. On a 393px phone that is sixty
-     pixels of photograph — the photograph being the thing the viewer is for.
-     So it goes under rather than beside, as a sheet that can be dragged
-     through and dismissed with the same control as before. */
+  /* The unused filters are ten glyphs, which fit across a desktop bar and
+     do not fit across a phone. Here the same list stays behind the `+`.
+     Both are always rendered, because which one applies can change while the
+     page is open by turning the phone over. */
+  .chips .spare { display:none; }
+  .chips .addchip { display:inline-flex; }
+
+  /* The details rail was a 330px column, which on a 393px phone leaves sixty
+     pixels of photograph — the photograph being what the viewer is for. There
+     is not room for both, so it stops trying: details is a *tab*, and the
+     control that opened the column now switches between the two. */
   #viewer { flex-direction:column; }
   .stage { flex:1 1 auto; min-height:0; }
   .stage img, .stage video { max-height:100%; }
-  #rail { width:auto; max-height:55dvh; border-left:0;
-          border-top:1px solid var(--line);
+  #viewer:not(.norail) .stage { display:none; }
+  #rail { width:auto; flex:1 1 auto; max-height:none; border-left:0;
+          /* Clear of the row of controls that floats over the top of it. */
+          padding-top:calc(52px + env(safe-area-inset-top));
           padding-bottom:calc(30px + env(safe-area-inset-bottom)); }
   /* Three controls, two corners. `right:112px` was measured against the width
      of the word *Details*, which is not a number to rest a layout on once
@@ -862,10 +890,6 @@ h2.year span { font-size:13px; font-weight:400; }
      waiting to be got out of the way. */
   .cell.gone::after { left:auto; right:6px; }
   .cell.gone:hover::after { opacity:1; }
-  /* Shift, ctrl and the arrow keys are four lines of fixed footer about
-     controls this device does not have — which is four rows of photographs. */
-  .hint.keys { display:none; }
-  .hint.touch { display:inline; }
 
   /* A tap leaves `:hover` stuck on whatever was tapped until something else
      is, so every link keeps a blue box and every folder card stays lit — the
@@ -1805,7 +1829,7 @@ def browse(request: Request,
   <div class="meta" id="vmeta"></div></div>
   <button id="viewclose" title="Close (Esc)">&times;</button>
   <button id="railtoggle" title="Details (I)">Details</button>
-  <a id="viewget" class="who-link" download>Download</a>
+  <a id="viewget" class="who-link" download>{_mark("get", 19)}</a>
   <aside id="rail"></aside>
 </div>
 <div id="menu" hidden></div>
@@ -1836,18 +1860,13 @@ def browse(request: Request,
             "&".join(x for x in request.url.query.split("&")
                      if x and not x.startswith("within="))),
         script=_view_script(user, view, groups),
-        # Both, and the stylesheet picks. Which gestures this page has depends
-        # on the device rather than on the request, so the server cannot know
-        # which sentence is the true one — and shift, ctrl and the arrow keys
-        # are four lines of fixed footer describing a keyboard that is not
-        # there.
+        # No instructions. A standing sentence about clicking and holding is
+        # read once, on the first visit, and then occupies a fixed strip at the
+        # bottom of every screen for as long as the app exists — which on a
+        # phone was three lines of it. The gestures are the ordinary ones; the
+        # footer is for what this page is *now*, which is the count and
+        # whatever the last write had to say.
         footer=f"""<span class="count" id="count">{shown}</span>
-<span class="hint keys"><b>click</b> a circle to select &middot;
-<b>shift</b> for a range &middot; <b>ctrl</b> to add &middot;
-<b>click</b> a photo to open it &middot;
-<b>&larr; &rarr;</b> page the viewer</span>
-<span class="hint touch"><b>tap</b> a circle to select &middot;
-<b>hold</b> one for a range &middot; <b>swipe</b> the viewer</span>
 <span class="note" id="note" hidden></span>""",
         user=user)
 
@@ -1871,6 +1890,7 @@ def _view_script(user: Principal, view: ix.Filters, groups: list[str], *,
         f"CHIPS={_js(_chips(user))},FIXED={_js(_FIXED)},"
         f"EXTRA={_js(_EXTRA)},ADMIN={_js(user.is_admin)},"
         f"USERS={_js(_audience_names())},GROUPS={_js(_group_names())},"
+        f"MARKS={_js({c: _mark(c) for c, _ in _chips(user)})},"
         f"USUAL={_js(store().usual)},PAGE={_js(page)},"
         f"TIERS={_js(_TIERS)},"
         f"GRID_GROUPS={_js(_GRID_GROUPS)},GROUPING={_js(groups)};</script>"
@@ -1927,7 +1947,7 @@ def _actions(user: Principal) -> str:
     """
     if not user.is_admin:
         return ""
-    return """<div class="row" id="actions">
+    return f"""<div class="row" id="actions">
   <button id="selall" class="tick" title="Select all" aria-label="Select all"></button>
   <span class="count" id="selcount" style="margin:0"></span>
   <span class="grp" data-side="live" hidden>
@@ -1939,7 +1959,7 @@ def _actions(user: Principal) -> str:
     <button data-act="top">Make top</button>
     <button data-act="unstack">Unstack</button>
     <button data-act="nostack">Not a stack</button>
-    <button data-act="download">Download</button>
+    <button data-act="download" class="get">{_mark("get")}<span class="word">Download</span></button>
     <span class="sep"></span>
     <button data-act="delete" class="danger">Delete</button>
   </span>
@@ -2322,6 +2342,94 @@ _CHIPS: tuple[tuple[str, str], ...] = (
     ("stacks", "Stacks"), ("deleted", "Deleted"),
 )
 
+#: One drawing per filter, so the bar can say which question a chip asks
+#: without spending a word on it.
+#:
+#: **Drawn here rather than taken from a set.** An icon font is a second
+#: typeface to load for ten glyphs, and none of the general-purpose sets has a
+#: mark for *stacks of near-identical photographs* or for *which import this
+#: came off* — so the two that matter most in this app would have been the two
+#: approximated. These are the same twenty-four unit grid, the same 1.7 stroke
+#: and the same round ends as the bell in the bar, which is what makes them
+#: read as one family rather than as clip art.
+#:
+#: Each is chosen against its neighbours as much as for itself: the set has to
+#: be told apart at seventeen pixels, so no two share a silhouette.
+_FILTER_MARKS: dict[str, str] = {
+    # An occasion — planted somewhere and named. Not a calendar: that is the
+    # date, and an event here is *which occasion*, not when.
+    "event": '<path d="M6 21V3.6"/>'
+             '<path d="M6 4.4h10.8l-2.6 3.6 2.6 3.6H6"/>',
+    # The one shape nothing else uses, eyelet and all.
+    "tag": '<path d="M3.6 11.9V5.3a1.7 1.7 0 0 1 1.7-1.7h6.6a1.7 1.7 0 0 1 '
+           '1.2.5l7.1 7.1a1.7 1.7 0 0 1 0 2.4l-6.6 6.6a1.7 1.7 0 0 1-2.4 '
+           '0l-7.1-7.1a1.7 1.7 0 0 1-.5-1.2z"/>'
+           '<circle cx="8.1" cy="8.1" r="1.4"/>',
+    "date": '<rect x="3.4" y="5" width="17.2" height="15.6" rx="2.2"/>'
+            '<path d="M3.4 10h17.2"/><path d="M8 3.2v3.5"/>'
+            '<path d="M16 3.2v3.5"/>',
+    # Who can see it: people, plural, one behind the other. Deliberately not an
+    # eye — an eye reads as *preview this* wherever it appears beside pictures.
+    "audience": '<circle cx="9.4" cy="8.6" r="3.4"/>'
+                '<path d="M3.2 19.8a6.2 6.2 0 0 1 12.4 0"/>'
+                '<circle cx="17.8" cy="8.2" r="2.4"/>'
+                '<path d="M16.8 14.4a5.2 5.2 0 0 1 4 5.4"/>',
+    # Photographs, video, and whatever else — so, kinds of thing. A play
+    # triangle would have named one of the three values rather than the
+    # question.
+    "kind": '<rect x="3.4" y="3.4" width="9.4" height="9.4" rx="1.8"/>'
+            '<circle cx="15.8" cy="15.8" r="4.8"/>',
+    # Its three values are small, medium and large, and this is that sentence
+    # with no words in it.
+    "band": '<path d="M5 19.8v-3.4"/><path d="M12 19.8v-7.6"/>'
+            '<path d="M19 19.8v-11.6"/>',
+    # Which import it came off. A card rather than a phone, because the camera
+    # filter next to it is already a device and two devices side by side is
+    # two silhouettes to tell apart at seventeen pixels.
+    "source": '<path d="M6 3.5h8.6L19 7.9V20a1.6 1.6 0 0 1-1.6 1.6H6A1.6 1.6 '
+              '0 0 1 4.4 20V5.1A1.6 1.6 0 0 1 6 3.5z"/>'
+              '<path d="M8.4 3.6v3.2"/><path d="M11.4 3.6v3.2"/>'
+              '<path d="M14.4 4.2v2.6"/>',
+    "camera": '<path d="M3.5 8.6a1.8 1.8 0 0 1 1.8-1.8h2.5l1.5-2.3h5.4l1.5 '
+              '2.3h2.5a1.8 1.8 0 0 1 1.8 1.8v9a1.8 1.8 0 0 1-1.8 '
+              '1.8H5.3a1.8 1.8 0 0 1-1.8-1.8z"/>'
+              '<circle cx="12" cy="13" r="3.5"/>',
+    # A card with cards behind it — the same depth the stack badge on a
+    # thumbnail is drawn with, so the filter and the thing it filters on look
+    # like the same idea.
+    "stacks": '<rect x="3.4" y="9.2" width="12.6" height="11.4" rx="2"/>'
+              '<path d="M6.9 6.4h9.5a2 2 0 0 1 2 2v9.2"/>'
+              '<path d="M10.4 3.6h8.2a2 2 0 0 1 2 2v8.4"/>',
+    # The bin, because that is what every other part of the app calls it.
+    "deleted": '<path d="M4 6.4h16"/>'
+               '<path d="M6.6 6.4l.9 12a1.8 1.8 0 0 0 1.8 1.7h5.4a1.8 1.8 0 0 '
+               '0 1.8-1.7l.9-12"/>'
+               '<path d="M9.6 6.4V4.7a1.3 1.3 0 0 1 1.3-1.3h2.2a1.3 1.3 0 0 1 '
+               '1.3 1.3v1.7"/>',
+    # Not a filter. Taking a copy away with you is the same gesture on every
+    # platform and has the same mark everywhere: into something, downwards.
+    # Kept in here so there is one place drawings live.
+    "get": '<path d="M12 3.6v11"/><path d="M7.8 10.4 12 14.6l4.2-4.2"/>'
+           '<path d="M4.4 16.2v2.4a1.8 1.8 0 0 0 1.8 1.8h11.6a1.8 1.8 0 0 0 '
+           '1.8-1.8v-2.4"/>',
+}
+
+
+def _mark(name: str, size: int = 17) -> str:
+    """One glyph, as the bar draws it.
+
+    Same attributes as the bell beside it: `currentColor`, so a mark takes the
+    colour of whatever state its chip is in and nothing has to be drawn twice.
+    """
+    body = _FILTER_MARKS.get(name)
+    if not body:
+        return ""
+    return (f'<svg viewBox="0 0 24 24" width="{size}" height="{size}" '
+            'aria-hidden="true" fill="none" stroke="currentColor" '
+            'stroke-width="1.7" stroke-linecap="round" '
+            f'stroke-linejoin="round">{body}</svg>')
+
+
 #: Complete vocabularies — these columns cannot hold anything else.
 _FIXED: dict[str, tuple[tuple[str, str], ...]] = {
     "kind": (("image", "Photos"), ("video", "Video"), ("other", "Other")),
@@ -2520,6 +2628,13 @@ function url(patch){
 // app learned to ask something new — ten of them saying nothing, in front of
 // the one or two that are the address of what you are looking at. The unused
 // ones are a list of questions, and a list of questions belongs in a menu.
+// The glyph a filter is drawn with, and its name where it has no glyph. The
+// fallback is not decoration: a filter added to `_CHIPS` without a drawing
+// would otherwise be a button with nothing in it, which is invisible — so an
+// undrawn filter falls back to being a word, the way all of them used to be.
+const MARK=(typeof MARKS!=='undefined')?MARKS:{};
+function markOf(col,label){return MARK[col]||esc(label);}
+
 function drawChips(){
   chips.innerHTML='';
   for(const [col,label] of CHIPS){
@@ -2528,17 +2643,41 @@ function drawChips(){
     const b=document.createElement('button');
     b.className='chip on';
     const up=wider(col,v);
-    b.innerHTML=label+`<span class="val">${esc(labelFor(col,v))}</span>`
+    // The name is the drawing now. It stays in `title` for a pointer and in
+    // `aria-label` for everything else — a glyph with no name anywhere is a
+    // control only the person who drew it can read.
+    b.title=label;
+    b.setAttribute('aria-label',label+': '+labelFor(col,v));
+    b.innerHTML=markOf(col,label)
+                     +`<span class="val">${esc(labelFor(col,v))}</span>`
                      +`<span class="x" title="${up?'Up to '+esc(up):'Clear'}">`
                      +'&times;</span>';
     b.onclick=e=>{
       e.stopPropagation();
-      if(e.target.classList.contains('x')){location.href=url({[col]:up});return;}
+      if(e.target.closest('.x')){location.href=url({[col]:up});return;}
       openMenu(b,{column:col,mode:'filter'});
     };
     chips.appendChild(b);
   }
   const spare=CHIPS.filter(([col])=>!VIEW[col]);
+  // Every unused filter, each as its own glyph. They were behind a `+`
+  // because ten of them spelled out was a row of ten words saying nothing in
+  // front of the one or two that are the address of what you are looking at —
+  // which was true of the words and is not true of the drawings. A question
+  // you can see is a question you remember the app can answer.
+  //
+  // Both are rendered and the stylesheet picks: ten glyphs fit across a
+  // desktop bar and do not fit across a phone, and which it is can change
+  // while the page is open by turning the phone over.
+  for(const [col,label] of spare){
+    const b=document.createElement('button');
+    b.className='chip off spare';
+    b.title=label;
+    b.setAttribute('aria-label',label);
+    b.innerHTML=markOf(col,label);
+    b.onclick=e=>{e.stopPropagation();openMenu(b,{column:col,mode:'filter'});};
+    chips.appendChild(b);
+  }
   if(spare.length){
     const add=document.createElement('button');
     add.className='chip addchip';
@@ -2598,7 +2737,9 @@ function filterMenu(anchorEl,spare){
   for(const [col,label] of spare){
     const d=document.createElement('div');
     d.className='opt';
-    d.innerHTML=`<span>${esc(label)}</span>`;
+    // Glyph beside name, which is where the glyphs are learnt: this list is
+    // the only place in the app that says both at once.
+    d.innerHTML=`<i class="mark">${MARK[col]||''}</i><span>${esc(label)}</span>`;
     d.onclick=e=>{e.stopPropagation();closeMenu();
                   openMenu(anchorEl,{column:col,mode:'filter'});};
     list.appendChild(d);
@@ -3124,10 +3265,23 @@ const railToggle=document.getElementById('railtoggle');
 // working style, not a per-photo choice.
 let railOn=true;
 try{railOn=localStorage.getItem('pix2.rail')!=='0';}catch(e){}
+// Narrow enough and there is no room for a photograph and a column of numbers
+// at once, so details is a tab rather than a rail — and a tap on a photograph
+// opens the photograph. The stored preference is about the column; it says
+// nothing about which tab you want to land on.
+const tabbed=()=>media('(max-width: 720px)');
+if(tabbed()) railOn=false;
 function drawRail(){
   viewer.classList.toggle('norail',!railOn);
-  railToggle.textContent=railOn?'Hide details':'Details';
-  try{localStorage.setItem('pix2.rail',railOn?'1':'0');}catch(e){}
+  // A tab is named for where it goes; a rail is named for what it does.
+  railToggle.textContent=tabbed()?(railOn?'Photo':'Details')
+                                 :(railOn?'Hide details':'Details');
+  // Not remembered while it is a tab: the preference belongs to the column,
+  // and writing it here would mean turning the phone sideways once decided
+  // how every desktop viewer opened from then on.
+  if(!tabbed()){
+    try{localStorage.setItem('pix2.rail',railOn?'1':'0');}catch(e){}
+  }
 }
 if(railToggle) railToggle.onclick=e=>{
   e.stopPropagation();railOn=!railOn;drawRail();
@@ -3146,7 +3300,9 @@ function drawGet(c){
   // — which is the clips a browser will not play as they are, and nothing
   // else in the library.
   const touch=COARSE&&CAN_SHARE;
-  viewGet.textContent=touch?'Save':(c.dataset.copy?'Download copy':'Download');
+  // The drawing says it; the name is for the pointer and the screen reader.
+  viewGet.setAttribute('aria-label',
+    touch?'Save':(c.dataset.copy?'Download copy':'Download'));
   viewGet.title=touch
     ? 'Save this to Photos, Files, or anywhere else.'
     : (c.dataset.copy
@@ -3540,7 +3696,8 @@ function fanOut(head,html){
 // one this app is for. The sheet the button opens offers Photos and Files
 // both, so the word has to cover both.
 if(COARSE&&CAN_SHARE&&actions){
-  const b=actions.querySelector('[data-act="download"]');
+  const b=actions.querySelector('[data-act="download"] .word')
+        ||actions.querySelector('[data-act="download"]');
   if(b) b.textContent='Save';
 }
 

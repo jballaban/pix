@@ -89,6 +89,11 @@ const GRID_GROUPS = [['day', 'By day'], ['year', 'By year'],
                      ['event', 'By event'], ['none', 'Ungrouped']];
 const GROUPING = ['year'];
 const CHIPS = [['event', 'Event'], ['date', 'Date'], ['camera', 'Camera']];
+// Each filter's drawing, as the server hands it over. Stand-ins rather than
+// the real paths: what this drives is that a chip is drawn and not spelled
+// out, which is true of any `<svg>`.
+const MARKS = { event: '<svg id="m-event"></svg>', date: '<svg id="m-date"></svg>',
+                camera: '<svg id="m-camera"></svg>' };
 const FIXED = {};
 const EXTRA = {};
 const ADMIN = true;
@@ -114,10 +119,10 @@ const press = key => (keys.keydown || []).forEach(fn => fn(
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'MARKS', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS,
-      GROUPING, PAGE, TIERS, fn => fn());
+      GROUPING, PAGE, TIERS, MARKS, fn => fn());
   } catch (e) {
     console.log('FAIL the script threw on load: ' + e.message);
     process.exit(1);
@@ -128,17 +133,31 @@ const press = key => (keys.keydown || []).forEach(fn => fn(
   const menu = document.byId.menu;
   const labels = el => el.querySelectorAll('.opt')
     .map(o => (o.innerHTML.match(/<span>([^<]*)<\/span>/) || [])[1]);
-  const on = () => chips.children.filter(c => !c._classes.has('addchip'));
+  const on = () => chips.children.filter(c => c._classes.has('on'));
+  const off = () => chips.children.filter(c => c._classes.has('off'));
   const plus = () => chips.children.find(c => c._classes.has('addchip'));
 
-  // Only the filters that are doing something. The others are a list of
-  // questions the app can ask, which is not a thing to read past on the way
-  // to the one or two that are the address of what you are looking at.
-  check('only the filters in use are on the bar', on().length === 1,
+  // The ones doing something carry their value; the rest are there as their
+  // own glyph. Spelled out they were a row of words saying nothing in front
+  // of the one or two that are the address of what you are looking at — which
+  // was true of the words and is not true of the drawings.
+  check('the filter in use is on the bar', on().length === 1,
         chips.children.map(c => c.innerHTML).join('|'));
   check('and it says what it is set to', on()[0].innerHTML.includes('2026'),
         on()[0].innerHTML);
-  check('the rest are behind a +', !!plus());
+  check('it is drawn rather than named', on()[0].innerHTML.includes('<svg'),
+        on()[0].innerHTML);
+  check('but it still says which question it is, for a pointer and a reader',
+        on()[0].attrs['aria-label'] === 'Date: 2026', on()[0].attrs['aria-label']);
+  check('the unused ones are on the bar too, as their glyph alone',
+        off().length === 2, off().map(c => c.innerHTML).join('|'));
+  check('carrying no value, because they have none',
+        off().every(c => !c.innerHTML.includes('class="val"')));
+  // Both are rendered every time. Which of them is on screen is the
+  // stylesheet's business, because it can change while the page is open by
+  // turning the phone over.
+  check('and the + is still there for a screen with no room for them',
+        !!plus());
 
   plus().click();
   await settle();
