@@ -3737,3 +3737,82 @@ def test_the_offer_is_not_made_to_a_desktop_browser(client: TestClient) -> None:
     # And never inside the thing it is offering.
     assert "display-mode: standalone" in js
     assert "navigator.standalone" in js
+
+
+# --- reachable with a thumb ---------------------------------------------------
+
+def _media_block(sheet: str, query: str) -> str:
+    """One `@media` block's body, braces balanced.
+
+    A rule's presence in the stylesheet says nothing; which block it is in is
+    the whole of what these tests are about, and a nested block means the
+    first closing brace is not the end.
+    """
+    at = sheet.index("@media " + query)
+    depth, start = 0, sheet.index("{", at)
+    for i in range(start, len(sheet)):
+        depth += (sheet[i] == "{") - (sheet[i] == "}")
+        if depth == 0:
+            return sheet[start + 1:i]
+    raise AssertionError(f"unclosed @media {query}")
+
+
+def test_a_finger_gets_a_control_it_can_hit() -> None:
+    """Apple asks for 44 points square; the bar was drawn to 31.
+
+    `--ctl` is the one number: the height the action row reserves and the
+    height a button measures both come off it, so a block that raised the
+    buttons without raising it would put a 44px control in a 31px hole.
+    """
+    coarse = _media_block(web._STYLE, "(pointer: coarse)")
+
+    assert "--ctl:44px" in coarse
+    assert "min-height:44px" in coarse
+
+
+def test_the_three_circles_are_left_out_of_it() -> None:
+    """The stylesheet's own warning, and it has been paid for once: a
+    `min-height` outranks their fixed `height` and would make an oval of every
+    select circle in the grid. They get an invisible slug instead, so twenty
+    pixels on screen is forty-four to a thumb."""
+    coarse = _media_block(web._STYLE, "(pointer: coarse)")
+
+    assert "button:not(.tick):not(.grppick):not(.pick)" in coarse
+    assert ".pick::before, .tick::before, .grppick::before" in coarse
+    assert "inset:-12px" in coarse
+    # Positioned, or the slug is laid out against the page instead.
+    assert ".tick, .grppick { position:relative; }" in coarse
+
+
+def test_hiding_and_sizing_are_asked_as_two_questions() -> None:
+    """A touchscreen laptop has a pointer and wants nothing revealed; a phone
+    on a trackpad has a coarse one and wants nothing enlarged. Answering both
+    with one query gets one of them wrong."""
+    hover = _media_block(web._STYLE, "(hover: none)")
+
+    # What hover hides is unreachable here, and only that.
+    assert ".choose { opacity:1; }" in hover
+    assert "--ctl" not in hover
+
+
+def test_a_sign_in_field_does_not_zoom_the_page() -> None:
+    """Sixteen pixels is the exact threshold below which the phone zooms in on
+    a focused field and does not zoom back.
+
+    In the login sheet rather than the main one because that sheet is served
+    *after* it: `.gate input { font:inherit }` is the same weight and the last
+    one counts, so the rule would have been written and quietly lost.
+    """
+    assert "font-size:16px" in _media_block(web._LOGIN_CSS, "(pointer: coarse)")
+    assert "font-size:16px" in _media_block(web._STYLE, "(pointer: coarse)")
+
+
+def test_every_control_in_the_bar_grows_together() -> None:
+    """Two of the chips are spans rather than buttons — the one saying which
+    operation you arrived from, and the one saying which stack you are in — so
+    a rule about buttons alone leaves 31px chips in a 44px row, which is the
+    misalignment `--ctl` exists to prevent."""
+    coarse = _media_block(web._STYLE, "(pointer: coarse)")
+    rule = coarse[coarse.index("button:not(.tick)"):]
+
+    assert rule.split("{")[0].strip().endswith(".chip")

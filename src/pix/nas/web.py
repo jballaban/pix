@@ -566,8 +566,6 @@ h3.group[data-state="some"] .grppick { background:var(--top);
                     pointer-events:none; transition:opacity .08s; }
 .cell.gone:hover::after { opacity:0; }
 .bin-link { color:var(--gone); font-weight:600; }
-/* Touch has no hover, so there the circle is the only way to select at all. */
-@media (hover: none) { .pick { opacity:.55; } }
 .cell.picked .pick::after { content:"\\2713"; color:#0d0f12; font-weight:700;
                             font-size:13px; line-height:17px; }
 /* Shared is the decided state, so it is what reads as finished; a file with no
@@ -798,8 +796,11 @@ h2.year span { font-size:13px; font-weight:400; }
 /* Anything the page keeps out of sight until the pointer is over it is
    unreachable where there is no pointer. Separate from the sizing block
    below, because these are two different questions and a device can answer
-   them differently. */
+   them differently — a touchscreen laptop has a pointer and a phone plugged
+   into a trackpad has a coarse one. */
 @media (hover: none) {
+  /* Touch has no hover, so here the circle is the only way to select at all. */
+  .pick { opacity:.55; }
   /* The only way to say which file a stack shows. It is on screen solely
      while one is being chosen, so there is nothing for it to clutter. */
   .choose { opacity:1; }
@@ -811,6 +812,100 @@ h2.year span { font-size:13px; font-weight:400; }
      waiting to be got out of the way. */
   .cell.gone::after { left:auto; right:6px; }
   .cell.gone:hover::after { opacity:1; }
+
+  /* A tap leaves `:hover` stuck on whatever was tapped until something else
+     is, so every link keeps a blue box and every folder card stays lit — the
+     page slowly fills with marks saying *you were here*, which is not a thing
+     it was ever trying to say. Said here rather than by wrapping forty rules
+     in `(hover: hover)`: this is the exception, and it should read like one.
+     `:active` below puts back the press feedback these were doing. */
+  a:hover { background:none; box-shadow:none; }
+  .tile:hover { border-color:var(--line); background:var(--panel); }
+  .grpname:hover { color:inherit; background:none; box-shadow:none; }
+  button:hover:not(:disabled), .chip:hover { border-color:var(--line); }
+  .stack:hover { background:#000b; color:var(--fg);
+                 box-shadow:2px -2px 0 -1px #000b, 4px -4px 0 -2px #000b; }
+}
+
+/* --- a finger ---------------------------------------------------------------
+   Apple asks for 44 points square and the page was drawn to 16, 20 and 31.
+   Nothing here changes what anything *looks* like where it can be helped:
+   the select circles keep their twenty pixels and grow an invisible slug
+   around them, because a page of 44px circles over the photographs would be
+   a page about its own controls. */
+@media (pointer: coarse) {
+  /* One number, and the rest follows. `--ctl` exists so that the height the
+     action row reserves and the height a button actually measures cannot
+     drift (see the note where it is declared) — so this is the whole of the
+     change to the bar, including `.row + .row`'s reserved height and the
+     brand and account at the ends of the top row. */
+  :root { --ctl:44px; }
+
+  /* Every button except the three that are circles. Those are excluded for
+     the reason set out above `.row + .row`: a `min-height` outranks their
+     `height` and would make an oval of every select circle in the grid.
+     `.chip` is in by name because two of them — the one saying which
+     operation you arrived from, and the one saying which stack you are in —
+     are spans rather than buttons, and a 31px chip in a 44px row is the
+     misalignment `--ctl` exists to prevent. */
+  button:not(.tick):not(.grppick):not(.pick), .chip {
+    min-height:44px; padding:8px 12px;
+    display:inline-flex; align-items:center; }
+  /* Rows in a dropdown are full-width, so they stay blocks and simply get
+     taller. Said after the rule above, which would otherwise shrink-wrap
+     Sign out to its own text. */
+  .memenu a, .memenu button, .bellmenu a, .bellmenu .quiet {
+    min-height:44px; display:flex; align-items:center; width:100%; }
+  .opt { min-height:44px; align-items:center; }
+  #sizepick { width:44px; height:44px; }
+
+  /* The circles. An invisible slug either side, so twenty pixels on screen is
+     forty-four to a thumb. `.pick` is already positioned and already uses
+     `::after` for its tick; the other two are neither, so they are told to
+     be. */
+  .tick, .grppick { position:relative; }
+  .pick::before, .tick::before, .grppick::before {
+    content:""; position:absolute; inset:-12px; }
+  /* And now they must not poach their neighbours. A slug reaches twelve
+     pixels past a circle that had eight of clearance, so the gap has to grow
+     by more than the overhang — otherwise a tap on the left edge of a group's
+     name selects the group instead of regrouping by it. */
+  h3.group { gap:14px; }
+  #actions .grp { gap:14px; }
+  /* The cross that clears a filter, which was ten pixels of glyph inside a
+     button that does something else. Stretched to the chip's own height
+     rather than padded, so the chip does not grow to hold it. */
+  .chip .x, .from-op .x {
+    align-self:stretch; display:flex; align-items:center;
+    padding:0 10px; margin:0 -10px 0 2px; }
+
+  /* Tapping twice quickly on two circles side by side is a double-tap, and a
+     double-tap zooms. */
+  .cell, button, .opt, .chip { touch-action:manipulation; }
+
+  /* iOS paints a grey box over anything tapped, which on a grid of
+     photographs reads as a rendering fault. Removing it without putting
+     something back leaves touch with no press feedback at all, so both
+     happen here or neither should. */
+  button, .chip, .opt, .cell, a { -webkit-tap-highlight-color:transparent; }
+  button:active:not(:disabled), .chip:active { background:#2f3745; }
+  .opt:active { background:#38424f; }
+  .cell:active img { opacity:.75; }
+
+  /* Long-pressing a thumbnail raises the system's own sheet, whose
+     *Save to Photos* saves the four-hundred-pixel thumbnail — and in the
+     viewer, the sixteen-hundred-pixel preview. Either way somebody walks off
+     believing they have the photograph. Save is how you get the photograph.
+     Scoped to coarse, because on a desk selecting a heading to copy it is
+     ordinary. */
+  .cell, .cell img, .stage img, .pick, .tick, .grppick, h3.group {
+    -webkit-touch-callout:none; -webkit-user-select:none; user-select:none;
+    -webkit-user-drag:none; }
+
+  /* Sixteen pixels, or the page zooms in on focus and does not zoom back —
+     which leaves the library at 130% with no way to say so. It is the exact
+     threshold, so this is the smallest these can be. */
+  #menu input, #menu .form input { font-size:16px; }
 }
 """
 
@@ -1760,7 +1855,7 @@ def _actions(user: Principal) -> str:
     if not user.is_admin:
         return ""
     return """<div class="row" id="actions">
-  <button id="selall" class="tick" title="Select all"></button>
+  <button id="selall" class="tick" title="Select all" aria-label="Select all"></button>
   <span class="count" id="selcount" style="margin:0"></span>
   <span class="grp" data-side="live" hidden>
     <button data-act="event">Event&hellip;</button>
@@ -1876,7 +1971,8 @@ def _heading(labels: list[str], levels: int, count: int, *,
            '<button class="addgrp" title="Add a grouping inside this one">'
            "+</button>")
     return (f'<h3 class="group{shelf}">'
-            + ('<button class="grppick" title="Select this group"></button>'
+            + ('<button class="grppick" title="Select this group" '
+               'aria-label="Select this group"></button>'
                if pick else "")
             + f'<span class="crumbs">{crumbs}</span>{add}'
               f'<span class="dim">{count:,}</span>'
@@ -5411,6 +5507,12 @@ _LOGIN_CSS = """
               border:1px solid var(--line); border-radius:4px; padding:7px 9px;
               font:inherit; }
 .gate button { width:100%; margin:16px 0 0; padding:8px; }
+/* Sixteen pixels or the phone zooms in on the field and does not zoom back,
+   which is a sign-in form at 130% on the one page where getting it wrong
+   means not getting in. Said here rather than with the rest of the coarse
+   rules because this sheet is served *after* that one and `font:inherit`
+   above would win — two rules of equal weight, and the last one counts. */
+@media (pointer: coarse) { .gate input { font-size:16px; } }
 """
 
 
