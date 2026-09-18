@@ -770,6 +770,48 @@ h2.year span { font-size:13px; font-weight:400; }
 #rail summary { cursor:pointer; color:var(--dim); }
 #rail details .kv { grid-template-columns:1fr; gap:0; margin-top:8px; }
 #rail details dt { margin-top:6px; font-size:11px; }
+
+/* --- a narrow screen ------------------------------------------------------
+   About width, not about fingers: a phone in landscape and a window dragged
+   narrow want the same layout, and a touchscreen laptop with a desk's worth
+   of glass does not. What the finger changes is in the block after this one.
+
+   Twenty pixels of gutter either side is a tenth of a phone, and the three
+   thumbnail sizes were 2, 1 and 1 columns — two of the three settings the
+   same, which is a control that does nothing two-thirds of the time. */
+@media (max-width: 720px) {
+  main { padding:12px 10px 56px; }
+  .topbar { padding:calc(8px + env(safe-area-inset-top)) 10px 8px; }
+  .footbar { padding:6px 10px calc(6px + env(safe-area-inset-bottom)); }
+  /* The keyboard is not on this screen, so neither is the sentence about it.
+     Four lines of fixed footer explaining shift and the arrow keys is four
+     rows of photographs. */
+  .footbar .hint { display:none; }
+  .grid { grid-template-columns:repeat(auto-fill,minmax(108px,1fr)); }
+  .grid[data-size="medium"] {
+          grid-template-columns:repeat(auto-fill,minmax(165px,1fr)); }
+  .grid[data-size="large"] { grid-template-columns:1fr; }
+  /* Above the footer rather than across it. */
+  .install { bottom:calc(46px + env(safe-area-inset-bottom)); }
+}
+
+/* Anything the page keeps out of sight until the pointer is over it is
+   unreachable where there is no pointer. Separate from the sizing block
+   below, because these are two different questions and a device can answer
+   them differently. */
+@media (hover: none) {
+  /* The only way to say which file a stack shows. It is on screen solely
+     while one is being chosen, so there is nothing for it to clutter. */
+  .choose { opacity:1; }
+  /* Removing a grouping level, and adding one. Dim rather than hidden, the
+     way the select circle already is here. */
+  .rmgrp { opacity:.55; }
+  .addgrp { opacity:1; }
+  /* Nothing hides it on a tap, so it moves off the circle instead of
+     waiting to be got out of the way. */
+  .cell.gone::after { left:auto; right:6px; }
+  .cell.gone:hover::after { opacity:1; }
+}
 """
 
 
@@ -2219,10 +2261,19 @@ try{
 // How wide a cell is drawn, in the pixels the screen actually has. Measured
 // once rather than per cell: every cell in the grid is the same width, and
 // asking two thousand of them costs a layout each.
+// Capped at two on a phone, and it is not a compromise about sharpness.
+// A modern phone reports three, so a 174px cell asked for 520 real pixels,
+// which no thumbnail has — and every cell in the grid came from `large` at a
+// thousand pixels, or from `preview` at sixteen hundred at the other two
+// sizes. The biggest derivative in the library, ten times the bytes it can
+// show, over wifi or a VPN, on the most memory-constrained thing in the house.
+// Two is past the point anyone can see on a cell this size and it is what the
+// thumbnail tier was built to cover.
 function cellPixels(){
   const c=cells.find(x=>!x.hidden)||cells[0];
   const w=c?c.getBoundingClientRect().width:0;
-  return Math.round((w||150)*(window.devicePixelRatio||1));
+  const dpr=window.devicePixelRatio||1;
+  return Math.round((w||150)*(media('(max-width: 720px)')?Math.min(dpr,2):dpr));
 }
 
 // The smallest tier that can fill it. Not a fixed tier per size: the same
@@ -2390,7 +2441,17 @@ function filterMenu(anchorEl,spare){
 // Under the control that opened it, and never off the right-hand edge.
 function placeMenu(anchorEl){
   const r=anchorEl.getBoundingClientRect();
-  menu.style.left=Math.min(r.left,window.innerWidth-316)+'px';
+  const room=window.innerWidth;
+  // Below 316px the old arithmetic went negative and hung the menu off the
+  // left edge of the screen to discover it. On anything this narrow a 300px
+  // menu is not standing beside something anyway, so it spans instead.
+  if(room<=720){
+    menu.style.left='8px';
+    menu.style.width=(room-16)+'px';
+  }else{
+    menu.style.left=Math.max(8,Math.min(r.left,room-316))+'px';
+    menu.style.width='';
+  }
   menu.style.top=(r.bottom+window.scrollY+4)+'px';
   menu.hidden=false;
 }

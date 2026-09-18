@@ -88,7 +88,11 @@ document.querySelector = sel => document.querySelectorAll(sel)[0] || null;
 // Coarse, and able to hand a file to the system. Both are asked of the browser
 // rather than of its name, so both are stubbed the way a browser answers them.
 let coarse = true;
-const matchMedia = q => ({ matches: q === '(pointer: coarse)' && coarse });
+const matchMedia = q => ({
+  matches: q === '(pointer: coarse)' ? coarse
+         : q === '(max-width: 720px)' ? window.innerWidth <= 720
+         : false,
+});
 
 // What each fetched file claims to weigh, so the ceiling can be driven without
 // allocating a hundred megabytes to reach it.
@@ -260,6 +264,48 @@ function run() {
   check('a handful goes to the sheet together',
         shared && shared.files.length === 2,
         shared && shared.files.length);
+
+  // --- what a phone actually downloads to fill a cell --------------------------
+  // The grid was reading the biggest derivative in the library into a cell the
+  // width of a thumb. A phone reports three device pixels per CSS pixel, so a
+  // 114px cell asked for 342 — past what the 400px tier gives a 4:3 frame on
+  // its short edge — and every cell came from `large` at a thousand pixels.
+  {
+    const img = new El('img');
+    img.attrs.src = '/thumb/f/a.jpg';
+    img.setAttribute = (k, v) => { img.attrs[k] = v; };
+    img.getAttribute = k => img.attrs[k];
+    const shown = document.querySelectorAll('.cell')[0];
+    shown.appendChild(img);
+    shown.dataset.ar = '0.75';
+    // Three columns of a 393px screen, which is what the narrow grid gives.
+    shown._rect = { left: 0, top: 0, width: 114, height: 114 };
+
+    // There is one control and it cycles, so three presses redraw three times
+    // and land back where they started. Pressed rather than merely read: a
+    // check on the source the page was *rendered* with proves nothing about
+    // the one it would choose.
+    const round = () => { for (let i = 0; i < 3; i++) document.byId.sizepick.click(); };
+    round();
+    check('the grid is back at the size it started', grid.dataset.size === 'small',
+          grid.dataset.size);
+    check('and a phone fills a thumb-sized cell from the thumbnail tier',
+          img.attrs.src === '/thumb/f/a.jpg', img.attrs.src);
+
+    // The cap is about the screen, not about the pointer: a desk with a retina
+    // display and the same cell should still get every pixel it can show.
+    window.innerWidth = 1400;
+    round();
+    check('a wide retina screen is not capped and reads the tier above',
+          img.attrs.src === '/large/f/a.jpg', img.attrs.src);
+    window.innerWidth = 390;
+    round();
+    check('and back on the phone it goes back down',
+          img.attrs.src === '/thumb/f/a.jpg', img.attrs.src);
+    img.remove();
+    delete shown._rect;
+    delete shown.dataset.ar;
+  }
 
   // --- and on a desktop, none of this ------------------------------------------
   coarse = false;
