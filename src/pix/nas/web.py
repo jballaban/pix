@@ -347,6 +347,9 @@ main { padding:16px max(var(--gut),env(safe-area-inset-right)) 40px
              border-radius:3px; font-weight:600; }
 main { padding-bottom:48px; }
 .hint { color:var(--dim); font-size:12px; }
+/* One of the two, never both: the page carries a sentence for a keyboard and
+   a sentence for a finger, and only the device knows which it is. */
+.hint.touch { display:none; }
 .hint b { color:var(--fg); font-weight:600; }
 
 button, .chip { background:#222833; color:var(--fg); border:1px solid var(--line);
@@ -817,10 +820,6 @@ h2.year span { font-size:13px; font-weight:400; }
 @media (max-width: 720px) {
   :root { --gut:10px; }
   main { padding-top:12px; padding-bottom:56px; }
-  /* The keyboard is not on this screen, so neither is the sentence about it.
-     Four lines of fixed footer explaining shift and the arrow keys is four
-     rows of photographs. */
-  .footbar .hint { display:none; }
   .grid { grid-template-columns:repeat(auto-fill,minmax(108px,1fr)); }
   .grid[data-size="medium"] {
           grid-template-columns:repeat(auto-fill,minmax(165px,1fr)); }
@@ -863,6 +862,10 @@ h2.year span { font-size:13px; font-weight:400; }
      waiting to be got out of the way. */
   .cell.gone::after { left:auto; right:6px; }
   .cell.gone:hover::after { opacity:1; }
+  /* Shift, ctrl and the arrow keys are four lines of fixed footer about
+     controls this device does not have — which is four rows of photographs. */
+  .hint.keys { display:none; }
+  .hint.touch { display:inline; }
 
   /* A tap leaves `:hover` stuck on whatever was tapped until something else
      is, so every link keeps a blue box and every folder card stays lit — the
@@ -1821,11 +1824,18 @@ def browse(request: Request,
             "&".join(x for x in request.url.query.split("&")
                      if x and not x.startswith("within="))),
         script=_view_script(user, view, groups),
+        # Both, and the stylesheet picks. Which gestures this page has depends
+        # on the device rather than on the request, so the server cannot know
+        # which sentence is the true one — and shift, ctrl and the arrow keys
+        # are four lines of fixed footer describing a keyboard that is not
+        # there.
         footer=f"""<span class="count" id="count">{shown}</span>
-<span class="hint"><b>click</b> a circle to select &middot;
+<span class="hint keys"><b>click</b> a circle to select &middot;
 <b>shift</b> for a range &middot; <b>ctrl</b> to add &middot;
 <b>click</b> a photo to open it &middot;
 <b>&larr; &rarr;</b> page the viewer</span>
+<span class="hint touch"><b>tap</b> a circle to select &middot;
+<b>hold</b> one for a range &middot; <b>swipe</b> the viewer</span>
 <span class="note" id="note" hidden></span>""",
         user=user)
 
@@ -3000,9 +3010,20 @@ function drawSel(){
 // files near the top and every thumbnail below them opened the picture two
 // along. `picked` is keyed by element for exactly this reason; the handlers
 // were the half that still counted.
+//: How long a press has to be to mean *and everything back to the last one*.
+//: Long enough not to catch a slow tap, short enough that nobody lets go
+//: first — which is the whole range either way.
+const HOLD_MS=450;
+
 function wire(c){
-  c.querySelector('.pick').addEventListener('click',e=>{
+  const pick=c.querySelector('.pick');
+  // A press that has already done its work. The finger coming off it is still
+  // a tap as far as the browser is concerned, and that tap would untick the
+  // far end of the range the press just made.
+  let held=null,done=false;
+  pick.addEventListener('click',e=>{
     e.stopPropagation();
+    if(done){done=false;return;}
     const n=cells.indexOf(c);
     if(n<0) return;
     // The circle is the deliberate gesture: it adds and removes without
@@ -3010,6 +3031,34 @@ function wire(c){
     if(e.shiftKey&&anchor>=0) range(anchor,n); else {togglePick(n); anchor=n;}
     setCur(n,true); drawSel();
   });
+  // Holding a circle is what shift-clicking one is on a keyboard: everything
+  // from the last circle you touched to this one. A phone has no shift key,
+  // and 61,846 files one circle at a time is not a job anybody finishes —
+  // which made a range the difference between the library being cullable on a
+  // phone and not.
+  if(typeof pick.addEventListener==='function'){
+    const stop=()=>{ if(held){clearTimeout(held);held=null;} };
+    pick.addEventListener('touchstart',()=>{
+      done=false;
+      stop();
+      held=setTimeout(()=>{
+        held=null;
+        const n=cells.indexOf(c);
+        if(n<0) return;
+        // With nothing touched yet there is no range to make, so it is an
+        // ordinary tick — and it becomes the end to measure the next one from.
+        if(anchor>=0&&anchor!==n) range(anchor,n);
+        else {togglePick(n,true); anchor=n;}
+        setCur(n,true); drawSel();
+        done=true;
+      },HOLD_MS);
+    },{passive:true});
+    // Moving is scrolling, and letting go early is an ordinary tap. Either
+    // way this was not a hold.
+    pick.addEventListener('touchmove',stop,{passive:true});
+    pick.addEventListener('touchend',stop,{passive:true});
+    pick.addEventListener('touchcancel',stop,{passive:true});
+  }
   c.addEventListener('click',e=>{
     // A link inside the cell is somewhere to go, not a photograph to open.
     // The stack badge did both: the viewer opened over the grid and then the

@@ -55,7 +55,10 @@ function cell(name, copy) {
 }
 
 const grid = mk('grid');
-const cells = [cell('a.jpg'), cell('b.heic')];
+// Three, not two: a range across adjacent circles and two separate taps on
+// them are the same answer, so a two-cell grid cannot tell a hold that was
+// cancelled from one that was not.
+const cells = [cell('a.jpg'), cell('b.heic'), cell('c.jpg')];
 cells.forEach(c => grid.appendChild(c));
 
 const actions = mk('actions');
@@ -159,6 +162,20 @@ const USUAL = 'family';
 const PAGE = '/browse';
 const TIERS = [['/thumb/', 400], ['/large/', 1000], ['/preview/', 1600]];
 
+// Everything the page defers runs at once, which is what every other driver
+// here assumes — except the press-and-hold, which is *about* the delay: the
+// whole question is whether the finger was still down. Those are held back so
+// a test can answer it, and cancelling one has to work, or every tap on a
+// circle becomes a range.
+const pending = [];
+const timer = (fn, ms) => {
+  if (ms >= 200) { const h = { fn, live: true }; pending.push(h); return h; }
+  fn();
+  return null;
+};
+const cancelTimer = h => { if (h && h.live !== undefined) h.live = false; };
+const heldOut = () => pending.splice(0).forEach(h => { if (h.live) h.fn(); });
+
 const settle = () => new Promise(r => setImmediate(r));
 // The fetch is a run of awaits, so a few turns of the loop rather than one.
 const settled = async () => { for (let i = 0; i < 12; i++) await settle(); };
@@ -166,12 +183,12 @@ const settled = async () => { for (let i = 0; i < 12; i++) await settle(); };
 const PARAMS = ['document', 'window', 'fetch', 'localStorage', 'location',
                 'confirm', 'matchMedia', 'navigator', 'VIEW', 'CHIPS', 'FIXED',
                 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS',
-                'GROUPING', 'PAGE', 'TIERS', 'setTimeout'];
+                'GROUPING', 'PAGE', 'TIERS', 'setTimeout', 'clearTimeout'];
 function run() {
   new Function(...PARAMS, js)(
     document, window, fetch, localStorage, location, confirm, matchMedia,
     navigator, VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-    GRID_GROUPS, GROUPING, PAGE, TIERS, fn => fn());
+    GRID_GROUPS, GROUPING, PAGE, TIERS, timer, cancelTimer);
 }
 
 (async () => {
@@ -276,6 +293,46 @@ function run() {
   check('a handful goes to the sheet together',
         shared && shared.files.length === 2,
         shared && shared.files.length);
+
+  // --- a range, without a shift key -------------------------------------------
+  // Shift-click is the only way to select more than one at a time, and a phone
+  // has no shift key. 61,846 files one circle at a time is not a job anybody
+  // finishes, which made this the difference between the library being
+  // cullable on a phone and not.
+  {
+    const on = c => c.children.find(k => k._classes.has('pick'));
+    const fire = (c, type) => (on(c)._listeners[type] || []).forEach(fn => fn({}));
+    // A finger that stays down: the hold comes due before it lifts.
+    const hold = c => { fire(c, 'touchstart'); heldOut(); fire(c, 'touchend');
+                        on(c).click(); };
+    // And one that does not: down, up, and the hold was cancelled on the way.
+    const tap = c => { fire(c, 'touchstart'); fire(c, 'touchend'); heldOut();
+                       on(c).click(); };
+    const count = () => document.byId.selcount.textContent;
+
+    if (count() !== '0 selected') tick.click();
+    tap(cells[0]);
+    check('a tap on a circle ticks one', count() === '1 selected', count());
+    hold(cells[2]);
+    check('and holding another takes everything between it and the last',
+          count() === '3 selected', count());
+    check('the far end included, rather than ticked by the press and unticked '
+          + 'again by the tap that ends it', cells[2]._classes.has('picked'));
+
+    // The cancel is the part that has to work: without it every tap is a
+    // range, and one gesture doing both jobs is worse than only shift-click
+    // doing one of them.
+    tick.click();
+    tap(cells[0]);
+    tap(cells[2]);
+    check('two taps two apart tick two, not the one between them',
+          count() === '2 selected', count());
+    check('which is the whole of the difference a cancelled hold makes',
+          !cells[1]._classes.has('picked'));
+    tap(cells[2]);
+    check('and a tap unticks again', count() === '1 selected', count());
+    tick.click();
+  }
 
   // --- swiping between photographs --------------------------------------------
   // The arrow keys are the desktop's answer and a phone has none, so without
