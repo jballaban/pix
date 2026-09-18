@@ -2514,6 +2514,43 @@ def test_a_clip_with_no_copy_downloads_as_itself(
     assert client.get("/download/init_2026/b.mp4").content == b"already h264"
 
 
+def test_a_download_says_what_kind_of_file_it_is(
+    client: TestClient, writable: Path
+) -> None:
+    """A phone will only offer *Save to Photos* for something it has been told
+    is a photograph. Everything went out as `application/octet-stream`, which
+    is a file the share sheet can only put in Files."""
+    (writable / "b.mp4").write_bytes(b"clip")
+
+    assert client.get("/download/init_2026/a.jpg"
+                      ).headers["content-type"] == "image/jpeg"
+    assert client.get("/download/init_2026/b.mp4"
+                      ).headers["content-type"] == "video/mp4"
+
+
+def test_a_named_type_is_still_an_attachment(
+    client: TestClient, writable: Path
+) -> None:
+    """The reason it was safe to stop lying about the type: the disposition is
+    what makes a browser download rather than display, and it outranks the
+    type everywhere. A desktop download is unchanged."""
+    r = client.get("/download/init_2026/a.jpg")
+
+    assert r.headers["content-type"] == "image/jpeg"
+    assert "attachment" in r.headers["content-disposition"]
+
+
+def test_a_file_nothing_has_an_opinion_about_stays_unnamed(
+    client: TestClient, writable: Path
+) -> None:
+    """An `.insv` is not a type any phone knows. Claiming one would be worse
+    than admitting there is nothing useful to say."""
+    (writable / "c.insv").write_bytes(b"360")
+
+    assert client.get("/download/init_2026/c.insv"
+                      ).headers["content-type"] == "application/octet-stream"
+
+
 def test_a_viewer_cannot_download_what_was_not_shared(
     client: TestClient, writable: Path,
     sign_in: "Callable[[str, str], TestClient]",

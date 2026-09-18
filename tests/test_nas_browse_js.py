@@ -218,6 +218,33 @@ def test_the_same_script_runs_the_landing_page(
 
 @pytest.mark.skipif(shutil.which("node") is None,
                     reason="node is not installed")
+def test_the_same_script_hands_a_phone_its_files_rather_than_downloading(
+    tmp_path: Path
+) -> None:
+    """A press on Save fetches the files into the page and then waits for a
+    second press to open the share sheet, which is where *Save to Photos*
+    lives.
+
+    Driven rather than read, because none of it is visible in the markup: which
+    of the two paths a press takes, that the sheet is opened from its own tap
+    rather than from the one that started the fetch — a browser keeps the
+    permission alive for about a second, so sharing straight after the await
+    works for a photograph and fails silently for a clip — and that a selection
+    too big to hold turns back into an ordinary download instead of leaving a
+    button that cannot work.
+    """
+    script = tmp_path / "browse.js"
+    script.write_text(web._BROWSE_JS, encoding="utf-8")
+
+    result = subprocess.run(
+        ["node", str(JS_DIR / "save.js"), str(script)],
+        capture_output=True, text=True, timeout=120, cwd=JS_DIR)
+
+    assert result.returncode == 0, (result.stdout + result.stderr)[-2000:]
+
+
+@pytest.mark.skipif(shutil.which("node") is None,
+                    reason="node is not installed")
 def test_the_browse_script_parses(tmp_path: Path) -> None:
     """A syntax error is silent in a browser and total in its effect."""
     script = tmp_path / "browse.js"

@@ -1610,6 +1610,7 @@ def browse(request: Request,
   <div class="what" id="workwhat"></div>
   <div class="bar"><i id="workbar"></i></div>
   <div class="tally" id="worktally"></div>
+  <button id="worksave" class="primary" hidden>Save</button>
   <button id="workstop">Stop</button>
 </div>""",
         tools=('<div class="chips" id="chips"></div>'
@@ -2161,6 +2162,30 @@ const stage=document.querySelector('.stage');
 // Bounded so each request stays short: the server accepts 500, but a chunk that
 // takes ten seconds gives no progress reading and holds the single worker.
 const CHUNK=100;
+
+// --- what kind of thing is this being used on --------------------------------
+// Asked once, of the browser rather than of its name. A user-agent string says
+// what somebody wants you to believe; `pointer: coarse` says a finger is what
+// will be aiming at these twenty pixels, which is the only thing any of this
+// turns on.
+//
+// `typeof` because the page script is run under a DOM stub in the tests, where
+// `matchMedia` does not exist — and a bare reference would throw on load and
+// take every handler on the page with it, which is the exact failure the stub
+// was written to catch.
+function media(q){
+  try{ return typeof matchMedia==='function'&&matchMedia(q).matches; }
+  catch(e){ return false; }
+}
+const COARSE=media('(pointer: coarse)');
+// Whether the file can be handed to the system rather than downloaded. On iOS
+// this is the only route into Photos at all: a download — in Safari, and
+// assuming it happens at all in an installed app — lands in Files and nowhere
+// else. Feature-tested, so a desktop browser without it simply never takes
+// this path.
+const CAN_SHARE=(typeof navigator!=='undefined'
+                 &&typeof navigator.canShare==='function'
+                 &&typeof navigator.share==='function');
 
 let cells=[...document.querySelectorAll('.cell')];
 let cur=-1, anchor=-1, busy=false;
@@ -2834,12 +2859,26 @@ function drawGet(c){
   // The original is a second thing to want only where it is a different file
   // — which is the clips a browser will not play as they are, and nothing
   // else in the library.
-  viewGet.textContent=c.dataset.copy?'Download copy':'Download';
-  viewGet.title=c.dataset.copy
-    ? 'The H.264 copy. Hold shift for the original off the camera.'
-    : 'The file as it came off the camera.';
+  const touch=COARSE&&CAN_SHARE;
+  viewGet.textContent=touch?'Save':(c.dataset.copy?'Download copy':'Download');
+  viewGet.title=touch
+    ? 'Save this to Photos, Files, or anywhere else.'
+    : (c.dataset.copy
+       ? 'The H.264 copy. Hold shift for the original off the camera.'
+       : 'The file as it came off the camera.');
   viewGet.onclick=e=>{
     e.stopPropagation();
+    if(touch){
+      // **The playable copy, where there is one.** Everywhere else in the app
+      // the original is the thing to want, and from the grid it still is — but
+      // this button puts a file in Photos, and the whole reason a render
+      // exists is that the original is something that will not play. Saving
+      // the camera's HEVC here would put a clip in the photo library that the
+      // photo library cannot show.
+      e.preventDefault();
+      saveFiles([c],false);
+      return;
+    }
     if(e.shiftKey&&c.dataset.copy) viewGet.setAttribute('href',at+'?original=1');
     else viewGet.setAttribute('href',at);
   };
@@ -3168,6 +3207,14 @@ function fanOut(head,html){
 // clips a browser will not play as they are — so the choice is offered only
 // when the selection holds one, and the rest of the time pressing Download
 // downloads.
+// *Download* names one of the two places a phone can put a file, and not the
+// one this app is for. The sheet the button opens offers Photos and Files
+// both, so the word has to cover both.
+if(COARSE&&CAN_SHARE&&actions){
+  const b=actions.querySelector('[data-act="download"]');
+  if(b) b.textContent='Save';
+}
+
 function downloadMenu(anchorEl){
   const cs=targets();
   if(!cs.length){say('nothing selected');return;}
@@ -3191,15 +3238,53 @@ function downloadMenu(anchorEl){
   menuCtx={key};
 }
 
+function fileUrl(c,original){
+  return '/download/'+encodeURIComponent(c.dataset.folder)
+        +'/'+encodeURIComponent(c.dataset.name)+(original?'?original=1':'');
+}
+
+// What the system will call this, worked out here rather than read off the
+// response. The fallback paths never see a header, and the share sheet will
+// only offer *Save Image* for something it has been told is an image — so the
+// one place that must agree about a file's type is the client.
+const MIME={jpg:'image/jpeg',jpeg:'image/jpeg',png:'image/png',
+            gif:'image/gif',webp:'image/webp',heic:'image/heic',
+            heif:'image/heif',avif:'image/avif',tif:'image/tiff',
+            tiff:'image/tiff',dng:'image/x-adobe-dng',
+            mp4:'video/mp4',m4v:'video/x-m4v',mov:'video/quicktime',
+            avi:'video/x-msvideo',mkv:'video/x-matroska',webm:'video/webm',
+            mts:'video/mp2t',m2ts:'video/mp2t','3gp':'video/3gpp'};
+function mimeOf(name){
+  const at=String(name).lastIndexOf('.');
+  return (at<0?'':MIME[name.slice(at+1).toLowerCase()])||'application/octet-stream';
+}
+
+// Sharing holds every byte in memory — the fetched blob, the File made from
+// it, and the sheet's own copy of the same bytes, in a process the phone will
+// kill around a gigabyte. So there is a ceiling, and going over it is not a
+// failure: it is the ordinary download, said plainly.
+const SHARE_MAX_FILES=10;
+const SHARE_MAX_BYTES=150*1024*1024;
+
 // One file is a link; a selection is a posted form. Not a fetch either way:
 // the browser has to own the transfer, or every byte of a selection of video
 // is held in this page's memory before a file appears anywhere.
+//
+// Except on a phone, where the browser owning it means the file goes to Files
+// if it goes anywhere at all, and the library's whole point is the photographs
+// being *in Photos*. There, the bytes come here and go out through the share
+// sheet — see `saveFiles`.
 function getFiles(cs,original){
+  if(COARSE&&CAN_SHARE&&cs.length<=SHARE_MAX_FILES){
+    saveFiles(cs,original);
+    return;
+  }
+  downloadFiles(cs,original);
+}
+
+function downloadFiles(cs,original){
   if(cs.length===1){
-    const c=cs[0];
-    location.href='/download/'+encodeURIComponent(c.dataset.folder)
-                 +'/'+encodeURIComponent(c.dataset.name)
-                 +(original?'?original=1':'');
+    location.href=fileUrl(cs[0],original);
     say('downloading 1 file');
     return;
   }
@@ -3220,6 +3305,80 @@ function getFiles(cs,original){
   form.submit();
   form.remove();
   say(`downloading ${cs.length.toLocaleString()} files as a zip`);
+}
+
+// Down here, then out through the share sheet — which on a phone is where
+// *Save to Photos* lives, and the only place it lives.
+//
+// **Two taps, always.** The sheet may only be opened by a gesture, and the
+// gesture that started this was spent somewhere inside the fetch: a browser
+// keeps the permission alive across a promise for about a second, so sharing
+// straight after the await works for a photograph on wifi and fails for a
+// forty-megabyte clip on a VPN. That is one button behaving two ways depending
+// on the file and the network, and the failure is silent. So the fetch is one
+// press and the sheet is another, every time, and the second one is a button
+// that is not there until the bytes are.
+let ready=null;
+function saveFiles(cs,original){
+  if(busy) return;
+  busy=true; ready=null; say('');
+  workOpen(cs.length===1?'Fetching':'Fetching '+cs.length+' files',cs.length);
+  if(workSave) workSave.hidden=true;
+  const files=[];
+  let bytes=0;
+  (async()=>{
+    for(let i=0;i<cs.length;i++){
+      if(stopping) break;
+      const c=cs[i];
+      const r=await fetch(fileUrl(c,original),{credentials:'same-origin'});
+      if(!r.ok) throw new Error(c.dataset.name+': '+r.status);
+      // Read before buffering. The header is there on every one of these —
+      // they are files on a disk — so a selection that is too big to hold can
+      // be turned down without first holding it.
+      bytes+=+(r.headers&&r.headers.get&&r.headers.get('content-length'))||0;
+      if(bytes>SHARE_MAX_BYTES) throw new Error('too big');
+      files.push(new File([await r.blob()],c.dataset.name,
+                          {type:mimeOf(c.dataset.name)}));
+      workProgress(i+1,cs.length);
+    }
+    if(stopping){busy=false;workClose();return;}
+    // The sheet decides what it will take, and it is the authority: a `.insv`
+    // or a raw file is something no phone has an opinion about.
+    if(!navigator.canShare({files:files})) throw new Error('not shareable');
+    ready=files;
+    if(workWhat) workWhat.innerHTML=files.length===1?'Ready to save'
+      :'Ready to save '+files.length+' files';
+    if(workTally) workTally.textContent=
+      'Photos, Files, or anywhere else you send it.';
+    if(workSave){workSave.hidden=false;}
+  })().catch(err=>{
+    // Whatever the reason — too big to hold, a type the sheet will not take,
+    // a fetch that failed — the ordinary download is still there. Saying where
+    // the file is going to land instead is the difference between a fallback
+    // and a button that did something else without mentioning it.
+    busy=false; workClose();
+    downloadFiles(cs,original);
+    // After, not before: `downloadFiles` says *downloading 1 file*, which is
+    // true and is not the part worth reading.
+    say(err&&err.message==='too big'
+        ? 'too large to hand to Photos — downloading to Files instead'
+        : 'Photos will not take this one — downloading to Files instead',true);
+  });
+}
+
+// The second press. Synchronous from the tap: nothing is awaited between the
+// gesture and the sheet, which is the whole reason the fetch was a separate
+// press.
+function shareReady(){
+  if(!ready) return;
+  const files=ready;
+  navigator.share({files:files}).then(()=>{
+    say(files.length===1?'saved 1 file':`saved ${files.length} files`);
+  },err=>{
+    // Closing the sheet is an answer, not a fault.
+    if(!err||err.name!=='AbortError') say('could not save: '+(err&&err.message),true);
+  });
+  ready=null; busy=false; workClose();
 }
 
 function endChoosing(restore){
@@ -3528,6 +3687,7 @@ const workWhat=document.getElementById('workwhat');
 const workBar=document.getElementById('workbar');
 const workTally=document.getElementById('worktally');
 const workStop=document.getElementById('workstop');
+const workSave=document.getElementById('worksave');
 const TAKEOVER_MS=180;
 let workTimer=null;
 // Asked for, not done yet. A write is a run of requests and this is checked
@@ -3572,6 +3732,11 @@ function drawBin(n){
 function workClose(){
   clearTimeout(workTimer); workTimer=null;
   if(working) working.classList.remove('on');
+  // Whatever was fetched and never sent goes with it. Holding a hundred
+  // megabytes of blobs against a Save button that is no longer on screen is
+  // the kind of thing a phone notices.
+  ready=null;
+  if(workSave) workSave.hidden=true;
 }
 
 // Stopping is a decision about the rest of the work, not about the request in
@@ -3586,6 +3751,7 @@ function stopWork(){
   if(workTally) workTally.textContent='finishing the files already sent…';
 }
 if(workStop) workStop.onclick=e=>{e.stopPropagation();stopWork();};
+if(workSave) workSave.onclick=e=>{e.stopPropagation();shareReady();};
 
 const chooseCancel=document.getElementById('choosecancel');
 if(chooseCancel) chooseCancel.onclick=e=>{e.stopPropagation();
@@ -4012,6 +4178,33 @@ def _to_send(folder: str, name: str, original: bool) -> tuple[Path, str]:
     return media, name
 
 
+#: What a file is, by the only thing a URL knows about it.
+#:
+#: Not a guess the app acts on — it serves the same bytes either way. It is what
+#: lets a phone put a photograph in Photos: iOS will only offer *Save Image* for
+#: something it has been told is an image, and a file handed over as
+#: `application/octet-stream` is a file the share sheet can only put in Files.
+_MIME: dict[str, str] = {
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+    ".gif": "image/gif", ".webp": "image/webp", ".heic": "image/heic",
+    ".heif": "image/heif", ".avif": "image/avif", ".tif": "image/tiff",
+    ".tiff": "image/tiff", ".dng": "image/x-adobe-dng",
+    ".mp4": "video/mp4", ".m4v": "video/x-m4v", ".mov": "video/quicktime",
+    ".avi": "video/x-msvideo", ".mkv": "video/x-matroska",
+    ".webm": "video/webm", ".mts": "video/mp2t", ".m2ts": "video/mp2t",
+    ".3gp": "video/3gpp",
+}
+
+
+def _mime(name: str) -> str:
+    """What to call this kind of file, or nothing useful if we do not know.
+
+    Octet-stream for anything unlisted — an `.insv` is not a type any phone has
+    an opinion about, and claiming one would be worse than admitting it.
+    """
+    return _MIME.get(Path(name).suffix.lower(), "application/octet-stream")
+
+
 @app.get("/download/{folder}/{name}")
 def download(folder: str, name: str,
              user: Annotated[Principal, Depends(require_user)],
@@ -4020,13 +4213,18 @@ def download(folder: str, name: str,
 
     The same access check as every other byte-serving route: a grid that omits
     a photograph while this hands it over is not access control.
+
+    **Named as what it is, and still an attachment.** `filename=` sets a
+    `Content-Disposition: attachment`, which outranks the type in every browser
+    — so this still downloads on a desktop exactly as it did when it claimed
+    everything was octet-stream. What the honest type buys is the phone: see
+    `_mime`.
     """
     _allowed(user, folder, name)
     target, called = _to_send(folder, name, bool(original))
     if not target.is_file():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such file")
-    return FileResponse(target, filename=called,
-                        media_type="application/octet-stream")
+    return FileResponse(target, filename=called, media_type=_mime(called))
 
 
 #: How many files one zip will hold. Not a technical limit — the stream is
