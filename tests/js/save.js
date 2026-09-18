@@ -277,6 +277,68 @@ function run() {
         shared && shared.files.length === 2,
         shared && shared.files.length);
 
+  // --- swiping between photographs --------------------------------------------
+  // The arrow keys are the desktop's answer and a phone has none, so without
+  // this the only way from one photograph to the next is to close the viewer,
+  // find the thumbnail after it, and open that.
+  {
+    const viewer = document.byId.viewer;
+    const touch = (type, x, y) => (stage._listeners[type] || []).forEach(fn =>
+      fn(type === 'touchend'
+         ? { changedTouches: [{ clientX: x, clientY: y }] }
+         : { touches: [{ clientX: x, clientY: y }] }));
+    const swipe = (fromX, toX, dy) => {
+      touch('touchstart', fromX, 200);
+      touch('touchend', toX, 200 + (dy || 0));
+    };
+
+    // The tick clears when anything is ticked, and the sections above left a
+    // selection behind.
+    if (document.byId.selcount.textContent !== '0 selected') tick.click();
+    cells[0].click();
+    check('the viewer is open on the first photograph',
+          viewer.classList.contains('on') && cells[0]._classes.has('cur'));
+
+    swipe(300, 120);
+    check('a swipe to the left moves on', cells[1]._classes.has('cur'));
+    swipe(120, 300);
+    check('and back to the right moves back', cells[0]._classes.has('cur'));
+
+    // More down than across is somebody scrolling, not turning a page.
+    swipe(300, 240, 120);
+    check('a mostly-vertical drag is not a page turn',
+          cells[0]._classes.has('cur'));
+    // And a tap is not a swipe.
+    swipe(300, 288);
+    check('nor is a short one', cells[0]._classes.has('cur'));
+
+    // The edges belong to the system: that is how you go back, and an app
+    // that takes the gesture over is one you cannot get out of.
+    swipe(10, 300);
+    check('a drag from the screen edge is left alone',
+          cells[0]._classes.has('cur'));
+
+    check('and looking still decides nothing',
+          document.byId.selcount.textContent === '0 selected',
+          document.byId.selcount.textContent);
+    document.byId.viewclose.click();
+  }
+
+  // --- coming back to a page the browser kept ---------------------------------
+  // Leaving for the share sheet and returning can strand the takeover over the
+  // whole screen with nothing that dismisses it: Stop only acts while a write
+  // is running, and by then none is.
+  {
+    const working = document.byId.working;
+    working.classList.add('on');
+    document.byId.viewer.classList.add('on');
+    (listeners.pageshow || []).forEach(fn => fn({ persisted: true }));
+    check('a restored page is not still covered by the takeover',
+          !working.classList.contains('on'));
+    check('nor by the viewer',
+          !document.byId.viewer.classList.contains('on'));
+  }
+
   // --- the menu and the keyboard ----------------------------------------------
   // Opening a menu focused its filter box, the phone scrolled the document to
   // bring the field into view, and the page closes a menu on any scroll — so

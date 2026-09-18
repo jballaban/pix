@@ -230,7 +230,12 @@ _STYLE = """
         /* One control's outer height: a 21px line (14px at 1.5), 4px of
            padding each side, 1px of border each side. Named because two rules
            have to agree on it — see `.row`. */
-        --ctl:31px; }
+        --ctl:31px;
+        /* The side gutter, in one place, because three bars and the page
+           itself have to agree about it — and because in landscape the notch
+           lies over the left of the screen, so each of them has to take the
+           larger of the gutter and whatever the device says is unusable. */
+        --gut:20px; }
 * { box-sizing: border-box; }
 body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5
        system-ui,-apple-system,Segoe UI,sans-serif; }
@@ -244,7 +249,8 @@ a { color:var(--accent); text-decoration:none; }
 a:hover { background:var(--tint); box-shadow:0 0 0 3px var(--tint);
           border-radius:2px; }
 .dim { color:var(--dim); }
-main { padding:16px 20px 40px; }
+main { padding:16px max(var(--gut),env(safe-area-inset-right)) 40px
+               max(var(--gut),env(safe-area-inset-left)); }
 
 /* The bar never leaves: filters are the address of what you are looking at,
    and losing them 2,000 thumbnails down is losing your place. */
@@ -254,7 +260,9 @@ main { padding:16px 20px 40px; }
    and a web page in a window everywhere else. */
 .topbar { position:sticky; top:0; z-index:5; background:var(--chrome);
           border-bottom:1px solid #0008;
-          padding:calc(9px + env(safe-area-inset-top)) 20px 9px;
+          padding:calc(9px + env(safe-area-inset-top))
+                  max(var(--gut),env(safe-area-inset-right)) 9px
+                  max(var(--gut),env(safe-area-inset-left));
           /* It scrolls over the grid, so it reads as a layer above it rather
              than as the first thing in it. */
           box-shadow:0 8px 16px -12px #000c; }
@@ -312,7 +320,9 @@ main { padding:16px 20px 40px; }
    every row of chrome up there is a row of photographs pushed off. */
 .footbar { position:fixed; left:0; right:0; bottom:0; z-index:4;
            background:var(--chrome); border-top:1px solid #0008;
-           padding:6px 20px calc(6px + env(safe-area-inset-bottom));
+           padding:6px max(var(--gut),env(safe-area-inset-right))
+                   calc(6px + env(safe-area-inset-bottom))
+                   max(var(--gut),env(safe-area-inset-left));
            display:flex; gap:14px; align-items:baseline;
            flex-wrap:wrap; font-size:12px; }
 .footbar:empty { display:none; }
@@ -362,7 +372,12 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
 .sep { width:1px; height:20px; background:var(--line); }
 
 /* menu */
+/* `dvh` after `vh`, never instead of it: an engine that does not know the
+   unit keeps the old value rather than losing the rule. `vh` is the viewport
+   as though the browser's own bars were not there, so the bottom of a long
+   list sat underneath them. */
 #menu { position:absolute; z-index:20; width:300px; max-height:60vh;
+        max-height:60dvh;
         background:var(--panel); border:1px solid var(--line); border-radius:6px;
         box-shadow:0 10px 30px #0009; display:flex; flex-direction:column; }
 /* An id selector beats the user agent's `[hidden] { display:none }`, so the
@@ -728,28 +743,47 @@ h2.year span { font-size:13px; font-weight:400; }
                   font-variant-numeric:tabular-nums; }
 #working button { margin-top:4px; }
 
-#viewer { position:fixed; inset:0; background:#000e; display:none; z-index:30; }
+/* Nothing behind it moves. A full-screen overlay over a scrollable page
+   rubber-bands the grid underneath every time you drag on the photograph,
+   and on a phone that is most touches. `touch-action` rather than locking
+   the body: the viewer deliberately scrolls the grid behind it as you page,
+   so that closing it leaves you where you were looking, and a fixed body
+   would break that.
+
+   Pinch goes with it. It only ever zoomed the *page* — the photograph is as
+   big as it is — which left a fixed overlay panned half off the screen with
+   the way out somewhere past the edge. */
+#viewer { position:fixed; inset:0; background:#000e; display:none; z-index:30;
+          touch-action:none; overscroll-behavior:none; }
 #viewer.on { display:flex; }
 .stage { flex:1; min-width:0; display:flex; flex-direction:column;
          align-items:center; justify-content:center; padding:12px; }
 .stage img, .stage video { max-width:100%; max-height:86vh;
+                           max-height:86dvh;
                            object-fit:contain; display:none; }
 .stage img.on, .stage video.on { display:block; }
 .stage .meta { padding:10px; color:var(--dim); font-size:12px;
                text-align:center; }
 /* A reserved column, not an overlay: metadata you have to summon and that
    then covers the photograph is metadata nobody consults while looking. */
-#rail { width:330px; flex:none; background:var(--panel); overflow-y:auto;
+#rail { touch-action:pan-y;
+        width:330px; flex:none; background:var(--panel); overflow-y:auto;
         border-left:1px solid var(--line); padding:14px 16px 30px;
         font-size:13px; }
 #viewer.norail #rail { display:none; }
-#railtoggle { position:absolute; top:10px; right:12px; z-index:2;
+/* The viewer covers the whole screen, the status bar and the island
+   included, so its own controls are the one place in the app that has to
+   say so itself — everything else sits inside a bar that already has. */
+#railtoggle { position:absolute; top:calc(10px + env(safe-area-inset-top));
+              right:calc(12px + env(safe-area-inset-right)); z-index:2;
               margin:0; opacity:.75; }
-#viewclose { position:absolute; top:10px; left:12px; z-index:2; margin:0;
+#viewclose { position:absolute; top:calc(10px + env(safe-area-inset-top));
+             left:calc(12px + env(safe-area-inset-left)); z-index:2; margin:0;
              opacity:.75; font-size:17px; line-height:1; padding:2px 10px; }
 /* Beside Details, because it is the same kind of thing: something you reach
    for about the photograph you are looking at, rather than a way out of it. */
-#viewget { position:absolute; top:10px; right:112px; z-index:2; margin:0;
+#viewget { position:absolute; top:calc(10px + env(safe-area-inset-top));
+           right:calc(112px + env(safe-area-inset-right)); z-index:2; margin:0;
            opacity:.75; border:1px solid var(--line); border-radius:3px;
            padding:3px 10px; font-size:13px; background:var(--chrome);
            color:var(--fg); }
@@ -781,9 +815,8 @@ h2.year span { font-size:13px; font-weight:400; }
    thumbnail sizes were 2, 1 and 1 columns — two of the three settings the
    same, which is a control that does nothing two-thirds of the time. */
 @media (max-width: 720px) {
-  main { padding:12px 10px 56px; }
-  .topbar { padding:calc(8px + env(safe-area-inset-top)) 10px 8px; }
-  .footbar { padding:6px 10px calc(6px + env(safe-area-inset-bottom)); }
+  :root { --gut:10px; }
+  main { padding-top:12px; padding-bottom:56px; }
   /* The keyboard is not on this screen, so neither is the sentence about it.
      Four lines of fixed footer explaining shift and the arrow keys is four
      rows of photographs. */
@@ -794,6 +827,21 @@ h2.year span { font-size:13px; font-weight:400; }
   .grid[data-size="large"] { grid-template-columns:1fr; }
   /* Above the footer rather than across it. */
   .install { bottom:calc(46px + env(safe-area-inset-bottom)); }
+
+  /* The details rail was a 330px column. On a 393px phone that is sixty
+     pixels of photograph — the photograph being the thing the viewer is for.
+     So it goes under rather than beside, as a sheet that can be dragged
+     through and dismissed with the same control as before. */
+  #viewer { flex-direction:column; }
+  .stage { flex:1 1 auto; min-height:0; }
+  .stage img, .stage video { max-height:100%; }
+  #rail { width:auto; max-height:55dvh; border-left:0;
+          border-top:1px solid var(--line);
+          padding-bottom:calc(30px + env(safe-area-inset-bottom)); }
+  /* Three controls, two corners. `right:112px` was measured against the width
+     of the word *Details*, which is not a number to rest a layout on once
+     everything in the bar is taller and wider. */
+  #viewget { right:auto; left:calc(68px + env(safe-area-inset-left)); }
 }
 
 /* Anything the page keeps out of sight until the pointer is over it is
@@ -3189,7 +3237,50 @@ if(rail) rail.addEventListener('click',e=>e.stopPropagation());
 // arriving back at that grid to find a photograph over it reads as the app
 // having opened something on its own. Belt to the braces above: that stops
 // the viewer opening on the way out, this closes it whatever opened it.
-if(viewer) window.addEventListener('pageshow',e=>{if(e.persisted) closeViewer();});
+// A page restored from the back/forward cache comes back exactly as it left it,
+// and what it left open it should not be holding open. The takeover is the one
+// that matters: leaving for the share sheet and coming back can strand it over
+// the whole screen with nothing that dismisses it, because Stop only acts while
+// a write is running and by then none is.
+window.addEventListener('pageshow',e=>{
+  if(!e.persisted) return;
+  if(viewer) closeViewer();
+  closeMenu();
+  busy=false; stopping=false; workClose();
+});
+
+// --- swiping between photographs ---------------------------------------------
+// Left and right are the arrow keys' job, and a phone has no arrow keys — so
+// without this the only way from one photograph to the next is to close the
+// viewer, find the thumbnail after it, and open that.
+if(stage&&typeof stage.addEventListener==='function'){
+  let sx=0,sy=0,swiping=false;
+  stage.addEventListener('touchstart',e=>{
+    const t=e.touches&&e.touches.length===1&&e.touches[0];
+    // A drag beginning at the very edge of the screen belongs to the system —
+    // that is how you go back — and an app that takes it over is one you
+    // cannot get out of.
+    swiping=!!t&&t.clientX>28&&t.clientX<(window.innerWidth||0)-28;
+    if(t){sx=t.clientX;sy=t.clientY;}
+  },{passive:true});
+  stage.addEventListener('touchend',e=>{
+    if(!swiping) return;
+    swiping=false;
+    const t=e.changedTouches&&e.changedTouches[0];
+    if(!t) return;
+    const dx=t.clientX-sx,dy=t.clientY-sy;
+    // Far enough across to have been meant, and more across than down: without
+    // the second test every slightly crooked scroll of the details turns a
+    // page. Down is deliberately not a gesture — it is the system's in an
+    // installed app, and there is a close button.
+    if(Math.abs(dx)<48||Math.abs(dx)<Math.abs(dy)*1.6) return;
+    const to=nextShown(cur,dx<0?1:-1);
+    if(to<0) return;
+    // Paging is looking, not choosing — the same rule the arrow keys follow.
+    setCur(to,true);
+    drawSel();
+  },{passive:true});
+}
 
 // --- writing -----------------------------------------------------------------
 // Loud, because the alternative has bitten twice: a write that fails without
