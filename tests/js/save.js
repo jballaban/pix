@@ -16,6 +16,15 @@
 const fs = require('fs');
 const { El, document } = require('./dom.js');
 
+// The stub's `focus` does nothing, which is exactly what a phone must not be
+// asked to do: raising the keyboard is the whole question. Recorded, and it
+// gives the page an `activeElement` to ask about too.
+const focused = [];
+El.prototype.focus = function focus() {
+  focused.push(this);
+  document.activeElement = this;
+};
+
 const js = fs.readFileSync(process.argv[2], 'utf8');
 const failures = [];
 function check(name, cond, detail) {
@@ -100,6 +109,9 @@ let weigh = 1000;
 const fetched = [];
 const fetch = async (url) => {
   fetched.push(url);
+  if (url.startsWith('/api/suggest')) {
+    return { ok: true, json: async () => [{ value: 'ghost', n: 1, scope: 'all' }] };
+  }
   return {
     ok: true,
     headers: { get: k => (k === 'content-length' ? String(weigh) : null) },
@@ -264,6 +276,37 @@ function run() {
   check('a handful goes to the sheet together',
         shared && shared.files.length === 2,
         shared && shared.files.length);
+
+  // --- the menu and the keyboard ----------------------------------------------
+  // Opening a menu focused its filter box, the phone scrolled the document to
+  // bring the field into view, and the page closes a menu on any scroll — so
+  // every Event, Tags, Date and Access opened and vanished. Nothing was broken
+  // and none of it worked.
+  {
+    const menu = document.byId.menu;
+    focused.length = 0;
+    document.activeElement = null;
+    cells[0].children[0].click();
+    actBtn('tags').click();
+    await settled();
+
+    check('the menu is open', menu.hidden === false);
+    check('and nothing asked the phone for its keyboard',
+          focused.length === 0, focused.map(e => e.id).join(', '));
+
+    // The browser scrolling the page to reveal a field the reader is typing in
+    // is not the reader moving on.
+    document.activeElement = document.byId.menuq;
+    (listeners.scroll || []).forEach(fn => fn());
+    check('a scroll with the cursor still in the menu leaves it open',
+          menu.hidden === false);
+
+    // And a real one still dismisses it.
+    document.activeElement = null;
+    (listeners.scroll || []).forEach(fn => fn());
+    check('a scroll of the page itself still closes it', menu.hidden === true);
+    cells[0].children[0].click();   // back to nothing selected
+  }
 
   // --- what a phone actually downloads to fill a cell --------------------------
   // The grid was reading the biggest derivative in the library into a cell the

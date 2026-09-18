@@ -372,7 +372,10 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
 #menu input { background:#14161a; color:var(--fg); border:0;
               border-bottom:1px solid var(--line); padding:9px 11px; font:inherit;
               border-radius:6px 6px 0 0; outline:none; width:100%; }
-#menulist { overflow-y:auto; padding:4px 0; }
+/* `contain`, so dragging past the end of the list scrolls nothing. Without it
+   the page behind takes over, and the page closing on a scroll is what closes
+   the menu — a list you cannot reach the bottom of without dismissing it. */
+#menulist { overflow-y:auto; padding:4px 0; overscroll-behavior:contain; }
 .opt { display:flex; gap:8px; padding:5px 11px; cursor:pointer;
        align-items:baseline; }
 .opt:hover, .opt.cur { background:#2a3340; }
@@ -2584,7 +2587,20 @@ document.addEventListener('click',e=>{
   if(!menu.hidden&&!menu.contains(e.target)) closeMenu();
 });
 window.addEventListener('resize',closeMenu);
-window.addEventListener('scroll',closeMenu,{passive:true});
+// Closing on a scroll means *you have moved on*. On a phone it meant the
+// keyboard: focusing a field makes the browser scroll the document to bring
+// it into view, so the menu shut the instant it became usable — every Event,
+// Tags, Date and Access, on the device this library is mostly read on, opened
+// and then disappeared. Nothing in the app was broken and none of it worked.
+//
+// So a scroll with the cursor still inside the menu is the browser moving the
+// page, not the reader. Nothing else changes: the menu is positioned in the
+// document and scrolls with it either way.
+window.addEventListener('scroll',()=>{
+  const at=(typeof document!=='undefined')&&document.activeElement;
+  if(at&&!menu.hidden&&menu.contains(at)) return;
+  closeMenu();
+},{passive:true});
 
 menu.addEventListener('click',e=>e.stopPropagation());
 
@@ -2613,7 +2629,11 @@ async function openMenu(anchorEl,ctx){
     if(e.key==='Escape'){closeMenu();}
     e.stopPropagation();
   };
-  setTimeout(()=>q.focus(),0);
+  // Not on a phone. There the keyboard is half the screen, and it would come
+  // up over the list before anyone has decided whether they want to type —
+  // when what is usually wanted is the third name down, already on screen.
+  // Tapping the field is how you ask for it.
+  if(!COARSE) setTimeout(()=>q.focus(),0);
 
   let opts=[];
   if(fixed && ctx.mode!=='set'){
