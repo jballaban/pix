@@ -3816,3 +3816,21 @@ def test_every_control_in_the_bar_grows_together() -> None:
     rule = coarse[coarse.index("button:not(.tick)"):]
 
     assert rule.split("{")[0].strip().endswith(".chip")
+
+
+def test_a_dropdown_row_outranks_the_rule_above_it() -> None:
+    """Three `:not()`s count as three classes, so the rule that makes every
+    button 44px is the *heavier* selector and a plain `.memenu button` loses
+    to it — which shrink-wraps Sign out to its own text under History and
+    Accounts, which stay full width because they are links and that rule never
+    touched them.
+
+    Locked down because it is invisible until somebody opens the account menu
+    on a phone, and because the obvious tidy-up is to drop the `:not()`s.
+    """
+    coarse = _media_block(web._STYLE, "(pointer: coarse)")
+    rows = coarse[coarse.index(".memenu a,"):].split("{")[0]
+
+    assert ".memenu button:not(.tick):not(.grppick):not(.pick)" in rows
+    # Equal weight, so the later one counts — and it has to be the later one.
+    assert coarse.index("button:not(.tick)") < coarse.index(".memenu button:not(")

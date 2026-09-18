@@ -905,10 +905,15 @@ h2.year span { font-size:13px; font-weight:400; }
   button:not(.tick):not(.grppick):not(.pick), .chip {
     min-height:44px; padding:8px 12px;
     display:inline-flex; align-items:center; }
-  /* Rows in a dropdown are full-width, so they stay blocks and simply get
-     taller. Said after the rule above, which would otherwise shrink-wrap
-     Sign out to its own text. */
-  .memenu a, .memenu button, .bellmenu a, .bellmenu .quiet {
+  /* Rows in a dropdown are full width, so they stay blocks and simply get
+     taller. Carrying the same three `:not()`s as the rule above, and not for
+     tidiness: each of those counts as a class, so `.memenu button` is the
+     lighter selector and loses — and Sign out shrink-wraps to its own text
+     under History and Accounts, which do not, because they are links and that
+     rule never touched them. Equal weight and later in the sheet is what
+     makes this the one that counts. */
+  .memenu a, .bellmenu a, .bellmenu .quiet,
+  .memenu button:not(.tick):not(.grppick):not(.pick) {
     min-height:44px; display:flex; align-items:center; width:100%; }
   .opt { min-height:44px; align-items:center; }
   #sizepick { width:44px; height:44px; }
@@ -929,9 +934,16 @@ h2.year span { font-size:13px; font-weight:400; }
   /* The cross that clears a filter, which was ten pixels of glyph inside a
      button that does something else. Stretched to the chip's own height
      rather than padded, so the chip does not grow to hold it. */
-  .chip .x, .from-op .x {
-    align-self:stretch; display:flex; align-items:center;
-    padding:0 10px; margin:0 -10px 0 2px; }
+  /* Padding for the hit area and a matching negative margin so the chip
+     does not grow to hold it. Not `align-self: stretch`, which would work
+     only for as long as every chip is a flex container — and one of them is
+     a span that is only one because the rule above made it one. */
+  .chip .x, .from-op .x { padding:12px 10px; margin:-12px -10px -12px 0; }
+  /* `text-overflow` needs a block box, and the chips are flex ones here. The
+     name of the operation is the part that can run long, so it is the part
+     that has to do the eliding. */
+  .from-op { overflow:hidden; }
+  .from-op b { overflow:hidden; text-overflow:ellipsis; min-width:0; }
 
   /* Tapping twice quickly on two circles side by side is a double-tap, and a
      double-tap zooms. */
