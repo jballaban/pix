@@ -49,7 +49,7 @@ from pix.nas.decisions import Decision
 #: Bumped whenever the shape changes. A mismatch drops and rebuilds rather than
 #: migrating: the index is disposable by design, and a migration path is
 #: machinery to maintain for something a `pix2 index` reproduces exactly.
-SCHEMA_VERSION: int = 10
+SCHEMA_VERSION: int = 11
 
 #: `audience` filter value meaning *nobody yet* — the "New" chip in the UI.
 #: A sentinel rather than a separate reviewed flag: a file with no audience
@@ -184,6 +184,17 @@ CREATE TABLE IF NOT EXISTS file_tags (
     PRIMARY KEY (folder, name, tag)
 );
 CREATE INDEX IF NOT EXISTS file_tags_tag ON file_tags(tag);
+-- Who is *in* the file. Its own table rather than a prefix inside `file_tags`,
+-- because who is shown is a different question from what this is a picture of
+-- and the app has to be able to ask them apart: a shelf of everything with Mum
+-- in it is not a shelf of everything tagged `mum`.
+CREATE TABLE IF NOT EXISTS file_people (
+    folder TEXT NOT NULL,
+    name   TEXT NOT NULL,
+    who    TEXT NOT NULL,
+    PRIMARY KEY (folder, name, who)
+);
+CREATE INDEX IF NOT EXISTS file_people_who ON file_people(who);
 CREATE TABLE IF NOT EXISTS file_audience (
     folder TEXT NOT NULL,
     name   TEXT NOT NULL,
@@ -236,6 +247,11 @@ class Filters:
     #: state rather than a date — *the ones nobody could place* is real work.
     date: str | None = None
     tag: str | None = None
+    #: Who is **in** the file, which is not `audience` and never collapses
+    #: into it: *pictures of Mum* and *pictures Mum may see* are opposite
+    #: questions that happen to take the same kind of word, and a household
+    #: asks the first one far more often.
+    person: str | None = None
     audience: str | None = None
     kind: str | None = None
     band: str | None = None
@@ -328,9 +344,9 @@ class Filters:
     #: told the server it had been made in the ordinary grid — which is how it
     #: decides whether a file has left the view. Restoring a file left it on
     #: screen in a listing of the deleted.
-    NAMES: ClassVar[tuple[str, ...]] = ("event", "tag", "date", "audience",
-                                       "kind", "band", "source", "camera",
-                                       "deleted", "stacks", "within")
+    NAMES: ClassVar[tuple[str, ...]] = ("event", "tag", "person", "date",
+                                       "audience", "kind", "band", "source",
+                                       "camera", "deleted", "stacks", "within")
 
 
 @dataclass(frozen=True)
@@ -359,6 +375,7 @@ def connect(db_path: Path) -> sqlite3.Connection:
         conn.executescript(
             "DROP TABLE IF EXISTS files;"
             "DROP TABLE IF EXISTS file_tags;"
+            "DROP TABLE IF EXISTS file_people;"
             "DROP TABLE IF EXISTS file_audience;")
     conn.executescript(_SCHEMA)
     conn.execute("INSERT OR REPLACE INTO meta VALUES ('schema', ?)",
@@ -478,6 +495,7 @@ def build(db_path: Path, *, echo: Callable[[str], None] = lambda _: None,
         with conn:
             conn.execute("DELETE FROM files")
             conn.execute("DELETE FROM file_tags")
+            conn.execute("DELETE FROM file_people")
             conn.execute("DELETE FROM file_audience")
             for folder, decided, source in _folders(meta_root, master_root):
                 for record in _records(meta_root / folder):
@@ -578,13 +596,14 @@ def refresh(conn: sqlite3.Connection, folder: str, name: str, *,
 
 def _write_multi(conn: sqlite3.Connection, folder: str, name: str,
                  decision: Decision | None) -> None:
-    """Replace one file's tag and audience rows.
+    """Replace one file's tag, people and audience rows.
 
     Delete-then-insert, or un-sharing a file would silently do nothing — and
     a share that cannot be taken back is not access control.
     """
     for table, column, values in (
         ("file_tags", "tag", decision.tags if decision else ()),
+        ("file_people", "who", decision.people if decision else ()),
         ("file_audience", "who", decision.audience if decision else ()),
     ):
         conn.execute(f"DELETE FROM {table} WHERE folder = ? AND name = ?",
@@ -902,6 +921,11 @@ def _clauses(filters: Filters) -> dict[str, tuple[str, dict[str, Any]]]:
             "EXISTS (SELECT 1 FROM file_tags ft WHERE ft.folder = files.folder "
             "AND ft.name = files.name AND ft.tag = :f_tag)",
             {"f_tag": filters.tag})
+    if filters.person is not None:
+        out["person"] = (
+            "EXISTS (SELECT 1 FROM file_people fp WHERE fp.folder = files.folder "
+            "AND fp.name = files.name AND fp.who = :f_person)",
+            {"f_person": filters.person})
     if filters.audience is not None:
         shared = ("EXISTS (SELECT 1 FROM file_audience fa "
                   "WHERE fa.folder = files.folder AND fa.name = files.name")
@@ -1087,7 +1111,7 @@ def files(conn: sqlite3.Connection, filters: Filters | None = None, *,
     selected = "".join(f", {key} AS grp{i} " for i, key in enumerate(keys))
     ordered = _ordering(groups)
     return list(conn.execute(
-        "SELECT files.*, " + _TAGS_COL + ", " + _AUDIENCE_COL
+        "SELECT files.*, " + _TAGS_COL + ", " + _PEOPLE_COL + ", " + _AUDIENCE_COL
         + ", " + _BEHIND_COL + ", " + _AHEAD_COL
         + (selected or ", NULL AS grp0 ")
         + "FROM files "
@@ -1117,6 +1141,9 @@ _AHEAD_COL: str = (
 _TAGS_COL: str = (
     "(SELECT group_concat(ft.tag, char(10)) FROM file_tags ft "
     " WHERE ft.folder = files.folder AND ft.name = files.name) AS tags")
+_PEOPLE_COL: str = (
+    "(SELECT group_concat(fp.who, char(10)) FROM file_people fp "
+    " WHERE fp.folder = files.folder AND fp.name = files.name) AS people")
 _AUDIENCE_COL: str = (
     "(SELECT group_concat(fa.who, char(10)) FROM file_audience fa "
     " WHERE fa.folder = files.folder AND fa.name = files.name) AS audience")
@@ -1360,7 +1387,7 @@ def one(conn: sqlite3.Connection, folder: str,
         name: str) -> sqlite3.Row | None:
     """A single row with its tags, or None if the file is not indexed."""
     return conn.execute(
-        "SELECT files.*, " + _TAGS_COL + ", " + _AUDIENCE_COL
+        "SELECT files.*, " + _TAGS_COL + ", " + _PEOPLE_COL + ", " + _AUDIENCE_COL
         + " FROM files WHERE folder = ? AND name = ?",
         (folder, name)).fetchone()
 
@@ -1595,9 +1622,10 @@ def suggest(conn: sqlite3.Connection, column: str,
         parts = [p for p in (seen, *extra, *_always(view)) if p]
         return f"WHERE {' AND '.join(parts)} " if parts else ""
 
-    if column in ("tag", "audience"):
-        table, col = (("file_tags", "tag") if column == "tag"
-                      else ("file_audience", "who"))
+    if column in ("tag", "person", "audience"):
+        table, col = {"tag": ("file_tags", "tag"),
+                      "person": ("file_people", "who"),
+                      "audience": ("file_audience", "who")}[column]
         sql = (f"SELECT m.{col} AS value, " + tally
                + f"FROM {table} m "
                  "JOIN files ON files.folder = m.folder AND files.name = m.name "

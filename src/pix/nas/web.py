@@ -1471,6 +1471,7 @@ def filters(
     event: Annotated[str | None, Query()] = None,
     date: Annotated[str | None, Query()] = None,
     tag: Annotated[str | None, Query()] = None,
+    person: Annotated[str | None, Query()] = None,
     audience: Annotated[str | None, Query()] = None,
     kind: Annotated[str | None, Query()] = None,
     band: Annotated[str | None, Query()] = None,
@@ -1516,6 +1517,7 @@ def filters(
     rather than as some third thing.
     """
     return ix.Filters(event=event, date=ix.date_prefix(date), tag=tag,
+                      person=person,
                       audience=audience, chosen=_from_operation(op, stale),
                       within=within,
                       stacks=_stacks(stacks, user),
@@ -1966,6 +1968,7 @@ def _actions(user: Principal) -> str:
   <span class="grp" data-side="live" hidden>
     {_act("event", "Event&hellip;")}
     {_act("tags", "Tags&hellip;")}
+    {_act("people", "People&hellip;")}
     {_act("date", "Date&hellip;")}
     {_act("access", "Access&hellip;")}
     {_act("stack", "Stack")}
@@ -2181,6 +2184,7 @@ def _cell(row: sqlite3.Row, view: ix.Filters | None = None) -> str:
         f'data-audience="{_h(nl.join(shared))}" '
         f'data-event="{_h(row["event"] or "")}" '
         f'data-tags="{_h(nl.join(tags))}" '
+        f'data-people="{_h(nl.join(_split(row["people"])))}" '
         f'data-date="{_h(str(row["effective_date"] or "no date"))}" '
         f'data-deleted="{"1" if row["deleted"] else ""}" '
         f'data-under="{_h(row["stacked_under"] or "")}" '
@@ -2348,8 +2352,8 @@ _CHIPS: tuple[tuple[str, str], ...] = (
     # what it is, then what it is for. `kind`, `band` and `deleted` come last
     # as a group of their own — they are facts about the file rather than
     # judgements about it, and nobody reaches for them mid-cull.
-    ("event", "Event"), ("tag", "Tag"), ("date", "Date"),
-    ("audience", "Access"),
+    ("event", "Event"), ("tag", "Tag"), ("person", "People"),
+    ("date", "Date"), ("audience", "Access"),
     ("kind", "Type"), ("band", "Size"), ("source", "Source"),
     ("camera", "Camera"),
     ("stacks", "Stacks"), ("deleted", "Deleted"),
@@ -2381,12 +2385,17 @@ _MARKS: dict[str, str] = {
     "date": '<rect x="3.4" y="5" width="17.2" height="15.6" rx="2.2"/>'
             '<path d="M3.4 10h17.2"/><path d="M8 3.2v3.5"/>'
             '<path d="M16 3.2v3.5"/>',
-    # Who can see it: people, plural, one behind the other. Deliberately not an
-    # eye — an eye reads as *preview this* wherever it appears beside pictures.
-    "audience": '<circle cx="9.4" cy="8.6" r="3.4"/>'
-                '<path d="M3.2 19.8a6.2 6.2 0 0 1 12.4 0"/>'
-                '<circle cx="17.8" cy="8.2" r="2.4"/>'
-                '<path d="M16.8 14.4a5.2 5.2 0 0 1 4 5.4"/>',
+    # Who is **in** the photograph. A head and shoulders, because that is
+    # what a person is, and inside a frame because the question is who is in
+    # *this* — which is also where a detected face will one day be drawn.
+    "person": '<rect x="3.3" y="3.3" width="17.4" height="17.4" rx="3"/>'
+              '<circle cx="12" cy="10" r="2.9"/>'
+              '<path d="M6.9 19.4a5.6 5.6 0 0 1 10.2 0"/>',
+    # Who may **see** it, which is the opposite question and had the person
+    # shape until People needed it more. An eye: the thing this decides is
+    # whether somebody can look, and nothing else in the set is round.
+    "audience": '<path d="M2.2 12s3.6-6.4 9.8-6.4S21.8 12 21.8 12s-3.6 6.4-9.8 '
+                '6.4S2.2 12 2.2 12z"/><circle cx="12" cy="12" r="2.9"/>',
     # Photographs, video, and whatever else — so, kinds of thing. A play
     # triangle would have named one of the three values rather than the
     # question.
@@ -2465,7 +2474,8 @@ _MARKS: dict[str, str] = {
 #: Two bars that read the same way — a control that changes its face between
 #: them is a control you have to learn twice.
 _ACT_MARKS: dict[str, str] = {
-    "event": "event", "tags": "tag", "date": "date", "access": "audience",
+    "event": "event", "tags": "tag", "people": "person", "date": "date",
+    "access": "audience",
     "stack": "stacks", "top": "top", "unstack": "unstack",
     "nostack": "nostack", "download": "get", "delete": "deleted",
     "restore": "restore", "purge": "purge",
@@ -3472,6 +3482,10 @@ function railHtml(d){
     : [['Event',d.event||'—']];
 
   const tags=(d.tags||[]).map(t=>`<span class="pill">${esc(t)}</span>`).join('');
+  // Under a heading of their own rather than mixed in with the tags. They are
+  // pills either way, and *Mum* sitting in a row with *beach* and *sunset*
+  // reads as a keyword — which is the one thing a person is not.
+  const folk=(d.people||[]).map(p=>`<span class="pill">${esc(p)}</span>`).join('');
   const all=Object.entries(d.exif||{})
     .map(([k,v])=>`<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
 
@@ -3480,6 +3494,7 @@ function railHtml(d){
           ...eventRow])
     + (tags?`<div style="margin-top:6px">${tags}</div>`
           :'<div class="dim" style="margin-top:4px">no tags</div>')
+    + (folk?`<div class="rail-h">People</div><div>${folk}</div>`:'')
     + (d.has_sidecar?'':'<div class="dim" style="margin-top:6px">'
         +'no sidecar &mdash; nothing decided yet</div>')
     + `<div class="rail-h">Date</div>` + kv(dateRows)
@@ -4147,6 +4162,7 @@ function drop(gone){
 // Which cell attribute each multi-valued action edits, and the two request
 // fields that add to it and take from it.
 const MULTI={tags:['tags','add_tags','remove_tags'],
+            people:['people','add_people','remove_people'],
              access:['audience','add_audience','remove_audience']};
 
 function valuesOf(c,field){
@@ -4421,7 +4437,8 @@ async function send(cs,body,label,sharedBatch){
 // two are not the same word: `unshare` writes the audience field and offers
 // audience values, and using the action name as the column asked the server
 // for a column called `share` — a 400, and an empty list every time.
-const ACT_COLUMN={tags:'tag', access:'audience', event:'event'};
+const ACT_COLUMN={tags:'tag', people:'person', access:'audience',
+                  event:'event'};
 (actions?[...actions.querySelectorAll('[data-act]')]:[]).forEach(b=>{
   const act=b.dataset.act;
   b.onclick=e=>{
@@ -4954,8 +4971,8 @@ def api_suggest(user: Annotated[Principal, Depends(require_user)],
     already covering those days. Both or neither — half a range is not a range,
     and guessing the missing end would propose events on evidence nobody gave.
     """
-    if column not in ("event", "tag", "audience", "date", "kind", "band",
-                      "camera", "source"):
+    if column not in ("event", "tag", "person", "audience", "date", "kind",
+                      "band", "camera", "source"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             f"cannot suggest values for {column!r}")
     near = (near_from, near_to) if near_from and near_to else None
@@ -5029,6 +5046,7 @@ def api_file(folder: str, name: str,
         "year": row["year"],
         "event": row["event"],
         "tags": _split(row["tags"]),
+        "people": _split(row["people"]),
         "audience": _split(row["audience"]),
         "has_sidecar": bool(row["has_sidecar"]),
         "decided": ({"event": decision.event,
@@ -5097,6 +5115,9 @@ class DecideBody(BaseModel):
     tags: list[str] | None = None
     add_tags: list[str] = []
     remove_tags: list[str] = []
+    people: list[str] | None = None
+    add_people: list[str] = []
+    remove_people: list[str] = []
     audience: list[str] | None = None
     add_audience: list[str] = []
     remove_audience: list[str] = []
@@ -5125,6 +5146,7 @@ def api_decide(user: Annotated[Principal, Depends(require_admin)],
         "event": decision.event,
         "date_override": decision.date_override,
         "tags": list(decision.tags),
+        "people": list(decision.people),
         "audience": list(decision.audience),
         "has_sidecar": not decision.is_empty(),
         "indexed": indexed,
@@ -5237,6 +5259,9 @@ class DecideBulkBody(BaseModel):
     tags: list[str] | None = None
     add_tags: list[str] = []
     remove_tags: list[str] = []
+    people: list[str] | None = None
+    add_people: list[str] = []
+    remove_people: list[str] = []
     audience: list[str] | None = None
     add_audience: list[str] = []
     remove_audience: list[str] = []
@@ -5359,6 +5384,9 @@ class _Change:
     tags: Sequence[str] | None | Unset = decisions.UNSET
     add_tags: Sequence[str] = field(default_factory=tuple)
     remove_tags: Sequence[str] = field(default_factory=tuple)
+    people: Sequence[str] | None | Unset = decisions.UNSET
+    add_people: Sequence[str] = field(default_factory=tuple)
+    remove_people: Sequence[str] = field(default_factory=tuple)
     audience: Sequence[str] | None | Unset = decisions.UNSET
     add_audience: Sequence[str] = field(default_factory=tuple)
     remove_audience: Sequence[str] = field(default_factory=tuple)
@@ -5382,6 +5410,9 @@ def _change(body: DecideBody | DecideBulkBody) -> _Change:
                    date_override=got("date_override"), tags=got("tags"),
                    add_tags=tuple(body.add_tags),
                    remove_tags=tuple(body.remove_tags),
+                   people=got("people"),
+                   add_people=tuple(body.add_people),
+                   remove_people=tuple(body.remove_people),
                    audience=got("audience"),
                    add_audience=tuple(body.add_audience),
                    remove_audience=tuple(body.remove_audience),
@@ -5398,14 +5429,16 @@ def _recorded(change: _Change) -> dict[str, Any]:
     the operation never touched.
     """
     out: dict[str, Any] = {}
-    for name in ("event", "date_override", "tags", "audience", "deleted",
+    for name in ("event", "date_override", "tags", "people", "audience",
+                 "deleted",
                  "stacked_under", "no_stack"):
         value: Any = getattr(change, name)
         if isinstance(value, Unset):
             continue
         out[name] = ([str(v) for v in cast("Sequence[str]", value)]
                      if isinstance(value, (list, tuple)) else value)
-    for name in ("add_tags", "remove_tags", "add_audience", "remove_audience"):
+    for name in ("add_tags", "remove_tags", "add_people", "remove_people",
+                 "add_audience", "remove_audience"):
         many = cast("Sequence[str]", getattr(change, name))
         if many:
             out[name] = [str(v) for v in many]
@@ -5453,6 +5486,9 @@ def _decide(folder: str, name: str, change: _Change,
                 media, event=change.event,
                 date_override=change.date_override, tags=change.tags,
                 add_tags=change.add_tags, remove_tags=change.remove_tags,
+                people=change.people,
+                add_people=change.add_people,
+                remove_people=change.remove_people,
                 audience=change.audience,
                 add_audience=change.add_audience,
                 remove_audience=change.remove_audience,
@@ -5600,6 +5636,10 @@ def _summary(change: _Change) -> str:
     if change.remove_audience:
         return f"took {', '.join(change.remove_audience)} access "\
                f"from {files}"
+    if change.add_people:
+        return f"put {', '.join(change.add_people)} in {files}"
+    if change.remove_people:
+        return f"took {', '.join(change.remove_people)} out of {files}"
     if change.add_tags:
         return f"tagged {files} {', '.join(change.add_tags)}"
     if change.remove_tags:

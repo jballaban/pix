@@ -1,6 +1,7 @@
 """Curation decisions — the `.xmp` sidecar beside each master file (spec §4).
 
-Four fields: **`audience`, `event`, `tags`, and a date override**. Nothing
+Five fields: **`audience`, `event`, `tags`, `people`, and a date override**.
+Nothing
 recomputable goes here, because master is the one tier backed up forever and
 caching a probed fact in it duplicates recomputable data into permanent
 storage. Everything that is here is a human judgement about the file.
@@ -58,6 +59,7 @@ understand:
 |---|---|---|
 | event | `pix:EventOverride` | `Iptc4xmpExt:Event` |
 | tags | — | `dc:subject`, the standard keywords bag |
+| people | — | `Iptc4xmpExt:PersonInImage`, the standard *who is shown* bag |
 | audience | `pix:Audience` | — nothing standard expresses *who may see this* |
 | stacked under | `pix:StackedUnder` | — Lightroom keeps stacks in its catalogue, not the file |
 | not a stack | `pix:NoStack` | — a refusal of the app's own suggestion has no standard |
@@ -69,6 +71,19 @@ the industry keyword field, every tool round-trips it, and nothing in pix
 used it before — so there is no legacy vocabulary to reconcile and no reason
 to invent a second home that could disagree with the first.
 
+**`people` is who is *in* the photograph, and it is not `audience`.** They are
+opposite questions that both take a person's name: who is shown, and who may
+look. Mum being in a picture says nothing about whether it is shared with her,
+and a photograph of the children shared with nobody is an ordinary thing. They
+are separate fields for that reason and not merely separate names for one list.
+
+It lives **only** in `Iptc4xmpExt:PersonInImage`, by the same argument as tags:
+it is the standard field for exactly this, every cataloguer round-trips it, and
+pix never used it before. Whole-file, which is all that field says — a clip is
+tagged with who is in the clip, not who is in which frame. When faces arrive
+they bring **regions**, which have their own standard home in `mwg-rs:Regions`
+and can be added beside this without either having to move.
+
 Writes are temp-then-rename, so a kill mid-write cannot leave a half-written
 sidecar that parses as a decision nobody made.
 """
@@ -79,7 +94,7 @@ import os
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 from xml.sax.saxutils import escape, quoteattr
 
 from pix import datestr
@@ -109,14 +124,19 @@ UNSET: Unset = Unset()
 class Decision:
     """What a human decided about one master file.
 
-    `tags` is sorted and de-duplicated on construction, so two sidecars
-    recording the same judgement are the same bytes — which keeps a
-    re-write from looking like a change.
+    Every multi-valued field is sorted and de-duplicated on construction, so
+    two sidecars recording the same judgement are the same bytes — which keeps
+    a re-write from looking like a change. They do not all de-duplicate the
+    same way: see the three `normalize_*` functions below, one per field,
+    because a keyword, a person and a login are three different kinds of word.
     """
 
     event: str | None = None
     date_override: str | None = None
     tags: tuple[str, ...] = field(default_factory=tuple)
+    #: Who is **in** the photograph. Not `audience`, which is who may see it —
+    #: see the note in the module docstring about why one list cannot be both.
+    people: tuple[str, ...] = field(default_factory=tuple)
     audience: tuple[str, ...] = field(default_factory=tuple)
     #: Soft-deleted — *this should go*, which is a judgement like any other and
     #: so lives here rather than in a list off to the side. Beside the file, a
@@ -147,13 +167,14 @@ class Decision:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "tags", normalize_tags(self.tags))
+        object.__setattr__(self, "people", normalize_people(self.people))
         object.__setattr__(self, "audience",
                            normalize_names(self.audience))
 
     def is_empty(self) -> bool:
         """True when nothing has been decided, so no sidecar should exist."""
         return not (self.event or self.date_override or self.tags
-                    or self.audience or self.deleted
+                    or self.people or self.audience or self.deleted
                     or self.stacked_under or self.no_stack)
 
 
@@ -180,6 +201,36 @@ def normalize_names(values: Iterable[str]) -> tuple[str, ...]:
     """
     return tuple(sorted({v.strip().casefold()
                          for v in values if v and v.strip()}))
+
+
+def normalize_people(values: Iterable[str]) -> tuple[str, ...]:
+    """Trim, drop blanks, sort — de-duplicated **without regard to case, but
+    keeping the case that was typed**.
+
+    Neither of the two rules above is right for a person. `normalize_tags`
+    keeps the spelling and would make *Mom* and *mom* two people, which is the
+    one thing a person must not be. `normalize_names` folds, and would write
+    *mom* into the permanent record of who is in the photograph — a name is
+    the one kind of word where case is part of it, and audiences fold only
+    because they are compared against logins.
+
+    So: the first spelling in sorted order wins, and *Mom* beats *mom* by
+    being sorted first. Within a file that is exact. **Across files it is not**
+    — two files can still carry two spellings, and what keeps them together is
+    the menu offering the names already in use so people pick rather than
+    retype, which is the same thing that keeps tags tidy. A canonical list of
+    people is where that would be settled properly, and is also where a face
+    would eventually hang.
+    """
+    # Sorted *before* the de-duplication, not after: taking whichever spelling
+    # happened to arrive first would make the stored name depend on the order
+    # the caller passed them in, so the same two names could land either way
+    # round on two files. Sorting first also settles which wins — capitals
+    # sort ahead, so `Mom` beats `mom`, which is the one anybody meant.
+    seen: dict[str, str] = {}
+    for value in sorted(v.strip() for v in values if v and v.strip()):
+        seen.setdefault(value.casefold(), value)
+    return tuple(sorted(seen.values()))
 
 
 class DecisionError(ValueError):
@@ -235,6 +286,9 @@ def change(media: Path, *,
            tags: Sequence[str] | None | Unset = UNSET,
            add_tags: Sequence[str] = (),
            remove_tags: Sequence[str] = (),
+           people: Sequence[str] | None | Unset = UNSET,
+           add_people: Sequence[str] = (),
+           remove_people: Sequence[str] = (),
            audience: Sequence[str] | None | Unset = UNSET,
            add_audience: Sequence[str] = (),
            remove_audience: Sequence[str] = (),
@@ -250,10 +304,10 @@ def change(media: Path, *,
     single process serializes the writes, so concurrency is a policy question
     here, never an integrity one.
 
-    Tags and audience take `add_`/`remove_` as well as a wholesale replace,
-    and the difference matters at scale: sharing 200 files with the kids must
-    add to whatever each is already shared with, not flatten them all to one
-    list.
+    Tags, people and audience take `add_`/`remove_` as well as a wholesale
+    replace, and the difference matters at scale: sharing 200 files with the
+    kids must add to whatever each is already shared with, not flatten them
+    all to one list.
 
     Returns **both** the previous decision and the new one. The caller needs the
     previous value to be able to undo it, and it has already been read here —
@@ -267,8 +321,11 @@ def change(media: Path, *,
                        if isinstance(date_override, Unset)
                        else date_override),
         tags=_merge(current.tags, tags, add_tags, remove_tags),
+        people=_merge(current.people, people, add_people, remove_people,
+                      norm=normalize_people, same=str.casefold),
         audience=_merge(current.audience, audience,
-                        add_audience, remove_audience, fold=True),
+                        add_audience, remove_audience,
+                        norm=normalize_names),
         deleted=current.deleted if isinstance(deleted, Unset) else deleted,
         stacked_under=(current.stacked_under
                        if isinstance(stacked_under, Unset) else stacked_under),
@@ -286,18 +343,24 @@ def apply(media: Path, **fields: Any) -> Decision:
 
 def _merge(current: tuple[str, ...], replace: Sequence[str] | None | Unset,
            add: Sequence[str], remove: Sequence[str], *,
-           fold: bool = False) -> tuple[str, ...]:
+           norm: Callable[[Iterable[str]], tuple[str, ...]] = normalize_tags,
+           same: Callable[[str], str] = lambda v: v) -> tuple[str, ...]:
     """Apply a replace-or-add-or-remove edit to one multi-valued field.
 
-    `fold` picks the normaliser, and it matters most for *remove*:
-    unsharing `Kid` has to match a stored `kid`, or access could be
-    granted and then not taken back.
+    Two functions rather than one flag, because the three fields here need
+    three different pairs. `norm` is how a value is stored; `same` is when two
+    of them count as the same value, and it is **only** consulted for *remove*.
+
+    They are separate for people. A person is stored with the case that was
+    typed, so `Mom` stays `Mom` — but taking Mum out of a photograph has to
+    match a `mom` that some earlier edit stored, or a name could be put on and
+    then not taken off. That is the same failure `audience` folds to avoid,
+    except that an audience can fold in storage too and a name cannot.
     """
-    norm = normalize_names if fold else normalize_tags
     kept = current if isinstance(replace, Unset) else norm(replace or ())
     if add or remove:
-        dropped = set(norm(remove))
-        kept = norm([v for v in [*kept, *norm(add)] if v not in dropped])
+        dropped = {same(v) for v in norm(remove)}
+        kept = norm([v for v in [*kept, *norm(add)] if same(v) not in dropped])
     return kept
 
 
@@ -358,6 +421,7 @@ def _to_xml(decision: Decision) -> str:
 
     body = "".join(f"    {key}={quoteattr(value)}\n" for key, value in props)
     children = (_bag("dc:subject", decision.tags)
+                + _bag("Iptc4xmpExt:PersonInImage", decision.people)
                 + _bag("pix:Audience", decision.audience))
     return _TEMPLATE.format(rdf=_RDF_NS, pix=PIX_NS, dc=_DC_NS,
                             photoshop=_PHOTOSHOP_NS, iptc=_IPTC_EXT_NS,
@@ -396,6 +460,8 @@ def _from_xml(root: ET.Element) -> Decision | None:
     decision = Decision(event=values.get("EventOverride"),
                         date_override=values.get("DateOverride"),
                         tags=_read_bag(description, _DC_NS, "subject"),
+                        people=_read_bag(description, _IPTC_EXT_NS,
+                                         "PersonInImage"),
                         audience=normalize_names(
                             _read_bag(description, PIX_NS, "Audience")),
                         deleted=_truth(values.get("Deleted")),

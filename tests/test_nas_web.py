@@ -356,7 +356,12 @@ def test_the_actions_and_filters_ask_the_same_questions_in_the_same_order(
     acts = re.findall(r'data-act="(\w+)"', html)
     # What a file is, then which of them speaks for the rest, then what
     # happens to it.
-    assert acts[:10] == ["event", "tags", "date", "access",
+    assert acts[:11] == ["event", "tags",
+                         # Who is *in* it sits with what it is a picture of,
+                         # because that is the same kind of question. Who may
+                         # *see* it is further along, with the rest of what
+                         # the file is for.
+                         "people", "date", "access",
                          "stack", "top", "unstack", "nostack",
                          # Taking a copy away is not doing anything to the
                          # library, so it sits with the rest rather than over
@@ -364,7 +369,8 @@ def test_the_actions_and_filters_ask_the_same_questions_in_the_same_order(
                          "download", "delete"], acts
 
     chips = html[html.index("CHIPS="):html.index("FIXED=")]
-    for earlier, later in (("event", "tag"), ("tag", "date"),
+    for earlier, later in (("event", "tag"), ("tag", "person"),
+                           ("person", "date"),
                            ("date", "audience"), ("audience", "kind"),
                            ("kind", "band"), ("band", "stacks"),
                            ("stacks", "deleted")):
@@ -3986,3 +3992,102 @@ def test_an_action_keeps_a_name_where_the_word_is_hidden() -> None:
     # the button rather than part of what it is called.
     assert 'title="Event" aria-label="Event"' in html
     assert '<span class="word">Event&hellip;</span>' in html
+
+
+# --- who is in the photograph -------------------------------------------------
+
+def test_people_can_be_put_on_a_file_and_read_back(
+    client: TestClient, writable: Path
+) -> None:
+    r = client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "add_people": ["Mom", "Dad"]})
+
+    assert r.status_code == 200
+    assert r.json()["people"] == ["Dad", "Mom"]
+    after = decisions.read(writable / "a.jpg")
+    assert after is not None and after.people == ("Dad", "Mom")
+
+
+def test_people_do_not_become_an_audience(
+    client: TestClient, writable: Path
+) -> None:
+    """The one confusion this feature exists to avoid. Putting Mum in a
+    photograph must not share it with her, and a household where it did would
+    be one where every picture of the children was visible to them."""
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "add_people": ["Mom"]})
+
+    after = decisions.read(writable / "a.jpg")
+    assert after is not None
+    assert after.people == ("Mom",)
+    assert after.audience == ()
+
+
+def test_an_audience_does_not_become_a_person(
+    client: TestClient, writable: Path
+) -> None:
+    """And the other way round, which is the same mistake read backwards."""
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "add_audience": ["family"]})
+
+    after = decisions.read(writable / "a.jpg")
+    assert after is not None
+    assert after.audience == ("family",) and after.people == ()
+
+
+def test_the_library_can_be_filtered_to_one_person(
+    client: TestClient, writable: Path
+) -> None:
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "add_people": ["Mom"]})
+
+    with_her = client.get("/api/files?person=Mom").json()
+    assert [f["name"] for f in with_her] == ["a.jpg"]
+    assert client.get("/api/files?person=Nobody").json() == []
+
+
+def test_a_person_filter_is_not_an_audience_filter(
+    client: TestClient, writable: Path
+) -> None:
+    """Two tables, two clauses. Sharing with `family` must not make a file
+    turn up under *pictures of family*."""
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "add_audience": ["family"]})
+
+    assert client.get("/api/files?person=family").json() == []
+    assert client.get("/api/files?audience=family").json()
+
+
+def test_the_names_already_in_use_are_offered(
+    client: TestClient, writable: Path
+) -> None:
+    """What keeps *Mom* and *mom* from becoming two people across a library is
+    the menu offering the names already there, so they are picked rather than
+    retyped — the same thing that keeps tags tidy."""
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "add_people": ["Mom"]})
+
+    assert "Mom" in [s["value"] for s in
+                     client.get("/api/suggest?column=person").json()]
+
+
+def test_a_thumbnail_carries_who_is_in_it(
+    client: TestClient, writable: Path
+) -> None:
+    """The grid reads the selection's current people off the cells, so a bulk
+    edit can tell *all of them*, *some of them* and *none* apart."""
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "add_people": ["Mom"]})
+
+    assert 'data-people="Mom"' in client.get("/browse").text
+
+
+def test_people_are_asked_about_separately_from_access(
+    client: TestClient
+) -> None:
+    """Two chips, two actions, two drawings — and the drawings must not be the
+    same one, because telling these two apart is the whole point."""
+    assert ("person", "People") in web._CHIPS
+    assert web._ACT_MARKS["people"] == "person"
+    assert web._ACT_MARKS["access"] == "audience"
+    assert web._mark("person") != web._mark("audience")

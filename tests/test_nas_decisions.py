@@ -344,3 +344,71 @@ def test_tags_keep_their_case(media: Path) -> None:
     decisions.write(media, Decision(tags=("Beach", "beach")))
 
     assert decisions.read(media) == Decision(tags=("Beach", "beach"))
+
+
+# --- who is in the photograph -------------------------------------------------
+
+def test_a_person_keeps_the_case_that_was_typed(tmp_path: Path) -> None:
+    """A name is the one kind of word where case is part of it. `audience`
+    folds because it is compared against logins; nobody logs in as Mum."""
+    assert decisions.normalize_people(["Mom", "Dad"]) == ("Dad", "Mom")
+
+
+def test_one_person_is_not_two_because_of_a_capital(tmp_path: Path) -> None:
+    """*Mom* and *mom* are one person, which is the whole of what makes this
+    groupable. Sorted before de-duplicating so the answer does not depend on
+    the order they arrived in — and so capitals win, which is the spelling
+    anybody meant."""
+    assert decisions.normalize_people(["mom", "Mom"]) == ("Mom",)
+    assert decisions.normalize_people(["Mom", "mom"]) == ("Mom",)
+
+
+def test_people_and_audience_are_different_lists(tmp_path: Path) -> None:
+    """Opposite questions that take the same kind of word: who is shown, and
+    who may look. Mum being in a picture says nothing about whether it is
+    shared with her."""
+    media = tmp_path / "a.jpg"
+    media.write_bytes(b"x")
+
+    decisions.write(media, decisions.Decision(people=("Mom",),
+                                              audience=("kids",)))
+    back = decisions.read(media)
+
+    assert back is not None
+    assert back.people == ("Mom",)
+    assert back.audience == ("kids",)
+
+
+def test_people_round_trip_through_the_standard_field(tmp_path: Path) -> None:
+    """`Iptc4xmpExt:PersonInImage` is the industry field for *who is shown*, so
+    a cataloguer that has never heard of pix still reads the names."""
+    media = tmp_path / "a.jpg"
+    media.write_bytes(b"x")
+
+    decisions.write(media, decisions.Decision(people=("Mom", "Dad")))
+
+    raw = decisions.sidecar_path(media).read_text(encoding="utf-8")
+    assert "Iptc4xmpExt:PersonInImage" in raw
+    assert "pix:People" not in raw
+
+
+def test_taking_a_person_out_matches_whatever_case_was_stored(
+    tmp_path: Path
+) -> None:
+    """The failure this avoids is a name that can be put on and not taken off.
+    `audience` avoids it by folding in storage too; a person cannot, so the
+    match folds and the storage does not."""
+    media = tmp_path / "a.jpg"
+    media.write_bytes(b"x")
+    decisions.write(media, decisions.Decision(people=("mom",)))
+
+    _, after = decisions.change(media, remove_people=["MOM"])
+
+    assert after.people == ()
+
+
+def test_a_person_alone_is_still_a_decision(tmp_path: Path) -> None:
+    """No sidecar means undecided, so saying who is in a photograph has to
+    create one like any other judgement."""
+    assert not decisions.Decision(people=("Mom",)).is_empty()
+    assert decisions.Decision().is_empty()
