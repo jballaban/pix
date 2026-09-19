@@ -3890,7 +3890,7 @@ def test_taking_a_copy_away_is_drawn_too(client: TestClient) -> None:
     where three controls sit across the top of a photograph."""
     html = client.get("/browse").text
 
-    assert '<button data-act="download"><svg' in html
+    assert '<button data-act="download" title="Download" '            'aria-label="Download"><svg' in html
     assert '<span class="word">Download</span>' in html
     assert '<a id="viewget" class="who-link" download><svg' in html
 
@@ -3964,3 +3964,25 @@ def test_an_action_keeps_its_word_where_the_script_can_find_it() -> None:
 
     assert '<span class="word">Event&hellip;</span>' in html
     assert "[data-act=\"'+act+'\"] .word" in web._BROWSE_JS
+
+
+def test_an_action_is_its_drawing_alone_on_a_phone() -> None:
+    """Eleven drawings and eleven words is two rows of bar on a screen with
+    none to give, and the drawing is the half that survives being small."""
+    narrow = _media_block(web._STYLE, "(max-width: 720px)")
+
+    assert "#actions .grp button .word { display:none; }" in narrow
+    assert "min-width:44px" in narrow
+
+
+def test_an_action_keeps_a_name_where_the_word_is_hidden() -> None:
+    """A control whose only name is switched off by a media query has no name
+    at all — not to a screen reader, and not to anyone hovering it on a
+    desktop either. So the word is carried three times over."""
+    html = web._actions(web.Principal(name="admin", is_admin=True))
+
+    assert 'title="Make top" aria-label="Make top"' in html
+    # The ellipsis says *this one asks something next*, which is a fact about
+    # the button rather than part of what it is called.
+    assert 'title="Event" aria-label="Event"' in html
+    assert '<span class="word">Event&hellip;</span>' in html

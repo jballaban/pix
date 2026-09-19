@@ -294,6 +294,20 @@ function run() {
         shared && shared.files.length === 2,
         shared && shared.files.length);
 
+  // --- long-pressing a photograph -----------------------------------------
+  // The stylesheet closes this on iOS with `-webkit-touch-callout`, which
+  // Android does not have — so there, long-pressing a thumbnail opens the
+  // browser's own image menu and its *Save image* saves the 400px derivative.
+  {
+    let stopped = 0;
+    const menu = () => (grid._listeners.contextmenu || [])
+      .forEach(fn => fn({ preventDefault() { stopped += 1; } }));
+    menu();
+    check('a finger holding a thumbnail is not offered the browser\'s own '
+          + 'menu, which would save the derivative', stopped === 1,
+          String(stopped));
+  }
+
   // --- a range, without a shift key -------------------------------------------
   // Shift-click is the only way to select more than one at a time, and a phone
   // has no shift key. 61,846 files one circle at a time is not a job anybody

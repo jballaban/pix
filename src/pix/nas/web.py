@@ -855,6 +855,17 @@ h2.year span { font-size:13px; font-weight:400; }
   .chips .spare { display:none; }
   .chips .addchip { display:inline-flex; }
 
+  /* Eleven drawings and eleven words is two rows of bar on a screen with none
+     to give, and the drawings are the half that survives being small. The
+     word stays in the markup — the takeover reads it back, and it is the
+     button's `aria-label` besides. */
+  #actions .grp button .word { display:none; }
+  #actions .grp button { min-width:44px; justify-content:center; }
+  /* Said in words because it is a state rather than a control: the bar is
+     waiting for you to point at a photograph, and there is no drawing for
+     *now do that*. */
+  #actions .grp b { font-size:12px; }
+
   /* The details rail was a 330px column, which on a 393px phone leaves sixty
      pixels of photograph — the photograph being what the viewer is for. There
      is not room for both, so it stops trying: details is a *tab*, and the
@@ -2462,15 +2473,26 @@ _ACT_MARKS: dict[str, str] = {
 
 
 def _act(act: str, word: str, cls: str = "") -> str:
-    """One button in the edit bar: its drawing, then its name.
+    """One button in the edit bar: its drawing, and its name beside it.
 
-    The word stays. Up here there are eleven of these in a row and no value
-    beside them to say which is which — a filter chip reads *flag, Sicily* and
-    an action would read only *flag*, which is a button you press to find out
-    what it does.
+    **The name is an element of its own, and it is carried three times.** On a
+    wide screen it is read; on a phone the stylesheet hides it and the drawing
+    stands alone, because eleven words and eleven drawings is two rows of bar
+    on a screen that has none to give. So the word also goes into `title`, for
+    a pointer, and into `aria-label`, for everything that does not have one —
+    a control whose only name is hidden by a media query has no name at all.
+
+    The span is not decoration either: the takeover names an action by reading
+    it back off its own button rather than keeping a second vocabulary for the
+    same four words, and `textContent` on a button with a drawing in it would
+    take the drawing with it.
     """
     kind = f' class="{cls}"' if cls else ""
-    return (f'<button data-act="{act}"{kind}>{_mark(_ACT_MARKS.get(act, ""))}'
+    # The ellipsis says *this one asks something next*, which is a fact about
+    # the button and not part of what it is called.
+    name = word.replace("&hellip;", "").strip()
+    return (f'<button data-act="{act}"{kind} title="{name}" '
+            f'aria-label="{name}">{_mark(_ACT_MARKS.get(act, ""))}'
             f'<span class="word">{word}</span></button>')
 
 
@@ -3524,6 +3546,24 @@ window.addEventListener('pageshow',e=>{
   closeMenu();
   busy=false; stopping=false; workClose();
 });
+
+// Android has no `-webkit-touch-callout`, so the stylesheet rule that closes
+// this on iOS closes nothing there: long-pressing a thumbnail opens Chrome's
+// own image menu, and its *Save image* saves the four-hundred-pixel
+// derivative — or, in the viewer, the sixteen-hundred-pixel preview. Somebody
+// walks off believing they have the photograph either way, and Save is how you
+// get the photograph.
+//
+// Refusing the menu is the only lever there is, and it is taken only where a
+// finger is doing the pressing: *Save image as* on a right-click is an
+// ordinary thing to want at a desk, and nothing about it is wrong there.
+if(COARSE){
+  const noMenu=e=>e.preventDefault();
+  if(grid&&typeof grid.addEventListener==='function')
+    grid.addEventListener('contextmenu',noMenu);
+  if(stage&&typeof stage.addEventListener==='function')
+    stage.addEventListener('contextmenu',noMenu);
+}
 
 // --- swiping between photographs ---------------------------------------------
 // Left and right are the arrow keys' job, and a phone has no arrow keys — so
