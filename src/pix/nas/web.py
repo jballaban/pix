@@ -372,7 +372,9 @@ button, .chip { background:#222833; color:var(--fg); border:1px solid var(--line
 /* Buttons that are a drawing and a word — the drawing needs the same air from
    the word that the chips give theirs. */
 #actions button svg { display:block; flex:none; }
-#actions .get { display:inline-flex; align-items:center; gap:6px; }
+/* The tick is deliberately outside this: it is a circle with nothing in
+   it, and a gap round nothing is still a wider circle. */
+#actions .grp button { display:inline-flex; align-items:center; gap:6px; }
 button:hover:not(:disabled), .chip:hover { border-color:var(--accent); }
 button:disabled { opacity:.4; cursor:default; }
 button.primary { background:var(--accent); color:#0d0f12; border-color:var(--accent);
@@ -1951,21 +1953,21 @@ def _actions(user: Principal) -> str:
   <button id="selall" class="tick" title="Select all" aria-label="Select all"></button>
   <span class="count" id="selcount" style="margin:0"></span>
   <span class="grp" data-side="live" hidden>
-    <button data-act="event">Event&hellip;</button>
-    <button data-act="tags">Tags&hellip;</button>
-    <button data-act="date">Date&hellip;</button>
-    <button data-act="access">Access&hellip;</button>
-    <button data-act="stack">Stack</button>
-    <button data-act="top">Make top</button>
-    <button data-act="unstack">Unstack</button>
-    <button data-act="nostack">Not a stack</button>
-    <button data-act="download" class="get">{_mark("get")}<span class="word">Download</span></button>
+    {_act("event", "Event&hellip;")}
+    {_act("tags", "Tags&hellip;")}
+    {_act("date", "Date&hellip;")}
+    {_act("access", "Access&hellip;")}
+    {_act("stack", "Stack")}
+    {_act("top", "Make top")}
+    {_act("unstack", "Unstack")}
+    {_act("nostack", "Not a stack")}
+    {_act("download", "Download")}
     <span class="sep"></span>
-    <button data-act="delete" class="danger">Delete</button>
+    {_act("delete", "Delete", "danger")}
   </span>
   <span class="grp" data-side="gone" hidden>
-    <button data-act="restore">Restore</button>
-    <button data-act="purge" class="danger">Purge&hellip;</button>
+    {_act("restore", "Restore")}
+    {_act("purge", "Purge&hellip;", "danger")}
   </span>
   <span class="grp" data-side="choose" hidden>
     <b>Click the one to show</b>
@@ -2355,7 +2357,7 @@ _CHIPS: tuple[tuple[str, str], ...] = (
 #:
 #: Each is chosen against its neighbours as much as for itself: the set has to
 #: be told apart at seventeen pixels, so no two share a silhouette.
-_FILTER_MARKS: dict[str, str] = {
+_MARKS: dict[str, str] = {
     # An occasion — planted somewhere and named. Not a calendar: that is the
     # date, and an event here is *which occasion*, not when.
     "event": '<path d="M6 21V3.6"/>'
@@ -2406,13 +2408,70 @@ _FILTER_MARKS: dict[str, str] = {
                '0 1.8-1.7l.9-12"/>'
                '<path d="M9.6 6.4V4.7a1.3 1.3 0 0 1 1.3-1.3h2.2a1.3 1.3 0 0 1 '
                '1.3 1.3v1.7"/>',
-    # Not a filter. Taking a copy away with you is the same gesture on every
-    # platform and has the same mark everywhere: into something, downwards.
-    # Kept in here so there is one place drawings live.
+    # --- and the things you *do*, which are not filters ----------------
+    # The edit bar asks the same questions in the same order as the filter bar
+    # — that is deliberate, and it is why most of these reuse a drawing from
+    # above rather than get one of their own. These five are the actions with
+    # no question above them to borrow from.
+
+    # Taking a copy away is the same gesture on every platform and has the
+    # same mark everywhere: into something, downwards.
     "get": '<path d="M12 3.6v11"/><path d="M7.8 10.4 12 14.6l4.2-4.2"/>'
            '<path d="M4.4 16.2v2.4a1.8 1.8 0 0 0 1.8 1.8h11.6a1.8 1.8 0 0 0 '
            '1.8-1.8v-2.4"/>',
+    # Which one of a stack speaks for the rest: raise this to the top, drawn
+    # as an arrow meeting a ceiling it cannot go past.
+    "top": '<path d="M4.6 3.9h14.8"/><path d="M12 20.4V8.4"/>'
+           '<path d="M7.2 13.2 12 8.4l4.8 4.8"/>',
+    # Cards side by side and not touching — the same two shapes the stack mark
+    # overlaps, which is the whole of what the action does to them.
+    "unstack": '<rect x="2.9" y="7.5" width="8.2" height="10.6" rx="1.8"/>'
+               '<rect x="12.9" y="7.5" width="8.2" height="10.6" rx="1.8"/>',
+    # Refusing the app's guess, so: a stack, struck through. Two cards rather
+    # than the filter's three, because a slash across three is mush at
+    # seventeen pixels.
+    "nostack": '<rect x="3.2" y="9" width="11.6" height="11.6" rx="2"/>'
+               '<path d="M7 6.2h9a2 2 0 0 1 2 2v9"/>'
+               '<path d="M3.6 20.6 20.6 3.6"/>',
+    # Back out of the bin. A circle turned the other way is *undo* everywhere.
+    "restore": '<path d="M3.5 12a8.5 8.5 0 1 0 2.5-6"/>'
+               '<path d="M3.4 4.3v5.4h5.4"/>',
+    # The end of the file rather than a decision about it. The bin it shares
+    # with Delete, and the cross that says this one is not coming back.
+    "purge": '<path d="M4 6.4h16"/>'
+             '<path d="M6.6 6.4l.9 12a1.8 1.8 0 0 0 1.8 1.7h5.4a1.8 1.8 0 0 0 '
+             '1.8-1.7l.9-12"/>'
+             '<path d="M9.6 6.4V4.7a1.3 1.3 0 0 1 1.3-1.3h2.2a1.3 1.3 0 0 1 '
+             '1.3 1.3v1.7"/>'
+             '<path d="M10.4 11.5 13.6 15.3"/><path d="M13.6 11.5 10.4 15.3"/>',
 }
+
+#: Which drawing each action wears.
+#:
+#: Most of them point back into the filter marks above, and that is the point:
+#: *Event* the filter and *Event* the action are the same question asked twice,
+#: once about what you are looking at and once about what it should become.
+#: Two bars that read the same way — a control that changes its face between
+#: them is a control you have to learn twice.
+_ACT_MARKS: dict[str, str] = {
+    "event": "event", "tags": "tag", "date": "date", "access": "audience",
+    "stack": "stacks", "top": "top", "unstack": "unstack",
+    "nostack": "nostack", "download": "get", "delete": "deleted",
+    "restore": "restore", "purge": "purge",
+}
+
+
+def _act(act: str, word: str, cls: str = "") -> str:
+    """One button in the edit bar: its drawing, then its name.
+
+    The word stays. Up here there are eleven of these in a row and no value
+    beside them to say which is which — a filter chip reads *flag, Sicily* and
+    an action would read only *flag*, which is a button you press to find out
+    what it does.
+    """
+    kind = f' class="{cls}"' if cls else ""
+    return (f'<button data-act="{act}"{kind}>{_mark(_ACT_MARKS.get(act, ""))}'
+            f'<span class="word">{word}</span></button>')
 
 
 def _mark(name: str, size: int = 17) -> str:
@@ -2421,7 +2480,7 @@ def _mark(name: str, size: int = 17) -> str:
     Same attributes as the bell beside it: `currentColor`, so a mark takes the
     colour of whatever state its chip is in and nothing has to be drawn twice.
     """
-    body = _FILTER_MARKS.get(name)
+    body = _MARKS.get(name)
     if not body:
         return ""
     return (f'<svg viewBox="0 0 24 24" width="{size}" height="{size}" '
@@ -4251,7 +4310,8 @@ function actLabel(act,value,add){
   // one flag, two controls, and the word for it depends on which way it is
   // going.
   if(act==='deleted') return value?'Delete':'Restore';
-  const b=actions&&actions.querySelector('[data-act="'+act+'"]');
+  const b=actions&&(actions.querySelector('[data-act="'+act+'"] .word')
+                   ||actions.querySelector('[data-act="'+act+'"]'));
   const word=esc(b?b.textContent.replace(/\\u2026|\\.\\.\\./,'').trim():act);
   if(!value) return word+' &mdash; clearing';
   return word+(add===false?' &mdash; removing <b>':' &mdash; <b>')

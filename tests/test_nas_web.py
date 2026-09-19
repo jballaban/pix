@@ -3843,14 +3843,14 @@ def test_every_filter_has_a_drawing() -> None:
     added to `_CHIPS` without a mark is a button with nothing in it. The page
     falls back to the name rather than rendering an empty control — this is
     what stops that fallback from being the thing anybody actually sees."""
-    missing = [col for col, _ in web._CHIPS if col not in web._FILTER_MARKS]
+    missing = [col for col, _ in web._CHIPS if col not in web._MARKS]
 
     assert not missing, f"no drawing for: {', '.join(missing)}"
 
 
 def test_no_two_filters_are_drawn_the_same() -> None:
     """They are told apart at seventeen pixels and only by their shape."""
-    marks = [web._FILTER_MARKS[col] for col, _ in web._CHIPS]
+    marks = [web._MARKS[col] for col, _ in web._CHIPS]
 
     assert len(set(marks)) == len(marks)
 
@@ -3890,7 +3890,7 @@ def test_taking_a_copy_away_is_drawn_too(client: TestClient) -> None:
     where three controls sit across the top of a photograph."""
     html = client.get("/browse").text
 
-    assert '<button data-act="download" class="get"><svg' in html
+    assert '<button data-act="download"><svg' in html
     assert '<span class="word">Download</span>' in html
     assert '<a id="viewget" class="who-link" download><svg' in html
 
@@ -3917,3 +3917,50 @@ def test_the_unused_filters_fold_away_where_they_do_not_fit() -> None:
     assert ".chips .addchip { display:inline-flex; }" in narrow
     # The other way round outside it.
     assert ".chips .addchip { display:none; }" in web._STYLE
+
+
+def test_the_two_bars_wear_the_same_drawings() -> None:
+    """*Event* the filter and *Event* the action are one question asked twice
+    — once about what you are looking at, once about what it should become.
+    The bars already ask them in the same order; a control that changes its
+    face between them is a control you have to learn twice."""
+    assert web._ACT_MARKS["event"] == "event"
+    assert web._ACT_MARKS["tags"] == "tag"
+    assert web._ACT_MARKS["access"] == "audience"
+    assert web._ACT_MARKS["stack"] == "stacks"
+    assert web._ACT_MARKS["delete"] == "deleted"
+    # Which is the same pairing the script uses to decide what a menu writes,
+    # and the two must not disagree about what an action is about.
+    for act, col in (("tags", "tag"), ("access", "audience"),
+                     ("event", "event")):
+        assert f"{act}:'{col}'" in web._BROWSE_JS
+
+
+def test_every_action_is_drawn() -> None:
+    """Eleven buttons in a row and four of them illustrated is not a style,
+    it is an unfinished edit."""
+    html = web._actions(web.Principal(name="admin", is_admin=True))
+    acts = set(re.findall(r'data-act="(\w+)"', html))
+
+    assert acts
+    undrawn = [a for a in acts if not web._mark(web._ACT_MARKS.get(a, ""))]
+    assert not undrawn, f"no drawing for: {', '.join(sorted(undrawn))}"
+
+
+def test_no_two_actions_are_drawn_the_same() -> None:
+    """Delete and Purge are the nearest pair — both the bin — and the cross
+    inside one of them is the whole difference between recoverable and not."""
+    marks = [web._mark(name) for name in web._ACT_MARKS.values()]
+
+    assert len(set(marks)) == len(marks)
+
+
+def test_an_action_keeps_its_word_where_the_script_can_find_it() -> None:
+    """The takeover names an action by reading it off its own button rather
+    than keeping a second vocabulary for the same four words. With a drawing
+    in there too, the word has to be its own element — `textContent` on the
+    button would take the drawing with it, and one control already sets it."""
+    html = web._actions(web.Principal(name="admin", is_admin=True))
+
+    assert '<span class="word">Event&hellip;</span>' in html
+    assert "[data-act=\"'+act+'\"] .word" in web._BROWSE_JS
