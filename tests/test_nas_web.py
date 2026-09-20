@@ -4749,3 +4749,27 @@ def test_the_takeover_is_written_once(client: TestClient) -> None:
     assert web._BROWSE_JS.count("getElementById('working')") == 1
     html = client.get("/browse").text
     assert html.count('id="working"') == 1
+
+
+def test_what_is_left_to_do_is_not_the_colour_of_what_is_done() -> None:
+    """Amber, which is what this app has always meant by *this wants you* —
+    the same as a guessed stack and a half-ticked box. It is the one chip on a
+    card that is a job rather than a fact, and the audience green filed it in
+    with the thing it is counted from.
+
+    Pinned for its **weight**, not its colour. `.spread i.none` and
+    `.spread.audience i` weigh exactly the same, so the later one won and this
+    drew green for as long as it sat higher up the file — a rule that was
+    correct and had no effect.
+    """
+    css = web._STYLE
+    rule = ".spread.audience i.none { color:var(--top); }"
+
+    assert rule in css
+    # Three classes to the audience rule's two, so it wins wherever it sits.
+    assert css.index(".spread.audience i {") < css.index(rule)
+
+
+def test_the_plus_more_chip_is_gone_from_the_stylesheet() -> None:
+    """Cards name every value they hold, so nothing renders it any more."""
+    assert ".spread .more" not in web._STYLE

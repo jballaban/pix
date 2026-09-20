@@ -484,8 +484,6 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
                border-radius:2px; }
 .tile .bar i b { display:block; height:100%; background:var(--keep);
                  border-radius:2px; }
-/* The one negative fact, in the same clothes as the positive ones. */
-.spread i.none { color:var(--top); }
 /* What the folder holds, in the same chips a thumbnail wears — so a card
    and a photograph say the same kind of thing about themselves. */
 .spread { display:flex; flex-wrap:wrap; gap:3px; margin-top:6px; }
@@ -501,7 +499,16 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
 .spread.audience i { color:var(--keep); }
 .spread.people i { color:var(--accent); }
 .spread.tags i { color:#fff; }
-.spread .more { color:var(--dim); background:none; padding-left:2px; }
+/* What is left to do, in the colour this app has always used for *this wants
+   you* — the same amber as a guessed stack and a half-ticked box. It is the
+   one chip on a card that is a job rather than a fact, and green filed it in
+   with the audience it is counted from.
+
+   **After the three above, and it has to be.** `.spread i.none` and
+   `.spread.audience i` weigh exactly the same, so the later one wins and this
+   was drawn green for as long as it sat higher up the file. Anything added
+   below this that colours a chip takes it back. */
+.spread.audience i.none { color:var(--top); }
 .tile:hover { border-color:var(--accent); background:#20242b;
              box-shadow:none; }
 /* A folder can be selected, so it carries the same circle a thumbnail does
