@@ -1371,6 +1371,70 @@ function arrow(key, opts) {
           String(went));
   }
 
+  // --- a half-ticked box completes, it does not clear ------------------------
+  // One file carries `ghost` and the other does not, so with both selected
+  // that box is *some*. Ticking it used to take the grant off the one that
+  // had it — on a folder ninety per cent shared, one click for none of it —
+  // which is the opposite of what ticking a box says, and the opposite of
+  // what `event` did in the same menu under the same kind of box.
+  //
+  // Its own two files and its own state: by this point in the run the grid
+  // has been stacked, written to and paged through, and a check that assumed
+  // the opening position would be testing the blocks above it.
+  {
+    deselect();
+    const two = document.querySelectorAll('.cell').slice(0, 2);
+    two[0].dataset.audience = 'ghost';
+    two[1].dataset.audience = '';
+    two.forEach(c => c.children.find(k => k._classes.has('pick')).click());
+    check('two files are selected',
+          document.byId.selcount.textContent === '2 selected',
+          document.byId.selcount.textContent);
+
+    access.click();
+    await settle(); await settle();
+    const rows = document.byId.menu.querySelectorAll('.opt');
+    const names = rows.map(
+      o => (o.innerHTML.match(/<span>([^<]*)<\/span>/) || [])[1]);
+    const half = rows[names.indexOf('ghost')];
+    check('one of them has it and the other does not',
+          !!half && half.dataset.state === 'some',
+          half && half.dataset.state);
+
+    if (half) {
+      const n = calls.length;
+      half.click();
+      await settle(); await settle();
+      const out = calls.slice(n).filter(c => c.url.startsWith('/api/decide'));
+      check('ticking it writes once', out.length === 1, String(out.length));
+      if (out.length) {
+        const body = JSON.parse(out[0].body);
+        check('and it adds, rather than taking it off the one that had it',
+              Array.isArray(body.add_audience)
+              && body.add_audience[0] === 'ghost', out[0].body);
+        check('there is no remove in it', !body.remove_audience, out[0].body);
+      }
+      check('so the box is full now',
+            half.dataset.state === 'all', half.dataset.state);
+
+      // And a full box is where the destructive direction lives: the one
+      // state in which ticking reads as *undo this*.
+      const m = calls.length;
+      half.click();
+      await settle(); await settle();
+      const back = calls.slice(m).filter(c => c.url.startsWith('/api/decide'));
+      check('ticking a full box takes it away', back.length === 1,
+            String(back.length));
+      if (back.length) {
+        const body = JSON.parse(back[0].body);
+        check('by removing it', Array.isArray(body.remove_audience)
+              && body.remove_audience[0] === 'ghost', back[0].body);
+      }
+    }
+    document.byId.grid.click();   // anywhere outside dismisses the menu
+    deselect();
+  }
+
   if (failures.length) {
     failures.forEach(f => console.log('FAIL ' + f));
     process.exit(1);

@@ -1640,7 +1640,8 @@ def home(request: Request,
                  # it loaded, and a page whose chips never drew and whose
                  # heading never wired looks exactly like a page whose
                  # controls were never built.
-                 f'<p class="dim">{head}</p>{body}<div id="menu" hidden></div>',
+                 f'<p class="dim">{head}</p>{body}'
+                 f'<div id="menu" hidden></div>{_WORKING}',
                  tools='<div class="chips" id="chips"></div>',
                  rows=_actions(user, folders=True),
                  footer='<span id="note" class="note"></span>',
@@ -1939,13 +1940,7 @@ def browse(request: Request,
   <aside id="rail"></aside>
 </div>
 <div id="menu" hidden></div>
-<div id="working">
-  <div class="what" id="workwhat"></div>
-  <div class="bar"><i id="workbar"></i></div>
-  <div class="tally" id="worktally"></div>
-  <button id="worksave" class="primary" hidden>Save</button>
-  <button id="workstop">Stop</button>
-</div>""",
+{_WORKING}""",
         tools=('<div class="chips" id="chips"></div>'
                + _from_link(op, stale, len(rows))),
         # Away from the filters, at the end of the row with the account. It is
@@ -2090,6 +2085,22 @@ def _writable(user: Principal, change: _Change) -> None:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             f"not yours to change: {', '.join(refused)}")
+
+
+#: The takeover, which any page that writes has to carry.
+#:
+#: A write is a run of requests over SMB and takes seconds; without this the
+#: screen simply sits there. It lived in the grid's markup alone, which was
+#: true for exactly as long as the grid was the only page that wrote — and
+#: when the landing page learned to, every `if(working)` guard in the script
+#: quietly did nothing and a folder edit ran with no sign of it at all.
+_WORKING: str = """<div id="working">
+  <div class="what" id="workwhat"></div>
+  <div class="bar"><i id="workbar"></i></div>
+  <div class="tally" id="worktally"></div>
+  <button id="worksave" class="primary" hidden>Save</button>
+  <button id="workstop">Stop</button>
+</div>"""
 
 
 def _actions(user: Principal, *, folders: bool = False) -> str:
@@ -3204,13 +3215,26 @@ async function openMenu(anchorEl,ctx){
     if(ctx.mode==='filter'){location.href=url({[ctx.column]:value});return;}
     const cs=await acting();
     if(!cs) return;
+    if(!cs.length){workClose();say('nothing selected');return;}
     await applyToSelection(ctx.as||ctx.column,value,true,cs);
     if(FOLDERS) foldersDirty=true;
   }
 
-  // A checklist, not a list of commands. `some` clears first and then
-  // adds: taking access away is the safer direction, so it is the one that
-  // costs a single click.
+  // A checklist, not a list of commands — and a half-ticked box completes,
+  // it does not clear.
+  //
+  // It used to clear, on the argument that taking access away is the safer
+  // direction and should be the one that costs a single click. Two things
+  // were wrong with that. Ticking `family` on a folder that is ninety per
+  // cent `family` is not an ambiguous gesture: it says *all of it*, and
+  // answering with *none of it* is the opposite of what was asked, on the
+  // ninety per cent that were already right. And `event` beside it always
+  // completed — one field going one way and the others the other, in one
+  // menu, under one kind of box.
+  //
+  // So: none and some both add, all removes. The destructive direction is the
+  // one you reach by ticking a box that is already full, which is the only
+  // state where it reads as *undo this*.
   // The field each action edits. `event` holds one value where tags and
   // access hold many, but the question the menu asks is the same one —
   // *do these files say this?* — so it is one control either way.
@@ -3222,14 +3246,14 @@ async function openMenu(anchorEl,ctx){
     // there is no way to know that about a folder without asking.
     const cs=await acting();
     if(!cs) return;
-    if(!cs.length){say('nothing selected');return;}
+    if(!cs.length){workClose();say('nothing selected');return;}
     const state=shareState(cs,FIELD,value);
     if(FIELD==='event'){
       // Ticking the event they already have clears it; anything else sets
       // it. One value, so there is nothing to add to.
       await applyToSelection('event',state==='all'?null:value,true,cs);
     }else{
-      await applyToSelection(ctx.as,value,state==='none',cs);
+      await applyToSelection(ctx.as,value,state!=='all',cs);
     }
     if(FOLDERS) foldersDirty=true;
     mark(row,shareState(cs,FIELD,value));
@@ -3948,7 +3972,7 @@ async function readFolders(){
         if(rows.length<PAGE_SIZE) break;
         offset+=rows.length;
       }
-      workProgress(i+1,chosen.length);
+      workProgress(i+1,chosen.length,'folder','folders');
     }
   }catch(e){
     busy=false; workClose();
@@ -3956,8 +3980,14 @@ async function readFolders(){
     return null;
   }
   const halted=stopping;
-  busy=false; workClose();
-  if(halted){say('stopped — nothing was written');return null;}
+  busy=false;
+  if(halted){workClose();say('stopped — nothing was written');return null;}
+  // **Left open on purpose.** Reading is the first half of one gesture and
+  // the write is the second; closing here and opening again in `send` puts a
+  // gap of at least the takeover's own delay between them, so the screen
+  // blinks empty in the middle of a job that never stopped. Whoever asked
+  // closes it if they turn out not to write — there are three of them and
+  // they are all in this file.
   expanded=out;
   return out;
 }
@@ -4178,6 +4208,9 @@ if(COARSE&&CAN_SHARE&&actions){
 async function downloadMenu(anchorEl){
   const cs=await acting();
   if(!cs) return;
+  // Closed either way: a download is the browser's job from here, and on a
+  // desktop it shows nothing of its own to take the takeover's place.
+  workClose();
   if(!cs.length){say('nothing selected');return;}
   if(!cs.some(c=>c.dataset.copy)){closeMenu();getFiles(cs,false);return;}
   const key='download';
@@ -4475,6 +4508,11 @@ function targetsOn(side){
 // screen would be showing a view that is no longer true, and the next click
 // would act on a photograph the filters say is somewhere else.
 function drop(gone){
+  // Nothing to do one zoom out: this tidies away *cells*, and a folder page
+  // has none — so every test below is about an empty list, and the last of
+  // them would have replaced the folders with *nothing matches these filters
+  // any more*. The cards are re-read whole when the menu closes.
+  if(FOLDERS) return;
   if(!gone.length) return;
   const keys=new Set(gone.map(g=>g.folder+'\\n'+g.name));
   const at=cells[cur];
@@ -4671,11 +4709,11 @@ function workOpen(label,total){
   workTimer=setTimeout(()=>{if(working) working.classList.add('on');},
                        TAKEOVER_MS);
 }
-function workProgress(done,total){
+function workProgress(done,total,one,many){
   if(workBar) workBar.style.width=(total?Math.round(done/total*100):0)+'%';
   if(workTally) workTally.textContent=
     `${done.toLocaleString()} of ${total.toLocaleString()} `+
-    (total===1?'file':'files');
+    (total===1?(one||'file'):(many||'files'));
 }
 // The standing count of what is waiting in the bin. It is rendered with the
 // page, so every delete, restore and purge has to say what it is now — a

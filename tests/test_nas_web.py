@@ -4705,3 +4705,30 @@ def test_the_share_is_of_the_card_that_prints_it() -> None:
 
     body = inspect.getsource(ix.spread)
     assert "GROUPINGS[g]" in body and "_where(view)" in body
+
+
+def test_every_page_that_writes_can_say_it_is_writing(
+    client: TestClient
+) -> None:
+    """A write is a run of requests over SMB and takes seconds; without the
+    takeover the screen just sits there.
+
+    It lived in the grid's markup alone, which was true for exactly as long as
+    the grid was the only page that wrote. When the landing page learned to,
+    every `if(working)` guard in the script quietly did nothing and a folder
+    edit ran with no sign of it — the failure a guard is supposed to prevent,
+    arriving as silence instead of an error.
+    """
+    for path in ("/browse", "/?date=2026&group=month,event"):
+        html = client.get(path).text
+        for part in ('id="working"', 'id="workbar"', 'id="worktally"',
+                     'id="workstop"', 'id="workwhat"'):
+            assert part in html, f"{path} is missing {part}"
+
+
+def test_the_takeover_is_written_once(client: TestClient) -> None:
+    """Two copies is two things to keep in step, and the one that fell behind
+    would be the page nobody was looking at."""
+    assert web._BROWSE_JS.count("getElementById('working')") == 1
+    html = client.get("/browse").text
+    assert html.count('id="working"') == 1
