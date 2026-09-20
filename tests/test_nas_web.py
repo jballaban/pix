@@ -1004,12 +1004,13 @@ def test_a_viewer_never_has_a_photograph_hidden_by_a_guess(
     add_user: "Callable[..., None]"
 ) -> None:
     """Folding on a guess is the app deciding, on its own evidence, that
-    several files are one. That is a curator's call, and somebody who cannot
-    make it has no way to see what was folded away — so for them a stack is
-    only ever one a person made.
+    several files are one, and a library that is quietly smaller than it is —
+    with nothing on screen saying so — is not what anybody should arrive at.
 
-    Not a matter of dropping the parameter any more: folding is what the
-    default does, so leaving it unset would fold for everyone."""
+    So the *default* is what is defended here, not the ability: they may ask,
+    and asking is a thing they did. Not a matter of dropping the parameter
+    either, because folding is what the unset value does — it has to be said
+    as `firm`."""
     _burst(app_env, writable, "x.jpg", "y.jpg")
     add_user("kid", "pw")
     client.post("/api/decide/bulk", json={
@@ -1018,10 +1019,17 @@ def test_a_viewer_never_has_a_photograph_hidden_by_a_guess(
                   {"folder": "init_2026", "name": "y.jpg"}]})
     kid = sign_in("kid", "pw")
 
-    for url in ("/browse", "/browse?stacks=only", "/browse?stacks=guesses"):
+    # Nothing folds unasked, however they arrive at the grid.
+    for url in ("/browse", "/browse?stacks=firm", "/browse?group=none"):
         html = kid.get(url).text
         assert 'data-name="x.jpg"' in html, url
         assert 'data-name="y.jpg"' in html, f"{url} folded on a guess"
+
+    # And when they do ask, the guess behaves as a stack — which is the only
+    # way there is ever a suggestion on screen for them to refuse.
+    asked = kid.get("/browse?stacks=guesses").text
+    assert 'data-name="x.jpg"' in asked
+    assert 'data-name="y.jpg"' not in asked, "asking for guesses did not fold"
 
 
 def test_only_stacks_is_every_stack_however_it_was_made(
@@ -1130,14 +1138,9 @@ def test_a_guess_is_only_for_the_person_who_can_answer_it(
     sign_in: "Callable[[str, str], TestClient]",
     add_user: "Callable[..., None]"
 ) -> None:
-    """It hides photographs on the strength of a guess. Somebody who cannot
-    see what was folded away should not be able to turn it on — and asking for
-    it in the address bar is how *hidden from the bar* would have been found
-    out to mean nothing.
-
-    This outlasted opening the edit bar to the household: they can stack files
-    they picked themselves, and still cannot have a view folded out from under
-    them by the app."""
+    """A household member may ask for the app's guesses — they can refuse
+    one now, and *Not a stack* cannot be reached unless suggestions fold — so
+    the filter is on their bar."""
     _burst(app_env, writable, "x.jpg", "y.jpg")
     add_user("kid", "pw")
     client.post("/api/decide/bulk", json={
@@ -1148,7 +1151,7 @@ def test_a_guess_is_only_for_the_person_who_can_answer_it(
     html = sign_in("kid", "pw").get("/browse").text
 
     assert 'data-name="x.jpg"' in html and 'data-name="y.jpg"' in html
-    assert '"stacks"' not in html[html.index("CHIPS="):html.index("FIXED=")]
+    assert '"stacks"' in html[html.index("CHIPS="):html.index("FIXED=")]
 
 
 def test_a_decision_on_a_folded_guess_reaches_what_it_hides(
@@ -4326,3 +4329,36 @@ def test_a_household_member_can_see_inside_a_stack(
     assert [r["name"] for r in kid.get("/api/files").json()] == ["x.jpg"]
     # ...and still theirs to open, which is a different question entirely.
     assert kid.get("/api/file/init_2026/y.jpg").status_code == 200
+
+
+def test_a_household_member_can_reach_every_action_they_are_offered(
+    app_env: dict[str, Path], writable: Path,
+    sign_in: "Callable[[str, str], TestClient]",
+    add_user: "Callable[..., None]"
+) -> None:
+    """A button nothing can reach is worse than either answer.
+
+    *Not a stack* refuses one of the app's suggestions, and with `firm` forced
+    there was never a suggestion on screen to refuse — the control sat on the
+    bar and could not be used. So the filter that makes a guess fold is on
+    their bar too, and only the default still differs.
+    """
+    _burst(app_env, writable, "x.jpg", "y.jpg")
+    add_user("kid", "pw")
+    sign_in(accounts.ADMIN, "admin").post("/api/decide/bulk", json={
+        "add_audience": ["kid"],
+        "files": [{"folder": "init_2026", "name": "x.jpg"},
+                  {"folder": "init_2026", "name": "y.jpg"}]})
+    kid = sign_in("kid", "pw")
+
+    html = kid.get("/browse?stacks=guesses").text
+    assert 'data-act="nostack"' in html
+    # A suggestion is on screen, folded, and says how many are behind it.
+    assert 'data-behind="1"' in html or 'class="stack' in html
+
+    refused = kid.post("/api/decide", json={
+        "folder": "init_2026", "name": "x.jpg", "no_stack": True})
+
+    assert refused.status_code == 200
+    after = decisions.read(writable / "x.jpg")
+    assert after is not None and after.no_stack

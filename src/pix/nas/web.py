@@ -1307,25 +1307,28 @@ def _whoami(user: Principal | None) -> str:
 def _stacks(stacks: str | None, user: Principal) -> str | None:
     """What this person's view does with stacks.
 
-    **A guess never hides a photograph from a viewer.** Folding one is the app
-    deciding, on its own evidence, that several files are one — which is a
-    curator's call, and a viewer has no way to see what was folded away. So
-    they get `firm`: the stacks somebody actually made, and nothing else.
-    Dropping the parameter would not be enough now that folding is what the
-    default does.
+    **A guess never hides a photograph from somebody who has not asked for
+    it.** Folding one is the app deciding, on its own evidence, that several
+    files are one; arriving at a library that is quietly smaller than it is,
+    with nothing on screen saying so, is not something to do to anybody by
+    default. So a household member's default is `firm` — the stacks somebody
+    actually made. Dropping the parameter would not be enough, because folding
+    is what the default does.
 
-    This outlasted opening the edit bar to the household, deliberately. They
-    can make and unmake a stack of files they picked themselves; what they
-    cannot do is have the app fold a view out from under them. Reviewing the
-    app's *suggestions* needs this to give, and that is a separate decision
-    from the one that handed over the bar.
+    **Asking is different from being given.** They have the stack actions, and
+    *Not a stack* — refusing a suggestion — cannot be reached at all unless
+    suggestions can be made to fold: with `firm` forced there is never a
+    suggested stack on screen to refuse. A button on the bar that nothing can
+    reach is worse than either answer, so the value is honoured when it is
+    asked for and only the default differs.
 
-    An administrator gets what they asked for, and anything unrecognised
-    reads as the default rather than as some fifth thing.
+    An administrator's default is to fold, because reviewing the app's
+    guesses is most of what the bin-and-stacks work is. Anything unrecognised
+    reads as that person's default rather than as some fifth thing.
     """
-    if not user.is_admin:
-        return "firm"
-    return stacks if stacks in ("only", "guesses", "firm") else None
+    if stacks in ("only", "guesses", "firm"):
+        return stacks
+    return None if user.is_admin else "firm"
 
 
 def _both_sides(deleted: str | None, op_id: str | None,
@@ -2406,13 +2409,13 @@ def _chips(user: Principal) -> tuple[tuple[str, str], ...]:
     view to be found, which is what makes deleting safe to hand over and
     restoring not.
 
-    Stacks stay an administrator's too, and that is a smaller decision than
-    it looks: a household member can stack and unstack files they picked, and
-    what the filter adds is the app's own *suggestions*, which fold a view on
-    the app's evidence. Handing that over is its own call — see `_stacks`.
+    **Stacks are everyone's**, because the stack actions are. A thousand
+    suggestions is shared work, and *Not a stack* cannot be reached without
+    the filter that makes a suggestion fold into one — see `_stacks`, which
+    still leaves the default the safe way round for a household member.
     """
     return tuple((col, label) for col, label in _CHIPS
-                 if col not in ("audience", "deleted", "stacks")
+                 if col not in ("audience", "deleted")
                  or user.is_admin)
 
 
