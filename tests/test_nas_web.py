@@ -1131,9 +1131,13 @@ def test_a_guess_is_only_for_the_person_who_can_answer_it(
     add_user: "Callable[..., None]"
 ) -> None:
     """It hides photographs on the strength of a guess. Somebody who cannot
-    accept or refuse one should not be able to turn it on — and asking for it
-    in the address bar is how *hidden from the bar* would have been found out
-    to mean nothing."""
+    see what was folded away should not be able to turn it on — and asking for
+    it in the address bar is how *hidden from the bar* would have been found
+    out to mean nothing.
+
+    This outlasted opening the edit bar to the household: they can stack files
+    they picked themselves, and still cannot have a view folded out from under
+    them by the app."""
     _burst(app_env, writable, "x.jpg", "y.jpg")
     add_user("kid", "pw")
     client.post("/api/decide/bulk", json={
@@ -2816,13 +2820,19 @@ def test_a_viewer_cannot_write(household: dict[str, object]) -> None:
 def test_a_viewer_is_offered_no_edit_controls(
     household: dict[str, object]
 ) -> None:
-    """Not merely hidden — the endpoints refuse them. Showing a control that
-    would fail reads as brokenness rather than as policy."""
+    """The family curates (§8), so a household member gets the edit bar — all
+    of it but the two that somebody else noticing cannot undo.
+
+    Not merely hidden either way: the endpoints refuse a field this person may
+    not write, whatever their browser was showing them."""
     kid = cast(TestClient, household["kid"])
     html = kid.get("/browse").text
 
-    assert '<button data-act="access"' not in html
-    assert 'id="actions"' not in html
+    assert 'id="actions"' in html
+    for act in ("event", "tags", "people", "date", "delete", "download"):
+        assert f'data-act="{act}"' in html, act
+    for act in ("access", "purge", "restore"):
+        assert f'data-act="{act}"' not in html, act
 
 
 def test_the_admin_keeps_the_edit_controls(household: dict[str, object]) -> None:
@@ -4157,3 +4167,162 @@ def test_people_are_asked_about_separately_from_access(
     assert web._ACT_MARKS["people"] == "person"
     assert web._ACT_MARKS["access"] == "audience"
     assert web._mark("person") != web._mark("audience")
+
+
+# --- what the household may write ---------------------------------------------
+
+def test_a_household_member_can_tag_what_was_shared_with_them(
+    household: dict[str, object], writable: Path
+) -> None:
+    """The family curates (§8). This is the whole reason the bar opened."""
+    kid = cast(TestClient, household["kid"])
+
+    r = kid.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg",
+        "add_tags": ["beach"], "add_people": ["Mom"]})
+
+    assert r.status_code == 200
+    after = decisions.read(writable / "a.jpg")
+    assert after is not None
+    assert after.tags == ("beach",) and after.people == ("Mom",)
+
+
+def test_a_household_member_cannot_share_anything(
+    household: dict[str, object], writable: Path
+) -> None:
+    """The one control that can show a photograph to somebody who should not
+    see it. Refused by the endpoint, not by the absence of a button — a button
+    is a suggestion and anyone can post."""
+    kid = cast(TestClient, household["kid"])
+
+    r = kid.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "add_audience": ["kid"]})
+
+    assert r.status_code == 403
+    after = decisions.read(writable / "a.jpg")
+    assert after is not None and after.audience == ("kid",), "audience changed"
+
+
+def test_a_household_member_cannot_purge(
+    household: dict[str, object]
+) -> None:
+    """It ends the file. There is no undo anywhere for it."""
+    kid = cast(TestClient, household["kid"])
+
+    r = kid.post("/api/purge", json={
+        "files": [{"folder": "init_2026", "name": "a.jpg"}]})
+
+    assert r.status_code in (401, 403)
+
+
+def test_a_household_member_can_delete_but_not_bring_it_back(
+    household: dict[str, object], writable: Path
+) -> None:
+    """Deleting is soft and theirs; undeleting is not, because `/history` is
+    not. Not refused by a missing field — the deleted are in nobody's view but
+    an administrator's, so there is nothing for them to name."""
+    kid = cast(TestClient, household["kid"])
+
+    assert kid.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "deleted": True
+    }).status_code == 200
+    after = decisions.read(writable / "a.jpg")
+    assert after is not None and after.deleted
+
+    back = kid.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "deleted": False})
+
+    assert back.status_code == 404, "a viewer restored a file out of the bin"
+    still = decisions.read(writable / "a.jpg")
+    assert still is not None and still.deleted
+
+
+def test_a_household_member_cannot_edit_what_was_not_shared(
+    household: dict[str, object], writable: Path
+) -> None:
+    """The check the route never needed while it was an administrator's. Every
+    field they send is one they may write — it is the *file* that is not
+    theirs, and naming it by hand is the whole attack."""
+    kid = cast(TestClient, household["kid"])
+
+    r = kid.post("/api/decide", json={
+        "folder": "init_2026", "name": "b.mp4", "add_tags": ["mine"]})
+
+    assert r.status_code == 404
+    assert decisions.read(writable / "b.mp4") is None
+
+
+def test_a_bulk_edit_reaches_only_what_was_shared(
+    household: dict[str, object], writable: Path
+) -> None:
+    """Sent as one request naming both, which is what a page could never do —
+    and exactly why the check cannot live in the page."""
+    kid = cast(TestClient, household["kid"])
+
+    r = kid.post("/api/decide/bulk", json={
+        "add_tags": ["mine"],
+        "files": [{"folder": "init_2026", "name": "a.jpg"},
+                  {"folder": "init_2026", "name": "b.mp4"}]})
+
+    assert r.status_code == 200
+    assert r.json()["written"] == 1
+    assert decisions.read(writable / "b.mp4") is None
+    mine = decisions.read(writable / "a.jpg")
+    assert mine is not None and mine.tags == ("mine",)
+
+
+def test_a_bulk_edit_cannot_share_either(
+    household: dict[str, object], writable: Path
+) -> None:
+    """The field check runs once for the batch, before any of it is written —
+    a refusal that wrote the first two hundred would not be one."""
+    kid = cast(TestClient, household["kid"])
+
+    r = kid.post("/api/decide/bulk", json={
+        "add_audience": ["kid"],
+        "files": [{"folder": "init_2026", "name": "a.jpg"}]})
+
+    assert r.status_code == 403
+
+
+def test_the_bar_and_the_endpoint_read_the_same_table() -> None:
+    """Two lists would be two things to forget. Every action a household
+    member is offered writes only fields they may write."""
+    for act in web.HOUSEHOLD:
+        for wrote in web._ACT_WRITES[act]:
+            assert wrote in web._HOUSEHOLD_FIELDS, f"{act} writes {wrote}"
+    # And the two that are withheld are withheld for a field, not by omission.
+    assert "audience" not in web._HOUSEHOLD_FIELDS
+    assert "access" not in web.HOUSEHOLD and "purge" not in web.HOUSEHOLD
+
+
+def test_a_household_member_can_see_inside_a_stack(
+    app_env: dict[str, Path], writable: Path,
+    sign_in: "Callable[[str, str], TestClient]",
+    add_user: "Callable[..., None]"
+) -> None:
+    """A bare `Filters` also hides whatever is stacked behind another file,
+    which is a rule about what a *grid* shows and not about who may see what.
+
+    Every file inside a stack answered 404 to a household member: they could
+    open a stack and get a wall of broken thumbnails. An administrator has no
+    scope and so never came through the check at all, which is why it went
+    unnoticed — the one person who could not reproduce it was the only one
+    looking.
+    """
+    _burst(app_env, writable, "x.jpg", "y.jpg")
+    add_user("kid", "pw")
+    admin = sign_in(accounts.ADMIN, "admin")
+    admin.post("/api/decide/bulk", json={
+        "add_audience": ["kid"],
+        "files": [{"folder": "init_2026", "name": "x.jpg"},
+                  {"folder": "init_2026", "name": "y.jpg"}]})
+    admin.post("/api/decide", json={
+        "folder": "init_2026", "name": "y.jpg",
+        "stacked_under": "init_2026/x.jpg"})
+    kid = sign_in("kid", "pw")
+
+    # Folded away in the grid, as a stacked file should be...
+    assert [r["name"] for r in kid.get("/api/files").json()] == ["x.jpg"]
+    # ...and still theirs to open, which is a different question entirely.
+    assert kid.get("/api/file/init_2026/y.jpg").status_code == 200

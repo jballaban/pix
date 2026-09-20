@@ -1309,10 +1309,16 @@ def _stacks(stacks: str | None, user: Principal) -> str | None:
 
     **A guess never hides a photograph from a viewer.** Folding one is the app
     deciding, on its own evidence, that several files are one — which is a
-    curator's call, and a viewer has no way to make it and no way to see what
-    was folded away. So they get `firm`: the stacks somebody actually made,
-    and nothing else. Dropping the parameter would not be enough now that
-    folding is what the default does.
+    curator's call, and a viewer has no way to see what was folded away. So
+    they get `firm`: the stacks somebody actually made, and nothing else.
+    Dropping the parameter would not be enough now that folding is what the
+    default does.
+
+    This outlasted opening the edit bar to the household, deliberately. They
+    can make and unmake a stack of files they picked themselves; what they
+    cannot do is have the app fold a view out from under them. Reviewing the
+    app's *suggestions* needs this to give, and that is a separate decision
+    from the one that handed over the bar.
 
     An administrator gets what they asked for, and anything unrecognised
     reads as the default rather than as some fifth thing.
@@ -1932,12 +1938,94 @@ def _from_link(op_id: str | None, stale: str | None, shown: int) -> str:
             f'</span>')
 
 
-def _actions(user: Principal) -> str:
-    """The edit bar — admin only.
+#: Every action, and the decision fields it writes.
+#:
+#: One table, because the buttons a page renders and the fields an endpoint
+#: accepts are the same question and must not be able to disagree. Hiding a
+#: control is not access control — anyone can post to `/api/decide` — so this
+#: drives the refusal first and the bar second.
+_ACT_WRITES: dict[str, tuple[str, ...]] = {
+    "event": ("event",),
+    "tags": ("tags",),
+    "people": ("people",),
+    "date": ("date_override",),
+    "access": ("audience",),
+    "stack": ("stacked_under",),
+    "top": ("stacked_under",),
+    "unstack": ("stacked_under",),
+    "nostack": ("no_stack", "stacked_under"),
+    "delete": ("deleted",),
+    "restore": ("deleted",),
+    # Takes a copy away and decides nothing, so it writes no field — and is
+    # listed anyway, because a table of actions with one missing is a table
+    # nobody can read as complete.
+    "download": (),
+    "purge": (),
+}
 
-    Not merely hidden: the endpoints refuse a non-admin outright. This is so
-    the page does not offer a control that would fail, which reads as
-    brokenness rather than as policy.
+#: What a household member gets.
+#:
+#: The family curates (§8) — *tagging and ranking are the whole point of the
+#: app* — and the whole edit bar being an administrator's is the opposite of
+#: that. What they do not get is the two that cannot be taken back by somebody
+#: else noticing: **access**, which is the only control that can show a
+#: photograph to a person who should not see it, and **purge**, which ends the
+#: file. **Restore** is absent because `/history` is, and the deleted are not
+#: in anybody else's view to find: deleting is theirs, undeleting is not.
+HOUSEHOLD: frozenset[str] = frozenset(_ACT_WRITES) - {"access", "purge",
+                                                      "restore"}
+
+#: The decision fields a household member may write, derived rather than
+#: listed — a second list is a second thing to forget.
+_HOUSEHOLD_FIELDS: frozenset[str] = frozenset(
+    f for act in HOUSEHOLD for f in _ACT_WRITES[act])
+
+
+def may(user: Principal, act: str) -> bool:
+    """Whether this person gets this action."""
+    return user.is_admin or act in HOUSEHOLD
+
+
+def _writable(user: Principal, change: _Change) -> None:
+    """Refuse a decision that touches a field this person may not write.
+
+    **Checked here rather than trusted from the page.** The bar renders only
+    the actions `may` allows, but a bar is a suggestion and this is the rule:
+    a household member posting `audience` directly gets a 403 whatever their
+    browser was showing them.
+    """
+    if user.is_admin:
+        return
+    sent = set(_recorded(change))
+    # `add_tags` and the rest name the field they edit; one prefix strip puts
+    # them back with it rather than needing their own list.
+    touched = {f.removeprefix("add_").removeprefix("remove_") for f in sent}
+    refused = sorted(touched - _HOUSEHOLD_FIELDS)
+    if refused:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            f"not yours to change: {', '.join(refused)}")
+
+
+def _actions(user: Principal) -> str:
+    """The edit bar — as much of it as this person gets.
+
+    **The family curates** (§8): tagging and naming are the whole point of the
+    app, and the whole bar being an administrator's meant a household member
+    logged in, saw a circle on every thumbnail, selected things, and watched
+    nothing happen. Which of the two readings that is — *no permission* or
+    *broken* — was not on screen anywhere.
+
+    What they do not get is `access` and `purge`, and the reason is the same
+    for both: they are the two that somebody else noticing cannot undo. Access
+    is the only control that can show a photograph to a person who should not
+    see it, and purge ends the file. Delete is theirs, because it is soft, and
+    restore is not, because `/history` is not — see `HOUSEHOLD`.
+
+    Not merely hidden: the endpoints refuse a field this person may not write,
+    whatever their browser was showing them. This is so the page does not
+    offer a control that would fail, which reads as brokenness rather than as
+    policy — and so that hiding the control is never what is holding the line.
 
     **Two sets, shown by what is selected rather than by what is filtered.**
     A deleted file cannot be deleted again and a living one cannot be
@@ -1960,28 +2048,26 @@ def _actions(user: Principal) -> str:
     own, and not only for tidiness: they are usually hidden, and a separator is
     not, so a bar around them would hang there beside nothing.
     """
-    if not user.is_admin:
-        return ""
     return f"""<div class="row" id="actions">
   <button id="selall" class="tick" title="Select all" aria-label="Select all"></button>
   <span class="count" id="selcount" style="margin:0"></span>
   <span class="grp" data-side="live" hidden>
-    {_act("event", "Event&hellip;")}
-    {_act("tags", "Tags&hellip;")}
-    {_act("people", "People&hellip;")}
-    {_act("date", "Date&hellip;")}
-    {_act("access", "Access&hellip;")}
-    {_act("stack", "Stack")}
-    {_act("top", "Make top")}
-    {_act("unstack", "Unstack")}
-    {_act("nostack", "Not a stack")}
-    {_act("download", "Download")}
+    {_act("event", "Event&hellip;", user=user)}
+    {_act("tags", "Tags&hellip;", user=user)}
+    {_act("people", "People&hellip;", user=user)}
+    {_act("date", "Date&hellip;", user=user)}
+    {_act("access", "Access&hellip;", user=user)}
+    {_act("stack", "Stack", user=user)}
+    {_act("top", "Make top", user=user)}
+    {_act("unstack", "Unstack", user=user)}
+    {_act("nostack", "Not a stack", user=user)}
+    {_act("download", "Download", user=user)}
     <span class="sep"></span>
-    {_act("delete", "Delete", "danger")}
+    {_act("delete", "Delete", "danger", user=user)}
   </span>
   <span class="grp" data-side="gone" hidden>
-    {_act("restore", "Restore")}
-    {_act("purge", "Purge&hellip;", "danger")}
+    {_act("restore", "Restore", user=user)}
+    {_act("purge", "Purge&hellip;", "danger", user=user)}
   </span>
   <span class="grp" data-side="choose" hidden>
     <b>Click the one to show</b>
@@ -2314,6 +2400,16 @@ def _chips(user: Principal) -> tuple[tuple[str, str], ...]:
     Access is an administrator's control. Everyone else sees only what has
     been shared with them, so filtering by who else can see it offers a
     choice between their whole world and nothing.
+
+    The bin is an administrator's too, and for a household member it is not
+    merely hidden but empty by definition: the deleted are in nobody else's
+    view to be found, which is what makes deleting safe to hand over and
+    restoring not.
+
+    Stacks stay an administrator's too, and that is a smaller decision than
+    it looks: a household member can stack and unstack files they picked, and
+    what the filter adds is the app's own *suggestions*, which fold a view on
+    the app's evidence. Handing that over is its own call — see `_stacks`.
     """
     return tuple((col, label) for col, label in _CHIPS
                  if col not in ("audience", "deleted", "stacks")
@@ -2482,7 +2578,8 @@ _ACT_MARKS: dict[str, str] = {
 }
 
 
-def _act(act: str, word: str, cls: str = "") -> str:
+def _act(act: str, word: str, cls: str = "", *,
+         user: Principal | None = None) -> str:
     """One button in the edit bar: its drawing, and its name beside it.
 
     **The name is an element of its own, and it is carried three times.** On a
@@ -2497,6 +2594,11 @@ def _act(act: str, word: str, cls: str = "") -> str:
     same four words, and `textContent` on a button with a drawing in it would
     take the drawing with it.
     """
+    # An action this person does not get is not drawn disabled — it is not
+    # there. A greyed-out Purge on a household member's bar is a standing
+    # advertisement for a power they will never have.
+    if user is not None and not may(user, act):
+        return ""
     kind = f' class="{cls}"' if cls else ""
     # The ellipsis says *this one asks something next*, which is a fact about
     # the button and not part of what it is called.
@@ -4716,13 +4818,23 @@ def _allowed(user: Principal, folder: str, name: str) -> None:
     that omits a photograph while `/preview/...` still returns it is not
     access control; it is a tidier index. Anyone can type a URL.
 
+    **`unfold` is what makes this the access question rather than the listing
+    question.** A bare `Filters` also hides whatever is stacked behind another
+    file — which is a rule about what a *grid* shows, not about who may see
+    what. Without it every file inside a stack answered 404 to a household
+    member: they could open a stack and get a wall of broken thumbnails, while
+    an administrator, having no scope, never came through here to find out.
+
+    The deleted stay hidden, and that is the access question: they are in
+    nobody's view but an administrator's.
+
     An admin has no scope and pays nothing for this.
     """
     if user.scope is None:
         return
     conn = db()
     try:
-        if not ix.matching(conn, ix.Filters(viewer=user.scope),
+        if not ix.matching(conn, ix.Filters(viewer=user.scope, unfold=True),
                            [(folder, name)]):
             # The same answer as a file that does not exist. Distinguishing
             # them would confirm that a photograph is there to be asked for.
@@ -5139,7 +5251,7 @@ class DecideBody(BaseModel):
 
 
 @app.post("/api/decide")
-def api_decide(user: Annotated[Principal, Depends(require_admin)],
+def api_decide(user: Annotated[Principal, Depends(require_user)],
                body: Annotated[DecideBody, Body()]) -> JSONResponse:
     """Write a decision to master, then bring its index row up to date.
 
@@ -5148,6 +5260,13 @@ def api_decide(user: Annotated[Principal, Depends(require_admin)],
     `pix2 index` catches up — drift is only ever "the index is behind", never
     "the record is wrong". `indexed` in the response says which happened.
     """
+    # Both halves, and in this order: what this person may write at all, then
+    # whether this file is theirs to write it to. Neither was here while the
+    # route was an administrator's — an admin has no scope and every field —
+    # and opening it without both would let anybody edit any file by typing
+    # its name.
+    _writable(user, _change(body))
+    _allowed(user, body.folder, body.name)
     was, decision, indexed = _decide(body.folder, body.name, _change(body))
     history.record(user.name, _summary(_change(body)),
                    [history.Before(body.folder, body.name, was,
@@ -5289,7 +5408,7 @@ BULK_LIMIT: int = 500
 
 
 @app.post("/api/decide/bulk")
-def api_decide_bulk(user: Annotated[Principal, Depends(require_admin)],
+def api_decide_bulk(user: Annotated[Principal, Depends(require_user)],
                     view: Annotated[ix.Filters, Depends(filters)],
                     body: Annotated[DecideBulkBody, Body()]) -> JSONResponse:
     """Apply one decision to many files, reporting per-file failures.
@@ -5315,6 +5434,7 @@ def api_decide_bulk(user: Annotated[Principal, Depends(require_admin)],
             f"{len(body.files)} files in one request — send at most {BULK_LIMIT}")
 
     change = _change(body)
+    _writable(user, change)
     did = _recorded(change)
     written = 0
     indexed = 0
@@ -5325,6 +5445,23 @@ def api_decide_bulk(user: Annotated[Principal, Depends(require_admin)],
     # of it the open rather than the write.
     conn = ix.open_rw(DB_PATH) if DB_PATH.is_file() else None
     targets = _with_guessed(conn, view, body.files)
+    # **After the expansion, not before it.** `_with_guessed` adds files the
+    # request never named — the rest of a suggested stack — so checking what
+    # was sent would let a household member reach the others through it.
+    #
+    # One question for the whole batch: `matching` takes the lot, and a bulk
+    # edit is exactly where a per-file round trip over SMB is felt. Files that
+    # are not theirs are dropped rather than reported, the same answer a file
+    # that does not exist gets — naming them would confirm they are there.
+    if user.scope is not None and targets:
+        look = conn if conn is not None else db()
+        try:
+            mine = ix.matching(look, ix.Filters(viewer=user.scope, unfold=True),
+                               [(t.folder, t.name) for t in targets])
+        finally:
+            if conn is None:
+                look.close()
+        targets = [t for t in targets if (t.folder, t.name) in mine]
     done: list[tuple[str, str]] = []
     undo: list[history.Before] = []
     dropped: list[dict[str, str]] = []
