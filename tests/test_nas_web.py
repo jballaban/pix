@@ -4519,3 +4519,62 @@ def test_promoting_a_take_still_moves_the_stack_rather_than_breaking_it(
     top = decisions.read(writable / "b.mp4")
     assert top is None or top.stacked_under is None, "the top is behind itself"
     assert {r["name"] for r in client.get("/api/files").json()} == {"b.mp4"}
+
+
+# --- deciding about a folder --------------------------------------------------
+
+def test_the_folder_bar_asks_only_what_a_set_can_answer(
+    client: TestClient
+) -> None:
+    """One zoom out the selection is sets rather than photographs, and the
+    question each control asks has to survive that.
+
+    The four stack actions do not: every one needs *a photograph* — which of
+    these takes speaks for the others, whether they are one moment — and
+    across an event there is no such question to ask.
+    """
+    html = client.get("/?date=2026&group=month,event").text
+    # The row itself. The page script names an action too, and a regex over
+    # the whole document reads that as a second button.
+    bar = html[html.index('id="actions"'):]
+    bar = bar[:bar.index("</div>")]
+    acts = re.findall(r'data-act="(\w+)"', bar)
+
+    assert acts == ["event", "tags", "access", "download"], acts
+    for gone in ("stack", "top", "unstack", "nostack", "delete", "purge"):
+        assert f'data-act="{gone}"' not in html, gone
+
+
+def test_a_folder_can_be_selected(client: TestClient) -> None:
+    """The same circle the thumbnails carry, for the same gesture."""
+    html = client.get("/?date=2026&group=month,event").text
+
+    assert 'class="pick" aria-label="Select this folder"' in html
+    assert 'id="selall"' in html and 'id="selcount"' in html
+
+
+def test_a_folder_with_no_address_offers_no_circle(client: TestClient) -> None:
+    """*No day* is every file whose date stops at the month, and there is no
+    filter that says so — so that card cannot be opened, and a set nothing can
+    name is a set nothing can be decided about either."""
+    dead = '<div class="tile dead"'
+    html = client.get("/?date=2026&group=month,day").text
+
+    if dead in html:
+        card = html[html.index(dead):]
+        card = card[:card.index("</div>")]
+        assert "pick" not in card, card
+
+
+def test_the_landing_page_asks_the_actions_in_the_bar_order(
+    client: TestClient
+) -> None:
+    """Learning one bar teaches the other, at either zoom — so the four it
+    keeps are in the order the grid puts them in."""
+    html = client.get("/?date=2026&group=month,event").text
+    acts = _as_columns(re.findall(r'data-act="(\w+)"', html))
+    bar = [col for col, _ in web._CHIPS]
+    assert acts[:4] == ["event", "tag", "audience", "download"], acts
+    shared = set(bar) & set(acts)
+
+    assert _relative(bar, shared) == _relative(acts, shared)

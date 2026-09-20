@@ -44,11 +44,18 @@ heading.appendChild(addBtn);
 document.appendChild(heading);
 
 // Folders, not cells: the script's grid machinery must find nothing to do.
+// Each carries the circle the server draws on it, because a folder can be
+// selected and a decision about it is a decision about the files it holds.
+const tiles = [];
 for (const name of ['2025', '2026']) {
   const t = new El('a');
   t.className = 'tile';
   t.attrs.href = '/browse?date=' + name;
+  const pick = new El('button');
+  pick.className = 'pick';
+  t.appendChild(pick);
   grid.appendChild(t);
+  tiles.push(t);
 }
 
 // **Every element the real page has, and no others.** This stage used to be a
@@ -60,11 +67,52 @@ const ids = process.argv[3]
   ? JSON.parse(fs.readFileSync(process.argv[3], 'utf8'))
   : ['grid', 'menu', 'chips', 'note', 'sizepick'];
 for (const id of ids) if (!document.byId[id]) mk(id);
+
+// The folder bar, as the server draws it: a tick, a count, and the four
+// controls whose question a *set* can answer. The ids above come from the
+// served page, but an element stubbed by id alone has none of its contents.
+{
+  const bar = document.byId.actions;
+  const tick = new El('button');
+  tick.id = 'selall';
+  tick.className = 'tick';
+  document.byId.selall = tick;
+  bar.appendChild(tick);
+  const count = new El('span');
+  count.id = 'selcount';
+  count.className = 'count';
+  document.byId.selcount = count;
+  bar.appendChild(count);
+  const g = new El('span');
+  g.className = 'grp';
+  g.dataset.side = 'live';
+  g.hidden = true;
+  for (const name of ['event', 'tags', 'access', 'download']) {
+    const b = new El('button');
+    b.dataset.act = name;
+    g.appendChild(b);
+  }
+  bar.appendChild(g);
+}
 // No size control here: it is a thumbnail size, and these folders are text.
 
 const calls = [];
+// What each folder turns out to hold, by the query that opens it.
+const inFolder = {
+  '2025': [{ folder: 'f', name: 'a.jpg', tags: '', audience: '', event: '' }],
+  '2026': [{ folder: 'f', name: 'b.jpg', tags: '', audience: 'kid', event: '' },
+           { folder: 'f', name: 'c.jpg', tags: '', audience: '', event: '' }],
+};
 const fetch = async (url, opts) => {
   calls.push({ url, body: opts && opts.body });
+  if (url.startsWith('/api/files')) {
+    const year = (url.match(/date=(\d+)/) || [])[1];
+    return { ok: true, json: async () => inFolder[year] || [] };
+  }
+  if (url.startsWith('/api/decide')) {
+    return { ok: true, json: async () => ({ failed: [], dropped: [], total: 3,
+                                            binned: 0 }) };
+  }
   return { ok: true, json: async () => [{ value: 'Sicily', n: 12, scope: 'all' }] };
 };
 const stored = {};
@@ -239,6 +287,67 @@ const press = key => (keys.keydown || []).forEach(fn => fn(
   press('ArrowRight');
   press('ArrowLeft');
   press('i');
+
+  // --- a decision about a folder --------------------------------------------
+  // One zoom out, the same gesture: a folder is a set of filters, so a
+  // decision about it is a decision about every file that link would open.
+  const actions = document.byId.actions;
+  const act = name => actions.querySelectorAll('[data-act]')
+    .find(b => b.dataset.act === name);
+  const pickOf = t => t.children.find(k => k._classes.has('pick'));
+
+  check('nothing is selected to begin with',
+        document.byId.selcount.textContent === '0 selected',
+        document.byId.selcount.textContent);
+  check('so the actions are not on screen',
+        actions.querySelectorAll('.grp').every(g => g.hidden));
+
+  went = null;
+  pickOf(tiles[1]).click();
+  check('a folder can be selected',
+        document.byId.selcount.textContent === '1 selected',
+        document.byId.selcount.textContent);
+  check('and it says so on the card', tiles[1]._classes.has('picked'));
+  check('now the actions are', actions.querySelectorAll('.grp')
+        .some(g => !g.hidden));
+  // The circle is inside the link that opens the folder, so it has to say it
+  // is not that.
+  check('selecting it did not open it', went === null, String(went));
+
+  // The whole point: four controls, and not one of the four that needs a
+  // photograph to mean anything.
+  const offered = actions.querySelectorAll('[data-act]').map(b => b.dataset.act);
+  check('the folder bar offers what a set can answer',
+        offered.join(',') === 'event,tags,access,download', offered.join(','));
+
+  act('tags').click();
+  await settle(); await settle();
+  check('the menu opens on the values already in use', menu.hidden === false);
+
+  // Read when something is actually ticked, not when the menu opens: the
+  // folder may hold thousands, and opening a menu is not asking for them.
+  const n = calls.length;
+  const row = menu.querySelectorAll('.opt')[0];
+  check('there is a name to tick', !!row);
+  if (row) {
+    row.click();
+    for (let k = 0; k < 8; k++) await settle();
+    const read = calls.slice(n).filter(c => c.url.startsWith('/api/files'));
+    check('ticking one reads what the folder holds', read.length === 1,
+          String(read.length));
+    check('by the query that opens it, minus the grouping',
+          !!read[0] && read[0].url.includes('date=2026')
+          && !read[0].url.includes('group='), read[0] && read[0].url);
+
+    const wrote = calls.slice(n).filter(c => c.url.startsWith('/api/decide'));
+    check('and writes to the files, not to the folder', wrote.length === 1,
+          String(wrote.length));
+    const sent = wrote.length ? JSON.parse(wrote[0].body) : { files: [] };
+    check('every file the folder holds', sent.files.length === 2,
+          JSON.stringify(sent.files));
+    check('named as files', sent.files.every(f => f.folder && f.name),
+          JSON.stringify(sent.files));
+  }
 
   if (failures.length) {
     failures.forEach(f => console.log('FAIL ' + f));

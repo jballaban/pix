@@ -102,6 +102,12 @@ class El {
   // the browser owns the transfer. The stub records it instead.
   submit() { (document.submitted ||= []).push(this); }
   setAttribute(k, v) { this.attrs[k] = v; }
+  // The real API, and its absence was being papered over one element at a
+  // time: tests that needed it hung a `getAttribute` on the element by hand,
+  // which is a stub asking to be finished rather than a test being careful.
+  // A missing method does not read as missing here — it throws on load and
+  // takes every handler with it, which looks exactly like a broken page.
+  getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }
   removeAttribute(k) { delete this.attrs[k]; }
   get clientWidth() { return 900; }
   querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }

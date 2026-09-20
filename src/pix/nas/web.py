@@ -486,6 +486,15 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
 .tile .left.all { color:var(--keep); }
 .tile:hover { border-color:var(--accent); background:#20242b;
              box-shadow:none; }
+/* A folder can be selected, so it carries the same circle a thumbnail does
+   and reads the same when it is chosen. Top right rather than top left: a
+   card leads with its name, and a control over the first word of it is a
+   control in the way of the thing you are reading. */
+.tile { position:relative; }
+.tile .pick { left:auto; right:9px; top:11px; }
+.tile:hover .pick, .tile.picked .pick { opacity:1; }
+.tile .name { padding-right:28px; }
+.tile.picked { border-color:var(--accent); background:#20273a; }
 /* A section with no address. It is still a real pile of files, so it is still
    shown — it just cannot be opened on its own. */
 .tile.dead { cursor:default; opacity:.7; }
@@ -608,8 +617,10 @@ h3.group[data-state="some"] .grppick { background:var(--top);
                     pointer-events:none; transition:opacity .08s; }
 .cell.gone:hover::after { opacity:0; }
 .bin-link { color:var(--gone); font-weight:600; }
-.cell.picked .pick::after { content:"\\2713"; color:#0d0f12; font-weight:700;
+.cell.picked .pick::after,
+.tile.picked .pick::after { content:"\\2713"; color:#0d0f12; font-weight:700;
                             font-size:13px; line-height:17px; }
+.tile.picked .pick { background:var(--accent); border-color:var(--accent); }
 /* Shared is the decided state, so it is what reads as finished; a file with no
    audience is the work still to do and looks untouched. An inset ring, so it
    can coexist with the selection outline — the two answer different questions
@@ -1609,6 +1620,7 @@ def home(request: Request,
                  # controls were never built.
                  f'<p class="dim">{head}</p>{body}<div id="menu" hidden></div>',
                  tools='<div class="chips" id="chips"></div>',
+                 rows=_actions(user, folders=True),
                  footer='<span id="note" class="note"></span>',
                  script=_view_script(user, view, groups, page="/"),
                  zoom="/browse" + (f"?{q}" if q else ""),
@@ -1707,7 +1719,13 @@ def _folder(row: sqlite3.Row, groups: list[str], view: ix.Filters,
         # this one does not.
         return (f'<div class="tile dead" title="There is no filter for this '
                 f'one, so it cannot be opened on its own">{inner}</div>')
-    return f'<a class="tile" href="{_h(href)}">{inner}</a>'
+    # The same circle the thumbnails carry, for the same gesture one zoom
+    # out: a folder is a set of files, and a decision about it is a decision
+    # about them. Only on a folder that can be opened — one with no address
+    # has no set to name either, so there is nothing to select.
+    return (f'<a class="tile" href="{_h(href)}">'
+            f'<button class="pick" aria-label="Select this folder"></button>'
+            f'{inner}</a>')
 
 
 def _bar(n: int, entire: int, left: int, user: Principal) -> str:
@@ -2010,7 +2028,7 @@ def _writable(user: Principal, change: _Change) -> None:
             f"not yours to change: {', '.join(refused)}")
 
 
-def _actions(user: Principal) -> str:
+def _actions(user: Principal, *, folders: bool = False) -> str:
     """The edit bar — as much of it as this person gets.
 
     **The family curates** (§8): tagging and naming are the whole point of the
@@ -2050,7 +2068,28 @@ def _actions(user: Principal) -> str:
     The stack actions join the first cluster rather than earning a bar of their
     own, and not only for tidiness: they are usually hidden, and a separator is
     not, so a bar around them would hang there beside nothing.
+
+    **A folder bar is four of these and no more.** One zoom out, the selection
+    is sets rather than photographs, and the question each control asks has to
+    survive that. *Event*, *Tags*, *Access* and *Download* are statements about
+    a set and read the same either way — naming a run of days as one event
+    is the gesture the whole backlog turns on (§8). The four stack actions
+    are not: every one of them needs *a photograph* — which of these takes
+    speaks for the others, whether they are one moment — and across an
+    event there is no such question to ask.
     """
+    if folders:
+        return f"""<div class="row" id="actions">
+  <button id="selall" class="tick" title="Select all"
+          aria-label="Select all"></button>
+  <span class="count" id="selcount" style="margin:0"></span>
+  <span class="grp" data-side="live" hidden>
+    {_act("event", "Event&hellip;", user=user)}
+    {_act("tags", "Tags&hellip;", user=user)}
+    {_act("access", "Access&hellip;", user=user)}
+    {_act("download", "Download", user=user)}
+  </span>
+</div>"""
     return f"""<div class="row" id="actions">
   <button id="selall" class="tick" title="Select all" aria-label="Select all"></button>
   <span class="count" id="selcount" style="margin:0"></span>
@@ -2998,7 +3037,13 @@ function esc(s){return String(s).replace(/[&<>"]/g,c=>(
 
 // --- the shared menu ---------------------------------------------------------
 let menuCtx=null;
-function closeMenu(){menu.hidden=true;menuCtx=null;}
+function closeMenu(){
+  menu.hidden=true;menuCtx=null;
+  // The cards carry counts and a bar that the writes just made wrong, and
+  // there is no cell on screen to correct the way the grid corrects its own.
+  // Once rather than after every tick of the menu.
+  if(foldersDirty){foldersDirty=false;location.reload();}
+}
 // Anywhere outside dismisses. The opener stops propagation and toggles,
 // so clicking the same label again closes rather than reopening — a menu
 // you cannot dismiss with the control that opened it feels stuck.
@@ -3090,10 +3135,13 @@ async function openMenu(anchorEl,ctx){
   }
   if(menuCtx!==ctx) return;   // a later menu opened while this was loading
 
-  function choose(value){
+  async function choose(value){
     closeMenu();
-    if(ctx.mode==='filter') location.href=url({[ctx.column]:value});
-    else applyToSelection(ctx.as||ctx.column,value,true);
+    if(ctx.mode==='filter'){location.href=url({[ctx.column]:value});return;}
+    const cs=await acting();
+    if(!cs) return;
+    await applyToSelection(ctx.as||ctx.column,value,true,cs);
+    if(FOLDERS) foldersDirty=true;
   }
 
   // A checklist, not a list of commands. `some` clears first and then
@@ -3105,17 +3153,22 @@ async function openMenu(anchorEl,ctx){
   const FIELD=MULTI[ctx.as]?MULTI[ctx.as][0]:(ctx.as==='event'?'event':null);
 
   async function toggle(value,row){
-    const cs=targets();
+    // On the landing page this is every file the chosen folders hold, read
+    // once and kept: the tri-state has to be able to say *some of them*, and
+    // there is no way to know that about a folder without asking.
+    const cs=await acting();
+    if(!cs) return;
     if(!cs.length){say('nothing selected');return;}
     const state=shareState(cs,FIELD,value);
     if(FIELD==='event'){
       // Ticking the event they already have clears it; anything else sets
       // it. One value, so there is nothing to add to.
-      await applyToSelection('event',state==='all'?null:value,true);
+      await applyToSelection('event',state==='all'?null:value,true,cs);
     }else{
-      await applyToSelection(ctx.as,value,state==='none');
+      await applyToSelection(ctx.as,value,state==='none',cs);
     }
-    mark(row,shareState(targets(),FIELD,value));
+    if(FOLDERS) foldersDirty=true;
+    mark(row,shareState(cs,FIELD,value));
   }
   function mark(row,state){
     row.dataset.state=state;
@@ -3314,6 +3367,8 @@ function show(act,on){
 function drawSel(){
   drawGroupPicks();
   if(!actions) return;
+  // The landing page has a selection too, and it is not made of these.
+  if(FOLDERS){drawFolderSel();return;}
   // A menu that acts on the selection has nothing left to act on once the
   // selection is empty — which is exactly where a write that pushes every
   // file out of the view leaves it, and it sat there open over a grid it
@@ -3444,6 +3499,13 @@ cells.forEach(wire);
 const selall=document.getElementById('selall');
 if(selall) selall.onclick=e=>{
   e.stopPropagation();
+  if(FOLDERS){
+    if(pickedFolders.size) pickedFolders.clear();
+    else tiles.forEach(t=>pickedFolders.add(t));
+    expanded=null;
+    drawFolderSel();
+    return;
+  }
   if(picked.size){clearPicks();return;}
   cells.forEach((_,n)=>togglePick(n,true));
   drawSel();
@@ -3753,6 +3815,123 @@ function targets(){
   return [...picked];
 }
 
+// --- the landing page selects folders ----------------------------------------
+// One zoom out, the same gesture. A folder *is* a set of filters — its own
+// link says which — so a decision about a folder is a decision about every
+// file that link would open, and the way to make one is to ask for those files
+// and then do exactly what the grid does.
+//
+// Which is why nothing below writes anything. It turns folders into the same
+// shape a thumbnail has, and `applyToSelection` takes it from there: the
+// cascade into stacks, the field the person is allowed to write, the chunking,
+// the log and the revert are all the ones that were already there.
+const FOLDERS = PAGE==='/';
+const tiles = FOLDERS && grid
+  ? [...grid.querySelectorAll('.tile')].filter(t=>t.getAttribute('href')) : [];
+const pickedFolders = new Set();
+// The files behind the chosen folders, once anything has asked. Thrown away
+// whenever the selection changes, because it is an answer about that
+// selection and nothing else.
+let expanded = null;
+
+// A fetched row, wearing enough of a thumbnail to be one. `applyToSelection`
+// reads `dataset` and paints what it just wrote back onto the cell; there is
+// no cell here, so the paint lands on nothing and the write is unaffected.
+function ghost(row){
+  return {
+    dataset:{folder:row.folder, name:row.name,
+             tags:row.tags||'', audience:row.audience||'',
+             event:row.event||'', deleted:row.deleted?'1':''},
+    classList:{add(){}, remove(){}, toggle(){}, contains(){return false;}},
+    querySelector(){return null;}, appendChild(){}, remove(){},
+  };
+}
+
+// Every file the chosen folders hold. Paged, because a folder is not bounded
+// by what fits on a screen the way a selection of thumbnails is — an event
+// can be thousands — and the takeover says so while it reads.
+const PAGE_SIZE = 2000;
+async function readFolders(){
+  if(expanded) return expanded;
+  const chosen=[...pickedFolders];
+  if(!chosen.length) return [];
+  if(busy){say('still writing…');return null;}
+  busy=true;
+  workOpen(chosen.length===1?'Reading the folder'
+                            :`Reading ${chosen.length} folders`, chosen.length);
+  const out=[], seen=new Set();
+  try{
+    for(let i=0;i<chosen.length;i++){
+      if(stopping) break;
+      const q=new URLSearchParams(
+        (chosen[i].getAttribute('href').split('?')[1])||'');
+      // How the library is cut up says nothing about which files are in it,
+      // and asking for a grouping the file listing does not use would only
+      // give the server something to ignore.
+      q.delete('group');
+      for(let offset=0;;){
+        q.set('limit',String(PAGE_SIZE)); q.set('offset',String(offset));
+        const r=await fetch('/api/files?'+q);
+        if(!r.ok) throw new Error((await r.text()).slice(0,200));
+        const rows=await r.json();
+        for(const row of rows){
+          const key=row.folder+'\\n'+row.name;
+          // Two folders can only overlap if the grouping lets them, but a
+          // file written twice in one gesture is written twice in the log.
+          if(seen.has(key)) continue;
+          seen.add(key); out.push(ghost(row));
+        }
+        if(rows.length<PAGE_SIZE) break;
+        offset+=rows.length;
+      }
+      workProgress(i+1,chosen.length);
+    }
+  }catch(e){
+    busy=false; workClose();
+    say('could not read that folder: '+e.message,true);
+    return null;
+  }
+  const halted=stopping;
+  busy=false; workClose();
+  if(halted){say('stopped — nothing was written');return null;}
+  expanded=out;
+  return out;
+}
+
+// What an action applies to, whichever page is asking.
+async function acting(){
+  return FOLDERS ? await readFolders() : targets();
+}
+
+// The cards carry counts and a progress bar that a write has just made wrong,
+// and there is no cell on screen to correct the way the grid corrects its own.
+// So the page is re-read once the menu is done with, rather than after every
+// tick of it.
+let foldersDirty=false;
+
+function drawFolderSel(){
+  tiles.forEach(t=>t.classList.toggle('picked',pickedFolders.has(t)));
+  if(!actions) return;
+  const n=pickedFolders.size;
+  if(!n&&menuCtx&&(menuCtx.mode==='set'||menuCtx.mode==='date')) closeMenu();
+  for(const g of actions.querySelectorAll('.grp')) g.hidden=!n;
+  actions.dataset.state = !n ? 'none' : n===tiles.length ? 'all' : 'some';
+  if(selcount) selcount.textContent = `${n} selected`;
+}
+
+tiles.forEach(t=>{
+  const pick=t.querySelector('.pick');
+  if(!pick) return;
+  pick.addEventListener('click',e=>{
+    // Inside the link that opens the folder, so it has to say it is not that.
+    e.preventDefault(); e.stopPropagation();
+    if(pickedFolders.has(t)) pickedFolders.delete(t); else pickedFolders.add(t);
+    expanded=null;
+    drawFolderSel();
+  });
+});
+if(FOLDERS) drawFolderSel();
+
 // Which kind of file an action is about. A deleted file cannot be deleted
 // again and a living one cannot be restored, so every action has a side and
 // acts only on that side of the selection. Select a day that holds both and
@@ -3932,8 +4111,9 @@ if(COARSE&&CAN_SHARE&&actions){
   if(b) b.textContent='Save';
 }
 
-function downloadMenu(anchorEl){
-  const cs=targets();
+async function downloadMenu(anchorEl){
+  const cs=await acting();
+  if(!cs) return;
   if(!cs.length){say('nothing selected');return;}
   if(!cs.some(c=>c.dataset.copy)){closeMenu();getFiles(cs,false);return;}
   const key='download';
@@ -4533,7 +4713,7 @@ async function send(cs,body,label,sharedBatch){
   busy=false; workClose();
   drawSel();
   cs.forEach(c=>details.delete(c.dataset.folder+'\\n'+c.dataset.name));
-  if(viewer.classList.contains('on')&&cells[cur]) fill(cells[cur]);
+  if(viewer&&viewer.classList.contains('on')&&cells[cur]) fill(cells[cur]);
   drop(gone);
   if(total!==null&&countEl) countEl.textContent=`${total.toLocaleString()} files`;
   drawBin(binned);
