@@ -550,7 +550,10 @@ _INSERT: str = (
 
 def refresh(conn: sqlite3.Connection, folder: str, name: str, *,
             meta_dir: Path | None = None,
-            master_dir: Path | None = None) -> bool:
+            master_dir: Path | None = None,
+            decision: Decision | None | decisions.Unset = decisions.UNSET,
+            record: dict[str, Any] | None = None,
+            commit: bool = True) -> bool:
     """Re-read one file's facts and decision, and rewrite just its row.
 
     This is what makes curation usable. A full rebuild reads every record in the
@@ -566,17 +569,38 @@ def refresh(conn: sqlite3.Connection, folder: str, name: str, *,
     Returns False when there are no probed facts for the file, which means it
     has not been processed and has no row to catch up. The sidecar is still the
     record; `pix2 index` picks it up once `process` has run.
+
+    **`decision` and `record` are what the caller already had in its hand.**
+    A decision write has just read the sidecar, changed it and written it
+    back; reading it again here is a second trip over SMB for an answer that
+    is already known. `record` is the same bargain for the meta file — 5KB
+    of JSON per file, and 11ms of latency to fetch it. Both default to
+    *nobody told me*, in which case this reads them itself.
+
+    **`commit=False` leaves the transaction to the caller.** One commit per
+    row is an fsync per row, and the index lives on the share: measured at
+    8.7ms each against the NAS, against 0.2ms when a batch shares one. That
+    is most of what made a folder-sized edit feel broken.
     """
     meta_root = meta_dir if meta_dir is not None else META_DIR
     master_root = master_dir if master_dir is not None else MASTER_DIR
 
-    record = _record(meta_root / folder / f"{name}.json")
+    if record is None:
+        record = _record(meta_root / folder / f"{name}.json")
     if record is None:
         return False
     media = master_root / folder / name
-    decided: dict[str, Decision | None] = (
-        {name: decisions.read(media)}
-        if decisions.sidecar_path(media).is_file() else {})
+    if isinstance(decision, decisions.Unset):
+        decided: dict[str, Decision | None] = (
+            {name: decisions.read(media)}
+            if decisions.sidecar_path(media).is_file() else {})
+    else:
+        # An empty decision is no sidecar — `write` deletes the file rather
+        # than leaving one that records nothing — so the two have to agree
+        # about that here, or `has_sidecar` would say a file is decided
+        # because somebody cleared the last field on it.
+        decided = ({} if decision is None or decision.is_empty()
+                   else {name: decision})
     # The source is a fact about the folder, not about the file, so it is
     # carried from the row already there rather than read off the ledger
     # again. One extra open per file over SMB is what makes a bulk edit slow.
@@ -593,11 +617,21 @@ def refresh(conn: sqlite3.Connection, folder: str, name: str, *,
     # this file leaving whatever it was part of.
     was = (str(before["suggested_under"])
            if before and before["suggested_under"] else None)
-    with conn:
-        conn.execute(_INSERT, row)
-        _write_multi(conn, folder, name, decided.get(name))
-        _regroup(conn, folder, name, was)
+    if commit:
+        with conn:
+            _rewrite(conn, folder, name, row, decided.get(name), was)
+    else:
+        _rewrite(conn, folder, name, row, decided.get(name), was)
     return True
+
+
+def _rewrite(conn: sqlite3.Connection, folder: str, name: str,
+             row: dict[str, Any], decision: Decision | None,
+             was: str | None) -> None:
+    """The three writes one row's refresh is made of."""
+    conn.execute(_INSERT, row)
+    _write_multi(conn, folder, name, decision)
+    _regroup(conn, folder, name, was)
 
 
 def _write_multi(conn: sqlite3.Connection, folder: str, name: str,
@@ -682,6 +716,17 @@ def _records(folder: Path) -> Iterator[dict[str, Any]]:
         record = _record(path)
         if record is not None:
             yield record
+
+
+def record_of(meta_dir: Path, folder: str, name: str
+              ) -> dict[str, Any] | None:
+    """One file's probed facts, by name.
+
+    Public so a caller can fetch a batch of them its own way — they are
+    read-only, independent, and 11ms of SMB latency each, which is a wait that
+    overlaps.
+    """
+    return _record(meta_dir / folder / f"{name}.json")
 
 
 def _record(path: Path) -> dict[str, Any] | None:

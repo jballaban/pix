@@ -23,6 +23,8 @@ import sqlite3
 import zipfile
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from urllib.parse import parse_qs, quote
 from dataclasses import dataclass, field, replace
 from itertools import groupby
@@ -5237,6 +5239,36 @@ def download(folder: str, name: str,
     return FileResponse(target, filename=called, media_type=_mime(called))
 
 
+#: How many meta records to fetch at once.
+#:
+#: Each is 5KB of JSON behind an 11ms round trip to the NAS, and the wait is
+#: latency rather than bandwidth — so the cure is having several in flight,
+#: not asking for less. Eight because the archive runs on a four-core Atom and
+#: the point is to keep its network busy, not its processor.
+META_READERS: int = 8
+
+
+def _records_for(targets: Sequence[Target]
+                 ) -> dict[tuple[str, str], dict[str, Any]]:
+    """The probed facts for a whole batch, fetched together.
+
+    Read-only and independent, so they overlap safely; one that fails is
+    simply absent, and the refresh that wanted it falls back to fetching its
+    own.
+    """
+    if len(targets) < 2:
+        return {}
+    def one(t: Target) -> tuple[str, str, dict[str, Any] | None]:
+        return t.folder, t.name, ix.record_of(META_DIR, t.folder, t.name)
+
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=META_READERS) as pool:
+        for folder, name, record in pool.map(one, targets):
+            if record is not None:
+                out[(folder, name)] = record
+    return out
+
+
 #: How many files one zip will hold. Not a technical limit — the stream is
 #: constant-memory whatever goes through it — but a selection can run to
 #: thousands, and a download nobody meant to start is a download nobody can
@@ -5768,46 +5800,64 @@ def api_decide_bulk(user: Annotated[Principal, Depends(require_user)],
     dropped: list[dict[str, str]] = []
     total: int | None = None
     binned: int | None = None
+    # Every row was its own commit, and a commit is an fsync to an index that
+    # lives on the share — 8.7ms a row against 0.2ms when a batch shares one,
+    # measured against the NAS. On 866 files that alone was most of the wait.
+    #
+    # The sidecars are written outside it and stay written whatever happens
+    # here. If this transaction never commits the index is *behind*, which is
+    # the one direction drift is allowed to go and what `pix2 index` is for —
+    # the opposite bargain, a committed row for a sidecar that failed, is the
+    # one the whole design refuses.
+    rows = conn if conn is not None else nullcontext()
+    # The meta records the refreshes are about to want, fetched together.
+    # Each is 5KB of JSON and an 11ms round trip, and they are read-only and
+    # independent — so the wait is latency, and latency is what overlapping
+    # them removes.
+    records = _records_for(targets)
     try:
-        for target in targets:
-            try:
-                was, _, was_indexed = _decide(target.folder, target.name,
-                                              change, conn=conn)
-            except HTTPException as e:
-                failed.append({"folder": target.folder, "name": target.name,
-                               "error": str(e.detail)})
-                continue
-            written += 1
-            indexed += 1 if was_indexed else 0
-            done.append((target.folder, target.name))
-            undo.append(history.Before(target.folder, target.name, was,
-                                       did=did))
-        # The file everything is being stacked onto stops being stacked
-        # itself. Promoting one photograph out of a stack is exactly this —
-        # the others come to defer to it, and it has to stop deferring to the
-        # one it is replacing, or the stack is a ring nothing can show.
-        if (conn is not None and done
-                and not isinstance(change.stacked_under, Unset)
-                and change.stacked_under):
-            promoted = _promote(conn, change.stacked_under)
-            undo.extend(promoted)
-            done.extend((b.folder, b.name) for b in promoted)
-        # Before asking what left the view, because bringing a stack's
-        # members up changes the answer for them too.
-        if (conn is not None and done
-                and not isinstance(change.stacked_under, Unset)):
-            brought = _cascade(conn, done, change.stacked_under)
-            undo.extend(brought)
-            done.extend((b.folder, b.name) for b in brought)
-        if conn is not None and done:
-            stays = ix.matching(conn, view, done)
-            dropped = [{"folder": f, "name": n}
-                       for f, n in done if (f, n) not in stays]
-            total = ix.count(conn, view)
-            # The header's standing count. It is rendered with the page, so
-            # without this it stays at whatever it said when the page loaded —
-            # which is wrong the instant anything is deleted or restored.
-            binned = ix.count(conn, ix.Filters(deleted="only"))
+        with rows:
+            for target in targets:
+                try:
+                    was, _, was_indexed = _decide(
+                        target.folder, target.name, change, conn=conn,
+                        record=records.get((target.folder, target.name)),
+                        commit=False)
+                except HTTPException as e:
+                    failed.append({"folder": target.folder, "name": target.name,
+                                   "error": str(e.detail)})
+                    continue
+                written += 1
+                indexed += 1 if was_indexed else 0
+                done.append((target.folder, target.name))
+                undo.append(history.Before(target.folder, target.name, was,
+                                           did=did))
+            # The file everything is being stacked onto stops being stacked
+            # itself. Promoting one photograph out of a stack is exactly this —
+            # the others come to defer to it, and it has to stop deferring to the
+            # one it is replacing, or the stack is a ring nothing can show.
+            if (conn is not None and done
+                    and not isinstance(change.stacked_under, Unset)
+                    and change.stacked_under):
+                promoted = _promote(conn, change.stacked_under)
+                undo.extend(promoted)
+                done.extend((b.folder, b.name) for b in promoted)
+            # Before asking what left the view, because bringing a stack's
+            # members up changes the answer for them too.
+            if (conn is not None and done
+                    and not isinstance(change.stacked_under, Unset)):
+                brought = _cascade(conn, done, change.stacked_under)
+                undo.extend(brought)
+                done.extend((b.folder, b.name) for b in brought)
+            if conn is not None and done:
+                stays = ix.matching(conn, view, done)
+                dropped = [{"folder": f, "name": n}
+                           for f, n in done if (f, n) not in stays]
+                total = ix.count(conn, view)
+                # The header's standing count. It is rendered with the page, so
+                # without this it stays at whatever it said when the page loaded —
+                # which is wrong the instant anything is deleted or restored.
+                binned = ix.count(conn, ix.Filters(deleted="only"))
     finally:
         if conn is not None:
             conn.close()
@@ -5912,7 +5962,9 @@ def _flag(value: Any) -> bool | Unset:
 
 
 def _decide(folder: str, name: str, change: _Change,
-            *, conn: sqlite3.Connection | None = None
+            *, conn: sqlite3.Connection | None = None,
+            record: dict[str, Any] | None = None,
+            commit: bool = True
             ) -> tuple[Decision | None, Decision, bool]:
     """Write one decision to master, then bring its index row up to date.
 
@@ -5928,6 +5980,16 @@ def _decide(folder: str, name: str, change: _Change,
 
     `conn` lets a batch reuse one index connection; alone, it opens and closes
     its own.
+
+    **`commit=False` puts the row in the caller's transaction.** Every row of
+    a bulk edit was its own commit, and a commit is an fsync — to an index
+    that lives on the share, measured at 8.7ms a row against 0.2ms when a
+    batch shares one. `record` is the same idea for the meta file the refresh
+    would otherwise fetch per row.
+
+    The sidecar write stays per file and outside any of that. It is the
+    record; the index is a projection of it, and a projection that rolls back
+    is behind, which is the one direction drift is allowed to go.
     """
     media = _master_file(folder, name)
     with _write_lock:
@@ -5961,8 +6023,12 @@ def _decide(folder: str, name: str, change: _Change,
                 # Passed rather than left to the index's own constants, so the
                 # path the decision was written to and the path the row is
                 # rebuilt from are the same one.
+                # The decision is the one just written, so the refresh
+                # does not go back to the share to read it again.
                 indexed = ix.refresh(conn, folder, name,
-                                     meta_dir=META_DIR, master_dir=MASTER_DIR)
+                                     meta_dir=META_DIR, master_dir=MASTER_DIR,
+                                     decision=decision, record=record,
+                                     commit=commit)
             except sqlite3.Error:
                 indexed = False
             finally:
