@@ -412,3 +412,37 @@ def test_a_person_alone_is_still_a_decision(tmp_path: Path) -> None:
     create one like any other judgement."""
     assert not decisions.Decision(people=("Mom",)).is_empty()
     assert decisions.Decision().is_empty()
+
+
+def test_an_audience_of_nobody_is_not_a_decision(tmp_path: Path) -> None:
+    """Pinned because the module docstring claimed the opposite for a long
+    time, and a comment that describes behaviour nobody implemented is how
+    working code gets "fixed".
+
+    There is no way for the dataclass to carry it: a tuple cannot tell *set to
+    nothing* from *never set*. The answer the model does have is a role with
+    no members — a name like `private` is a real audience, so the file counts
+    as decided, and nobody is in it.
+    """
+    media = tmp_path / "a.jpg"
+    media.write_bytes(b"x")
+
+    decisions.write(media, decisions.Decision(audience=()))
+
+    assert decisions.Decision(audience=()) == decisions.Decision()
+    assert not decisions.sidecar_path(media).exists()
+    assert decisions.read(media) is None
+
+
+def test_a_role_with_no_members_is_how_you_keep_one_to_yourself(
+    tmp_path: Path
+) -> None:
+    """Which is the whole of what the missing feature would have bought."""
+    media = tmp_path / "a.jpg"
+    media.write_bytes(b"x")
+
+    decisions.write(media, decisions.Decision(audience=("private",)))
+
+    after = decisions.read(media)
+    assert after is not None and after.audience == ("private",)
+    assert not after.is_empty()

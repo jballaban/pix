@@ -38,11 +38,25 @@ Nothing is special-cased — *keep this but show it to nobody* is a role with no
 members, created like any other. The owner is never in the list: an
 administrator sees everything by definition.
 
-**No sidecar means undecided.** That is the whole review-state model — there
-is no separate "reviewed" flag, and clearing every field deletes the file
-rather than leaving an empty one, so the two states stay distinguishable. An
-audience with no members is still a decision and does create a sidecar:
-choosing to keep something to yourself *is* a judgement.
+**Having an audience is what *decided* means.** That is the whole
+review-state model — there is no separate "reviewed" flag, and the counts
+the app shows are files with no row in `file_audience`. Saying who may see a
+photograph is the judgement that finishes it; tagging and naming and dating
+are all real work, and none of them is that one.
+
+**An audience of nobody is not a decision, and cannot be.** This said the
+opposite for a long time — that an empty audience still creates a sidecar,
+because choosing to keep something to yourself is a judgement. It does not:
+`Decision(audience=())` is `is_empty()`, compares equal to `Decision()`, and
+`write` deletes the sidecar rather than recording one. The claim was never
+implemented and the dataclass cannot carry it, having no way to tell *set to
+nothing* from *never set*.
+
+It is also not needed, which is why this is a correction and not a bug to
+fix. *Keep this but show it to nobody* is a **role with no members**, created
+like any other name — as the note above already says. A photograph shared
+with `private` has an audience, so it counts as decided, and nobody can see
+it. The model had the answer; only this paragraph did not.
 
 ### Serialization
 
