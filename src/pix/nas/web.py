@@ -484,7 +484,8 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
                border-radius:2px; }
 .tile .bar i b { display:block; height:100%; background:var(--keep);
                  border-radius:2px; }
-.tile .left { font-size:11px; color:var(--top); margin-top:4px; }
+/* The one negative fact, in the same clothes as the positive ones. */
+.spread i.none { color:var(--top); }
 /* What the folder holds, in the same chips a thumbnail wears — so a card
    and a photograph say the same kind of thing about themselves. */
 .spread { display:flex; flex-wrap:wrap; gap:3px; margin-top:6px; }
@@ -501,7 +502,6 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
 .spread.people i { color:var(--accent); }
 .spread.tags i { color:#fff; }
 .spread .more { color:var(--dim); background:none; padding-left:2px; }
-.tile .left.all { color:var(--keep); }
 .tile:hover { border-color:var(--accent); background:#20242b;
              box-shadow:none; }
 /* A folder can be selected, so it carries the same circle a thumbnail does
@@ -1690,7 +1690,8 @@ def _shelves(rows: list[sqlite3.Row], groups: list[str], view: ix.Filters,
     return "".join(out)
 
 
-def _spread_html(kind: str, values: list[tuple[str, int]], n: int) -> str:
+def _spread_html(kind: str, values: list[tuple[str, int]], n: int,
+                 lead: tuple[str, int] | None = None) -> str:
     """What a section says about itself, one kind of value at a time.
 
     **A percentage only where it is news.** A value the whole folder carries
@@ -1706,9 +1707,20 @@ def _spread_html(kind: str, values: list[tuple[str, int]], n: int) -> str:
     is the errand it exists to save. A taller card is cheaper than that, and
     the ones with most in them are the ones worth reading.
     """
-    if not values or not n:
+    if not n or not (values or lead):
         return ""
-    chips = "".join(
+    # What is *not* decided, wearing the same clothes as what is. It was a
+    # sentence of its own under the bar — *1 undecided* — which made the
+    # one negative fact on the card the only one shaped differently from all
+    # the positive ones. And *all decided* said nothing at all: a folder with
+    # nothing left says it by having no such chip, the way a folder with no
+    # tags says that by having no tags.
+    first = ("" if lead is None or not lead[1] else
+             f'<i class="none" title="{_h(lead[0])} — {lead[1]:,} of {n:,}">'
+             + _h(lead[0])
+             + (f'<b>{round(lead[1] * 100 / n)}%</b>' if lead[1] < n else "")
+             + "</i>")
+    chips = first + "".join(
         f'<i title="{_h(v)} — {c:,} of {n:,}">{_h(v)}'
         + (f'<b>{round(c * 100 / n)}%</b>' if c < n else "")
         + "</i>"
@@ -1766,15 +1778,14 @@ def _folder(row: sqlite3.Row, groups: list[str], view: ix.Filters,
         # of it is a quarter of one, and the green grows inside either as the
         # work gets done.
         + _bar(n, entire, left, user)
-        + (f'<span class="left">{left:,} undecided</span>' if left
-           else '<span class="left all">all decided</span>'
-           if user.is_admin else "")
         # What is *in* it, not just how much of it is done. A thumbnail says
         # which tags and which audience it carries; this is the same sentence
-        # for a folder, with the share that carries each.
+        # for a folder, with the share that carries each — and what is
+        # undecided is the first of them rather than a line of its own.
         + "".join(
             _spread_html(kind, (spread or {}).get(kind, {}).get(
-                tuple(row[f"grp{i}"] for i in range(len(groups))), []), n)
+                tuple(row[f"grp{i}"] for i in range(len(groups))), []), n,
+                lead=("undecided", left) if kind == "audience" else None)
             for kind in (("audience", "people", "tags") if user.is_admin
                          else ("people", "tags"))))
     if href is None:
@@ -3112,13 +3123,7 @@ function esc(s){return String(s).replace(/[&<>"]/g,c=>(
 
 // --- the shared menu ---------------------------------------------------------
 let menuCtx=null;
-function closeMenu(){
-  menu.hidden=true;menuCtx=null;
-  // The cards carry counts and a bar that the writes just made wrong, and
-  // there is no cell on screen to correct the way the grid corrects its own.
-  // Once rather than after every tick of the menu.
-  if(foldersDirty){foldersDirty=false;location.reload();}
-}
+function closeMenu(){menu.hidden=true;menuCtx=null;}
 // Anywhere outside dismisses. The opener stops propagation and toggles,
 // so clicking the same label again closes rather than reopening — a menu
 // you cannot dismiss with the control that opened it feels stuck.
@@ -3217,7 +3222,7 @@ async function openMenu(anchorEl,ctx){
     if(!cs) return;
     if(!cs.length){workClose();say('nothing selected');return;}
     await applyToSelection(ctx.as||ctx.column,value,true,cs);
-    if(FOLDERS) foldersDirty=true;
+    if(FOLDERS) redrawFolders();
   }
 
   // A checklist, not a list of commands — and a half-ticked box completes,
@@ -3255,7 +3260,7 @@ async function openMenu(anchorEl,ctx){
     }else{
       await applyToSelection(ctx.as,value,state!=='all',cs);
     }
-    if(FOLDERS) foldersDirty=true;
+    if(FOLDERS) redrawFolders();
     mark(row,shareState(cs,FIELD,value));
   }
   function mark(row,state){
@@ -3590,7 +3595,7 @@ if(selall) selall.onclick=e=>{
   if(FOLDERS){
     if(pickedFolders.size) pickedFolders.clear();
     else tiles.forEach(t=>pickedFolders.add(t));
-    expanded=null;
+    expanded=null; expandedBy.clear();
     drawFolderSel();
     return;
   }
@@ -3917,6 +3922,10 @@ const FOLDERS = PAGE==='/';
 const tiles = FOLDERS && grid
   ? [...grid.querySelectorAll('.tile')].filter(t=>t.getAttribute('href')) : [];
 const pickedFolders = new Set();
+// Which files sit behind each chosen folder. Kept per folder rather than in
+// one heap, because a card is redrawn from its own — a percentage of
+// everything selected is a percentage of the wrong thing.
+const expandedBy = new Map();
 // The files behind the chosen folders, once anything has asked. Thrown away
 // whenever the selection changes, because it is an answer about that
 // selection and nothing else.
@@ -3929,6 +3938,7 @@ function ghost(row){
   return {
     dataset:{folder:row.folder, name:row.name,
              tags:row.tags||'', audience:row.audience||'',
+             people:row.people||'',
              event:row.event||'', deleted:row.deleted?'1':''},
     classList:{add(){}, remove(){}, toggle(){}, contains(){return false;}},
     querySelector(){return null;}, appendChild(){}, remove(){},
@@ -3951,6 +3961,7 @@ async function readFolders(){
   try{
     for(let i=0;i<chosen.length;i++){
       if(stopping) break;
+      const from=out.length;
       const q=new URLSearchParams(
         (chosen[i].getAttribute('href').split('?')[1])||'');
       // How the library is cut up says nothing about which files are in it,
@@ -3972,6 +3983,7 @@ async function readFolders(){
         if(rows.length<PAGE_SIZE) break;
         offset+=rows.length;
       }
+      expandedBy.set(chosen[i],out.slice(from));
       workProgress(i+1,chosen.length,'folder','folders');
     }
   }catch(e){
@@ -3997,11 +4009,46 @@ async function acting(){
   return FOLDERS ? await readFolders() : targets();
 }
 
-// The cards carry counts and a progress bar that a write has just made wrong,
-// and there is no cell on screen to correct the way the grid corrects its own.
-// So the page is re-read once the menu is done with, rather than after every
-// tick of it.
-let foldersDirty=false;
+// A card is redrawn from its own files, which is where the answer already is:
+// `applyToSelection` writes what it wrote onto each of them, so counting is
+// all that is left. Nothing is fetched and nothing reloads — the menu stays
+// open and the card underneath it changes, which is the whole point of a
+// checklist you tick more than once.
+function redrawFolder(t){
+  const gs=expandedBy.get(t);
+  if(!gs||!gs.length) return;
+  const n=gs.length;
+  const kinds=ADMIN?['audience','people','tags']:['people','tags'];
+  for(const kind of kinds){
+    const counts=new Map();
+    for(const g of gs)
+      for(const v of valuesOf(g,kind)) counts.set(v,(counts.get(v)||0)+1);
+    // Commonest first, so what the whole folder carries leads and the partial
+    // ones follow — the same order the server draws them in.
+    const sorted=[...counts].sort((a,b)=>b[1]-a[1]||(a[0]<b[0]?-1:1));
+    const none=kind==='audience'
+      ? gs.filter(g=>!g.dataset.audience).length : 0;
+    let el=t.querySelector('.spread.'+kind);
+    if(!sorted.length&&!none){ if(el) el.remove(); continue; }
+    if(!el){
+      el=document.createElement('span');
+      el.className='spread '+kind;
+      t.appendChild(el);
+    }
+    const chip=(v,c,cls)=>`<i${cls?' class="'+cls+'"':''} `
+      +`title="${esc(v)} — ${c} of ${n}">${esc(v)}`
+      +(c<n?`<b>${Math.round(c*100/n)}%</b>`:'')+'</i>';
+    el.innerHTML=(none?chip('undecided',none,'none'):'')
+                +sorted.map(([v,c])=>chip(v,c)).join('');
+  }
+  // The green inside the blue: how much of this card has been decided.
+  const fill=t.querySelector('.bar i b');
+  if(fill){
+    const done=gs.filter(g=>!!g.dataset.audience).length;
+    fill.style.width=Math.round(done*100/n)+'%';
+  }
+}
+function redrawFolders(){ pickedFolders.forEach(redrawFolder); }
 
 function drawFolderSel(){
   tiles.forEach(t=>t.classList.toggle('picked',pickedFolders.has(t)));
@@ -4020,7 +4067,7 @@ tiles.forEach(t=>{
     // Inside the link that opens the folder, so it has to say it is not that.
     e.preventDefault(); e.stopPropagation();
     if(pickedFolders.has(t)) pickedFolders.delete(t); else pickedFolders.add(t);
-    expanded=null;
+    expanded=null; expandedBy.clear();
     drawFolderSel();
   });
 });
@@ -4511,8 +4558,12 @@ function drop(gone){
   // Nothing to do one zoom out: this tidies away *cells*, and a folder page
   // has none — so every test below is about an empty list, and the last of
   // them would have replaced the folders with *nothing matches these filters
-  // any more*. The cards are re-read whole when the menu closes.
-  if(FOLDERS) return;
+  // any more*.
+  //
+  // Files leaving the view is the one thing a card cannot be redrawn through,
+  // because the folder now holds a different set than the one that was read.
+  // That is rare and it is real, so it is the one case that reloads.
+  if(FOLDERS){ if(gone.length) location.reload(); return; }
   if(!gone.length) return;
   const keys=new Set(gone.map(g=>g.folder+'\\n'+g.name));
   const at=cells[cur];

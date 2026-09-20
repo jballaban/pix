@@ -1619,24 +1619,35 @@ def test_a_folder_says_how_much_of_it_is_done(
     client: TestClient, writable: Path
 ) -> None:
     """A year you have finished and a year you have not started are the same
-    sentence and different bars."""
+    sentence and different bars.
+
+    What is left reads as a chip like every other fact about the folder, and
+    a share of it rather than a count: it was the one negative thing on the
+    card and the only one shaped differently from all the positive ones.
+    """
     (writable / "b.mp4").write_bytes(b"fake")
     folders = _folders(client.get("/?group=event").text)
-    assert 'class="bar"' in folders and "2 undecided" in folders
+    assert 'class="bar"' in folders
+    # Everything is undecided, so there is no share to print — the same rule
+    # every other chip follows.
+    assert 'class="none"' in folders and ">undecided<" in folders
+    assert "%</b>" not in folders
 
     client.post("/api/decide/bulk", json={
         "add_audience": ["family"],
         "files": [{"folder": "init_2026", "name": "a.jpg"}]})
     half = _folders(client.get("/?group=event").text)
-    assert "1 undecided" in half
+    assert ">undecided<b>50%</b>" in half, half
     assert 'width:50%' in half, "the bar does not move"
 
     client.post("/api/decide/bulk", json={
         "add_audience": ["family"],
         "files": [{"folder": "init_2026", "name": "b.mp4"}]})
     done = _folders(client.get("/?group=event").text)
-    assert "all decided" in done
+    # Nothing left to say. A folder with none outstanding says so by carrying
+    # no such chip, the way one with no tags says that by carrying no tags.
     assert "undecided" not in done
+    assert "all decided" not in done
 
 
 def test_opening_a_folder_is_this_view_plus_what_the_folder_is(

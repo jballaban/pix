@@ -154,7 +154,12 @@ class El {
 // both with the first was how a lookup for one button kept finding another.
 function matchesSel(el, sel) {
   if (sel.startsWith('#')) return el.id === sel.slice(1);
-  if (sel.startsWith('.')) return el._classes.has(sel.slice(1));
+  // `.a` and `.a.b` both, because the page writes both and a stub that knew
+  // only the first answered *no* to the second — so a lookup for an element
+  // that was there came back empty and the caller made a second one.
+  if (sel.startsWith('.')) {
+    return sel.slice(1).split('.').every(c => el._classes.has(c));
+  }
   if (sel.startsWith('[')) {
     const spec = sel.slice(1, -1).split('=');
     const have = el.dataset[camel(spec[0].replace(/^data-/, ''))];

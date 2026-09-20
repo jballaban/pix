@@ -54,6 +54,9 @@ for (const name of ['2025', '2026']) {
   const pick = new El('button');
   pick.className = 'pick';
   t.appendChild(pick);
+  const spread = new El('span');
+  spread.className = 'spread audience';
+  t.appendChild(spread);
   grid.appendChild(t);
   tiles.push(t);
 }
@@ -347,6 +350,44 @@ const press = key => (keys.keydown || []).forEach(fn => fn(
           JSON.stringify(sent.files));
     check('named as files', sent.files.every(f => f.folder && f.name),
           JSON.stringify(sent.files));
+  }
+
+  // --- the card changes under the menu ---------------------------------------
+  // A write that finishes and leaves the card saying what it said before is a
+  // write with nothing on screen to show for it. It used to wait for the menu
+  // to be dismissed and then reload the page, so ticking a name appeared to
+  // do nothing at all until you clicked away.
+  {
+    const audience = () => (tiles[1].children.find(
+      k => k._classes.has('spread') && k._classes.has('audience')
+    ) || { innerHTML: '' }).innerHTML || '';
+
+    // What is left to decide reads as a chip like every other fact about the
+    // folder — one of the two files here is shared and the other is not.
+    check('what is undecided is a chip, with its share',
+          /class="none"[^>]*>undecided<b>50%<\/b>/.test(audience()),
+          audience());
+
+    act('access').click();
+    await settle(); await settle();
+    const before = audience();
+    check('the card does not say family yet', !/family/.test(before), before);
+
+    const row = menu.querySelectorAll('.opt')[0];
+    check('there is a name to tick', !!row);
+    if (row) {
+      row.click();
+      for (let k = 0; k < 8; k++) await settle();
+      check('the menu is still open to tick another', menu.hidden === false);
+      check('and the card underneath it has changed',
+            /family/.test(audience()), audience());
+      // Both files were written, so that one is all of them and prints no
+      // share — while the file that was already shared with `kid` still does.
+      check('the new one covers the folder, so no percentage',
+            />family<\/i>/.test(audience()), audience());
+      check('and nothing is undecided any more',
+            !/undecided/.test(audience()), audience());
+    }
   }
 
   if (failures.length) {
