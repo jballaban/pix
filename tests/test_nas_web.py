@@ -998,19 +998,21 @@ def test_a_guessed_stack_folds_like_a_stack_and_says_it_is_a_guess(
     assert 'data-proposed="1"' in html
 
 
-def test_a_viewer_never_has_a_photograph_hidden_by_a_guess(
+def test_folding_a_guess_is_the_off_position_for_everybody(
     client: TestClient, writable: Path, app_env: dict[str, Path],
     sign_in: "Callable[[str, str], TestClient]",
     add_user: "Callable[..., None]"
 ) -> None:
-    """Folding on a guess is the app deciding, on its own evidence, that
-    several files are one, and a library that is quietly smaller than it is —
-    with nothing on screen saying so — is not what anybody should arrive at.
+    """A suggestion is the app saying *these look like one photograph*, and
+    reading them as one is what makes a thousand of them reviewable — so it
+    is what the library does until somebody says otherwise.
 
-    So the *default* is what is defended here, not the ability: they may ask,
-    and asking is a thing they did. Not a matter of dropping the parameter
-    either, because folding is what the unset value does — it has to be said
-    as `firm`."""
+    A household member used to be pinned to `firm`, on the grounds that they
+    could not accept or refuse a guess. They can now, and what was left was a
+    filter whose cleared state and whose *No suggestions* value did the same
+    thing — a control with an off position that is also one of its values,
+    which reads as stuck rather than as careful.
+    """
     _burst(app_env, writable, "x.jpg", "y.jpg")
     add_user("kid", "pw")
     client.post("/api/decide/bulk", json={
@@ -1019,17 +1021,19 @@ def test_a_viewer_never_has_a_photograph_hidden_by_a_guess(
                   {"folder": "init_2026", "name": "y.jpg"}]})
     kid = sign_in("kid", "pw")
 
-    # Nothing folds unasked, however they arrive at the grid.
-    for url in ("/browse", "/browse?stacks=firm", "/browse?group=none"):
-        html = kid.get(url).text
-        assert 'data-name="x.jpg"' in html, url
-        assert 'data-name="y.jpg"' in html, f"{url} folded on a guess"
+    # Cleared, and the guess behaves as a stack: one card, the rest behind it.
+    off = kid.get("/browse").text
+    assert 'data-name="x.jpg"' in off
+    assert 'data-name="y.jpg"' not in off, "the off position did not fold"
 
-    # And when they do ask, the guess behaves as a stack — which is the only
-    # way there is ever a suggestion on screen for them to refuse.
-    asked = kid.get("/browse?stacks=guesses").text
-    assert 'data-name="x.jpg"' in asked
-    assert 'data-name="y.jpg"' not in asked, "asking for guesses did not fold"
+    # And `firm` is how to say otherwise — a value that now does something
+    # the cleared chip does not.
+    flat = kid.get("/browse?stacks=firm").text
+    assert 'data-name="x.jpg"' in flat and 'data-name="y.jpg"' in flat
+
+    # The same either way round for the owner, which is the point: one rule.
+    assert ('data-name="y.jpg"' in client.get("/browse?stacks=firm").text)
+    assert ('data-name="y.jpg"' not in client.get("/browse").text)
 
 
 def test_only_stacks_is_every_stack_however_it_was_made(
@@ -1150,8 +1154,11 @@ def test_a_guess_is_only_for_the_person_who_can_answer_it(
 
     html = sign_in("kid", "pw").get("/browse").text
 
-    assert 'data-name="x.jpg"' in html and 'data-name="y.jpg"' in html
     assert '"stacks"' in html[html.index("CHIPS="):html.index("FIXED=")]
+    # And the guess is on screen as a stack, which is the only way there is
+    # ever a suggestion in front of them to refuse.
+    assert 'data-name="x.jpg"' in html
+    assert 'data-name="y.jpg"' not in html
 
 
 def test_a_decision_on_a_folded_guess_reaches_what_it_hides(
@@ -4411,8 +4418,11 @@ def test_sharing_a_stack_survives_taking_it_apart(
         "folder": "init_2026", "name": "y.jpg", "stacked_under": None})
 
     kid = sign_in("kid", "pw")
-    assert {r["name"] for r in kid.get("/api/files").json()} == {"x.jpg",
-                                                                 "y.jpg"}
+    # Asked flat, because these two are also a *guess* — the app proposed
+    # them as one moment — and the ordinary view folds a guess. What is
+    # being checked here is who may see them, not how they are arranged.
+    assert {r["name"] for r in kid.get("/api/files?stacks=firm").json()} == {
+        "x.jpg", "y.jpg"}
 
 
 def test_taking_a_share_back_reaches_the_whole_stack_too(

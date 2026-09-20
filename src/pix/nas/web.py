@@ -1318,28 +1318,25 @@ def _whoami(user: Principal | None) -> str:
 def _stacks(stacks: str | None, user: Principal) -> str | None:
     """What this person's view does with stacks.
 
-    **A guess never hides a photograph from somebody who has not asked for
-    it.** Folding one is the app deciding, on its own evidence, that several
-    files are one; arriving at a library that is quietly smaller than it is,
-    with nothing on screen saying so, is not something to do to anybody by
-    default. So a household member's default is `firm` — the stacks somebody
-    actually made. Dropping the parameter would not be enough, because folding
-    is what the default does.
+    **Folding is the off position, for everybody.** A suggestion is the app
+    saying *these eight look like one photograph*, and reading them as one is
+    what makes a thousand of them reviewable at all — so it is what the
+    library does until somebody says otherwise, and `firm` is the way to say
+    otherwise.
 
-    **Asking is different from being given.** They have the stack actions, and
-    *Not a stack* — refusing a suggestion — cannot be reached at all unless
-    suggestions can be made to fold: with `firm` forced there is never a
-    suggested stack on screen to refuse. A button on the bar that nothing can
-    reach is worse than either answer, so the value is honoured when it is
-    asked for and only the default differs.
+    It was not always. A household member was pinned to `firm` on the grounds
+    that folding hides photographs on the app's own evidence and somebody who
+    could not accept or refuse a guess should not have it done to them. They
+    can accept and refuse now, which took the ground out from under it —
+    and what was left was a filter whose cleared state and whose *No
+    suggestions* value did the same thing, so it read as stuck rather than as
+    careful. A control with an off position that is also one of its values is
+    a control that appears broken, and was.
 
-    An administrator's default is to fold, because reviewing the app's
-    guesses is most of what the bin-and-stacks work is. Anything unrecognised
-    reads as that person's default rather than as some fifth thing.
+    Anything unrecognised reads as the default rather than as some fifth
+    thing.
     """
-    if stacks in ("only", "guesses", "firm"):
-        return stacks
-    return None if user.is_admin else "firm"
+    return stacks if stacks in ("only", "guesses", "firm") else None
 
 
 def _both_sides(deleted: str | None, op_id: str | None,
