@@ -4362,3 +4362,160 @@ def test_a_household_member_can_reach_every_action_they_are_offered(
     assert refused.status_code == 200
     after = decisions.read(writable / "x.jpg")
     assert after is not None and after.no_stack
+
+
+# --- a decision about a stack is a decision about the stack --------------------
+
+def _stacked(client: TestClient, app_env: dict[str, Path],
+             writable: Path) -> None:
+    """`y.jpg` behind `x.jpg`, as a stack somebody actually made."""
+    _burst(app_env, writable, "x.jpg", "y.jpg")
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "y.jpg",
+        "stacked_under": "init_2026/x.jpg"})
+
+
+def test_tagging_a_stack_tags_every_take_in_it(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """A stack shows one photograph and hides the rest so that it works as
+    though there is one file. A tag that reached only the one on top would
+    make that false the moment anybody took it apart."""
+    _stacked(client, app_env, writable)
+
+    client.post("/api/decide/bulk", json={
+        "add_tags": ["blah"],
+        "files": [{"folder": "init_2026", "name": "x.jpg"}]})
+
+    behind = decisions.read(writable / "y.jpg")
+    assert behind is not None and behind.tags == ("blah",)
+
+
+def test_sharing_a_stack_survives_taking_it_apart(
+    client: TestClient, writable: Path, app_env: dict[str, Path],
+    sign_in: "Callable[[str, str], TestClient]",
+    add_user: "Callable[..., None]"
+) -> None:
+    """The scenario this was found by. Share a stack, unstack it later, and
+    what was shared must still be what is there — before, the audience reached
+    the one photograph on top and unstacking produced files nobody could see.
+    """
+    _stacked(client, app_env, writable)
+    add_user("kid", "pw")
+
+    client.post("/api/decide/bulk", json={
+        "add_audience": ["kid"],
+        "files": [{"folder": "init_2026", "name": "x.jpg"}]})
+    # Taken apart afterwards, by the owner.
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "y.jpg", "stacked_under": None})
+
+    kid = sign_in("kid", "pw")
+    assert {r["name"] for r in kid.get("/api/files").json()} == {"x.jpg",
+                                                                 "y.jpg"}
+
+
+def test_taking_a_share_back_reaches_the_whole_stack_too(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """Symmetric, or it is a trapdoor: a grant that goes all the way down and
+    a revocation that stops at the top cannot be taken back."""
+    _stacked(client, app_env, writable)
+    client.post("/api/decide/bulk", json={
+        "add_audience": ["kid"],
+        "files": [{"folder": "init_2026", "name": "x.jpg"}]})
+
+    client.post("/api/decide/bulk", json={
+        "remove_audience": ["kid"],
+        "files": [{"folder": "init_2026", "name": "x.jpg"}]})
+
+    behind = decisions.read(writable / "y.jpg")
+    assert behind is not None and behind.audience == ()
+
+
+def test_the_scripting_route_cascades_the_same_way(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """The page writes through `/api/decide/bulk`, but two routes that
+    disagree about what a stack is are two libraries."""
+    _stacked(client, app_env, writable)
+
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "x.jpg", "add_people": ["Mom"]})
+
+    behind = decisions.read(writable / "y.jpg")
+    assert behind is not None and behind.people == ("Mom",)
+
+
+def test_a_cascade_reverts_as_one_gesture(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """Every file the decision reached is in the log, or a revert puts back
+    the one that was named and leaves the rest carrying it."""
+    _stacked(client, app_env, writable)
+    client.post("/api/decide/bulk", json={
+        "add_tags": ["blah"],
+        "files": [{"folder": "init_2026", "name": "x.jpg"}]})
+
+    op = history.recent()[0]
+    assert {f.name for f in op.files} == {"x.jpg", "y.jpg"}
+
+    client.post("/history/revert", data={"id": op.id})
+    for name in ("x.jpg", "y.jpg"):
+        after = decisions.read(writable / name)
+        assert after is None or after.tags == (), name
+
+
+def test_a_household_member_skips_the_takes_that_are_not_theirs(
+    client: TestClient, writable: Path, app_env: dict[str, Path],
+    sign_in: "Callable[[str, str], TestClient]",
+    add_user: "Callable[..., None]"
+) -> None:
+    """Silently, and that is the deliberate part. A cascade reaches files they
+    never named and may never have been shown; refusing the whole edit would
+    fail an ordinary tag for a reason they cannot see, and naming what was
+    skipped would tell them a photograph is there."""
+    # Three files the app has *not* guessed are one moment, so the only stack
+    # here is the one made below. Shared before it exists, which is how a
+    # stack comes to hold a file somebody can be shown the top of and not the
+    # rest — the cascade happens when a decision is made, not for ever after.
+    _three_files(writable, app_env)
+    add_user("kid", "pw")
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "add_audience": ["kid"]})
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "c.jpg",
+        "stacked_under": "init_2026/a.jpg"})
+    kid = sign_in("kid", "pw")
+
+    r = kid.post("/api/decide/bulk", json={
+        "add_tags": ["mine"],
+        "files": [{"folder": "init_2026", "name": "a.jpg"}]})
+
+    assert r.status_code == 200
+    top = decisions.read(writable / "a.jpg")
+    assert top is not None and top.tags == ("mine",)
+    hidden = decisions.read(writable / "c.jpg")
+    assert hidden is not None and hidden.tags == (), "reached what is not theirs"
+
+
+def test_promoting_a_take_still_moves_the_stack_rather_than_breaking_it(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """The cascade must not touch a write that moves a stack about — that one
+    has `_cascade`, which runs afterwards and knows not to point a file at
+    itself. Following the members here as well gave the new top its own name
+    as `stacked_under`, and the whole stack vanished from every listing."""
+    _three_files(writable, app_env)
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/a.jpg",
+        "files": [{"folder": "init_2026", "name": "b.mp4"},
+                  {"folder": "init_2026", "name": "c.jpg"}]})
+
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/b.mp4",
+        "files": [{"folder": "init_2026", "name": "a.jpg"}]})
+
+    top = decisions.read(writable / "b.mp4")
+    assert top is None or top.stacked_under is None, "the top is behind itself"
+    assert {r["name"] for r in client.get("/api/files").json()} == {"b.mp4"}

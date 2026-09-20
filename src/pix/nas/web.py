@@ -5268,12 +5268,42 @@ def api_decide(user: Annotated[Principal, Depends(require_user)],
     # route was an administrator's — an admin has no scope and every field —
     # and opening it without both would let anybody edit any file by typing
     # its name.
-    _writable(user, _change(body))
+    change = _change(body)
+    _writable(user, change)
     _allowed(user, body.folder, body.name)
-    was, decision, indexed = _decide(body.folder, body.name, _change(body))
-    history.record(user.name, _summary(_change(body)),
-                   [history.Before(body.folder, body.name, was,
-                                   did=_recorded(_change(body)))])
+
+    # The same cascade the page's own route does. There is no view here to say
+    # whether a stack is open — this is the scripting surface, and the page
+    # writes through `/api/decide/bulk` — so it asks what this person's
+    # ordinary view would fold, which is the only reading available.
+    conn = ix.open_rw(DB_PATH) if DB_PATH.is_file() else None
+    try:
+        view = ix.Filters(stacks=_stacks(None, user))
+        named = Target(folder=body.folder, name=body.name)
+        targets = _mine(user, conn, _behind(
+            conn, view, [named],
+            members=isinstance(change.stacked_under, Unset)))
+        was, decision, indexed = _decide(body.folder, body.name, change,
+                                         conn=conn)
+        undo = [history.Before(body.folder, body.name, was,
+                               did=_recorded(change))]
+        for target in targets:
+            if (target.folder, target.name) == (body.folder, body.name):
+                continue
+            try:
+                before, _, _ = _decide(target.folder, target.name, change,
+                                       conn=conn)
+            except HTTPException:
+                # One unwritable take does not cost the decision about the
+                # rest, the same way a bulk edit reports a failure and carries
+                # on.
+                continue
+            undo.append(history.Before(target.folder, target.name, before,
+                                       did=_recorded(change)))
+    finally:
+        if conn is not None:
+            conn.close()
+    history.record(user.name, _summary(change), undo)
     return JSONResponse({
         "folder": body.folder,
         "name": body.name,
@@ -5447,24 +5477,12 @@ def api_decide_bulk(user: Annotated[Principal, Depends(require_user)],
     # per row dominated the cost — measured at 96ms/file against the NAS, most
     # of it the open rather than the write.
     conn = ix.open_rw(DB_PATH) if DB_PATH.is_file() else None
-    targets = _with_guessed(conn, view, body.files)
-    # **After the expansion, not before it.** `_with_guessed` adds files the
-    # request never named — the rest of a suggested stack — so checking what
-    # was sent would let a household member reach the others through it.
-    #
-    # One question for the whole batch: `matching` takes the lot, and a bulk
-    # edit is exactly where a per-file round trip over SMB is felt. Files that
-    # are not theirs are dropped rather than reported, the same answer a file
-    # that does not exist gets — naming them would confirm they are there.
-    if user.scope is not None and targets:
-        look = conn if conn is not None else db()
-        try:
-            mine = ix.matching(look, ix.Filters(viewer=user.scope, unfold=True),
-                               [(t.folder, t.name) for t in targets])
-        finally:
-            if conn is None:
-                look.close()
-        targets = [t for t in targets if (t.folder, t.name) in mine]
+    # **After the expansion, not before it.** `_behind` adds files the request
+    # never named — the rest of a stack — so checking what was sent would let
+    # a household member reach the others through it.
+    targets = _mine(user, conn, _behind(
+        conn, view, body.files,
+        members=isinstance(change.stacked_under, Unset)))
     done: list[tuple[str, str]] = []
     undo: list[history.Before] = []
     dropped: list[dict[str, str]] = []
@@ -5673,36 +5691,96 @@ def _decide(folder: str, name: str, change: _Change,
     return was, decision, indexed
 
 
-def _with_guessed(conn: sqlite3.Connection | None, view: ix.Filters,
-                  files: Sequence[Target]) -> list[Target]:
+def _behind(conn: sqlite3.Connection | None, view: ix.Filters,
+            files: Sequence[Target], *, members: bool = True
+            ) -> list[Target]:
     """The selection, plus whatever a folded view is hiding behind it.
 
-    A guessed stack shows one photograph and hides the rest, and the whole
-    point of that is to work as though there is one file — so a decision made
-    about what is on screen is a decision about all of them. Exactly the rule a
-    real stack follows; the difference is only who did the grouping.
+    A stack shows one photograph and hides the rest, and the whole point of
+    that is to work as though there is one file — so a decision made about
+    what is on screen is a decision about all of them. Tag the stack and every
+    take carries the tag; share it and every take is shared, so that taking it
+    apart later leaves what somebody thought they had shared.
+
+    **Both kinds, and this is what it got wrong.** It followed only the app's
+    *guesses* and never a stack somebody had actually made, while claiming in
+    this very docstring to be following "exactly the rule a real stack
+    follows". It was not. The library therefore cascaded the grouping it had
+    proposed and not the one that had been confirmed — which is the wrong way
+    round, a stack you made being the stronger statement of the two. Sharing a
+    stack shared one photograph of it, and unstacking months later produced
+    files nobody could see.
 
     **Resolved before the first write, not after.** Refusing a guess writes
     `no_stack` to the photograph that speaks for it, and the index answers by
     recomputing that group — which would leave the others grouped behind a new
     leader, still unanswered, ready to be offered again tomorrow. Asked first,
-    the refusal reaches all of them.
+    the refusal reaches all of them. The same hazard applies to a real stack:
+    the write that moves a member out is the write that changes who its
+    members are.
 
-    Not when the view is opened by grouping: there the members are on screen
-    and in the selection already, so following them again would be a second
-    write to a file the curator can see they already picked.
+    Not when the view is already opened — inside a stack, or grouped by one.
+    There the members are on screen and in the selection already, so following
+    them again would be a second write to a file the curator can see they
+    picked.
+
+    **`members=False` for a write that moves a stack about**, because that one
+    already has a cascade of its own and it runs afterwards: `_cascade` sends
+    the members where the file that spoke for them went, and knows not to
+    point one at itself. Following them here as well applied the head's new
+    `stacked_under` to each of them — so promoting a take put the new top
+    behind itself, and the whole stack disappeared from every listing at once.
+    A guessed group is still followed, because nothing else follows it.
     """
-    if conn is None or not view.folds_guesses or view.unfold:
+    if conn is None:
+        return list(files)
+    # `within` opens one stack and `unfold` opens every stack in the view;
+    # either way what is behind is in front of the curator already.
+    opened = bool(view.within) or view.unfold
+    if opened:
         return list(files)
     out = list(files)
     seen = {(t.folder, t.name) for t in files}
     for target in files:
-        for folder, name in ix.proposed(conn, f"{target.folder}/{target.name}"):
+        key = f"{target.folder}/{target.name}"
+        # A confirmed stack always. A guessed one only where a guess is
+        # behaving as a stack for this viewer, because where it is not, those
+        # files are on screen in their own right and were not picked.
+        hidden = list(ix.members(conn, key)) if members else []
+        if view.folds_guesses:
+            hidden += ix.proposed(conn, key)
+        for folder, name in hidden:
             if (folder, name) in seen:
                 continue
             seen.add((folder, name))
             out.append(Target(folder=folder, name=name))
     return out
+
+
+def _mine(user: Principal, conn: sqlite3.Connection | None,
+          targets: Sequence[Target]) -> list[Target]:
+    """Drop the ones this person may not write to, without saying which.
+
+    **Silently**, which is the deliberate part. A cascade reaches files the
+    curator never named — the rest of a stack — and a household member can be
+    shown a stack whose other takes were never shared with them. Refusing the
+    whole edit would make an ordinary tag fail for a reason they cannot see;
+    naming what was skipped would tell them a photograph is there. So their
+    decision lands on the files that are theirs and stops at the ones that are
+    not, which is the same answer the grid already gives them.
+
+    An admin has no scope and pays nothing for this.
+    """
+    if user.scope is None or not targets:
+        return list(targets)
+    look = conn if conn is not None else db()
+    try:
+        mine = ix.matching(look, ix.Filters(viewer=user.scope, unfold=True),
+                           [(t.folder, t.name) for t in targets])
+    finally:
+        if conn is None:
+            look.close()
+    return [t for t in targets if (t.folder, t.name) in mine]
 
 
 def _cascade(conn: sqlite3.Connection | None,
