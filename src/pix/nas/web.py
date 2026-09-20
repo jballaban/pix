@@ -1688,12 +1688,6 @@ def _shelves(rows: list[sqlite3.Row], groups: list[str], view: ix.Filters,
     return "".join(out)
 
 
-#: How many values of one kind a card will name before it stops counting.
-#: A folder can hold fifty distinct tags, and fifty chips is not a summary of
-#: anything — the ones worth seeing are the ones most of it carries.
-SPREAD_SHOWN: int = 3
-
-
 def _spread_html(kind: str, values: list[tuple[str, int]], n: int) -> str:
     """What a section says about itself, one kind of value at a time.
 
@@ -1702,18 +1696,22 @@ def _spread_html(kind: str, values: list[tuple[str, int]], n: int) -> str:
     on a thumbnail; one that half of it carries is the interesting case, and
     the number is the whole reason to look. Printing `100%` beside everything
     would bury the one chip that is not.
+
+    **All of them, and the card grows.** The first version named three and
+    finished with `+4`, which is the one thing a summary must not do: it says
+    there is something else in there and refuses to say what, so the card
+    stops being an answer and becomes a reason to open the folder — which
+    is the errand it exists to save. A taller card is cheaper than that, and
+    the ones with most in them are the ones worth reading.
     """
     if not values or not n:
         return ""
-    shown = values[:SPREAD_SHOWN]
-    rest = len(values) - len(shown)
     chips = "".join(
         f'<i title="{_h(v)} — {c:,} of {n:,}">{_h(v)}'
         + (f'<b>{round(c * 100 / n)}%</b>' if c < n else "")
         + "</i>"
-        for v, c in shown)
-    more = f'<i class="more">+{rest}</i>' if rest > 0 else ""
-    return f'<span class="spread {kind}">{chips}{more}</span>'
+        for v, c in values)
+    return f'<span class="spread {kind}">{chips}</span>'
 
 
 def _folder(row: sqlite3.Row, groups: list[str], view: ix.Filters,

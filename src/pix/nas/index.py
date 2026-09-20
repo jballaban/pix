@@ -1469,7 +1469,8 @@ _SPREAD: dict[str, tuple[str, str]] = {
 
 def spread(conn: sqlite3.Connection, filters: Filters | None = None, *,
            groups: Sequence[str] = (), column: str,
-           limit: int = 500) -> dict[tuple[Any, ...], list[tuple[str, int]]]:
+           limit: int = 20000
+           ) -> dict[tuple[Any, ...], list[tuple[str, int]]]:
     """How much of each section carries each value, commonest first.
 
     A folder card says how many files are in it and how much of that is
@@ -1485,6 +1486,13 @@ def spread(conn: sqlite3.Connection, filters: Filters | None = None, *,
     Keyed by the section's grouping values, which is what the caller has in
     hand when it draws the card. Ungrouped, every file is one section and the
     key is the empty tuple.
+
+    `limit` counts rows across every section at once, so it is a guard against
+    a pathological library rather than a number of chips: the card decides how
+    many to name, and it names all of them. Set where no real library reaches
+    it, because truncating here would quietly shorten *some* cards depending
+    on how many others were on screen — a summary that is wrong in a way
+    nothing on the page could explain.
     """
     table, col = _SPREAD[column]
     view = filters or Filters()

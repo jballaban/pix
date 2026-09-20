@@ -4659,23 +4659,29 @@ def test_a_tag_only_some_of_it_carries_prints_the_share(
     assert "%</b>" in tags, tags
 
 
-def test_a_folder_stops_naming_values_before_it_becomes_a_wall(
+def test_a_folder_names_every_value_it_holds(
     client: TestClient, writable: Path, app_env: dict[str, Path]
 ) -> None:
-    """A folder can hold fifty distinct tags, and fifty chips summarise
-    nothing. The ones worth seeing are the ones most of it carries."""
+    """It used to name three and finish with `+4`, which is the one thing a
+    summary must not do: it says there is something else in there and refuses
+    to say what, so the card stops being an answer and becomes a reason to
+    open the folder — the errand it exists to save.
+
+    A taller card is cheaper than that.
+    """
     _burst(app_env, writable, "w.jpg")
-    for i in range(web.SPREAD_SHOWN + 3):
+    many = [f"t{i}" for i in range(7)]
+    for tag in many:
         client.post("/api/decide", json={
-            "folder": "init_2026", "name": "w.jpg", "add_tags": [f"t{i}"]})
+            "folder": "init_2026", "name": "w.jpg", "add_tags": [tag]})
 
     card = _card(client.get("/?date=2026&group=year&stacks=firm").text)
     tags = card[card.index('class="spread tags"'):]
     tags = tags[:tags.index("</span>") + 7]
 
-    # Three named, and one chip saying how many were not.
-    assert tags.count("<i ") == web.SPREAD_SHOWN + 1, tags
-    assert 'class="more">+3<' in tags, tags
+    for tag in many:
+        assert f">{tag}<" in tags, f"{tag} is not on the card: {tags}"
+    assert "more" not in tags, tags
 
 
 def test_a_household_member_is_not_told_about_an_audience(
