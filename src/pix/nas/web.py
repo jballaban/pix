@@ -452,7 +452,7 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
    be first, which said what one picture in there looks like and nothing about
    the section, and a wall of unrelated pictures is harder to read than a wall
    of text rather than easier. */
-.grid.folders { grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); }
+.grid.folders { grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); }
 .tile { display:flex; flex-direction:column; gap:3px; padding:11px 13px 12px;
         background:var(--panel); border:1px solid var(--line);
         border-radius:4px; text-decoration:none; color:var(--fg); }
@@ -483,6 +483,22 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
 .tile .bar i b { display:block; height:100%; background:var(--keep);
                  border-radius:2px; }
 .tile .left { font-size:11px; color:var(--top); margin-top:4px; }
+/* What the folder holds, in the same chips a thumbnail wears — so a card
+   and a photograph say the same kind of thing about themselves. */
+.spread { display:flex; flex-wrap:wrap; gap:3px; margin-top:6px; }
+.spread i { font-style:normal; font-size:10px; font-weight:600;
+            padding:1px 5px; border-radius:3px; background:#000b;
+            max-width:100%; overflow:hidden; white-space:nowrap;
+            text-overflow:ellipsis; }
+/* The share that carries it, and only where that is not all of it: a value
+   the whole folder has is a fact about the folder and reads as a plain word,
+   exactly as it does on a thumbnail. `100%` beside everything would bury the
+   one chip that is not. */
+.spread i b { font-weight:600; margin-left:4px; opacity:.72; }
+.spread.audience i { color:var(--keep); }
+.spread.people i { color:var(--accent); }
+.spread.tags i { color:#fff; }
+.spread .more { color:var(--dim); background:none; padding-left:2px; }
 .tile .left.all { color:var(--keep); }
 .tile:hover { border-color:var(--accent); background:#20242b;
              box-shadow:none; }
@@ -1587,6 +1603,14 @@ def home(request: Request,
               ix.sections(conn, view, groups=groups[-1:], limit=PAGE_LIMIT)}
              if len(groups) > 1 else {})
     s = ix.summary(conn, view)
+    # What each section carries, one query per kind. The same `GROUP BY` the
+    # sections use, so the buckets line up with the cards exactly — a count
+    # drawn from a different question would be a percentage of something else.
+    # Audience only for an administrator: a household member sees nothing that
+    # is not already shared with them, so the answer is always *all of it*.
+    spread = {kind: ix.spread(conn, view, groups=groups, column=kind)
+              for kind in (("audience", "people", "tags") if user.is_admin
+                           else ("people", "tags"))}
 
     open_note = ("" if not (user.is_admin
                             and accounts.admin_password_is_initial(store()))
@@ -1604,7 +1628,8 @@ def home(request: Request,
 
     body = ('<p class="empty">Nothing matches these filters.</p>' if not rows
             else '<div class="grid folders" id="grid">'
-                 + _shelves(rows, groups, view, user, whole) + "</div>")
+                 + _shelves(rows, groups, view, user, whole, spread)
+                 + "</div>")
     # The same query against the other page: the corner is a zoom control, and
     # a zoom that dropped the filters would be a different library rather than
     # the same one seen closer.
@@ -1625,7 +1650,10 @@ def home(request: Request,
 
 
 def _shelves(rows: list[sqlite3.Row], groups: list[str], view: ix.Filters,
-             user: Principal, whole: dict[object, int] | None = None) -> str:
+             user: Principal, whole: dict[object, int] | None = None,
+             spread: dict[str, dict[tuple[object, ...],
+                                    list[tuple[str, int]]]]
+             | None = None) -> str:
     """The folders, under a heading for each level above them.
 
     `year › event` is a row of events under each year, not a flat list of
@@ -1643,7 +1671,8 @@ def _shelves(rows: list[sqlite3.Row], groups: list[str], view: ix.Filters,
     outer = groups[:-1]
     if not groups:
         return (_heading([], 0, len(rows), pick=False, cut=True)
-                + "".join(_folder(r, groups, view, user) for r in rows))
+                + "".join(_folder(r, groups, view, user, spread=spread)
+                          for r in rows))
     out: list[str] = []
     for keys, run in groupby(rows, key=lambda r: tuple(
             r[f"grp{i}"] for i in range(len(outer)))):
@@ -1653,13 +1682,43 @@ def _shelves(rows: list[sqlite3.Row], groups: list[str], view: ix.Filters,
         labels.append(dict(_GRID_GROUPS).get(inner, inner))
         out.append(_heading(labels, len(groups), len(shelf), pick=False,
                             cut=True))
-        out.extend(_folder(r, groups, view, user, whole or {})
+        out.extend(_folder(r, groups, view, user, whole or {}, spread)
                    for r in shelf)
     return "".join(out)
 
 
+#: How many values of one kind a card will name before it stops counting.
+#: A folder can hold fifty distinct tags, and fifty chips is not a summary of
+#: anything — the ones worth seeing are the ones most of it carries.
+SPREAD_SHOWN: int = 3
+
+
+def _spread_html(kind: str, values: list[tuple[str, int]], n: int) -> str:
+    """What a section says about itself, one kind of value at a time.
+
+    **A percentage only where it is news.** A value the whole folder carries
+    is a fact about the folder and reads as a plain word, exactly as it does
+    on a thumbnail; one that half of it carries is the interesting case, and
+    the number is the whole reason to look. Printing `100%` beside everything
+    would bury the one chip that is not.
+    """
+    if not values or not n:
+        return ""
+    shown = values[:SPREAD_SHOWN]
+    rest = len(values) - len(shown)
+    chips = "".join(
+        f'<i title="{_h(v)} — {c:,} of {n:,}">{_h(v)}'
+        + (f'<b>{round(c * 100 / n)}%</b>' if c < n else "")
+        + "</i>"
+        for v, c in shown)
+    more = f'<i class="more">+{rest}</i>' if rest > 0 else ""
+    return f'<span class="spread {kind}">{chips}{more}</span>'
+
+
 def _folder(row: sqlite3.Row, groups: list[str], view: ix.Filters,
-            user: Principal, whole: dict[object, int] | None = None) -> str:
+            user: Principal, whole: dict[object, int] | None = None,
+            spread: dict[str, dict[tuple[object, ...], list[tuple[str, int]]]]
+            | None = None) -> str:
     """One section of the grid, drawn as what is worth knowing about it.
 
     Not a photograph. A cover was whichever file happened to be first, which
@@ -1708,7 +1767,15 @@ def _folder(row: sqlite3.Row, groups: list[str], view: ix.Filters,
         + _bar(n, entire, left, user)
         + (f'<span class="left">{left:,} undecided</span>' if left
            else '<span class="left all">all decided</span>'
-           if user.is_admin else ""))
+           if user.is_admin else "")
+        # What is *in* it, not just how much of it is done. A thumbnail says
+        # which tags and which audience it carries; this is the same sentence
+        # for a folder, with the share that carries each.
+        + "".join(
+            _spread_html(kind, (spread or {}).get(kind, {}).get(
+                tuple(row[f"grp{i}"] for i in range(len(groups))), []), n)
+            for kind in (("audience", "people", "tags") if user.is_admin
+                         else ("people", "tags"))))
     if href is None:
         # Nothing to link to, rather than a link somewhere else. *No day* is
         # every file whose date stops at the month, and there is no filter that

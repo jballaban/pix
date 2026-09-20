@@ -1459,6 +1459,55 @@ def sections(conn: sqlite3.Connection, filters: Filters | None = None, *,
         "LIMIT :limit OFFSET :offset", params))
 
 
+#: Which table and column each multi-valued field lives in, for `spread`.
+_SPREAD: dict[str, tuple[str, str]] = {
+    "audience": ("file_audience", "who"),
+    "tags": ("file_tags", "tag"),
+    "people": ("file_people", "who"),
+}
+
+
+def spread(conn: sqlite3.Connection, filters: Filters | None = None, *,
+           groups: Sequence[str] = (), column: str,
+           limit: int = 500) -> dict[tuple[Any, ...], list[tuple[str, int]]]:
+    """How much of each section carries each value, commonest first.
+
+    A folder card says how many files are in it and how much of that is
+    decided; what it could not say is *what* was decided. A card reading
+    `family` tells you an event is shared; one reading `family 60%` tells you
+    it is half done, which is the thing you would have had to open it to find
+    out.
+
+    The same `GROUP BY` the sections themselves use, with one join added, so
+    the buckets line up with the cards exactly — a count drawn from a
+    different question would be a percentage of something else.
+
+    Keyed by the section's grouping values, which is what the caller has in
+    hand when it draws the card. Ungrouped, every file is one section and the
+    key is the empty tuple.
+    """
+    table, col = _SPREAD[column]
+    view = filters or Filters()
+    where, bound = _where(view)
+    keys = [GROUPINGS[g] for g in groups if GROUPINGS.get(g)]
+    selected = "".join(f"{key} AS grp{i}, " for i, key in enumerate(keys))
+    grouped = ", ".join(f"grp{i}" for i in range(len(keys)))
+    params: dict[str, Any] = {**bound, "limit": limit}
+    rows = conn.execute(
+        "SELECT " + selected + f"m.{col} AS value, COUNT(*) AS n "
+        f"FROM files JOIN {table} m "
+        "  ON m.folder = files.folder AND m.name = files.name "
+        + (f"WHERE {where} " if where else "")
+        + "GROUP BY " + (f"{grouped}, " if grouped else "") + "value "
+        + "ORDER BY " + (f"{grouped}, " if grouped else "") + "n DESC, value "
+        "LIMIT :limit", params)
+    out: dict[tuple[Any, ...], list[tuple[str, int]]] = {}
+    for row in rows:
+        key = tuple(row[f"grp{i}"] for i in range(len(keys)))
+        out.setdefault(key, []).append((str(row["value"]), int(row["n"])))
+    return out
+
+
 def _ordering(groups: Sequence[str]) -> str:
     """`ORDER BY` for the grouping levels, outermost first.
 

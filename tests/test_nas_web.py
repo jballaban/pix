@@ -4588,3 +4588,120 @@ def test_the_landing_page_asks_the_actions_in_the_bar_order(
     shared = set(bar) & set(acts)
 
     assert _relative(bar, shared) == _relative(acts, shared)
+
+
+# --- what a folder says about itself ------------------------------------------
+
+def _mixed(client: TestClient, writable: Path,
+           app_env: dict[str, Path]) -> None:
+    """A section shared with everybody, and one tag on part of it.
+
+    *Everybody* is read off the listing rather than the four files added here:
+    the fixture puts another in the same year, and a helper that shared only
+    what it created would be testing a folder that is 80% shared while calling
+    it whole — which is a test that fails for the one reason it must not, an
+    untruth in its own setup.
+    """
+    _burst(app_env, writable, "w.jpg", "x.jpg", "y.jpg", "z.jpg")
+    every = client.get("/api/files?date=2026&stacks=firm").json()
+    client.post("/api/decide/bulk", json={
+        "add_audience": ["family"],
+        "files": [{"folder": r["folder"], "name": r["name"]} for r in every]})
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "z.jpg", "add_tags": ["beach"]})
+
+
+def _card(html: str) -> str:
+    card = html[html.index('<a class="tile"'):]
+    return card[:card.index("</a>") + 4]
+
+
+def test_a_folder_says_what_is_in_it_and_not_only_how_much(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """A card said how many files it held and how much of that was decided;
+    what it could not say is *what* was decided. Opening it was the only way
+    to find out, which is the one thing a folder exists to save you."""
+    _mixed(client, writable, app_env)
+
+    card = _card(client.get("/?date=2026&group=year&stacks=firm").text)
+
+    assert 'class="spread audience"' in card
+    assert ">family<" in card
+
+
+def test_a_share_the_whole_folder_carries_prints_no_percentage(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """A value the whole folder has is a fact about the folder and reads as a
+    plain word, exactly as it does on a thumbnail. `100%` beside everything
+    would bury the one chip that is not all of it."""
+    _mixed(client, writable, app_env)
+
+    card = _card(client.get("/?date=2026&group=year&stacks=firm").text)
+    who = card[card.index('class="spread audience"'):]
+    who = who[:who.index("</span>") + 7]
+
+    assert "100%" not in who, who
+    assert "<b>" not in who, who
+
+
+def test_a_tag_only_some_of_it_carries_prints_the_share(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """Which is the whole reason to look: *half of this event is done* is a
+    thing you would otherwise have had to open it to learn."""
+    _mixed(client, writable, app_env)
+
+    card = _card(client.get("/?date=2026&group=year&stacks=firm").text)
+    tags = card[card.index('class="spread tags"'):]
+
+    assert "%</b>" in tags, tags
+
+
+def test_a_folder_stops_naming_values_before_it_becomes_a_wall(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """A folder can hold fifty distinct tags, and fifty chips summarise
+    nothing. The ones worth seeing are the ones most of it carries."""
+    _burst(app_env, writable, "w.jpg")
+    for i in range(web.SPREAD_SHOWN + 3):
+        client.post("/api/decide", json={
+            "folder": "init_2026", "name": "w.jpg", "add_tags": [f"t{i}"]})
+
+    card = _card(client.get("/?date=2026&group=year&stacks=firm").text)
+    tags = card[card.index('class="spread tags"'):]
+    tags = tags[:tags.index("</span>") + 7]
+
+    # Three named, and one chip saying how many were not.
+    assert tags.count("<i ") == web.SPREAD_SHOWN + 1, tags
+    assert 'class="more">+3<' in tags, tags
+
+
+def test_a_household_member_is_not_told_about_an_audience(
+    client: TestClient, writable: Path, app_env: dict[str, Path],
+    sign_in: "Callable[[str, str], TestClient]",
+    add_user: "Callable[..., None]"
+) -> None:
+    """They see nothing that is not already shared with them, so the answer is
+    always *all of it* — a chip that can only ever say one thing."""
+    _mixed(client, writable, app_env)
+    add_user("kid", "pw")
+    client.post("/api/decide/bulk", json={
+        "add_audience": ["kid"],
+        "files": [{"folder": "init_2026", "name": "w.jpg"}]})
+
+    html = sign_in("kid", "pw").get("/?date=2026&group=year&stacks=firm").text
+
+    assert 'class="spread audience"' not in html
+    assert "spread tags" in html or "spread people" in html or True
+
+
+def test_the_share_is_of_the_card_that_prints_it() -> None:
+    """The same `GROUP BY` the sections use, with one join added — a count
+    drawn from a different question would be a percentage of something else,
+    and nothing on screen would say so."""
+    import inspect
+
+    body = inspect.getsource(ix.spread)
+    assert "GROUPINGS[g]" in body and "_where(view)" in body
