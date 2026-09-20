@@ -14,7 +14,7 @@ import zipfile
 import re
 import time
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import cast
 
@@ -346,35 +346,78 @@ def test_a_row_reserves_the_height_of_the_controls_in_it(
     assert "button, .chip { min-height" not in css
 
 
-def test_the_actions_and_filters_ask_the_same_questions_in_the_same_order(
+#: What an action is a decision *about*, for the orderings below. The same
+#: pairing the page script keeps in `ACT_COLUMN`, plus the three that never
+#: became filters.
+_ACT_COLUMN: dict[str, str] = {
+    "tags": "tag", "people": "person", "access": "audience",
+    "stack": "stacks", "delete": "deleted", "restore": "deleted",
+}
+
+
+def _as_columns(acts: list[str]) -> list[str]:
+    """Each action as the filter column it edits, first mention only.
+
+    `delete` and `restore` are both decisions about `deleted` — one per side
+    of the line, only ever on screen one at a time — so the second is not a
+    second position for that question.
+    """
+    out: list[str] = []
+    for act in acts:
+        col = _ACT_COLUMN.get(act, act)
+        if col not in out:
+            out.append(col)
+    return out
+
+
+def _relative(order: Sequence[str], among: set[str]) -> list[str]:
+    return [x for x in order if x in among]
+
+
+def test_every_list_of_questions_is_in_the_same_order(
     client: TestClient
 ) -> None:
-    """Two bars that read the same way. Learning one teaches the other, and a
-    control that moves between them is a control you have to find twice."""
+    """One arrangement, learned once.
+
+    The app asks the same questions in four places — the filter bar, the edit
+    bar, the grouping menu and the list of filterable columns — and each holds
+    its own subset in its own order. Where two of them share a question, it has
+    to fall in the same place in both, or the bar teaches you an order that the
+    menu below it then contradicts.
+
+    Asserted as the *rule* rather than as four hard-coded lists, which is the
+    point: a list that is merely correct today gets a question appended to the
+    end of it by whoever adds the next one. This fails instead.
+
+    Only shared questions are compared, so each list stays free to hold what
+    the others do not, and to put it where it likes: the grouping menu opens
+    with day, month and year because that is how the library is mostly read,
+    and no filter is displaced by it.
+    """
     html = client.get("/browse?event=Italy%20-%20Sicily").text
+    bar = [col for col, _ in web._CHIPS]
 
-    acts = re.findall(r'data-act="(\w+)"', html)
-    # What a file is, then which of them speaks for the rest, then what
-    # happens to it.
-    assert acts[:11] == ["event", "tags",
-                         # Who is *in* it sits with what it is a picture of,
-                         # because that is the same kind of question. Who may
-                         # *see* it is further along, with the rest of what
-                         # the file is for.
-                         "people", "date", "access",
-                         "stack", "top", "unstack", "nostack",
-                         # Taking a copy away is not doing anything to the
-                         # library, so it sits with the rest rather than over
-                         # the bar with the one thing that is.
-                         "download", "delete"], acts
+    others = {
+        "the edit bar": _as_columns(re.findall(r'data-act="(\w+)"', html)),
+        "the grouping menu": [g for g, _ in web._GRID_GROUPS],
+        "the filterable columns": list(ix.Filters.NAMES),
+    }
+    for what, order in others.items():
+        shared = set(bar) & set(order)
+        assert _relative(bar, shared) == _relative(order, shared), (
+            f"{what} asks these in a different order from the filter bar: "
+            f"bar={_relative(bar, shared)} {what}={_relative(order, shared)}")
 
-    chips = html[html.index("CHIPS="):html.index("FIXED=")]
-    for earlier, later in (("event", "tag"), ("tag", "person"),
-                           ("person", "date"),
-                           ("date", "audience"), ("audience", "kind"),
-                           ("kind", "band"), ("band", "stacks"),
-                           ("stacks", "deleted")):
-        assert chips.index(f'"{earlier}"') < chips.index(f'"{later}"'),             f"{earlier} should come before {later}: {chips}"
+
+def test_the_two_bars_ask_the_same_questions_first(client: TestClient) -> None:
+    """What a file *is* comes before what happens to it, in both bars — so the
+    run they share is a prefix of each rather than five things scattered
+    through it."""
+    html = client.get("/browse?event=Italy%20-%20Sicily").text
+    acts = _as_columns(re.findall(r'data-act="(\w+)"', html))
+
+    assert acts[:5] == ["event", "tag", "person", "date", "audience"]
+    assert [c for c, _ in web._CHIPS][:5] == acts[:5]
 
 
 def test_one_bar_separates_what_it_is_from_what_happens_to_it(
@@ -3133,14 +3176,37 @@ def test_the_filters_wrap_without_carrying_the_way_out_with_them(
     assert "min-width:0" in css[at:at + 120], css[at:at + 120]
 
 
-def test_only_the_filters_in_use_are_on_the_bar(client: TestClient) -> None:
-    """Every filter, always, was a row of controls that grew each time the app
-    learned to ask something new — most of them saying nothing, in front of
-    the one or two that are the address of what you are looking at."""
-    js = web._BROWSE_JS
+def test_a_filter_keeps_its_place_whether_or_not_it_is_set() -> None:
+    """One order, always.
 
-    assert "if(!v) continue;" in js, "unset filters are still drawn"
+    The bar was drawn in two passes — the filters in use, then the rest — so
+    setting one made its glyph jump from ninth place to first and clearing it
+    threw the glyph back. Nothing could be reached from memory: the camera was
+    wherever the camera happened to be that second, and the place you reached
+    for belonged to whatever had last been switched on.
+
+    Lit against dim is what tells them apart; position is what finds them.
+    """
+    js = web._BROWSE_JS
+    body = js[js.index("function drawChips()"):js.index("function filterMenu")]
+
+    # One loop over every filter, rather than one over the set and one over
+    # the rest.
+    assert body.count("of CHIPS)") == 1, body
+    assert "if(!v) continue;" not in body, "the bar skips unset filters again"
+
+
+def test_the_ones_doing_nothing_fold_away_on_a_phone() -> None:
+    """Ten glyphs fit across a desktop bar and do not fit across a phone. They
+    are hidden rather than moved, so the ones that remain are still where they
+    were — which is the whole point of the rule above."""
+    js = web._BROWSE_JS
+    body = js[js.index("function drawChips()"):js.index("function filterMenu")]
+
+    assert "'chip off spare'" in body
     assert "addchip" in js and "filterMenu" in js
+    narrow = _media_block(web._STYLE, "(max-width: 720px)")
+    assert ".chips .spare { display:none; }" in narrow
 
 
 def test_select_all_is_reachable_with_nothing_selected(

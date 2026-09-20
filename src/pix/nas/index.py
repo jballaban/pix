@@ -339,6 +339,12 @@ class Filters:
     #: the page is handed so that it can rebuild its own address. `viewer` is
     #: deliberately absent — it is not a question the viewer is allowed to ask.
     #:
+    #: *In the order the top bar shows them* is now checked rather than
+    #: asserted: this said `deleted, stacks` while the bar said `stacks,
+    #: deleted`, for as long as both existed. Nothing broke — it is an
+    #: iteration order — but a comment that is quietly false is worse than no
+    #: comment, and the next list written from this one inherits the lie.
+    #:
     #: `deleted` was missing from this while being offered as a chip, so the
     #: chip could never show what it was set to, and an edit made in the bin
     #: told the server it had been made in the ordinary grid — which is how it
@@ -346,7 +352,7 @@ class Filters:
     #: screen in a listing of the deleted.
     NAMES: ClassVar[tuple[str, ...]] = ("event", "tag", "person", "date",
                                        "audience", "kind", "band", "source",
-                                       "camera", "deleted", "stacks", "within")
+                                       "camera", "stacks", "deleted", "within")
 
 
 @dataclass(frozen=True)

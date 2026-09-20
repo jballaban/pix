@@ -2540,9 +2540,15 @@ _FIXED: dict[str, tuple[tuple[str, str], ...]] = {
 
 #: How the grid can be cut up, and what to call each choice.
 _GRID_GROUPS: tuple[tuple[str, str], ...] = (
+    # Day, month and year lead because grouping by time is how the library is
+    # mostly read and `day` is the default — an ordering by use, which is
+    # allowed to win. Everything after them follows the filter bar, because
+    # there it is the same set of questions and there is no reason for it to
+    # be a second arrangement to learn: `kind` sat after `camera` here and
+    # before `source` there, for no reason anybody chose.
     ("day", "By day"), ("month", "By month"), ("year", "By year"),
-    ("event", "By event"), ("source", "By source"),
-    ("camera", "By camera"), ("kind", "By type"),
+    ("event", "By event"), ("kind", "By type"), ("source", "By source"),
+    ("camera", "By camera"),
     ("stack", "By stack"), ("none", "Ungrouped"),
 )
 
@@ -2728,45 +2734,51 @@ function markOf(col,label){return MARK[col]||esc(label);}
 
 function drawChips(){
   chips.innerHTML='';
+  // **One pass, in one order, whatever is set.** Every filter keeps the same
+  // place in the bar whether it is doing something or not.
+  //
+  // They used to be drawn in two passes — the ones in use, then the rest — so
+  // setting a filter made its glyph jump from ninth place to first, and
+  // clearing it threw the glyph back again. Nothing on the bar could be
+  // reached from memory: the camera was wherever the camera happened to be
+  // that second, and the position you reached for belonged to whatever was
+  // last switched on. Grouping the active ones at the left reads well in a
+  // screenshot and is unusable under a thumb.
+  //
+  // They are still told apart at a glance — one is lit and carries a value,
+  // the other is a dim glyph — which is the job colour is for. Position is
+  // for finding things.
+  const spare=CHIPS.filter(([col])=>!VIEW[col]);
   for(const [col,label] of CHIPS){
     const v=VIEW[col];
-    if(!v) continue;
     const b=document.createElement('button');
-    b.className='chip on';
-    const up=wider(col,v);
+    const up=v?wider(col,v):null;
     // The name is the drawing now. It stays in `title` for a pointer and in
     // `aria-label` for everything else — a glyph with no name anywhere is a
     // control only the person who drew it can read.
     b.title=label;
-    b.setAttribute('aria-label',label+': '+labelFor(col,v));
-    b.innerHTML=markOf(col,label)
-                     +`<span class="val">${esc(labelFor(col,v))}</span>`
-                     +`<span class="x" title="${up?'Up to '+esc(up):'Clear'}">`
-                     +'&times;</span>';
+    if(v){
+      b.className='chip on';
+      b.setAttribute('aria-label',label+': '+labelFor(col,v));
+      b.innerHTML=markOf(col,label)
+                 +`<span class="val">${esc(labelFor(col,v))}</span>`
+                 +`<span class="x" title="${up?'Up to '+esc(up):'Clear'}">`
+                 +'&times;</span>';
+    }else{
+      // `spare` as well as `off`, because a narrow screen shows only the
+      // filters that are doing something and puts the rest behind the `+`:
+      // ten glyphs fit across a desktop bar and do not fit across a phone,
+      // and which it is can change while the page is open by turning the
+      // phone over. Hiding them leaves the rest exactly where they were.
+      b.className='chip off spare';
+      b.setAttribute('aria-label',label);
+      b.innerHTML=markOf(col,label);
+    }
     b.onclick=e=>{
       e.stopPropagation();
-      if(e.target.closest('.x')){location.href=url({[col]:up});return;}
+      if(v&&e.target.closest('.x')){location.href=url({[col]:up});return;}
       openMenu(b,{column:col,mode:'filter'});
     };
-    chips.appendChild(b);
-  }
-  const spare=CHIPS.filter(([col])=>!VIEW[col]);
-  // Every unused filter, each as its own glyph. They were behind a `+`
-  // because ten of them spelled out was a row of ten words saying nothing in
-  // front of the one or two that are the address of what you are looking at —
-  // which was true of the words and is not true of the drawings. A question
-  // you can see is a question you remember the app can answer.
-  //
-  // Both are rendered and the stylesheet picks: ten glyphs fit across a
-  // desktop bar and do not fit across a phone, and which it is can change
-  // while the page is open by turning the phone over.
-  for(const [col,label] of spare){
-    const b=document.createElement('button');
-    b.className='chip off spare';
-    b.title=label;
-    b.setAttribute('aria-label',label);
-    b.innerHTML=markOf(col,label);
-    b.onclick=e=>{e.stopPropagation();openMenu(b,{column:col,mode:'filter'});};
     chips.appendChild(b);
   }
   if(spare.length){
