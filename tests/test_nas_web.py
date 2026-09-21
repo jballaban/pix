@@ -3767,7 +3767,8 @@ def test_the_worker_never_keeps_a_page(app_env: dict[str, Path]) -> None:
     assert "/offline" in kept
     # Navigations go to the network and fall back to the offline page.
     assert "req.mode === 'navigate'" in body
-    assert "fetch(req).catch(() => caches.match('/offline'))" in body
+    assert "fetch(req, { cache: 'no-store' })" in body
+    assert "caches.match('/offline')" in body
 
 
 def test_the_offline_page_does_not_pretend_to_be_the_library(
@@ -3793,10 +3794,16 @@ def test_the_worker_cache_is_bumped_when_the_shell_changes(
     """An installed app keeps the shell it cached. Changing the offline page
     without changing the cache name leaves every phone in the house holding the
     old one — which, for a page whose whole job is to explain a failure, means
-    explaining it the wrong way for as long as the install lasts."""
+    explaining it the wrong way for as long as the install lasts.
+
+    **This failing is the point.** It names the version on purpose, so that
+    changing the worker breaks it and the bump is a thing somebody decided
+    rather than a thing somebody forgot. Read the failure, bump the constant,
+    change this line.
+    """
     body = TestClient(web.app).get("/sw.js").text
 
-    assert "pix2-shell-v2" in body, "shell cache not bumped"
+    assert "pix2-shell-v3" in body, "shell cache not bumped"
 
 
 def test_the_page_head_offers_the_app_to_both_phones(
@@ -4863,3 +4870,43 @@ def test_a_filter_doing_nothing_is_not_on_a_phones_bar() -> None:
 
     assert ".chips .spare { display:none; }" in coarse
     assert ".chips .addchip { display:inline-flex; }" in coarse
+
+
+def test_a_page_is_never_served_from_a_cache(client: TestClient) -> None:
+    """Every page carries its own script inlined, so a cached page is a cached
+    *build*.
+
+    Nothing used to say how old one was — no `Cache-Control`, no `ETag`, no
+    `Last-Modified` — which leaves a browser free to decide for itself, and
+    Safari in an installed app decides yes. A deploy would land, the container
+    restart, and the phone go on showing last week's app with nothing on
+    screen to say so.
+    """
+    for path in ("/browse", "/?date=2026&group=year", "/login"):
+        assert client.get(path).headers.get("cache-control") == "no-store", path
+
+
+def test_the_worker_fetches_a_page_rather_than_the_cached_one() -> None:
+    """It claims navigations go to the network every time, and a plain `fetch`
+    reads the HTTP cache — so it was handing back the very copy it thought it
+    was avoiding."""
+    assert "fetch(req, { cache: 'no-store' })" in web._SERVICE_WORKER
+
+
+def test_making_a_control_bigger_does_not_make_it_visible() -> None:
+    """The rule that gives every button a thumb-sized target carries three
+    `:not()`s, which weigh three classes — so it outranks nearly anything that
+    tries to hide one of those buttons later.
+
+    The filters a phone folds away are buttons. A `display` in that rule put
+    every unused filter back on the bar, four rows of them, while
+    `.chips .spare { display:none }` sat two blocks above it being outweighed.
+    The fourth specificity tie this stylesheet has paid for, and the first
+    that was visible from across the room.
+    """
+    coarse = _media_block(web._STYLE, "(pointer: coarse)")
+    rule = coarse[coarse.index("button:not(.tick)"):]
+    rule = rule[:rule.index("}")]
+
+    assert "display" not in rule, rule
+    assert "min-height:44px" in rule

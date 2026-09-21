@@ -993,9 +993,15 @@ h2.year span { font-size:13px; font-weight:400; }
      operation you arrived from, and the one saying which stack you are in —
      are spans rather than buttons, and a 31px chip in a 44px row is the
      misalignment `--ctl` exists to prevent. */
+  /* **Size only. It must not touch `display`.** Three `:not()`s weigh three
+     classes, so this outranks almost anything that tries to hide one of these
+     later — and the filters a phone folds away are buttons. Giving them a
+     `display` here put every unused filter back on the bar, four rows of
+     them, while `.chips .spare { display:none }` sat two blocks above being
+     outweighed. A button centres its own text; nothing here needed to say so.
+     */
   button:not(.tick):not(.grppick):not(.pick), .chip {
-    min-height:44px; padding:8px 12px;
-    display:inline-flex; align-items:center; }
+    min-height:44px; padding:8px 12px; }
   /* Rows in a dropdown are full width, so they stay blocks and simply get
      taller. Carrying the same three `:not()`s as the rule above, and not for
      tidiness: each of those counts as a class, so `.memenu button` is the
@@ -1327,7 +1333,20 @@ def _page(title: str, body: str, *, tools: str = "", rows: str = "",
     message line into the footer left both as `null`, and the first thing every
     write did was set a message — so nothing was ever sent, silently.
     """
-    return HTMLResponse(status_code=status_code, content=f"""<!doctype html><html><head><meta charset="utf-8">
+    # **Never reuse a page.** It carries its own script inlined, so a cached
+    # page is a cached *build* — and nothing here says how old one is: no
+    # `Cache-Control`, no `ETag`, no `Last-Modified`, which leaves a browser
+    # free to decide for itself. Safari in an installed app decides yes, and
+    # then a deploy lands, the container restarts, and the phone goes on
+    # showing last week's app with no way to tell.
+    #
+    # The service worker was supposed to be the answer and is not: it fetches
+    # navigations rather than serving them from its own cache, but `fetch`
+    # goes through the HTTP cache like anything else, so it was handing back
+    # the very copy it thought it was avoiding.
+    return HTMLResponse(status_code=status_code,
+                        headers={"Cache-Control": "no-store"},
+                        content=f"""<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <link rel="manifest" href="/manifest.webmanifest">
 <meta name="theme-color" content="#14161a">
@@ -6498,7 +6517,7 @@ _MANIFEST: dict[str, object] = {
 #: go to the network every time, and fall back to one honest offline page rather
 #: than to a stale copy of the library.
 _SERVICE_WORKER: str = """
-const SHELL = 'pix2-shell-v2';
+const SHELL = 'pix2-shell-v3';
 const KEEP = ['/offline', '/manifest.webmanifest', '/icon-192.png',
               '/icon-512.png', '/icon-maskable-512.png',
               '/apple-touch-icon.png'];
@@ -6524,7 +6543,12 @@ self.addEventListener('fetch', e => {
   // is a cached build. Offline, say so plainly instead of showing a library
   // that may no longer be what is there.
   if (req.mode === 'navigate') {
-    e.respondWith(fetch(req).catch(() => caches.match('/offline')));
+    // `no-store` because fetching is not the same as fetching *fresh*: a
+    // plain fetch reads the HTTP cache, which is where a stale page lives.
+    // The server says the same thing in a header; this says it from the side
+    // that claims to.
+    e.respondWith(fetch(req, { cache: 'no-store' })
+                  .catch(() => caches.match('/offline')));
     return;
   }
   // Everything else is either one of the shell files or a photograph, and the
