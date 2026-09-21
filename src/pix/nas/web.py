@@ -1649,11 +1649,18 @@ def home(request: Request,
                  # it loaded, and a page whose chips never drew and whose
                  # heading never wired looks exactly like a page whose
                  # controls were never built.
-                 f'<p class="dim">{head}</p>{body}'
-                 f'<div id="menu" hidden></div>{_WORKING}',
+                 f'{body}<div id="menu" hidden></div>{_WORKING}',
                  tools='<div class="chips" id="chips"></div>',
                  rows=_actions(user, folders=True),
-                 footer='<span id="note" class="note"></span>',
+                 # Along the bottom rather than over the folders. It is a
+                 # standing description of the library — how much of it
+                 # there is, how much is undated, when it was last indexed —
+                 # and none of it changes while you are reading, so a row of it
+                 # above the grid was a row of folders pushed off the screen to
+                 # say something that had not moved since yesterday. The strip
+                 # down there was carrying a version number and nothing else.
+                 footer=f'<span class="count">{head}</span>'
+                        '<span id="note" class="note"></span>',
                  script=_view_script(user, view, groups, page="/"),
                  zoom="/browse" + (f"?{q}" if q else ""),
                  user=user)

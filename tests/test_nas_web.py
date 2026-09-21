@@ -4773,3 +4773,24 @@ def test_what_is_left_to_do_is_not_the_colour_of_what_is_done() -> None:
 def test_the_plus_more_chip_is_gone_from_the_stylesheet() -> None:
     """Cards name every value they hold, so nothing renders it any more."""
     assert ".spread .more" not in web._STYLE
+
+
+def test_the_landing_page_opens_on_the_folders(client: TestClient) -> None:
+    """A standing description of the library — how much there is, how much is
+    undated, when it was last indexed — does not change while you read it, so
+    a row of it above the grid was a row of folders pushed off the screen to
+    say something that had not moved since yesterday."""
+    html = client.get("/?date=2026&group=year").text
+    main = html[html.index("<main>"):]
+
+    assert main.startswith('<main><div class="grid folders"') or \
+        main.startswith('<main><p class="empty"'), main[:120]
+
+
+def test_but_it_still_says_what_the_library_holds(client: TestClient) -> None:
+    """Moved, not dropped. The strip along the bottom was carrying a version
+    number and nothing else."""
+    html = client.get("/?date=2026&group=year").text
+    foot = html[html.index("<footer"):html.index("</footer>")]
+
+    assert "files" in foot and "undated" in foot and "indexed" in foot
