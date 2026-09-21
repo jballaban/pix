@@ -446,3 +446,46 @@ def test_a_role_with_no_members_is_how_you_keep_one_to_yourself(
     after = decisions.read(media)
     assert after is not None and after.audience == ("private",)
     assert not after.is_empty()
+
+
+def test_a_change_that_changes_nothing_writes_nothing(tmp_path: Path) -> None:
+    """Re-recording the same judgement still costs a temp file, a rename and
+    a fresh mtime over SMB — and it makes the sidecar look edited to anything
+    watching the share."""
+    media = tmp_path / "a.jpg"
+    media.write_bytes(b"x")
+    decisions.write(media, decisions.Decision(audience=("family",)))
+    side = decisions.sidecar_path(media)
+    stamp = side.stat().st_mtime_ns
+
+    was, after = decisions.change(media, add_audience=["family"])
+
+    assert after.audience == ("family",)
+    assert side.stat().st_mtime_ns == stamp, "the sidecar was rewritten"
+    assert was == after
+
+
+def test_nothing_to_say_about_a_file_with_no_sidecar_leaves_none(
+    tmp_path: Path
+) -> None:
+    """Its own case: no sidecar and nothing to record is already what the disk
+    holds, and comparing a `Decision` to `None` cannot see that."""
+    media = tmp_path / "a.jpg"
+    media.write_bytes(b"x")
+
+    decisions.change(media, remove_audience=["family"])
+
+    assert not decisions.sidecar_path(media).exists()
+
+
+def test_a_real_change_is_still_written(tmp_path: Path) -> None:
+    """The check has to be about the decision, not about the call."""
+    media = tmp_path / "a.jpg"
+    media.write_bytes(b"x")
+    decisions.write(media, decisions.Decision(audience=("family",)))
+
+    _, after = decisions.change(media, add_audience=["kid"])
+
+    assert after.audience == ("family", "kid")
+    read_back = decisions.read(media)
+    assert read_back is not None and read_back.audience == ("family", "kid")

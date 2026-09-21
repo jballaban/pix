@@ -4716,35 +4716,58 @@ function currentValues(cs,field){
 // on this side*. Stacking writes to everything except the keeper; making a new
 // top writes to the rest of its stack and then to itself. Both are one gesture
 // over a selection, and neither is the whole of it.
+// Whether this change would change *this* file. The page already knows what
+// each one says — the grid reads it off the cell, the folder page off the
+// files it fetched — so a file that already carries the value being added is
+// a file with nothing to do.
+//
+// Only where the answer is certain. A date override, a stacking or a refusal
+// is not written on the cell, so those are always sent: guessing *no change*
+// wrongly is a decision silently not made, which is far worse than a write
+// that turns out to be a no-op.
+function changes(c,act,value,add){
+  const multi=MULTI[act];
+  if(multi) return valuesOf(c,multi[0]).includes(value)!==!!add;
+  if(act==='event') return (c.dataset.event||'')!==(value||'');
+  if(act==='deleted') return !!c.dataset.deleted!==!!value;
+  return true;
+}
+
 async function applyToSelection(act,value,add,only,batch){
   const cs=only||targetsOn(sideOf(act,value));
   if(!cs.length){say('nothing selected');return;}
   const multi=MULTI[act];
   if(multi&&value===null){say('pick a name');return;}
+  // Sharing a folder where all but two files are already shared is two
+  // writes, not eight hundred and sixty-six. Each one it skips is a sidecar
+  // read, a sidecar rewrite and an index row it never has to touch — and a
+  // line in the progress it never has to count.
+  const todo=cs.filter(c=>changes(c,act,value,add));
+  if(!todo.length){say('already set on all of them');return {done:0};}
   const body = multi ? {[add?multi[1]:multi[2]]:[value]} : {[act]:value};
   // Everything each cell said before, so the ones that never got written can
   // be put back. All four fields rather than the one being edited: it costs
   // nothing and means the restore cannot be wrong about which was in play.
-  const before=cs.map(c=>({tags:c.dataset.tags||'',
+  const before=todo.map(c=>({tags:c.dataset.tags||'',
                            audience:c.dataset.audience||'',
                            event:c.dataset.event||'',
                            deleted:c.dataset.deleted||''}));
-  if(multi) cs.forEach(c=>paint(c,multi[0],value,add));
-  else if(act==='event') cs.forEach(c=>{c.dataset.event=value||'';});
+  if(multi) todo.forEach(c=>paint(c,multi[0],value,add));
+  else if(act==='event') todo.forEach(c=>{c.dataset.event=value||'';});
   // Under `Including deleted` a restored file stays on screen, so the cross
   // has to go the moment the decision does. Under `Only deleted` it leaves
   // instead, and `drop` takes the cell with it.
-  else if(act==='deleted') cs.forEach(c=>{
+  else if(act==='deleted') todo.forEach(c=>{
     c.dataset.deleted=value?'1':'';
     c.classList.toggle('gone',!!value);
   });
-  const out=await send(cs,body,actLabel(act,value,add),batch);
+  const out=await send(todo,body,actLabel(act,value,add),batch);
   // Only the tail. A write that stops half way — cancelled, or a share that
   // dropped — has really written the first part, and painting all of it back
   // would leave the screen denying what is on disk. The cells that were
   // written keep what they now say; the rest go back to what they said.
   const wrote=out?out.done:0;
-  cs.slice(wrote).forEach((c,i)=>{
+  todo.slice(wrote).forEach((c,i)=>{
     const was=before[wrote+i];
     c.dataset.tags=was.tags; c.dataset.audience=was.audience;
     c.dataset.event=was.event; c.dataset.deleted=was.deleted;
@@ -6133,6 +6156,11 @@ def _decide(folder: str, name: str, change: _Change,
                 status.HTTP_500_INTERNAL_SERVER_ERROR,
                 f"could not write the sidecar: {e}") from e
 
+        # Nothing was written, so there is nothing for the row to catch up
+        # with. The index is exactly as right as it was a moment ago, which is
+        # the only promise it makes.
+        if (decision == was if was is not None else decision.is_empty()):
+            return was, decision, True
         indexed = False
         own = conn is None and DB_PATH.is_file()
         if own:

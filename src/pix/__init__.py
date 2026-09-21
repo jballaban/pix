@@ -4,7 +4,7 @@ from pathlib import Path
 
 # Bump on every commit that changes runtime behavior. The CLI prints this
 # as the first line of every run so dev and tester are always aligned.
-__version__ = "0.1.375"
+__version__ = "0.1.376"
 
 
 def exiftool_config_path() -> Path:

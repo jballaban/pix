@@ -346,7 +346,15 @@ def change(media: Path, *,
         no_stack=(current.no_stack
                   if isinstance(no_stack, Unset) else no_stack),
     )
-    write(media, updated)
+    # A change that changes nothing writes nothing. Re-recording the same
+    # judgement still costs a temp file, a rename and a fresh mtime over SMB,
+    # and it makes the sidecar look edited to anything watching the share.
+    #
+    # `was is None` is its own case: no sidecar and nothing to say is already
+    # what the disk holds, and `updated == was` cannot see that because one
+    # side is not a `Decision` at all.
+    if not (updated == was if was is not None else updated.is_empty()):
+        write(media, updated)
     return was, updated
 
 

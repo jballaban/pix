@@ -1437,6 +1437,63 @@ function arrow(key, opts) {
     deselect();
   }
 
+  // --- a file that already says it is not written to --------------------------
+  // Sharing a folder where all but two files are already shared is two
+  // writes, not eight hundred and sixty-six. The progress counted every one
+  // of them, which is how this was noticed: it was doing the work as well as
+  // counting it.
+  {
+    deselect();
+    const two = document.querySelectorAll('.cell').slice(0, 2);
+    two[0].dataset.audience = 'ghost';
+    two[1].dataset.audience = '';
+    two.forEach(c => c.children.find(k => k._classes.has('pick')).click());
+
+    const n = calls.length;
+    access.click();
+    await settle(); await settle();
+    const rows = document.byId.menu.querySelectorAll('.opt');
+    const names = rows.map(
+      o => (o.innerHTML.match(/<span>([^<]*)<\/span>/) || [])[1]);
+    const half = rows[names.indexOf('ghost')];
+    if (half) {
+      half.click();
+      await settle(); await settle();
+      const out = calls.slice(n).filter(c => c.url.startsWith('/api/decide'));
+      check('the write goes out', out.length === 1, String(out.length));
+      if (out.length) {
+        const sent = JSON.parse(out[0].body);
+        check('naming only the file that did not already have it',
+              sent.files.length === 1, JSON.stringify(sent.files));
+      }
+
+      // And with both carrying it, there is nothing left to do at all.
+      const m = calls.length;
+      half.click();   // takes it off both
+      await settle(); await settle();
+      half.click();   // puts it back on both
+      await settle(); await settle();
+      const again = calls.slice(m).filter(c => c.url.startsWith('/api/decide'));
+      const last = again.length ? JSON.parse(again[again.length - 1].body) : null;
+      check('a full selection is written once, not twice',
+            !last || last.files.length === 2,
+            last && JSON.stringify(last.files));
+
+      const k = calls.length;
+      half.click();   // off
+      await settle(); await settle();
+      half.click();   // on again — nothing has changed since
+      await settle(); await settle();
+      check('and asking for what is already true writes something once',
+            calls.slice(k).filter(
+              c => c.url.startsWith('/api/decide')).length === 2,
+            String(calls.slice(k).filter(
+              c => c.url.startsWith('/api/decide')).length));
+    }
+    document.byId.grid.click();
+    deselect();
+  }
+
   if (failures.length) {
     failures.forEach(f => console.log('FAIL ' + f));
     process.exit(1);
