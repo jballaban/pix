@@ -151,6 +151,8 @@ const ADMIN = true;
 const USERS = ['family'];
 const GROUPS = ['family'];
 const USUAL = 'family';
+// The audience value meaning *nobody yet*, as the server sends it.
+const UNREVIEWED = 'new';
 const PAGE = '/';
 // What each derived tier is capped at, longest edge.
 const TIERS = [['/thumb/', 400], ['/large/', 1000],
@@ -170,10 +172,10 @@ const press = key => (keys.keydown || []).forEach(fn => fn(
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'MARKS', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'MARKS', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS,
-      GROUPING, PAGE, TIERS, MARKS, fn => fn());
+      GROUPING, PAGE, TIERS, UNREVIEWED, MARKS, fn => fn());
   } catch (e) {
     console.log('FAIL the script threw on load: ' + e.message);
     process.exit(1);
@@ -387,6 +389,32 @@ const press = key => (keys.keydown || []).forEach(fn => fn(
             />family<\/i>/.test(audience()), audience());
       check('and nothing is undecided any more',
             !/undecided/.test(audience()), audience());
+    }
+  }
+
+  // --- a chip opens the folder cut down to itself ----------------------------
+  // The card could say *half of this event is undecided* and the page could
+  // not then take you to that half. Pressed after a write on purpose: the
+  // chips are redrawn from the files that just changed, so a handler hung on
+  // each one would go in the bin with it — the chips would work until the
+  // first edit and then stop, which is the kind of thing nobody reports
+  // because it looks like they never worked.
+  {
+    const spread = tiles[1].children.find(
+      k => k._classes.has('spread') && k._classes.has('audience'));
+    const chip = spread.children.find(k => k.dataset.col);
+    check('a chip carries the filter it stands for', !!chip,
+          spread.innerHTML);
+    if (chip) {
+      check('by the column the filter bar uses',
+            chip.dataset.col === 'audience', chip.dataset.col);
+      went = null;
+      chip.click();
+      check('pressing it opens the folder, narrowed to that',
+            !!went && went.includes('date=2026')
+            && went.includes('audience=family'), String(went));
+      check('and not merely the folder', went !== '/browse?date=2026',
+            String(went));
     }
   }
 

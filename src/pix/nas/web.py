@@ -496,6 +496,11 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
    exactly as it does on a thumbnail. `100%` beside everything would bury the
    one chip that is not. */
 .spread i b { font-weight:600; margin-left:4px; opacity:.72; }
+/* Each one opens the folder cut down to itself, so it reads as something to
+   press rather than as a label that happens to be there. */
+.spread i[data-col] { cursor:pointer; }
+.spread i[data-col]:hover { background:#000; outline:1px solid currentColor;
+                            outline-offset:-1px; }
 .spread.audience i { color:var(--keep); }
 .spread.people i { color:var(--accent); }
 .spread.tags i { color:#fff; }
@@ -1704,6 +1709,13 @@ def _shelves(rows: list[sqlite3.Row], groups: list[str], view: ix.Filters,
     return "".join(out)
 
 
+#: Which filter each kind of chip narrows by, so a chip on a card can open
+#: the folder already cut down to itself.
+_SPREAD_FILTER: dict[str, str] = {
+    "audience": "audience", "people": "person", "tags": "tag",
+}
+
+
 def _spread_html(kind: str, values: list[tuple[str, int]], n: int,
                  lead: tuple[str, int] | None = None) -> str:
     """What a section says about itself, one kind of value at a time.
@@ -1729,16 +1741,29 @@ def _spread_html(kind: str, values: list[tuple[str, int]], n: int,
     # the positive ones. And *all decided* said nothing at all: a folder with
     # nothing left says it by having no such chip, the way a folder with no
     # tags says that by having no tags.
+    col = _SPREAD_FILTER.get(kind, "")
+
+    def chip(value: str, count: int, cls: str = "", filter_on: str = "") -> str:
+        # Opening the folder *and* narrowing it to this, which is the one
+        # thing the card could say and the page could not then do. A chip
+        # reading `undecided 50%` is the half of an event still to work
+        # through, and clicking it is how you get to exactly those.
+        where = (f' data-col="{col}" data-val="{_h(filter_on or value)}"'
+                 if col else "")
+        say = ("" if not col else
+               f" — click for the {_h(value)} ones in here")
+        return (f'<i class="{cls}"{where} '
+                f'title="{_h(value)} — {count:,} of {n:,}{say}">'
+                + _h(value)
+                + (f'<b>{round(count * 100 / n)}%</b>' if count < n else "")
+                + "</i>")
+
+    # `undecided` is not a value anything carries, it is the absence of one —
+    # and the audience filter has a word for that, the same one its own chip
+    # uses.
     first = ("" if lead is None or not lead[1] else
-             f'<i class="none" title="{_h(lead[0])} — {lead[1]:,} of {n:,}">'
-             + _h(lead[0])
-             + (f'<b>{round(lead[1] * 100 / n)}%</b>' if lead[1] < n else "")
-             + "</i>")
-    chips = first + "".join(
-        f'<i title="{_h(v)} — {c:,} of {n:,}">{_h(v)}'
-        + (f'<b>{round(c * 100 / n)}%</b>' if c < n else "")
-        + "</i>"
-        for v, c in values)
+             chip(lead[0], lead[1], "none", ix.UNREVIEWED))
+    chips = first + "".join(chip(v, c) for v, c in values)
     return f'<span class="spread {kind}">{chips}</span>'
 
 
@@ -2017,6 +2042,10 @@ def _view_script(user: Principal, view: ix.Filters, groups: list[str], *,
         f"EXTRA={_js(_EXTRA)},ADMIN={_js(user.is_admin)},"
         f"USERS={_js(_audience_names())},GROUPS={_js(_group_names())},"
         f"MARKS={_js({c: _mark(c) for c, _ in _chips(user)})},"
+        # The word the audience filter uses for *nobody yet*. Sent rather than
+        # spelled again here: the page draws a chip that sets it, and two
+        # copies of a sentinel are two chances to disagree about what it is.
+        f"UNREVIEWED={_js(ix.UNREVIEWED)},"
         f"USUAL={_js(store().usual)},PAGE={_js(page)},"
         f"TIERS={_js(_TIERS)},"
         f"GRID_GROUPS={_js(_GRID_GROUPS)},GROUPING={_js(groups)};</script>"
@@ -3933,6 +3962,9 @@ function targets(){
 // cascade into stacks, the field the person is allowed to write, the chunking,
 // the log and the revert are all the ones that were already there.
 const FOLDERS = PAGE==='/';
+// Which filter each kind of chip narrows by, kept in step with the server's
+// own map by the test that renders a card and presses one.
+const SPREAD_FILTER={audience:'audience', people:'person', tags:'tag'};
 const tiles = FOLDERS && grid
   ? [...grid.querySelectorAll('.tile')].filter(t=>t.getAttribute('href')) : [];
 const pickedFolders = new Set();
@@ -4049,10 +4081,15 @@ function redrawFolder(t){
       el.className='spread '+kind;
       t.appendChild(el);
     }
-    const chip=(v,c,cls)=>`<i${cls?' class="'+cls+'"':''} `
-      +`title="${esc(v)} — ${c} of ${n}">${esc(v)}`
+    // The same chip the server draws, filter and all: without `data-col` a
+    // redrawn card would look the same and do nothing when pressed.
+    const col=SPREAD_FILTER[kind];
+    const chip=(v,c,cls,on)=>`<i class="${cls||''}"`
+      +` data-col="${col}" data-val="${esc(on||v)}"`
+      +` title="${esc(v)} — ${c} of ${n} — click for the ${esc(v)} ones`
+      +` in here">${esc(v)}`
       +(c<n?`<b>${Math.round(c*100/n)}%</b>`:'')+'</i>';
-    el.innerHTML=(none?chip('undecided',none,'none'):'')
+    el.innerHTML=(none?chip('undecided',none,'none',UNREVIEWED):'')
                 +sorted.map(([v,c])=>chip(v,c)).join('');
   }
   // The green inside the blue: how much of this card has been decided.
@@ -4074,7 +4111,24 @@ function drawFolderSel(){
   if(selcount) selcount.textContent = `${n} selected`;
 }
 
+// A chip on a card opens the folder narrowed to itself: the card's own link
+// plus the one filter the chip names. Inside that link, so like the select
+// circle it has to say it is not it.
 tiles.forEach(t=>{
+  // One listener on the card rather than one per chip: a write redraws the
+  // chips from the files it just changed, and handlers hung on the old ones
+  // go into the bin with them — so the chips would open the folder until
+  // the first edit and then stop, which is the kind of thing nobody reports
+  // because it looks like they never worked.
+  t.addEventListener('click',e=>{
+    const chip=e.target&&e.target.closest&&e.target.closest('[data-col]');
+    if(!chip) return;
+    e.preventDefault(); e.stopPropagation();
+    const [path,query]=(t.getAttribute('href')||'').split('?');
+    const q=new URLSearchParams(query||'');
+    q.set(chip.dataset.col,chip.dataset.val);
+    location.href=path+'?'+q;
+  });
   const pick=t.querySelector('.pick');
   if(!pick) return;
   pick.addEventListener('click',e=>{

@@ -212,6 +212,22 @@ function parseInto(html) {
     }
     out.push(e);
   }
+  // The chips a folder card is made of. They carry the filter they stand for
+  // in `data-*`, which is the whole of what makes one clickable — and an
+  // element the stub cannot see is an element no test can press.
+  const chipRe = /<i\s([^>]*)>([^<]*)/g;
+  while ((m = chipRe.exec(html))) {
+    const e = new El('i');
+    const attrRe = /([\w-]+)="([^"]*)"/g;
+    let a;
+    while ((a = attrRe.exec(m[1]))) {
+      if (a[1] === 'class') e.className = a[2];
+      else if (a[1].startsWith('data-')) e.dataset[camel(a[1].slice(5))] = a[2];
+      else e.attrs[a[1]] = a[2];
+    }
+    e._text = m[2];
+    out.push(e);
+  }
   const spanRe = /<span class="([^"]*)"[^>]*>([^<]*)<\/span>/g;
   while ((m = spanRe.exec(html))) {
     const e = new El('span');

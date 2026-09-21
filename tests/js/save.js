@@ -159,6 +159,8 @@ const ADMIN = true;
 const USERS = ['family'];
 const GROUPS = ['family'];
 const USUAL = 'family';
+// The audience value meaning *nobody yet*, as the server sends it.
+const UNREVIEWED = 'new';
 const PAGE = '/browse';
 const TIERS = [['/thumb/', 400], ['/large/', 1000], ['/preview/', 1600]];
 
@@ -183,12 +185,12 @@ const settled = async () => { for (let i = 0; i < 12; i++) await settle(); };
 const PARAMS = ['document', 'window', 'fetch', 'localStorage', 'location',
                 'confirm', 'matchMedia', 'navigator', 'VIEW', 'CHIPS', 'FIXED',
                 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS',
-                'GROUPING', 'PAGE', 'TIERS', 'setTimeout', 'clearTimeout'];
+                'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'setTimeout', 'clearTimeout'];
 function run() {
   new Function(...PARAMS, js)(
     document, window, fetch, localStorage, location, confirm, matchMedia,
     navigator, VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-    GRID_GROUPS, GROUPING, PAGE, TIERS, timer, cancelTimer);
+    GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, timer, cancelTimer);
 }
 
 (async () => {

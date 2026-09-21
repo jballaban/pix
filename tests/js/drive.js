@@ -194,6 +194,8 @@ const ADMIN = true;
 const USERS = ['family', 'james'];
 const GROUPS = ['family'];
 const USUAL = 'family';
+// The audience value meaning *nobody yet*, as the server sends it.
+const UNREVIEWED = 'new';
 const PAGE = '/browse';
 // What each derived tier is capped at, longest edge.
 const TIERS = [['/thumb/', 400], ['/large/', 1000],
@@ -216,9 +218,9 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS', 'GROUPING',
-      'PAGE', 'TIERS', 'setTimeout', js,
+      'PAGE', 'TIERS', 'UNREVIEWED', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
-      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, GROUPING, PAGE, TIERS, fn => fn());
+      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, fn => fn());
   } catch (e) {
     console.log('FAIL the script threw on load: ' + e.message);
     process.exit(1);
@@ -950,10 +952,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, TIERS, fn => fn());
+      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, fn => fn());
 
     // One file out of the first section, and the whole of the second.
     s1[0].querySelector('.pick').click();
@@ -1015,10 +1017,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, TIERS, fn => fn());
+      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, fn => fn());
 
     // Push the first one out of the view, the way an edit does.
     shelf[0].querySelector('.pick').click();
@@ -1065,10 +1067,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, TIERS, fn => fn());
+      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, fn => fn());
 
     // Scrolled a couple of rows down: c2 straddles the top of the screen.
     scrolled = 250;
@@ -1107,10 +1109,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, TIERS, fn => fn());
+      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, fn => fn());
 
     document.byId.selall.click();          // all 250
     const n = calls.length;
@@ -1224,10 +1226,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, TIERS, fn => fn());
+      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, fn => fn());
     check('a new page opens at the size you left it',
           grid.dataset.size === 'large', grid.dataset.size);
 
@@ -1236,10 +1238,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, TIERS, fn => fn());
+      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, fn => fn());
     check('and one saved under the old names still opens there',
           grid.dataset.size === 'large', grid.dataset.size);
   }
@@ -1265,10 +1267,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, TIERS, fn => fn());
+      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, fn => fn());
 
     three[0].querySelector('.pick').click();
     three[1].querySelector('.pick').click();
@@ -1308,10 +1310,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, TIERS, fn => fn());
+      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, fn => fn());
 
     const get = actBtn('download');
     check('nothing selected offers no download', get.hidden === true);
