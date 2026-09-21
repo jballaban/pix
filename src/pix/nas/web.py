@@ -346,6 +346,9 @@ main { padding:16px max(var(--gut),env(safe-area-inset-right)) 40px
 .footbar .note { margin:0; margin-left:auto; }
 .ver { color:var(--dim); font-variant-numeric:tabular-nums;
        white-space:nowrap; }
+/* The other view of the same library, for where the corner cannot be. */
+.footbar .zoom { display:none; align-items:center; gap:6px; color:var(--fg); }
+.footbar .zoom svg { display:block; }
 .note.loud { background:#5a1d16; color:#ffd9d2; padding:2px 8px;
              border-radius:3px; font-weight:600; }
 main { padding-bottom:48px; }
@@ -727,41 +730,35 @@ h2.year span { font-size:13px; font-weight:400; }
 .gate .note, main > .note { margin:8px 0; }
 .warn { color:#e3b341; }
 .who-link { margin-left:10px; display:inline-flex; align-items:center; }
-/* What the library is holding that nobody has looked at, in the space of an
-   icon. The count was a phrase standing in the bar on every page whether or
-   not it was news, and the next thing worth reporting would have been a
-   second phrase beside it. */
-.bell { position:relative; display:inline-flex; align-items:center;
-        margin-left:10px; color:var(--dim); outline:none; cursor:default; }
-.bell:hover, .bell:focus-within { color:var(--fg); }
-.bell .dot { display:none; position:absolute; right:-1px; top:1px;
-             width:7px; height:7px; border-radius:50%;
-             background:var(--gone); border:1.5px solid var(--chrome); }
-.bell[data-any="1"] .dot { display:block; }
-.bell[data-any="1"] { color:var(--fg); }
-.bellmenu { position:absolute; right:0; top:100%; margin-top:6px; z-index:21;
-            min-width:170px; display:none; flex-direction:column;
-            background:var(--panel); border:1px solid var(--line);
-            border-radius:4px; padding:4px; box-shadow:0 10px 24px -8px #000d; }
-.bell:hover .bellmenu, .bell:focus-within .bellmenu { display:flex; }
-.bell::after { content:""; position:absolute; right:0; top:100%;
-               width:100%; height:8px; }
-.bellmenu a, .bellmenu .quiet { display:block; padding:6px 10px;
-            border-radius:3px; text-decoration:none; color:var(--fg);
-            white-space:nowrap; }
-.bellmenu a:hover { background:#242a33; box-shadow:none; }
-.bellmenu .quiet { color:var(--dim); }
-/* One or the other: something to report, or the fact that there is nothing.
-   Both at once reads as a bug, and neither leaves an empty box. */
-.bell[data-any="1"] .bellmenu .quiet { display:none; }
-
-/* Everything about you, under your name. Opens on hover *and* on focus, with
-   no script, because /history and /accounts carry none — and a Sign out that
-   only worked where the grid was loaded would be missing from the page you
-   are most likely to be stuck on. */
+/* Everything about you, and everything you do rarely, under one control.
+   Opens on hover *and* on focus, with no script, because /history and
+   /accounts carry none — and a Sign out that only worked where the grid was
+   loaded would be missing from the page you are most likely to be stuck on. */
 .me { position:relative; display:inline-flex; align-items:center;
       outline:none; }
 .me .name { cursor:default; color:var(--fg); gap:5px; }
+/* The name where there is room, the gear where there is not. Both are in the
+   markup and the width picks, because the one that is hidden must not be a
+   second copy of anything — two `#sizepick`s is one id and two controls. */
+.me .gearbtn { display:none; cursor:default; align-items:center; }
+.memenu .whoami { display:none; }
+/* What is waiting, on the control rather than beside it. A notification that
+   needs opening to be seen is not one. */
+.me .dot { display:none; position:absolute; right:-2px; top:0;
+           width:7px; height:7px; border-radius:50%;
+           background:var(--gone); border:1.5px solid var(--chrome); }
+.me[data-any="1"] .dot { display:block; }
+/* One or the other: something to report, or the fact that there is nothing. */
+.me[data-any="1"] .memenu .quiet { display:none; }
+.memenu .quiet { color:var(--dim); padding:6px 10px; white-space:nowrap; }
+.memenu .bin-link { display:block; padding:6px 10px; border-radius:3px; }
+.memenu .bin-link:hover { background:#242a33; box-shadow:none; }
+/* The size control reads as a row of the menu now, not a lozenge in the bar:
+   it has a whole line to say what it is on, so it says it. */
+.memenu .sizerow { display:block; width:100%; text-align:left;
+                   background:none; border:0; color:var(--fg);
+                   padding:6px 10px; border-radius:3px; cursor:pointer; }
+.memenu .sizerow:hover { background:#242a33; }
 .me .caret { font-style:normal; font-size:9px; color:var(--dim);
              transition:transform .12s; }
 .me:hover .caret, .me:focus-within .caret { transform:rotate(180deg); }
@@ -889,6 +886,22 @@ h2.year span { font-size:13px; font-weight:400; }
   /* Above the footer rather than across it. */
   .install { bottom:calc(46px + env(safe-area-inset-bottom)); }
 
+  /* The bar is for what you are looking at. Everything you reach for once in
+     a while goes behind the gear, and the name goes to the first line of the
+     menu it opens — one tap rather than none, which is what the room costs.
+     The three of them plus the filters had the bar at four rows and nearly
+     half the screen. */
+  .me .name { display:none; }
+  .me .gearbtn { display:inline-flex; }
+  .memenu .whoami { display:block; color:var(--dim); font-size:11px;
+                    text-transform:uppercase; letter-spacing:.07em;
+                    padding:7px 10px 3px; }
+  /* The corner is a picture of the grid under it, which is worth a row of
+     nothing on a screen this size. It moves to the strip along the bottom,
+     which had a version number and a count on it. */
+  .topbar .brand { display:none; }
+  .footbar .zoom { display:inline-flex; }
+
   /* The unused filters are ten glyphs, which fit across a desktop bar and
      do not fit across a phone. Here the same list stays behind the `+`.
      Both are always rendered, because which one applies can change while the
@@ -990,7 +1003,7 @@ h2.year span { font-size:13px; font-weight:400; }
      under History and Accounts, which do not, because they are links and that
      rule never touched them. Equal weight and later in the sheet is what
      makes this the one that counts. */
-  .memenu a, .bellmenu a, .bellmenu .quiet,
+  .memenu a, .memenu .quiet, .memenu .bin-link, .memenu .whoami,
   .memenu button:not(.tick):not(.grppick):not(.pick) {
     min-height:44px; display:flex; align-items:center; width:100%; }
   .opt { min-height:44px; align-items:center; }
@@ -1133,6 +1146,25 @@ _FAVICON = "data:image/svg+xml," + quote(
     'stroke-linecap="round" stroke-linejoin="round"/></svg>', safe="")
 
 
+def _zoom_link(zoom: str) -> str:
+    """The same control as the corner, for the strip along the bottom.
+
+    Rendered always and shown only where the corner is not — a second element
+    rather than the corner moved, because the two say it differently: up there
+    it is a picture of the grid under it, and down here, among a version
+    number and a count, a picture alone would be a mystery. So it carries the
+    word as well.
+    """
+    if not zoom:
+        return ""
+    folders = zoom.startswith("/browse")
+    say = "Show the files" if folders else "Show the folders"
+    return (f'<a class="zoom" href="{_h(zoom)}" title="{say}" '
+            f'aria-label="{say}">'
+            f'{_FOLDERS_MARK if folders else _FILES_MARK}'
+            f'<span>{"Files" if folders else "Folders"}</span></a>')
+
+
 def _brand(zoom: str) -> str:
     """The corner: on the two library pages a control, everywhere else the logo.
 
@@ -1269,9 +1301,14 @@ def _page(title: str, body: str, *, tools: str = "", rows: str = "",
           user: Principal | None = None) -> HTMLResponse:
     """One shell.
 
-    `tools` sits beside the brand on the first row, `right` is pushed to the far
-    end of it beside who you are, `rows` are whole extra rows below it, and
-    `footer` is the strip along the bottom.
+    `tools` sits beside the brand on the first row, `right` goes **inside** the
+    account menu at the far end of it, `rows` are whole extra rows below it,
+    and `footer` is the strip along the bottom.
+
+    `right` used to stand in the bar. It is one control — the thumbnail size
+    — used once in a while, and on a phone it was one of three such controls
+    holding a row open in front of the filters. Inside the menu it costs a tap
+    and no room at all.
 
     The two ends of that row are two different kinds of thing. On the left, what
     you are looking at — the filters, which are the address. On the right, how
@@ -1304,9 +1341,9 @@ def _page(title: str, body: str, *, tools: str = "", rows: str = "",
 <link rel="icon" href="{_FAVICON}"><style>{_STYLE}</style></head><body>
 <div class="topbar">
 <div class="row">{_brand(zoom)}{tools}
-<span class="spacer"></span><span class="right">{right}{_whoami(user)}</span></div>{rows}
+<span class="spacer"></span><span class="right">{_whoami(user, right)}</span></div>{rows}
 </div><main>{body}</main>
-<footer class="footbar"><span class="ver">v{_PIX_VERSION}</span>{footer}</footer>
+<footer class="footbar"><span class="ver">v{_PIX_VERSION}</span>{_zoom_link(zoom)}{footer}</footer>
 {script}
 <script>if('serviceWorker' in navigator)window.addEventListener('load',function(){{
   navigator.serviceWorker.register('/sw.js').catch(function(){{}});}});</script>
@@ -1314,33 +1351,68 @@ def _page(title: str, body: str, *, tools: str = "", rows: str = "",
 </body></html>""")
 
 
-def _whoami(user: Principal | None) -> str:
-    """Who you are signed in as, and everything that is about you.
+#: The gear, for when there is no room to spell any of it out.
+_GEAR: str = (
+    '<svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true" '
+    'fill="none" stroke="currentColor" stroke-width="1.7" '
+    'stroke-linecap="round" stroke-linejoin="round">'
+    '<circle cx="12" cy="12" r="3.1"/>'
+    '<path d="M19.1 14.6a1.5 1.5 0 0 0 .3 1.7l.1.1a1.8 1.8 0 1 1-2.6 2.6l-.1-.1'
+    'a1.5 1.5 0 0 0-1.7-.3 1.5 1.5 0 0 0-.9 1.4v.2a1.8 1.8 0 1 1-3.6 0v-.1'
+    'a1.5 1.5 0 0 0-1-1.4 1.5 1.5 0 0 0-1.7.3l-.1.1a1.8 1.8 0 1 1-2.6-2.6l.1-.1'
+    'a1.5 1.5 0 0 0 .3-1.7 1.5 1.5 0 0 0-1.4-.9h-.2a1.8 1.8 0 1 1 0-3.6h.1'
+    'a1.5 1.5 0 0 0 1.4-1 1.5 1.5 0 0 0-.3-1.7l-.1-.1a1.8 1.8 0 1 1 2.6-2.6'
+    'l.1.1a1.5 1.5 0 0 0 1.7.3h.1a1.5 1.5 0 0 0 .9-1.4v-.2a1.8 1.8 0 1 1 3.6 0'
+    'v.1a1.5 1.5 0 0 0 .9 1.4 1.5 1.5 0 0 0 1.7-.3l.1-.1a1.8 1.8 0 1 1 2.6 2.6'
+    'l-.1.1a1.5 1.5 0 0 0-.3 1.7v.1a1.5 1.5 0 0 0 1.4.9h.2a1.8 1.8 0 1 1 0 3.6'
+    'h-.1a1.5 1.5 0 0 0-1.4.9z"/></svg>')
 
-    The name is always visible because this app is used as two different
-    people — the owner curating, and the admin granting access — and acting as
-    the wrong one is invisible until something is shared with the wrong
-    household. What sits *under* the name is everything you do rarely:
-    History, Accounts, and the way out. Spread along the bar they were three
-    permanent controls competing with the filters, which are the thing the bar
-    is actually for.
 
-    **No script.** This has to work on `/history` and `/accounts`, which carry
-    no page script at all, so the menu opens on hover and on keyboard focus
-    with CSS alone. A dropdown that worked only where the grid was loaded
-    would be a sign-out button that vanished on the page you were most likely
-    to be stuck on.
+def _whoami(user: Principal | None, extra: str = "") -> str:
+    """Who you are, what is waiting, and everything you do rarely — one
+    control.
+
+    They were three: a bell, a thumbnail size, and the account. Each is small
+    and each is used once in a while, and on a phone the three of them plus
+    the filters pushed the top bar to four rows and nearly half the screen.
+    Three rarely-used controls standing permanently in front of the thing the
+    bar is actually for is the same mistake the filters made before they
+    learned to fold away.
+
+    **The name stays visible where there is room for it.** This app is used as
+    two different people — the owner curating and the admin granting access
+    — and acting as the wrong one is invisible until something is shared with
+    the wrong household. On a phone the name gives way to a gear and moves to
+    the first line inside the menu, which is one tap rather than none; that is
+    the cost of the room, and it is paid where the room is scarce.
+
+    **The dot rides on the trigger** either way. What is waiting has to be
+    visible without opening anything, or it is not a notification.
+
+    **No script.** `/history` and `/accounts` carry no page script at all, so
+    this opens on hover and on keyboard focus with CSS alone. A settings menu
+    that worked only where the grid was loaded would be a sign-out button
+    missing from the page you are most likely to be stuck on.
     """
     if user is None:
         return '<a class="who-link" href="/login">Sign in</a>'
+    waiting = _binned() if user.is_admin else 0
     manage = ('<a href="/history">History</a>'
               '<a href="/accounts">Accounts</a>' if user.is_admin else "")
+    # What is waiting, as a row of the menu rather than a bell of its own.
+    activity = (bin_link_html(waiting) if user.is_admin else "")
+    quiet = ('<span class="quiet">Nothing waiting</span>'
+             if user.is_admin else "")
     return (
-        f'{_activity(user)}'
-        f'<span class="me" tabindex="0">'
+        f'<span class="me" id="me" tabindex="0" data-any="{"1" if waiting else ""}">'
         f'<span class="who-link name">{_h(user.name)}'
         f'<i class="caret">&#9662;</i></span>'
-        f'<span class="memenu">{manage}'
+        f'<span class="who-link gearbtn" aria-label="Settings" '
+        f'title="Settings">{_GEAR}</span>'
+        f'<i class="dot"></i>'
+        f'<span class="memenu">'
+        f'<span class="whoami">{_h(user.name)}</span>'
+        f'{extra}{activity}{quiet}{manage}'
         f'<form method="post" action="/logout">'
         f'<button>Sign out</button></form></span></span>')
 
@@ -1483,34 +1555,6 @@ def bin_link_html(n: int) -> str:
     return (f'<a class="bin-link" id="bincount" '
             f'href="/browse?deleted=only"{"" if n else " hidden"}>'
             f'{n:,} deleted</a>')
-
-
-def _activity(user: Principal) -> str:
-    """What the library is holding that nobody has looked at.
-
-    One icon rather than a standing line of counts. *8 deleted* was a phrase
-    sitting in the bar on every page whether or not it was news, and the next
-    thing worth reporting would have been a second phrase beside it. A bell
-    with a dot on it says *there is something* in the space of an icon, and
-    what the something is can be read when you want it.
-
-    The dot, not the words, is the part that has to be right: it is the whole
-    of what you see without asking.
-    """
-    if not user.is_admin:
-        return ""
-    n = _binned()
-    return (f'<span class="bell" id="activity" tabindex="0" '
-            f'data-any="{"1" if n else ""}" '
-            f'title="Activity"><svg viewBox="0 0 24 24" width="17" '
-            f'height="17" aria-hidden="true" fill="none" '
-            f'stroke="currentColor" stroke-width="1.7" '
-            f'stroke-linecap="round" stroke-linejoin="round">'
-            f'<path d="M18 9a6 6 0 1 0-12 0c0 5-2 6-2 6h16s-2-1-2-6"/>'
-            f'<path d="M10.3 20a2 2 0 0 0 3.4 0"/></svg>'
-            f'<i class="dot"></i>'
-            f'<span class="bellmenu">{bin_link_html(n)}'
-            f'<span class="quiet">Nothing waiting</span></span></span>')
 
 
 def filters(
@@ -2001,7 +2045,8 @@ def browse(request: Request,
         # It says what it will do rather than what is true. With two sizes that
         # is the whole of it: no state to read off a label that might mean
         # either.
-        right=('<button id="sizepick" aria-label="Thumbnail size"></button>'),
+        right=('<button id="sizepick" class="sizerow" '
+               'aria-label="Thumbnail size"></button>'),
         rows=_actions(user),
         # Up a zoom: the same query, minus the stack. A folder view of one
         # stack is the stack, so the only thing the coarser view can say about

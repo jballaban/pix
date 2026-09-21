@@ -906,13 +906,13 @@ def test_the_grid_has_three_thumbnail_sizes(client: TestClient) -> None:
     html = client.get("/browse?event=Italy%20-%20Sicily").text
 
     assert 'id="sizepick"' in html
-    # At the far end of the row with the account, not among the filters: it
-    # changes how you are looking, never which photographs are here. Past the
-    # spacer is what puts it there; after the chips is true of anything in the
-    # row.
+    # Inside the account menu, not standing in the bar: it changes how you are
+    # looking, never which photographs are here, and it is reached once in a
+    # while. Three such controls held a row open in front of the filters.
     row = html[html.index('class="row"'):html.index("</div><main")]
+    menu = row[row.index('class="memenu"'):]
+    assert 'id="sizepick"' in menu, row
     assert row.index('id="sizepick"') > row.index("spacer")
-    assert row.index('id="sizepick"') < row.index("who-link")
 
     for rule in ("minmax(150px,1fr)", "minmax(230px,1fr)", "minmax(380px,1fr)"):
         assert rule in html, rule
@@ -3142,10 +3142,11 @@ def test_what_is_waiting_is_an_icon_not_a_sentence(
     """*8 deleted* stood in the bar on every page whether or not it was news,
     and the next thing worth reporting would have been a second phrase beside
     it. The dot is the whole of what you see without asking, so it is the part
-    that has to be right."""
+    that has to be right — and it rides on the one control the account, the
+    size and what is waiting were folded into."""
     quiet = client.get("/browse").text
     bar = quiet[quiet.index('class="row"'):quiet.index("</div><main")]
-    assert 'class="bell"' in bar
+    assert 'class="me"' in bar and 'class="dot"' in bar
     assert 'data-any=""' in bar, "a dot with nothing behind it"
     assert "Nothing waiting" in bar
 
@@ -4794,3 +4795,71 @@ def test_but_it_still_says_what_the_library_holds(client: TestClient) -> None:
     foot = html[html.index("<footer"):html.index("</footer>")]
 
     assert "files" in foot and "undated" in foot and "indexed" in foot
+
+
+# --- the bar on a phone -------------------------------------------------------
+
+def test_three_rarely_used_controls_became_one() -> None:
+    """The account, the thumbnail size and what is waiting were three separate
+    things standing permanently in the bar. Each is small, each is reached
+    once in a while, and together with the filters they had the top of a phone
+    at four rows and nearly half the screen."""
+    coarse = _media_block(web._STYLE, "(max-width: 720px)")
+
+    # The name gives way to a gear; the gear is the only thing left.
+    assert ".me .name { display:none; }" in coarse
+    assert ".me .gearbtn { display:inline-flex; }" in coarse
+    # And the name is the first line of what it opens, so who you are signed
+    # in as is one tap rather than a guess.
+    assert ".memenu .whoami { display:block;" in coarse
+
+
+def test_the_bar_is_not_two_copies_of_anything(client: TestClient) -> None:
+    """The narrow rules hide rather than move, which only works while the
+    thing being hidden is the same element — two `#sizepick`s would be one id
+    and two controls, and the page script would wire whichever it found
+    first."""
+    html = client.get("/browse?event=Italy%20-%20Sicily").text
+
+    for once in ('id="sizepick"', 'id="me"', 'id="bincount"'):
+        assert html.count(once) == 1, f"{once} appears {html.count(once)} times"
+
+
+def test_what_is_waiting_rides_on_the_control_you_can_see(
+    client: TestClient, writable: Path
+) -> None:
+    """A notification that needs opening to be seen is not one."""
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "deleted": True})
+    html = client.get("/browse").text
+    bar = html[html.index('class="topbar"'):html.index("</div><main")]
+
+    assert 'class="me" id="me" tabindex="0" data-any="1"' in bar
+    assert 'class="dot"' in bar
+
+
+def test_the_corner_moves_to_the_footer_where_there_is_no_room(
+    client: TestClient
+) -> None:
+    """The corner is a picture of the grid under it, which is worth a row of
+    nothing on a phone. A second element rather than the corner moved: down
+    there, among a version number and a count, a picture alone would be a
+    mystery, so it carries the word too."""
+    html = client.get("/browse?event=Italy%20-%20Sicily").text
+    foot = html[html.index("<footer"):html.index("</footer>")]
+    coarse = _media_block(web._STYLE, "(max-width: 720px)")
+
+    assert 'class="zoom"' in foot and "Folders" in foot
+    assert ".topbar .brand { display:none; }" in coarse
+    assert ".footbar .zoom { display:inline-flex; }" in coarse
+    # And it is not there on a desktop, where the corner is.
+    assert ".footbar .zoom { display:none;" in web._STYLE
+
+
+def test_a_filter_doing_nothing_is_not_on_a_phones_bar() -> None:
+    """Ten glyphs fit across a desktop bar and do not fit across a phone —
+    which was already true, and is the half of this the bar had right."""
+    coarse = _media_block(web._STYLE, "(max-width: 720px)")
+
+    assert ".chips .spare { display:none; }" in coarse
+    assert ".chips .addchip { display:inline-flex; }" in coarse
