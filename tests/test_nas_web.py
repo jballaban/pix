@@ -4785,7 +4785,7 @@ def test_what_is_left_to_do_is_not_the_colour_of_what_is_done() -> None:
     correct and had no effect.
     """
     css = web._STYLE
-    rule = ".spread.audience i.none { color:var(--top); }"
+    rule = ".spread.audience i.none { color:#f2d38a; background:var(--top-bed); }"
 
     assert rule in css
     # Three classes to the audience rule's two, so it wins wherever it sits.

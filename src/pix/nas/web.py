@@ -225,6 +225,17 @@ _STYLE = """
    between them did. */
 :root { color-scheme: dark; --bg:#14161a; --fg:#e7e9ee; --dim:#98a1b2;
         --line:#3a4250; --accent:#6aa3ff; --keep:#56c16a; --top:#e3b341; --gone:#e06c5a;
+        /* Tags had no colour of their own and wore white, which on a card
+           beside three coloured things reads as *the one nobody assigned*.
+           Violet because it is the hue left: clear of the blue people wear,
+           the green an audience does, and the amber that means unfinished. */
+        --tag:#a48bff;
+        /* Each of those again as something to sit *on*. A chip was coloured
+           text in a near-black lozenge, so the colour was a thin outline of
+           itself; filled at a seventh it becomes the chip, and a card reads
+           as a few facts in their own colours rather than a grey list. */
+        --keep-bed:#56c16a26; --accent-bed:#6aa3ff26;
+        --tag-bed:#a48bff26; --top-bed:#e3b34126;
         --panel:#222833;
         /* Accent at a sixth, for saying *this one* behind a word rather than
            through it. */
@@ -267,8 +278,12 @@ main { padding:16px max(var(--gut),env(safe-area-inset-right)) 20px
    behind the clock and the one the home indicator sits on. `env()` is zero in a
    browser tab, so this costs nothing there and is the difference between an app
    and a web page in a window everywhere else. */
-.topbar { position:sticky; top:0; z-index:5; background:var(--chrome);
-          border-bottom:1px solid #0008;
+.topbar { position:sticky; top:0; z-index:5;
+          /* A plane catches more light at its top edge. Two stops and four
+             per cent is not a gradient anybody will name — it is the
+             difference between a panel and a rectangle of paint. */
+          background:linear-gradient(180deg,#2b3340 0%,var(--chrome) 100%);
+          border-bottom:1px solid #0b0e13;
           padding:calc(9px + env(safe-area-inset-top))
                   max(var(--gut),env(safe-area-inset-right)) 9px
                   max(var(--gut),env(safe-area-inset-left));
@@ -373,8 +388,10 @@ main { padding:16px max(var(--gut),env(safe-area-inset-right)) 20px
 .hint { color:var(--dim); font-size:12px; }
 .hint b { color:var(--fg); font-weight:600; }
 
-button, .chip { background:#2b3340; color:var(--fg); border:1px solid var(--line);
-        border-radius:4px; padding:4px 10px; font:inherit; cursor:pointer; }
+button, .chip { background:linear-gradient(180deg,#313a49,#28303c);
+        color:var(--fg); border:1px solid var(--line);
+        border-radius:5px; padding:4px 10px; font:inherit; cursor:pointer;
+        box-shadow:inset 0 1px 0 #ffffff0f; }
 /* A chip is a drawing, a value and a cross in a row, so it lays them out
    rather than relying on them being inline. `gap` is what stops the glyph
    sitting against the number it belongs to. */
@@ -397,8 +414,10 @@ button, .chip { background:#2b3340; color:var(--fg); border:1px solid var(--line
 #actions .grp button { display:inline-flex; align-items:center; gap:6px; }
 button:hover:not(:disabled), .chip:hover { border-color:var(--accent); }
 button:disabled { opacity:.4; cursor:default; }
-button.primary { background:var(--accent); color:#0d0f12; border-color:var(--accent);
-                 font-weight:600; }
+button.primary { background:linear-gradient(180deg,#83b2ff,#5b97fb);
+                 color:#0b1220; border-color:#5b97fb; font-weight:600;
+                 box-shadow:inset 0 1px 0 #ffffff40,
+                            0 2px 10px -4px #6aa3ff8c; }
 /* Named rather than shouted: it sits with the others because it is one of the
    things you do, and a soft delete is undoable. */
 button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
@@ -478,9 +497,10 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
         border-radius:5px; text-decoration:none; color:var(--fg);
         /* An edge and a shadow say *this is a thing on top of that* twice,
            which is what a card needs to say when there are forty of them. */
-        box-shadow:0 1px 2px #0006, 0 6px 14px -10px #000a; }
-.tile .name { font-size:14px; font-weight:600; line-height:1.3;
-              overflow-wrap:anywhere; }
+        box-shadow:inset 0 1px 0 #ffffff0d,
+                   0 1px 2px #0006, 0 6px 14px -10px #000a; }
+.tile .name { font-size:15px; font-weight:600; line-height:1.25;
+              letter-spacing:-.005em; overflow-wrap:anywhere; }
 .tile .name .sep { color:var(--dim); font-style:normal; font-weight:400;
                    margin:0 5px; }
 .tile .when { font-size:11px; color:var(--dim); }
@@ -501,15 +521,15 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
    different bars, and so are a whole event and a fortnight of one. */
 .tile .bar { height:5px; margin-top:8px; border-radius:3px;
              background:#11141a; overflow:hidden; }
-.tile .bar i { display:block; height:100%; background:var(--accent);
-               border-radius:2px; }
-.tile .bar i b { display:block; height:100%; background:var(--keep);
-                 border-radius:2px; }
+.tile .bar i { display:block; height:100%; border-radius:3px;
+               background:linear-gradient(90deg,#4f86e0,#6aa3ff); }
+.tile .bar i b { display:block; height:100%; border-radius:3px;
+                 background:linear-gradient(90deg,#3f9e55,#6ad07e); }
 /* What the folder holds, in the same chips a thumbnail wears — so a card
    and a photograph say the same kind of thing about themselves. */
 .spread { display:flex; flex-wrap:wrap; gap:3px; margin-top:6px; }
 .spread i { font-style:normal; font-size:10px; font-weight:600;
-            padding:1px 5px; border-radius:3px; background:#000b;
+            padding:2px 7px; border-radius:999px;
             max-width:100%; overflow:hidden; white-space:nowrap;
             text-overflow:ellipsis; }
 
@@ -518,9 +538,9 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
 .spread i[data-col] { cursor:pointer; }
 .spread i[data-col]:hover { background:#000; outline:1px solid currentColor;
                             outline-offset:-1px; }
-.spread.audience i { color:var(--keep); }
-.spread.people i { color:var(--accent); }
-.spread.tags i { color:#fff; }
+.spread.audience i { color:#8fe0a0; background:var(--keep-bed); }
+.spread.people i { color:#a6c8ff; background:var(--accent-bed); }
+.spread.tags i { color:#cbb8ff; background:var(--tag-bed); }
 /* What is left to do, in the colour this app has always used for *this wants
    you* — the same amber as a guessed stack and a half-ticked box. It is the
    one chip on a card that is a job rather than a fact, and green filed it in
@@ -530,7 +550,7 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
    `.spread.audience i` weigh exactly the same, so the later one wins and this
    was drawn green for as long as it sat higher up the file. Anything added
    below this that colours a chip takes it back. */
-.spread.audience i.none { color:var(--top); }
+.spread.audience i.none { color:#f2d38a; background:var(--top-bed); }
 .tile:hover { border-color:var(--accent); background:#272e3b;
              box-shadow:0 1px 2px #0006, 0 10px 22px -12px #000c; }
 /* A folder can be selected, so it carries the same circle a thumbnail does
@@ -559,7 +579,13 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
    rather than having to know they are there. */
 h3.group { grid-column:1/-1; margin:18px 0 2px; font-size:13px;
            font-weight:600; display:flex; gap:8px; align-items:center;
-           border-bottom:1px solid var(--line); padding-bottom:5px; }
+           padding-bottom:5px;
+           /* Fading out rather than ruled across: a line that stops where the
+              words do says *this heading* where a full-width rule says
+              *another table*. */
+           border-bottom:1px solid transparent;
+           border-image:linear-gradient(90deg,var(--accent),var(--line) 38%,
+                                        transparent) 1; }
 h3.group:first-child { margin-top:0; }
 h3.group > span.dim { font-weight:400;
                       font-variant-numeric:tabular-nums; }
@@ -728,7 +754,10 @@ h3.group[data-state="some"] .grppick { background:var(--top);
 .unshared { position:absolute; left:6px; bottom:6px; width:8px; height:8px;
             border-radius:50%; background:var(--top);
             box-shadow:0 0 0 2px #000a; }
-.tags i { color:#fff; }
+/* The same violet a card gives a tag, kept legible over a photograph by
+   staying text on a dark lozenge rather than a tint. One colour for one kind
+   of thing, whichever surface it is written on. */
+.tags i { color:#cbb8ff; }
 
 table { border-collapse:collapse; width:100%; max-width:900px; }
 th,td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line); }
@@ -799,7 +828,8 @@ h2.year span { font-size:13px; font-weight:400; }
    a reload, so it has to be hideable. */
 .who-link[hidden] { display:none; }
 .who-link button { padding:3px 9px; margin:0; }
-.empty { color:var(--dim); padding:40px 0; }
+.empty { color:var(--dim); padding:48px 0; font-size:15px;
+         text-align:center; }
 
 /* A write of hundreds of sidecars over SMB is seconds, and the only thing
    that said so was a 12px note in the corner that appeared *after* the first
