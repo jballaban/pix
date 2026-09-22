@@ -54,8 +54,10 @@ for (const name of ['2025', '2026']) {
   const pick = new El('button');
   pick.className = 'pick';
   t.appendChild(pick);
+  // One run for every kind, as the server draws it: the colour is on each
+  // chip, so a break between kinds buys nothing and costs a line.
   const spread = new El('span');
-  spread.className = 'spread audience';
+  spread.className = 'spread';
   t.appendChild(spread);
   grid.appendChild(t);
   tiles.push(t);
@@ -361,8 +363,7 @@ const press = key => (keys.keydown || []).forEach(fn => fn(
   // do nothing at all until you clicked away.
   {
     const audience = () => (tiles[1].children.find(
-      k => k._classes.has('spread') && k._classes.has('audience')
-    ) || { innerHTML: '' }).innerHTML || '';
+      k => k._classes.has('spread')) || { innerHTML: '' }).innerHTML || '';
 
     // What is left to decide reads as a chip like every other fact about
     // the folder, and says the name and nothing else — one of the two files
@@ -400,8 +401,7 @@ const press = key => (keys.keydown || []).forEach(fn => fn(
   // first edit and then stop, which is the kind of thing nobody reports
   // because it looks like they never worked.
   {
-    const spread = tiles[1].children.find(
-      k => k._classes.has('spread') && k._classes.has('audience'));
+    const spread = tiles[1].children.find(k => k._classes.has('spread'));
     const chip = spread.children.find(k => k.dataset.col);
     check('a chip carries the filter it stands for', !!chip,
           spread.innerHTML);

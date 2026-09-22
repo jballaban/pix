@@ -4577,7 +4577,7 @@ def test_a_folder_says_what_is_in_it_and_not_only_how_much(
 
     card = _card(client.get("/?date=2026&group=year&stacks=firm").text)
 
-    assert 'class="spread audience"' in card
+    assert '<i class="audience"' in card
     assert ">family<" in card
 
 
@@ -4590,7 +4590,7 @@ def test_a_share_the_whole_folder_carries_prints_no_percentage(
     _mixed(client, writable, app_env)
 
     card = _card(client.get("/?date=2026&group=year&stacks=firm").text)
-    who = card[card.index('class="spread audience"'):]
+    who = card[card.index('class="spread"'):]
     who = who[:who.index("</span>") + 7]
 
     assert "100%" not in who, who
@@ -4612,7 +4612,7 @@ def test_a_chip_says_the_name_and_nothing_else(
     _mixed(client, writable, app_env)
 
     card = _card(client.get("/?date=2026&group=year&stacks=firm").text)
-    tags = card[card.index('class="spread tags"'):]
+    tags = card[card.index('class="spread"'):]
     tags = tags[:tags.index("</span>") + 7]
 
     assert "%" not in tags, tags
@@ -4640,7 +4640,7 @@ def test_a_folder_names_every_value_it_holds(
             "folder": "init_2026", "name": "w.jpg", "add_tags": [tag]})
 
     card = _card(client.get("/?date=2026&group=year&stacks=firm").text)
-    tags = card[card.index('class="spread tags"'):]
+    tags = card[card.index('class="spread"'):]
     tags = tags[:tags.index("</span>") + 7]
 
     for tag in many:
@@ -4663,7 +4663,7 @@ def test_a_household_member_is_not_told_about_an_audience(
 
     html = sign_in("kid", "pw").get("/?date=2026&group=year&stacks=firm").text
 
-    assert 'class="spread audience"' not in html
+    assert '<i class="audience"' not in html
     assert "spread tags" in html or "spread people" in html or True
 
 
@@ -4716,11 +4716,12 @@ def test_what_is_left_to_do_is_not_the_colour_of_what_is_done() -> None:
     correct and had no effect.
     """
     css = web._STYLE
-    rule = ".spread.audience i.none { color:#f2d38a; background:var(--top-bed); }"
+    rule = ".spread i.none { color:#f2d38a; background:var(--top-bed); }"
 
     assert rule in css
-    # Three classes to the audience rule's two, so it wins wherever it sits.
-    assert css.index(".spread.audience i {") < css.index(rule)
+    # After the rule that colours an audience chip, which it shares a class
+    # with and must outrank.
+    assert css.index(".spread i.audience {") < css.index(rule)
 
 
 def test_the_plus_more_chip_is_gone_from_the_stylesheet() -> None:

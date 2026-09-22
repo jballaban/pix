@@ -538,9 +538,11 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
 .spread i[data-col] { cursor:pointer; }
 .spread i[data-col]:hover { background:#000; outline:1px solid currentColor;
                             outline-offset:-1px; }
-.spread.audience i { color:#8fe0a0; background:var(--keep-bed); }
-.spread.people i { color:#a6c8ff; background:var(--accent-bed); }
-.spread.tags i { color:#cbb8ff; background:var(--tag-bed); }
+/* The colour is on the chip, not on a box around a run of them — which is
+   what lets every kind share one wrapping line and still be told apart. */
+.spread i.audience { color:#8fe0a0; background:var(--keep-bed); }
+.spread i.people { color:#a6c8ff; background:var(--accent-bed); }
+.spread i.tags { color:#cbb8ff; background:var(--tag-bed); }
 /* What is left to do, in the colour this app has always used for *this wants
    you* — the same amber as a guessed stack and a half-ticked box. It is the
    one chip on a card that is a job rather than a fact, and green filed it in
@@ -550,7 +552,7 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
    `.spread.audience i` weigh exactly the same, so the later one wins and this
    was drawn green for as long as it sat higher up the file. Anything added
    below this that colours a chip takes it back. */
-.spread.audience i.none { color:#f2d38a; background:var(--top-bed); }
+.spread i.none { color:#f2d38a; background:var(--top-bed); }
 .tile:hover { border-color:var(--accent); background:#272e3b;
              box-shadow:0 1px 2px #0006, 0 10px 22px -12px #000c; }
 /* A folder can be selected, so it carries the same circle a thumbnail does
@@ -593,7 +595,14 @@ h3.group > span.dim { font-weight:400;
    that reads loudest. */
 .crumbs { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
 .crumb { display:inline-flex; align-items:center; }
-.crumbs .sep { color:var(--dim); font-weight:400; }
+/* **Its own name, and it had to earn one.** This was a `.sep` too, which
+   elsewhere is a 1px vertical rule between two clusters of buttons — so the
+   chevron between two crumbs was drawn sitting on a one-pixel bar of
+   `--line`, all along. Nobody saw it while that colour was a shade off the
+   background; raising the contrast so a card had an edge gave the heading a
+   stray one. A divider and a piece of punctuation are not the same thing and
+   should never have shared a class. */
+.crumbsep { color:var(--dim); font-weight:400; }
 .crumb:not(:last-child) .grpname { color:var(--dim); font-weight:400; }
 /* The other way round on a shelf, where the last crumb is the name of the cut
    rather than a value: *By event* is the same two words over every shelf on
@@ -1860,8 +1869,8 @@ _SPREAD_FILTER: dict[str, str] = {
 }
 
 
-def _spread_html(kind: str, values: list[tuple[str, int]], n: int,
-                 lead: tuple[str, int] | None = None) -> str:
+def _spread_chips(kind: str, values: list[tuple[str, int]], n: int,
+                  lead: tuple[str, int] | None = None) -> str:
     """What a section says about itself, one kind of value at a time.
 
     **The name and nothing else.** A share was printed beside each one while
@@ -1880,6 +1889,12 @@ def _spread_html(kind: str, values: list[tuple[str, int]], n: int,
     stops being an answer and becomes a reason to open the folder — which
     is the errand it exists to save. A taller card is cheaper than that, and
     the ones with most in them are the ones worth reading.
+
+    **One run, not three.** Each kind used to be its own flex box, so each
+    started a fresh line however few chips were in it — three rows to say
+    *family, Mom, beach*. They carry their own colour now, which is what lets
+    them share one wrapping line and still be told apart: the order groups
+    them by kind and the hue says which kind without a break to mark it.
     """
     if not n or not (values or lead):
         return ""
@@ -1900,7 +1915,7 @@ def _spread_html(kind: str, values: list[tuple[str, int]], n: int,
                  if col else "")
         say = ("" if not col else
                f" — click for the {_h(value)} ones in here")
-        return (f'<i class="{cls}"{where} '
+        return (f'<i class="{cls or kind}"{where} '
                 f'title="{_h(value)} — {count:,} of {n:,}{say}">'
                 + _h(value) + "</i>")
 
@@ -1909,8 +1924,12 @@ def _spread_html(kind: str, values: list[tuple[str, int]], n: int,
     # uses.
     first = ("" if lead is None or not lead[1] else
              chip(lead[0], lead[1], "none", ix.UNREVIEWED))
-    chips = first + "".join(chip(v, c) for v, c in values)
-    return f'<span class="spread {kind}">{chips}</span>'
+    return first + "".join(chip(v, c) for v, c in values)
+
+
+def _spread_row(chips: str) -> str:
+    """All of a card's chips, in one run that wraps where it runs out."""
+    return f'<span class="spread">{chips}</span>' if chips else ""
 
 
 def _folder(row: sqlite3.Row, groups: list[str], view: ix.Filters,
@@ -1982,12 +2001,13 @@ def _folder(row: sqlite3.Row, groups: list[str], view: ix.Filters,
         # which tags and which audience it carries; this is the same sentence
         # for a folder, with the share that carries each — and what is
         # undecided is the first of them rather than a line of its own.
-        + "".join(
-            _spread_html(kind, (spread or {}).get(kind, {}).get(
-                tuple(row[f"grp{i}"] for i in range(len(groups))), []), n,
-                lead=("undecided", left) if kind == "audience" else None)
-            for kind in (("audience", "people", "tags") if user.is_admin
-                         else ("people", "tags"))))
+        + _spread_row(
+            "".join(
+                _spread_chips(kind, (spread or {}).get(kind, {}).get(
+                    tuple(row[f"grp{i}"] for i in range(len(groups))), []), n,
+                    lead=("undecided", left) if kind == "audience" else None)
+                for kind in (("audience", "people", "tags") if user.is_admin
+                             else ("people", "tags")))))
     if href is None:
         # Nothing to link to, rather than a link somewhere else. *No day* is
         # every file whose date stops at the month, and there is no filter that
@@ -2460,7 +2480,7 @@ def _heading(labels: list[str], levels: int, count: int, *,
         crumbs = ('<span class="crumb" data-level="0">'
                   '<button class="grpname">Ungrouped</button></span>')
     else:
-        crumbs = '<span class="sep">&rsaquo;</span>'.join(
+        crumbs = '<span class="crumbsep">&rsaquo;</span>'.join(
             f'<span class="crumb" data-level="{i}">'
             f'<button class="grpname">{_h(label)}</button>'
             f'<button class="rmgrp" title="Remove this grouping">&times;</button>'
@@ -4202,6 +4222,15 @@ function redrawFolder(t){
   if(!gs||!gs.length) return;
   const n=gs.length;
   const kinds=ADMIN?['audience','people','tags']:['people','tags'];
+  // The same chip the server draws, filter and all: without `data-col` a
+  // redrawn card would look the same and do nothing when pressed.
+  const chip=(kind,v,c,cls,on)=>`<i class="${cls||kind}"`
+    +` data-col="${SPREAD_FILTER[kind]}" data-val="${esc(on||v)}"`
+    +` title="${esc(v)} — ${c} of ${n} — click for the ${esc(v)} ones`
+    +` in here">${esc(v)}</i>`;
+  // One run for all of them, in the order the server writes them: the colour
+  // is on each chip, so the kinds stay legible without a break between them.
+  let html='';
   for(const kind of kinds){
     const counts=new Map();
     for(const g of gs)
@@ -4209,31 +4238,20 @@ function redrawFolder(t){
     // Commonest first, so what the whole folder carries leads and the partial
     // ones follow — the same order the server draws them in.
     const sorted=[...counts].sort((a,b)=>b[1]-a[1]||(a[0]<b[0]?-1:1));
-    const none=kind==='audience'
-      ? gs.filter(g=>!g.dataset.audience).length : 0;
-    let el=t.querySelector('.spread.'+kind);
-    if(!sorted.length&&!none){ if(el) el.remove(); continue; }
-    if(!el){
-      el=document.createElement('span');
-      el.className='spread '+kind;
-      t.appendChild(el);
+    if(kind==='audience'){
+      const none=gs.filter(g=>!g.dataset.audience).length;
+      if(none) html+=chip('audience','undecided',none,'none',UNREVIEWED);
     }
-    // The same chip the server draws, filter and all: without `data-col` a
-    // redrawn card would look the same and do nothing when pressed.
-    const col=SPREAD_FILTER[kind];
-    const chip=(v,c,cls,on)=>`<i class="${cls||''}"`
-      +` data-col="${col}" data-val="${esc(on||v)}"`
-      +` title="${esc(v)} — ${c} of ${n} — click for the ${esc(v)} ones`
-      +` in here">${esc(v)}</i>`;
-    el.innerHTML=(none?chip('undecided',none,'none',UNREVIEWED):'')
-                +sorted.map(([v,c])=>chip(v,c)).join('');
+    html+=sorted.map(([v,c])=>chip(kind,v,c)).join('');
   }
-  // The green inside the blue: how much of this card has been decided.
-  const fill=t.querySelector('.bar i b');
-  if(fill){
-    const done=gs.filter(g=>!!g.dataset.audience).length;
-    fill.style.width=Math.round(done*100/n)+'%';
+  let el=t.querySelector('.spread');
+  if(!html){ if(el) el.remove(); return; }
+  if(!el){
+    el=document.createElement('span');
+    el.className='spread';
+    t.appendChild(el);
   }
+  el.innerHTML=html;
 }
 function redrawFolders(){ pickedFolders.forEach(redrawFolder); }
 
