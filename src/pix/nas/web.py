@@ -479,7 +479,16 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
    selection is not one thing, and a two-state box would have to lie. */
 .opt .box { width:13px; flex:none; text-align:center; color:var(--keep); }
 .opt[data-state="some"] .box { color:var(--top); }
+/* A row that opens rather than ends. Every event carries one, because every
+   event can be given a sub-event — the chevron is what says the press has a
+   second half to it, which nothing else on the row does. */
+.opt .more { margin-left:6px; color:var(--dim); flex:none; }
+.opt:hover .more { color:var(--fg); }
 .opt.new { color:var(--keep); }
+/* A menu with nothing to list still has to say what typing in it would do.
+   An event with no sub-events yet is the ordinary case, not an error, and an
+   empty panel reads as a menu that failed to open. */
+.menunote { padding:4px 11px 9px; color:var(--dim); font-size:12px; }
 .band { padding:7px 11px 3px; color:var(--dim); font-size:11px;
         text-transform:uppercase; letter-spacing:.07em; }
 .band + .band { display:none; }
@@ -3522,8 +3531,12 @@ async function openMenu(anchorEl,ctx){
     // files are rather than here.
     const act = !nested ? (ctx.as||ctx.column)
               : ctx.head==null ? 'event_head' : 'event_leaf';
+    // Typed, it arrives as the half itself; pasted with its event in front,
+    // as the whole name. Halving a bare name yields no second half, and
+    // passing that on cleared the sub-event instead of writing the one that
+    // had just been typed.
     const said = nested&&ctx.head!=null&&value!=null
-               ? splitEvent(value)[1] : value;
+               ? (splitEvent(value)[1]||value) : value;
     await applyToSelection(act,said,true,cs);
     if(FOLDERS) redrawFolders();
     if(drilling){
@@ -3590,20 +3603,37 @@ async function openMenu(anchorEl,ctx){
   // it, and the second step is an offer rather than a question you have to
   // answer.
   const nested = ctx.mode==='set' && ctx.as==='event';
+  // A file saying *Sicily > Taormina* does say *Sicily* when the question is
+  // which event it is in, and says *Taormina* when the question is which part
+  // of it. Comparing the whole name either way left every event with a
+  // sub-event in it unticked at the first step and every sub-event unticked
+  // at the second — a menu opening on *no* when the answer on screen is yes.
+  function stateOf(value){
+    const cs=targets();
+    if(!nested) return shareState(cs,FIELD,value);
+    const half=ev=>splitEvent(ev||'')[ctx.head==null?0:1];
+    const n=cs.filter(c=>half(c.dataset.event)===value).length;
+    return n===0?'none':(n===cs.length?'all':'some');
+  }
   function heads(){
     const by=new Map();
     for(const o of opts){
       const head=splitEvent(o.value)[0];
       const at=by.get(head);
       if(at) at.n=(at.n||0)+(o.n||0);
-      else by.set(head,{value:head,label:head,n:o.n,scope:o.scope});
+      else by.set(head,{value:head,label:head,n:o.n,scope:o.scope,more:true});
     }
     return [...by.values()];
   }
+  // The second step deals in leaves, not whole names: it is asking for one
+  // half, the tick compares one half, and what gets written is one half. A
+  // row carrying *Sicily > Taormina* under the label *Taormina* was three
+  // chances for those to disagree.
   function leaves(head){
     return opts.filter(o=>splitEvent(o.value)[0]===head
                           &&splitEvent(o.value)[1])
-               .map(o=>({...o,label:splitEvent(o.value)[1]}));
+               .map(o=>({...o,value:splitEvent(o.value)[1],
+                              label:splitEvent(o.value)[1]}));
   }
   function shown(){
     return !nested ? opts : (ctx.head==null ? heads() : leaves(ctx.head));
@@ -3627,6 +3657,28 @@ async function openMenu(anchorEl,ctx){
     const list=document.createElement('div');
     list.id='menulist';
     const typed=(text||'').trim();
+    const inside=nested&&ctx.head!=null;
+    // The box asks the question the step is actually asking. It is set here
+    // rather than where the menu is built because the second step arrives
+    // later, and a box still offering to name an event while it is waiting
+    // for a sub-event is the whole of the confusion.
+    const box=document.getElementById('menuq');
+    if(box&&nested) box.placeholder=inside
+      ? 'Name a sub-event of “'+ctx.head+'”'
+      : 'Type a new name, or pick one below';
+    // The way back out, and then a heading saying which event this is under.
+    // Both at the top: the panel has to say where it is before it lists
+    // anything, or the second step looks like the first one gone wrong.
+    if(inside){
+      const up=opt({label:'‹ All events',n:null},()=>{
+        ctx.head=null; render('');});
+      up.classList.add('up');
+      list.appendChild(up);
+      const h=document.createElement('div');
+      h.className='band';
+      h.textContent='Sub-event of '+ctx.head;
+      list.appendChild(h);
+    }
     // Tags are invented as you go; access is not. Somebody who can be given
     // access is an account or a role, made under Accounts — offering to
     // create one here would write a grant that reaches nobody.
@@ -3664,16 +3716,10 @@ async function openMenu(anchorEl,ctx){
       band.forEach(o=>list.appendChild(
         opt(o,()=>choose(o.value),checkable)));
     };
-    const left=hits.filter(o=>!present.includes(
-      nested&&ctx.head!=null?o.label:o.value));
-    if(nested&&ctx.head!=null){
-      // Back out of the event, and a way to say this one has no afternoon.
-      const up=opt({label:'‹ all events',n:null},()=>{
-        ctx.head=null; render('');});
-      up.classList.add('up');
-      list.appendChild(up);
-      list.appendChild(opt({label:'No sub-event',n:null},()=>choose(null)));
-    }
+    const left=hits.filter(o=>!present.includes(o.value));
+    // A way to say this one has no afternoon.
+    if(inside) list.appendChild(
+      opt({label:'No sub-event',n:null},()=>choose(null)));
     if(ctx.column==='audience'){
       // The sentinel first and on its own: *nobody has this yet* is the
       // pile of work, not a name, and grouping it with the names buried it
@@ -3702,8 +3748,18 @@ async function openMenu(anchorEl,ctx){
           opt(o,()=>choose(o.value),checkable)));
       }
     }
-    if(!hits.length&&!typed){
+    if(!hits.length&&!typed&&!inside){
       list.innerHTML='<div class="band">nothing yet</div>';
+    }
+    // Inside an event the panel keeps its heading and its way out whatever
+    // else is missing, and says what there is to do — an event whose
+    // sub-events have not been invented yet is where somebody invents one.
+    if(inside&&!hits.length){
+      const note=document.createElement('div');
+      note.className='menunote';
+      note.textContent=typed ? 'No sub-event of this name yet.'
+        : 'No sub-events yet — type a name to make one.';
+      list.appendChild(note);
     }
     menu.querySelector('#menulist').replaceWith(list);
   }
@@ -3712,9 +3768,10 @@ async function openMenu(anchorEl,ctx){
     d.className='opt';
     d.innerHTML=(checkable?'<span class="box"></span>':'')
                +`<span>${esc(o.label)}</span>`
-               +(o.n!==null&&o.n!==undefined?`<span class="n">${o.n}</span>`:'');
+               +(o.n!==null&&o.n!==undefined?`<span class="n">${o.n}</span>`:'')
+               +(o.more?'<span class="more">›</span>':'');
     if(checkable){
-      mark(d,shareState(targets(),FIELD,o.value));
+      mark(d,stateOf(o.value));
       d.onclick=e=>{e.stopPropagation();toggle(o.value,d);};
     }else{
       d.onclick=fn;

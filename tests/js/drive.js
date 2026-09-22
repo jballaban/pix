@@ -1576,6 +1576,11 @@ function arrow(key, opts) {
           rows().filter(r => r === 'Sicily').length === 1, rows().join(','));
     check('and not one row per combination',
           !rows().some(r => /Taormina/.test(r || '')), rows().join(','));
+    // Nothing else on the row says the press has a second half to it.
+    check('each event says it opens',
+          menu.querySelectorAll('.opt')
+            .filter(o => /<span>(Sicily|Cornwall)<\/span>/.test(o.innerHTML))
+            .every(o => /class="more"/.test(o.innerHTML)));
 
     const n = calls.length;
     menu.querySelectorAll('.opt').find(
@@ -1595,10 +1600,19 @@ function arrow(key, opts) {
     check('now offering its sub-events, named short',
           rows().includes('Taormina') && rows().includes('Catania'),
           rows().join(','));
-    check('with a way back up', rows().some(r => /all events/.test(r || '')),
-          rows().join(','));
+    check('with a way back up',
+          rows().some(r => /all events/i.test(r || '')), rows().join(','));
     check('and a way to say there is no sub-event',
           rows().includes('No sub-event'), rows().join(','));
+    // The box was still offering to name an event while it was waiting for a
+    // sub-event, which is the whole of the confusion about how to write one.
+    check('the box asks for what this step actually wants',
+          /sub-event of/i.test(document.getElementById('menuq').placeholder),
+          document.getElementById('menuq').placeholder);
+    check('and the panel says which event it is under',
+          menu.querySelectorAll('.band').map(b => b.textContent)
+            .includes('Sub-event of Sicily'),
+          menu.querySelectorAll('.band').map(b => b.textContent).join(','));
 
     const m = calls.length;
     menu.querySelectorAll('.opt').find(
@@ -1615,6 +1629,84 @@ function arrow(key, opts) {
     check('and that one closes it', menu.hidden === true);
     check('the cell says the whole name',
           one.dataset.event === 'Sicily > Taormina', one.dataset.event);
+
+    // Reopened on a file that now has both halves. A tick compares at the
+    // width the step is asking about: a file saying *Sicily > Taormina* does
+    // say *Sicily* when the question is which event it is in. Comparing the
+    // whole name either way opened the menu on *no* with the answer on the
+    // screen behind it.
+    actBtn('event').click();
+    await settle(); await settle();
+    const sicily = menu.querySelectorAll('.opt').find(
+      o => /<span>Sicily<\/span>/.test(o.innerHTML));
+    check('an event is ticked by a file that named a part of it',
+          sicily.dataset.state === 'all', String(sicily.dataset.state));
+    sicily.click();
+    for (let k = 0; k < 8; k++) await settle();
+    const taormina = menu.querySelectorAll('.opt').find(
+      o => /<span>Taormina<\/span>/.test(o.innerHTML));
+    check('and the part it named is ticked inside it',
+          taormina.dataset.state === 'all', String(taormina.dataset.state));
+    document.byId.grid.click();
+    deselect();
+  }
+
+  // An event whose sub-events have not been invented yet is where somebody
+  // invents one — which is the ordinary case, and was the one the menu said
+  // nothing about at all: the panel blanked itself to *nothing yet*, taking
+  // the heading and the way out with it, and the only affordance left was to
+  // guess that typing would work.
+  {
+    deselect();
+    const one = document.querySelectorAll('.cell')[0];
+    one.dataset.event = '';
+    one.children.find(k => k._classes.has('pick')).click();
+
+    actBtn('event').click();
+    await settle(); await settle();
+    const menu = document.byId.menu;
+    const rows = () => menu.querySelectorAll('.opt').map(
+      o => (o.innerHTML.match(/<span>([^<]*)<\/span>/) || [])[1]);
+
+    menu.querySelectorAll('.opt').find(
+      o => /<span>Cornwall<\/span>/.test(o.innerHTML)).click();
+    for (let k = 0; k < 8; k++) await settle();
+
+    check('an event with no sub-events yet still says where it is',
+          menu.querySelectorAll('.band').map(b => b.textContent)
+            .includes('Sub-event of Cornwall'),
+          menu.querySelectorAll('.band').map(b => b.textContent).join(','));
+    check('and still offers the way out',
+          rows().some(r => /All events/i.test(r || '')), rows().join(','));
+    check('and says what there is to do here',
+          menu.querySelectorAll('.menunote').map(n => n.textContent)
+            .some(t => /type a name/i.test(t)),
+          menu.querySelectorAll('.menunote').map(n => n.textContent).join(','));
+
+    const q = document.getElementById('menuq');
+    q.value = 'Beach day';
+    q.oninput();
+    await settle();
+    const add = menu.querySelectorAll('.opt').find(
+      o => /Add /.test(o.innerHTML));
+    check('a sub-event nobody has used can be invented', !!add,
+          rows().join(','));
+    const t = calls.length;
+    if (add) add.click();
+    for (let k = 0; k < 8; k++) await settle();
+    const made = calls.slice(t).filter(c => c.url.startsWith('/api/decide'));
+    check('and typing one writes it as a sub-event', made.length === 1,
+          String(made.length));
+    if (made.length) {
+      const body = JSON.parse(made[0].body);
+      // Halving a bare name yields no second half, and passing that on
+      // cleared the sub-event instead of writing the one just typed.
+      check('rather than clearing the one it was asked to set',
+            body.event_leaf === 'Beach day' && body.event_head === undefined,
+            made[0].body);
+    }
+    check('the cell says the whole name',
+          one.dataset.event === 'Cornwall > Beach day', one.dataset.event);
     deselect();
   }
 
