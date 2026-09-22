@@ -4577,6 +4577,9 @@ function guessed(c){ return +(c.dataset.proposed||0) > 0; }
 // hiding the others and *back to where you were* is showing them again, with
 // the scroll never having moved.
 let choosing=null, fetched=[], opened=[], wasPicked=[], wasScrolled=0;
+// The pills saying which files were speaking. Borrowed for the question and
+// taken back with everything else it borrowed.
+let wereTops=[];
 let choiceBtns=[];
 
 // Merging two stacks has to offer every photograph in both of them as the one
@@ -4621,6 +4624,20 @@ async function expand(head){
   // between.
   const badge=head.querySelector('.stack');
   if(badge){badge.hidden=true; opened.push(badge);}
+  // In the badge's place, what it was really saying. Re-stacking something
+  // already stacked asks the question again over every file in it, and this
+  // file is the answer that was given last time — worth keeping on screen,
+  // because merging three stacks puts three of them among thirty photographs
+  // that look alike, and the one to keep is usually one of the three.
+  //
+  // The same pill an opened stack uses for the same fact, rather than a
+  // second way of saying *this is the one that shows*.
+  const was=document.createElement('span');
+  was.className='top-mark';
+  was.title='The one this stack has been showing';
+  was.textContent='Top';
+  head.appendChild(was);
+  wereTops.push(was);
   const holder=document.createElement('div');
   holder.innerHTML=html;
   const added=[...holder.children];
@@ -4900,9 +4917,12 @@ function endChoosing(restore){
   fetched.forEach(c=>{picked.delete(c); c.remove();});
   cells=cells.filter(c=>!fetched.includes(c));
   fetched=[];
-  // Closed again, so the badge means what it says again.
+  // Closed again, so the badge means what it says again — and says it in the
+  // place the pill was standing in.
   opened.forEach(b=>{b.hidden=false;});
   opened=[];
+  wereTops.forEach(m=>m.remove());
+  wereTops=[];
   cells.forEach(c=>{c.hidden=false;});
   document.querySelectorAll('.group').forEach(h=>{h.hidden=false;});
   // The page is tall again, so the position it was holding means something

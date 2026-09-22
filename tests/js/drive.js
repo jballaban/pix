@@ -769,6 +769,14 @@ function arrow(key, opts) {
     check('the depth badge goes while its files are on screen',
           badgeOn(cells[0]) === null || badgeOn(cells[0]).hidden === true,
           'still claiming a closed stack');
+    // In its place, what it was really saying. Merging stacks puts several of
+    // these among photographs that look alike — which is why they were
+    // stacked — and the one to keep is usually one of them.
+    const wasTop = c => c.children.find(k => k._classes.has('top-mark'));
+    check('and says instead which one was speaking', !!wasTop(cells[0]),
+          'nothing marks the file the stack was showing');
+    check('only the ones that were', !wasTop(cells[1]) && !wasTop(opened),
+          'a file that was never a top is marked as one');
     // Any of them can be the one that shows, so none of them is ringed as
     // though it were already a different kind of candidate.
     check('nothing is selected while a top is being chosen',
@@ -808,6 +816,8 @@ function arrow(key, opts) {
     }
     // It belongs in the grid now, but the blocks after this one count the
     // section it landed in.
+    check('and the mark goes when the question is answered',
+          !wasTop(cells[0]), 'a stale Top pill outlived the choosing');
     const stayed = grid.children.find(c => c.dataset.name === 'hidden.jpg');
     if (stayed) stayed.remove();
     behindCells = '';
