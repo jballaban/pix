@@ -4987,3 +4987,37 @@ def test_and_says_it_where_somebody_can_read_it(client: TestClient) -> None:
     not."""
     assert f"v{web._PIX_VERSION}" in client.get("/browse").text
     assert f"v{web._PIX_VERSION}" in client.get("/login").text
+
+
+# --- getting back -------------------------------------------------------------
+
+def test_every_page_carries_a_way_back(client: TestClient) -> None:
+    """Installed on a phone the app is the whole window — no address bar, no
+    back. Every filter, every grouping and every folder opened is a
+    navigation, so the history was right there and nothing could reach it.
+
+    On the pages with no script of their own as well: `/accounts` is exactly
+    where somebody gets stranded.
+    """
+    for path in ("/browse", "/?date=2026&group=year", "/accounts", "/history"):
+        html = client.get(path).text
+        assert 'id="back"' in html, path
+
+
+def test_the_way_back_is_only_where_there_is_no_other(client: TestClient) -> None:
+    """In a tab the browser already draws this, and a second one beside it is
+    a second thing to wonder about."""
+    css = web._STYLE
+
+    assert ".back { display:none;" in css
+    assert "html[data-inapp] .back { display:inline-flex;" in css
+    assert "@media (display-mode: standalone)" in css
+
+
+def test_a_way_back_that_goes_nowhere_says_so(client: TestClient) -> None:
+    """A fresh launch has nothing behind it, and a button that does nothing
+    teaches you to stop believing the rest of them."""
+    html = client.get("/browse").text
+
+    assert "history.length <= 1" in html and "back.disabled = true" in html
+    assert "history.back()" in html

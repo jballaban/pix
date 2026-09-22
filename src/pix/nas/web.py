@@ -322,6 +322,13 @@ main { padding:16px max(var(--gut),env(safe-area-inset-right)) 20px
    ask for the control *plus* its own chrome. */
 .row + .row { margin-top:8px; border-top:1px solid var(--line); padding-top:8px;
               min-height:calc(var(--ctl) + 8px + 1px); }
+/* Where the browser draws no chrome of its own. Never in a tab, where it
+   already draws this and a second one is a second thing to wonder about. */
+.back { display:none; padding:4px 7px; margin-right:2px; flex:none; }
+html[data-inapp] .back { display:inline-flex; align-items:center; }
+@media (display-mode: standalone) { .back { display:inline-flex;
+                                            align-items:center; } }
+.back:disabled { opacity:.3; }
 /* Three frames, one in front, with a picture in it — the app in one glyph:
    photographs, and one of them standing for the others. */
 .brand { display:inline-flex; align-items:center; color:var(--fg); }
@@ -1398,15 +1405,45 @@ def _page(title: str, body: str, *, tools: str = "", rows: str = "",
 <title>{title}</title>
 <link rel="icon" href="{_FAVICON}"><style>{_STYLE}</style></head><body>
 <div class="topbar">
-<div class="row">{_brand(zoom)}{tools}
+<div class="row"><button class="back" id="back" aria-label="Back"
+ title="Back">{_BACK}</button>{_brand(zoom)}{tools}
 <span class="spacer"></span><span class="right">{_whoami(user, right, info)}</span></div>{rows}
 </div><main>{body}</main>
 <span class="note" id="note" hidden></span>
 {script}
 <script>if('serviceWorker' in navigator)window.addEventListener('load',function(){{
   navigator.serviceWorker.register('/sw.js').catch(function(){{}});}});</script>
+<script>(function(){{
+  // Installed, the app is the whole window: no address bar, no back. The
+  // media query is the standard reading and `navigator.standalone` is how iOS
+  // has always said it — the same pair the install offer asks.
+  var app = (window.matchMedia
+             && window.matchMedia('(display-mode: standalone)').matches)
+            || navigator.standalone === true;
+  if (app) document.documentElement.setAttribute('data-inapp', '');
+  var back = document.getElementById('back');
+  if (!back) return;
+  // A fresh launch has nowhere to go back to, and a button that does nothing
+  // teaches you to stop believing the rest of them.
+  if (history.length <= 1) back.disabled = true;
+  back.onclick = function () {{ history.back(); }};
+}})();</script>
 <script>{_INSTALL_JS}</script>
 </body></html>""")
+
+
+#: Back, for where the browser's own is not on screen.
+#:
+#: **Only there.** Installed on a phone the app owns the whole window and
+#: there is no chrome around it at all — every filter, every grouping and
+#: every folder opened is a navigation, so the history is right there and
+#: nothing could reach it. In a tab the browser already draws this button, and
+#: a second one beside it is a second thing to wonder about.
+_BACK: str = (
+    '<svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true" '
+    'fill="none" stroke="currentColor" stroke-width="2" '
+    'stroke-linecap="round" stroke-linejoin="round">'
+    '<path d="M15 5.5 8.5 12l6.5 6.5"/></svg>')
 
 
 #: The gear, for when there is no room to spell any of it out.
