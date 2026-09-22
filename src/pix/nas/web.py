@@ -3705,8 +3705,13 @@ async function openMenu(anchorEl,ctx){
         const h=document.createElement('div');
         h.className='band'; h.textContent='On these files';
         list.appendChild(h);
+        // The event these files already have is the likeliest one to be
+        // sub-divided and was the one row not saying it opens — it is
+        // listed here rather than in the bands below, and the chevron was
+        // going on in the bands.
         shown.forEach(v=>list.appendChild(opt(
-          {value:v,label:v,n:null},()=>choose(v),true)));
+          {value:v,label:v,n:null,more:nested&&ctx.head==null},
+          ()=>choose(v),true)));
       }
     }
     const group=(title,band)=>{
@@ -3717,9 +3722,12 @@ async function openMenu(anchorEl,ctx){
         opt(o,()=>choose(o.value),checkable)));
     };
     const left=hits.filter(o=>!present.includes(o.value));
-    // A way to say this one has no afternoon.
-    if(inside) list.appendChild(
-      opt({label:'No sub-event',n:null},()=>choose(null)));
+    // A way to say there is none, at whichever width is being asked about.
+    // Nested, ticking the event a file already has opens it rather than
+    // clearing it, so without this row there is no way to take an event off
+    // at all — which there was before the second step existed.
+    if(nested) list.appendChild(opt(
+      {label:inside?'No sub-event':'No event',n:null},()=>choose(null)));
     if(ctx.column==='audience'){
       // The sentinel first and on its own: *nobody has this yet* is the
       // pile of work, not a name, and grouping it with the names buried it
@@ -3770,6 +3778,7 @@ async function openMenu(anchorEl,ctx){
                +`<span>${esc(o.label)}</span>`
                +(o.n!==null&&o.n!==undefined?`<span class="n">${o.n}</span>`:'')
                +(o.more?'<span class="more">›</span>':'');
+    if(o.more) d.title='Open '+o.label+' to name a sub-event inside it';
     if(checkable){
       mark(d,stateOf(o.value));
       d.onclick=e=>{e.stopPropagation();toggle(o.value,d);};

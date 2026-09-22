@@ -1710,6 +1710,46 @@ function arrow(key, opts) {
     deselect();
   }
 
+  // The way in, from where somebody actually stands: files that are already
+  // in an event, being sub-divided for the first time. Their event is listed
+  // under *On these files* rather than in the bands below, and that row was
+  // the one row not saying it opens — so the only event on screen looked like
+  // a finished answer with nothing inside it.
+  {
+    deselect();
+    const one = document.querySelectorAll('.cell')[0];
+    one.dataset.event = 'Sicily';
+    one.children.find(k => k._classes.has('pick')).click();
+
+    actBtn('event').click();
+    await settle(); await settle();
+    const menu = document.byId.menu;
+    const rows = () => menu.querySelectorAll('.opt').map(
+      o => (o.innerHTML.match(/<span>([^<]*)<\/span>/) || [])[1]);
+
+    const mine = menu.querySelectorAll('.opt').find(
+      o => /<span>Sicily<\/span>/.test(o.innerHTML));
+    check('the event these files are in is ticked',
+          mine.dataset.state === 'all', String(mine.dataset.state));
+    check('and says it opens, which is where a sub-event is named',
+          /class="more"/.test(mine.innerHTML), mine.innerHTML);
+    // Ticking the event a file already has opens it rather than clearing it,
+    // so the only way to take an event off has to be a row of its own.
+    check('and there is still a way to have no event at all',
+          rows().includes('No event'), rows().join(','));
+
+    mine.click();
+    for (let k = 0; k < 8; k++) await settle();
+    check('opening it asks for a sub-event of that event',
+          menu.querySelectorAll('.band').map(b => b.textContent)
+            .includes('Sub-event of Sicily'),
+          menu.querySelectorAll('.band').map(b => b.textContent).join(','));
+    check('and the menu is still open to be typed into',
+          menu.hidden === false);
+    document.byId.grid.click();
+    deselect();
+  }
+
   if (failures.length) {
     failures.forEach(f => console.log('FAIL ' + f));
     process.exit(1);
