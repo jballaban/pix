@@ -4965,3 +4965,25 @@ def test_a_card_is_lifted_as_well_as_outlined() -> None:
     tile = tile[:tile.index("}")]
 
     assert "box-shadow" in tile and "border:1px solid var(--line)" in tile
+
+
+def test_every_page_says_which_build_it_is(client: TestClient) -> None:
+    """The script is inlined into each page, so an open tab keeps the build it
+    was served with — and a stale tab and a broken build look identical from
+    the outside.
+
+    In the `<head>`, because the visible one moved into the account menu and
+    went off every signed-out page with it. The login screen is the one page a
+    deploy check can reach without a session, and it had no version on it at
+    all.
+    """
+    for path in ("/browse", "/?date=2026&group=year", "/login"):
+        html = client.get(path).text
+        assert f'<meta name="pix-version" content="{web._PIX_VERSION}">' in html, path
+
+
+def test_and_says_it_where_somebody_can_read_it(client: TestClient) -> None:
+    """Under the account where there is one, beside Sign in where there is
+    not."""
+    assert f"v{web._PIX_VERSION}" in client.get("/browse").text
+    assert f"v{web._PIX_VERSION}" in client.get("/login").text

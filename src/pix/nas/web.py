@@ -352,6 +352,10 @@ main { padding:16px max(var(--gut),env(safe-area-inset-right)) 20px
         padding:9px 14px; font-size:13px;
         box-shadow:0 14px 34px -12px #000e; }
 .note[hidden] { display:none; }
+/* Signed out there is no menu to put it in, and the login screen is the one
+   page a deploy can be checked on without a session. */
+.ver { color:var(--dim); font-size:11px; margin-right:10px;
+       font-variant-numeric:tabular-nums; }
 /* What the library is, under the account. Read when wanted, never standing
    in front of the photographs. */
 .memenu .info { display:block; border-top:1px solid var(--line);
@@ -1317,10 +1321,16 @@ def _page(title: str, body: str, *, tools: str = "", rows: str = "",
     so. They are `info` now, under the account menu, where you go when you
     want to know rather than all the time.
 
-    The **version** is still on every page, for the same reason the CLI prints
-    it on every run: the script is inlined into this HTML, so an open tab
-    keeps the build it was served with, and a stale tab and a broken build
+    The **version** is on every page twice, for the same reason the CLI
+    prints it on every run: the script is inlined into this HTML, so an open
+    tab keeps the build it was served with, and a stale tab and a broken build
     look identical from the outside.
+
+    Once for a person, under the account; and once in a `<meta>` for anything
+    checking a deploy landed. The two are not redundant — moving the visible
+    one into that menu took it off every signed-out page, which is the login
+    screen, which is the page a deploy check can reach without a session. The
+    tag is in the `<head>` where no rearranging of the body can lose it.
 
     What was down there and had to stay is the **message line**, which is how
     all forty-odd writes say whether they happened. It is not a strip any
@@ -1348,6 +1358,7 @@ def _page(title: str, body: str, *, tools: str = "", rows: str = "",
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <link rel="manifest" href="/manifest.webmanifest">
 <meta name="theme-color" content="#14161a">
+<meta name="pix-version" content="{_PIX_VERSION}">
 <meta name="color-scheme" content="dark">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="mobile-web-app-capable" content="yes">
@@ -1413,7 +1424,8 @@ def _whoami(user: Principal | None, extra: str = "",
     missing from the page you are most likely to be stuck on.
     """
     if user is None:
-        return '<a class="who-link" href="/login">Sign in</a>'
+        return (f'<span class="ver">v{_PIX_VERSION}</span>'
+                f'<a class="who-link" href="/login">Sign in</a>')
     waiting = _binned() if user.is_admin else 0
     manage = ('<a href="/history">History</a>'
               '<a href="/accounts">Accounts</a>' if user.is_admin else "")
