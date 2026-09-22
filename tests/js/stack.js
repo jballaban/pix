@@ -133,6 +133,7 @@ const USUAL = 'family';
 const UNREVIEWED = 'new';
 // What separates an event from a sub-event in one name.
 const EVENT_SEP = ' > ';
+const NO_EVENT = '(none)';
 const PAGE = '/browse';
 const TIERS = [['/thumb/', 400], ['/large/', 1000],
                ['/preview/', 1600]];
@@ -147,11 +148,11 @@ const viewerOpen = () => document.byId.viewer._classes.has('on');
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'history',
       'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS',
-      'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP',
+      'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT',
       'setTimeout', js,
     )(document, window, fetch, localStorage, location, history, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD,
-      GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
+      GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, fn => fn());
   } catch (e) {
     console.log('FAIL the script threw on load: ' + e.message);
     process.exit(1);

@@ -2150,6 +2150,14 @@ def _drill(row: sqlite3.Row, groups: list[str],
             patch["date"] = ix.UNDATED
             continue
         patch[column] = str(key)
+        # A folder of an event *itself*, made beside one folder per part of
+        # it: the files directly in the event and no others. Asking for the
+        # event plainly would open the whole trip, which is more than the
+        # folder counted — the one place a folder's link and a folder's count
+        # could disagree about what is in it.
+        if (name == "subevent" and key != ix.NO_EVENT
+                and decisions.EVENT_SEP not in str(key)):
+            patch[column] = f"{key}{decisions.EVENT_SEP}{ix.NO_EVENT}"
     return _browse_url(view, patch)
 
 
@@ -2276,6 +2284,7 @@ def _view_script(user: Principal, view: ix.Filters, groups: list[str], *,
         # copies of a sentinel are two chances to disagree about what it is.
         f"UNREVIEWED={_js(ix.UNREVIEWED)},"
         f"EVENT_SEP={_js(decisions.EVENT_SEP)},"
+        f"NO_EVENT={_js(ix.NO_EVENT)},"
         f"USUAL={_js(store().usual)},PAGE={_js(page)},"
         f"TIERS={_js(_TIERS)},"
         f"GRID_GROUPS={_js(_GRID_GROUPS)},ONE_FIELD={_js(_ONE_FIELD)},"
@@ -3414,12 +3423,28 @@ function placeMenu(anchorEl){
 // two more clicks, where the old behaviour had no way back to the year but
 // retyping it.
 function wider(col,v){
+  // An event narrows the same way a date does, so the cross climbs rather
+  // than clears: a part of an event goes up to the whole event, and the
+  // event to the whole library. Which is also the way out of *no sub-event*
+  // — it widens to the trip it is a slice of.
+  if(col==='event'){
+    const [head,leaf]=splitEvent(v);
+    return leaf?head:null;
+  }
   if(col!=='date') return null;
   const at=String(v).lastIndexOf('-');
   return at<0?null:String(v).slice(0,at);
 }
 
 function labelFor(col,v){
+  // *Sicily* is the trip and *Sicily, no sub-event* is the part of it nobody
+  // has divided up yet — two different sets of files, and a chip that showed
+  // the same word for both would be the bar disagreeing with the folder that
+  // set it.
+  if(col==='event'){
+    const [head,leaf]=splitEvent(v);
+    if(leaf===NO_EVENT) return head+' (no sub-event)';
+  }
   const fixed=FIXED[col];
   if(!fixed) return v;
   const hit=fixed.find(f=>f[0]===v);

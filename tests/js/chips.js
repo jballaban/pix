@@ -89,6 +89,7 @@ const USUAL = 'family';
 const UNREVIEWED = 'new';
 // What separates an event from a sub-event in one name.
 const EVENT_SEP = ' > ';
+const NO_EVENT = '(none)';
 const PAGE = '/browse';
 const TIERS = [['/thumb/', 400], ['/large/', 1000], ['/preview/', 1600]];
 
@@ -106,11 +107,11 @@ const optionLabels = () => document.byId.menu.querySelectorAll('.opt')
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'history',
       'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS',
-      'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP',
+      'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT',
       'setTimeout', js,
     )(document, window, fetch, localStorage, location, history, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD,
-      GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
+      GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, fn => fn());
   } catch (e) {
     console.log('FAIL the script threw on load: ' + e.message);
     process.exit(1);
@@ -151,6 +152,64 @@ const optionLabels = () => document.byId.menu.querySelectorAll('.opt')
         labels.includes('Photos') && labels.includes('Video'), labels.join('|'));
   check('and nothing that means everything',
         !labels.some(l => /^(any|all|everything)$/i.test(l)), labels.join('|'));
+
+  // --- an event is a hierarchy too, and one of its rungs has a name ---------
+  // *Sicily* is the trip. *Sicily, no sub-event* is the part of it nobody has
+  // divided up yet — a different set of files, and the one the sub-event
+  // grouping's folder for the event itself opens on. The bar has to be able
+  // to tell them apart or it would be disagreeing with the folder that set
+  // it, so the chip says which it is and the cross climbs to the other.
+  location.href = '/browse?start';
+  new Function(
+    'document', 'window', 'fetch', 'localStorage', 'location', 'history',
+    'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS',
+    'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE',
+    'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'setTimeout', js,
+  )(document, window, fetch, localStorage, location, history, confirm,
+    { ...VIEW, date: null, kind: null,
+      event: 'Sicily' + EVENT_SEP + NO_EVENT },
+    [['event', 'Event']], FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
+    GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP,
+    NO_EVENT, fn => fn());
+
+  const ev = chipFor('Event');
+  check('the event is on the bar', ev !== undefined,
+        chips.children.map(c => String(c.innerHTML)).join('|'));
+  check('and says it is the event without its parts',
+        String(ev.innerHTML).includes('Sicily (no sub-event)'),
+        String(ev.innerHTML));
+  check('rather than the sentinel it is spelled with',
+        !String(ev.innerHTML).includes(NO_EVENT), String(ev.innerHTML));
+  check('with a cross that widens to the whole event',
+        String(ev.innerHTML).includes('title="Up to Sicily"'),
+        String(ev.innerHTML));
+
+  crossIn(ev).click();
+  check('and pressing it lands on the whole event',
+        location.href === '/browse?event=Sicily&group=day', location.href);
+
+  // The whole event is the top of the ladder: there is nothing above a trip
+  // but the library, which is what clearing means.
+  location.href = '/browse?start';
+  new Function(
+    'document', 'window', 'fetch', 'localStorage', 'location', 'history',
+    'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS',
+    'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE',
+    'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'setTimeout', js,
+  )(document, window, fetch, localStorage, location, history, confirm,
+    { ...VIEW, date: null, kind: null,
+      event: 'Sicily' + EVENT_SEP + 'Taormina' },
+    [['event', 'Event']], FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
+    GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP,
+    NO_EVENT, fn => fn());
+
+  const part = chipFor('Event');
+  check('a part of an event is shown whole',
+        String(part.innerHTML).includes('Sicily &gt; Taormina'),
+        String(part.innerHTML));
+  crossIn(part).click();
+  check('and widens to the event it is part of',
+        location.href === '/browse?event=Sicily&group=day', location.href);
 
   if (failures.length) {
     failures.forEach(f => console.log('FAIL ' + f));

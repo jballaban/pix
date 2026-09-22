@@ -993,14 +993,29 @@ def _clauses(filters: Filters) -> dict[str, tuple[str, dict[str, Any]]]:
             {"f_chosen": json.dumps(
                 [f + chr(10) + n for f, n in filters.chosen])})
     if filters.event is not None:
-        # This one **and everything below it**, the way a date filter answers
-        # a year with every day in it. `event=Sicily` is the trip; picking
-        # `Sicily > Taormina` narrows to the afternoon, and no second filter
-        # had to be invented for it.
-        out["event"] = (
-            "(COALESCE(files.event, '(none)') = :f_event "
-            " OR files.event LIKE :f_event_under ESCAPE '\\')",
-            {"f_event": filters.event, "f_event_under": under(filters.event)})
+        head, leaf = decisions.split_event(filters.event)
+        if leaf == NO_EVENT and head:
+            # **This event and no part of it.** The sub-event grouping makes a
+            # folder for the files that are directly in an event, beside one
+            # per part of it, and that folder has to open on the files it
+            # counted — `event=Sicily` would open on the whole trip, which is
+            # more than the folder said was in it.
+            #
+            # Spelled as the event with `(none)` where a part would go, which
+            # is the same two conventions the grouping itself uses: the
+            # separator, and `(none)` for a column that has nothing in it.
+            out["event"] = ("COALESCE(files.event, '(none)') = :f_event",
+                            {"f_event": head})
+        else:
+            # This one **and everything below it**, the way a date filter
+            # answers a year with every day in it. `event=Sicily` is the trip;
+            # picking `Sicily > Taormina` narrows to the afternoon, and no
+            # second filter had to be invented for it.
+            out["event"] = (
+                "(COALESCE(files.event, '(none)') = :f_event "
+                " OR files.event LIKE :f_event_under ESCAPE '\\')",
+                {"f_event": filters.event,
+                 "f_event_under": under(filters.event)})
     if filters.date == UNDATED:
         # Undated is *no date at all*, not *not to that precision*. A file
         # known to be from August is not undated, and answering a day filter

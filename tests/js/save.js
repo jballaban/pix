@@ -164,6 +164,7 @@ const USUAL = 'family';
 const UNREVIEWED = 'new';
 // What separates an event from a sub-event in one name.
 const EVENT_SEP = ' > ';
+const NO_EVENT = '(none)';
 const PAGE = '/browse';
 const TIERS = [['/thumb/', 400], ['/large/', 1000], ['/preview/', 1600]];
 
@@ -188,12 +189,12 @@ const settled = async () => { for (let i = 0; i < 12; i++) await settle(); };
 const PARAMS = ['document', 'window', 'fetch', 'localStorage', 'location',
                 'confirm', 'matchMedia', 'navigator', 'VIEW', 'CHIPS', 'FIXED',
                 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD',
-                'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', 'clearTimeout'];
+                'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'setTimeout', 'clearTimeout'];
 function run() {
   new Function(...PARAMS, js)(
     document, window, fetch, localStorage, location, confirm, matchMedia,
     navigator, VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-    GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, timer, cancelTimer);
+    GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, timer, cancelTimer);
 }
 
 (async () => {

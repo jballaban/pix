@@ -13,6 +13,7 @@ import json
 import zipfile
 import re
 import time
+import urllib.parse
 
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -5174,6 +5175,11 @@ def _named(writable: Path, name: str) -> str | None:
     return decision.event
 
 
+def _quote(value: str) -> str:
+    """One filter value, as it appears in a URL."""
+    return urllib.parse.quote(value, safe="")
+
+
 def _evented(client: TestClient, writable: Path,
              app_env: dict[str, Path]) -> None:
     """Two files under one event, one of them in a sub-event of it."""
@@ -5255,6 +5261,45 @@ def test_reverting_a_rename_puts_each_name_back(
 
     assert _named(writable, "e1.jpg") == "Sicily"
     assert _named(writable, "e2.jpg") == "Sicily > Taormina"
+
+
+def test_an_event_can_be_asked_for_without_its_parts(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """*Sicily* is the trip and *Sicily, no sub-event* is the part of it
+    nobody has divided up yet — two different sets of files, and the sub-event
+    grouping makes a folder of each. Spelled as the event with `(none)` where
+    a part would go: the separator and the empty-column sentinel, which are
+    the two conventions the grouping itself is built out of."""
+    _evented(client, writable, app_env)
+    exact = f"Sicily{decisions.EVENT_SEP}{ix.NO_EVENT}"
+
+    trip = {r["name"] for r in
+            client.get("/api/files?event=Sicily&stacks=firm").json()}
+    itself = {r["name"] for r in client.get(
+        f"/api/files?event={_quote(exact)}&stacks=firm").json()}
+
+    assert trip == {"e1.jpg", "e2.jpg"}, trip
+    assert itself == {"e1.jpg"}, itself
+
+
+def test_the_folder_of_an_event_itself_opens_on_what_it_counted(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """The one place a folder's link and a folder's count could disagree
+    about what is in it. Grouped by event and sub-event there is a folder for
+    *Sicily* beside one for *Sicily > Taormina*, and the first counts only
+    the files directly in the event — so asking for the event plainly would
+    open it on the whole trip, one more file than the folder said."""
+    _evented(client, writable, app_env)
+
+    page = client.get("/?group=subevent&stacks=firm").text
+    want = _quote(f"Sicily{decisions.EVENT_SEP}{ix.NO_EVENT}")
+
+    assert f"event={want}" in page, "the folder asks for the whole trip"
+    opened = {r["name"] for r in client.get(
+        f"/api/files?event={want}&stacks=firm").json()}
+    assert opened == {"e1.jpg"}, opened
 
 
 def test_a_sub_event_is_not_a_filter_of_its_own() -> None:
