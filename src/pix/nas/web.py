@@ -6696,11 +6696,23 @@ def _decide(folder: str, name: str, change: _Change,
     is behind, which is the one direction drift is allowed to go.
     """
     media = _master_file(folder, name)
+    # The event this file is showing, which for most of the library is in its
+    # own tags and not in a sidecar — a half-name write keeps the half it is
+    # not replacing, and that half has to be the one on screen.
+    #
+    # Read only where a half-name write is actually in play: the meta is an
+    # SMB round trip, and no other field needs it.
+    half = not (isinstance(change.event_head, Unset)
+                and isinstance(change.event_leaf, Unset))
+    inherited = ix.inherited_event(
+        record if record is not None
+        else ix.record_of(META_DIR, folder, name)) if half else None
     with _write_lock:
         try:
             was, decision = decisions.change(
                 media, event=change.event,
                 event_head=change.event_head, event_leaf=change.event_leaf,
+                inherited_event=inherited,
                 date_override=change.date_override, tags=change.tags,
                 add_tags=change.add_tags, remove_tags=change.remove_tags,
                 people=change.people,

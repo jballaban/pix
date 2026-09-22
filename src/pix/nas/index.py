@@ -836,8 +836,7 @@ def _row(folder: str, record: dict[str, Any],
         "height": height,
         "duration": _duration(exif_map),
         "event": ((decision.event if decision else None)
-                  or _tag(exif_map, "EventOverride")
-                  or _tag(exif_map, "EventAuto")),
+                  or inherited_event(record)),
         "date_override": override,
         "effective_date": datestr.format_pix(effective) if effective else None,
         "year": f"{effective.year:04d}" if effective else None,
@@ -872,6 +871,22 @@ def _band(kind: str, size: object, duration: float | None) -> str | None:
         return None
     return ("small" if size < SMALL_IMAGE_BYTES
             else "large" if size > LARGE_IMAGE_BYTES else "medium")
+
+
+def inherited_event(record: dict[str, Any] | None) -> str | None:
+    """The event a file carries in its own tags, where no `.xmp` names one.
+
+    Seeding skipped writing ~62k sidecars on the strength of exactly this, so
+    for most of the library *the event this file is in* lives here and not in
+    a decision. Anything that reads a file's current event in order to build
+    on it — a half-name write, which keeps one half and replaces the other —
+    has to look here too, or it builds on nothing and writes nothing.
+    """
+    if not record:
+        return None
+    raw: object = record.get("exif")
+    exif = cast("dict[str, Any]", raw) if isinstance(raw, dict) else {}
+    return _tag(exif, "EventOverride") or _tag(exif, "EventAuto")
 
 
 def _tag(exif: dict[str, Any], key: str) -> str | None:

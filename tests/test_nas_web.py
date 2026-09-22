@@ -5328,6 +5328,57 @@ def test_dividing_an_event_up_takes_the_file_out_of_the_undivided_folder(
     assert [f["name"] for f in out["dropped"]] == ["e1.jpg"], out
 
 
+def test_a_sub_event_can_be_named_on_an_event_nobody_wrote_down(
+    client: TestClient, writable: Path
+) -> None:
+    """Most of the library's events live in the files' own tags rather than in
+    a decision — seeding skipped writing ~62k sidecars on exactly that — so a
+    write that keeps the half it is not replacing has to read that half from
+    where the file actually keeps it.
+
+    It read the sidecar alone, found nothing, joined a leaf onto no head and
+    wrote nothing at all: naming a sub-event of the event on screen looked
+    like the app ignoring the press."""
+    assert decisions.read(writable / "a.jpg") is None, "the premise: no sidecar"
+    assert {r["name"] for r in client.get(
+        "/api/files?event=Italy - Sicily&stacks=firm").json()} >= {"a.jpg"}
+
+    client.post("/api/decide/bulk?stacks=firm", json={
+        "event_leaf": "Boat",
+        "files": [{"folder": "init_2026", "name": "a.jpg"}]})
+
+    assert _named(writable, "a.jpg") == "Italy - Sicily > Boat"
+    assert {r["name"] for r in client.get(
+        "/api/files?event=Italy - Sicily %3E Boat&stacks=firm").json()}         == {"a.jpg"}
+
+
+def test_renaming_an_event_nobody_wrote_down_keeps_its_sub_event(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """The other half of the same write. A whole name can be inherited too —
+    the tags hold whatever was written into the file — and renaming the event
+    has to carry the part across from wherever the part is kept.
+
+    And it is a fallback only: a decision that names an event outranks the
+    tags, which is what a decision is for."""
+    import json
+
+    share = app_env["share"]
+    (share / "meta" / "init_2026" / "a.jpg.json").write_text(json.dumps({
+        "file": "a.jpg", "folder": "init_2026", "size": 10, "mtime_ns": 1,
+        "exif": {"EXIF:DateTimeOriginal": "2026:08:30 15:34:55",
+                 "XMP:EventAuto": "Italy - Sicily > Boat"},
+    }), encoding="utf-8")
+    ix.build(app_env["db"], meta_dir=share / "meta",
+             master_dir=share / "master")
+
+    client.post("/api/decide/bulk?stacks=firm", json={
+        "event_head": "Sicily",
+        "files": [{"folder": "init_2026", "name": "a.jpg"}]})
+
+    assert _named(writable, "a.jpg") == "Sicily > Boat"
+
+
 def test_a_sub_event_is_not_a_filter_of_its_own() -> None:
     """One field at two widths means one filter at two widths. A second
     parameter would be a second thing that could disagree with the first about

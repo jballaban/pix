@@ -327,6 +327,7 @@ def change(media: Path, *,
            event: str | None | Unset = UNSET,
            event_head: str | None | Unset = UNSET,
            event_leaf: str | None | Unset = UNSET,
+           inherited_event: str | None = None,
            date_override: str | None | Unset = UNSET,
            tags: Sequence[str] | None | Unset = UNSET,
            add_tags: Sequence[str] = (),
@@ -362,6 +363,15 @@ def change(media: Path, *,
     Here it is a read-modify-write on one field, which is what this function
     is for.
 
+    **`inherited_event` is the other half for a file with no sidecar.** Most
+    of the library has its event in its own embedded tags rather than in a
+    decision — seeding skipped writing ~62k sidecars on exactly that — so
+    reading the half to keep out of the sidecar alone read `None` for most
+    files, joined a leaf onto no head, and wrote nothing at all. Naming a
+    sub-event of an inherited event looked like the app ignoring the press.
+    Only a fallback: a decision that names an event outranks it, which is
+    what a decision is for.
+
     Returns **both** the previous decision and the new one. The caller needs the
     previous value to be able to undo it, and it has already been read here —
     asking for it again would double the SMB reads of every bulk edit.
@@ -373,7 +383,7 @@ def change(media: Path, *,
     elif isinstance(event_head, Unset) and isinstance(event_leaf, Unset):
         chosen = current.event
     else:
-        had_head, had_leaf = split_event(current.event)
+        had_head, had_leaf = split_event(current.event or inherited_event)
         chosen = join_event(
             had_head if isinstance(event_head, Unset) else event_head,
             had_leaf if isinstance(event_leaf, Unset) else event_leaf)
