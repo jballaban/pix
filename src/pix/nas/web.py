@@ -230,12 +230,19 @@ _STYLE = """
            Violet because it is the hue left: clear of the blue people wear,
            the green an audience does, and the amber that means unfinished. */
         --tag:#a48bff;
+        /* A sub-event is *which part of the trip*, and it is not a tag — two
+           violet lozenges on one thumbnail would say it was. Rose because it
+           is the hue left over: clear of the blue people wear, the green an
+           audience does, the violet of a tag and the amber of unfinished
+           work, and far enough round from the red that means deleted. */
+        --event:#e879b0;
         /* Each of those again as something to sit *on*. A chip was coloured
            text in a near-black lozenge, so the colour was a thin outline of
            itself; filled at a seventh it becomes the chip, and a card reads
            as a few facts in their own colours rather than a grey list. */
         --keep-bed:#56c16a26; --accent-bed:#6aa3ff26;
         --tag-bed:#a48bff26; --top-bed:#e3b34126;
+        --event-bed:#e879b026;
         --panel:#222833;
         /* Accent at a sixth, for saying *this one* behind a word rather than
            through it. */
@@ -803,6 +810,17 @@ h3.group[data-state="some"] .grppick { background:var(--top);
    staying text on a dark lozenge rather than a tint. One colour for one kind
    of thing, whichever surface it is written on. */
 .tags i { color:#cbb8ff; }
+/* Which part of the event this one is — the same lozenge a tag wears, in the
+   event's own colour, because it is the same kind of fact about the file and
+   not the same kind of thing. The part alone: *Taormina* is the news on a
+   150px thumbnail, and the whole name is in the tooltip. */
+.part { position:absolute; right:4px; bottom:4px; max-width:64%;
+        overflow:hidden; white-space:nowrap; text-overflow:ellipsis;
+        padding:1px 5px; border-radius:3px; background:#000b;
+        color:#f2a3ca; font-size:10px; font-weight:600; }
+/* A video says how long it is in the same corner, so it steps up rather than
+   sitting under the part. */
+.cell:has(.part) .badge { bottom:21px; }
 
 table { border-collapse:collapse; width:100%; max-width:900px; }
 th,td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line); }
@@ -2544,6 +2562,7 @@ def _sections(rows: list[sqlite3.Row], groups: list[str],
     There is always at least one heading, even ungrouped: the heading *is* the
     control, so a grid without one would offer no way to start.
     """
+    said = "subevent" in groups
     if not groups:
         return (_heading([], 0, len(rows))
                 + "".join(_cell(r, view) for r in rows))
@@ -2555,7 +2574,7 @@ def _sections(rows: list[sqlite3.Row], groups: list[str],
         labels = [_group_label(k, g, groups[:i], batch[0])
                   for i, (k, g) in enumerate(zip(keys, groups))]
         out.append(_heading(labels, len(groups), len(batch)))
-        out.extend(_cell(r, view) for r in batch)
+        out.extend(_cell(r, view, said=said) for r in batch)
     return "".join(out)
 
 
@@ -2673,7 +2692,27 @@ def _access_html(shared: list[str]) -> str:
     return _chips_html("who", unusual)
 
 
-def _cell(row: sqlite3.Row, view: ix.Filters | None = None) -> str:
+def _part_html(row: sqlite3.Row, view: ix.Filters, said: bool) -> str:
+    """Which part of its event this file is, on the thumbnail.
+
+    Not where the view has already said it: grouped by event and sub-event
+    every heading names one, and filtered to a whole name every thumbnail
+    under it carries the same one. A chip that is true of everything on
+    screen is furniture.
+
+    Grouping by *event* is not that — it names the trip, and which part of
+    the trip is exactly what still differs from cell to cell.
+    """
+    whole = row["event"]
+    leaf = decisions.split_event(whole)[1]
+    if said or not leaf or view.event == whole:
+        return ""
+    return (f'<span class="part" title="Sub-event &mdash; {_h(str(whole))}">'
+            f'{_h(leaf)}</span>')
+
+
+def _cell(row: sqlite3.Row, view: ix.Filters | None = None, *,
+          said: bool = False) -> str:
     mark = _stack_badge(row, view or ix.Filters())
     tags = _split(row["tags"])
     shared = _split(row["audience"])
@@ -2703,6 +2742,7 @@ def _cell(row: sqlite3.Row, view: ix.Filters | None = None) -> str:
            if row["kind"] == "video" else "")
         + mark
         + _access_html(shared) + _chips_html("tags", tags)
+        + _part_html(row, view or ix.Filters(), said)
         + "</div>"
     )
 
@@ -5262,13 +5302,15 @@ async function applyToSelection(act,value,add,only,batch){
                            event:c.dataset.event||'',
                            deleted:c.dataset.deleted||''}));
   if(multi) todo.forEach(c=>paint(c,multi[0],value,add));
-  else if(act==='event') todo.forEach(c=>{c.dataset.event=value||'';});
+  else if(act==='event') todo.forEach(c=>{c.dataset.event=value||'';
+                                          paintPart(c);});
   // Half a name: the other half is what the cell already says, so the cell
   // is where it is worked out.
   else if(act==='event_head'||act==='event_leaf') todo.forEach(c=>{
     const [head,leaf]=splitEvent(c.dataset.event||'');
     c.dataset.event=joinEvent(act==='event_head'?value:head,
                               act==='event_leaf'?value:leaf);
+    paintPart(c);
   });
   // Under `Including deleted` a restored file stays on screen, so the cross
   // has to go the moment the decision does. Under `Only deleted` it leaves
@@ -5288,7 +5330,7 @@ async function applyToSelection(act,value,add,only,batch){
     c.dataset.tags=was.tags; c.dataset.audience=was.audience;
     c.dataset.event=was.event; c.dataset.deleted=was.deleted;
     c.classList.toggle('gone',!!was.deleted);
-    repaint(c,'tags'); repaint(c,'audience');
+    repaint(c,'tags'); repaint(c,'audience'); paintPart(c);
   });
   return out;
 }
@@ -5300,6 +5342,21 @@ function paint(c,field,value,add){
   add?set.add(value):set.delete(value);
   c.dataset[field]=[...set].sort().join('\\n');
   repaint(c,field);
+}
+// The same rule the server draws by, because a cell edited here and a cell
+// fetched fresh must not be able to look different.
+function partSaid(){
+  return GROUPING.includes('subevent');
+}
+function paintPart(c){
+  const whole=c.dataset.event||'';
+  const leaf=splitEvent(whole)[1];
+  let el=c.querySelector('.part');
+  if(!leaf||partSaid()||VIEW.event===whole){ if(el) el.remove(); return; }
+  if(!el){el=document.createElement('span');el.className='part';
+          c.appendChild(el);}
+  el.setAttribute('title','Sub-event \u2014 '+whole);
+  el.textContent=leaf;
 }
 function repaint(c,field){
   const cls=field==='tags'?'tags':'who';

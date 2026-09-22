@@ -5379,6 +5379,61 @@ def test_renaming_an_event_nobody_wrote_down_keeps_its_sub_event(
     assert _named(writable, "a.jpg") == "Sicily > Boat"
 
 
+def test_a_thumbnail_says_which_part_of_its_event_it_is(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """The same lozenge a tag wears, in the event's own colour: it is the same
+    kind of fact about the file and not the same kind of thing. The part
+    alone, because *Taormina* is the news on a 150px thumbnail — the whole
+    name is the tooltip."""
+    _evented(client, writable, app_env)
+
+    page = client.get("/browse?event=Sicily&stacks=firm&group=none").text
+
+    assert 'class="part"' in page, page[:200]
+    assert ">Taormina</span>" in page
+    assert "Sub-event &mdash; Sicily &gt; Taormina" in page
+    # One chip, on the one file that is in a part of the event. The other is
+    # in the event itself and there is nothing to say about it.
+    assert page.count('class="part"') == 1
+
+
+def test_it_does_not_say_what_the_view_has_already_said(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """Grouped by event and sub-event every heading names one, and filtered to
+    a whole name every thumbnail under it carries the same one. A chip that is
+    true of everything on screen is furniture.
+
+    Grouping by *event* is not that, and is the case worth keeping: it names
+    the trip, and which part of the trip is exactly what still differs from
+    one thumbnail to the next."""
+    _evented(client, writable, app_env)
+    whole = _quote(f"Sicily{decisions.EVENT_SEP}Taormina")
+
+    grouped = client.get("/browse?event=Sicily&stacks=firm&group=subevent").text
+    by_event = client.get("/browse?event=Sicily&stacks=firm&group=event").text
+    pinned = client.get(f"/browse?event={whole}&stacks=firm&group=none").text
+
+    assert 'class="part"' not in grouped, "said twice under its own heading"
+    assert 'class="part"' in by_event, "the trip is named, the part is not"
+    assert 'class="part"' not in pinned, "said on every thumbnail in the view"
+
+
+def test_an_event_with_no_part_says_nothing(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """There is no part to name, and an empty chip would be a mark meaning
+    *this one is plain* — which is most of the library."""
+    _evented(client, writable, app_env)
+    whole = _quote(f"Sicily{decisions.EVENT_SEP}{ix.NO_EVENT}")
+
+    page = client.get(f"/browse?event={whole}&stacks=firm&group=none").text
+
+    assert "e1.jpg" in page
+    assert 'class="part"' not in page
+
+
 def test_a_sub_event_is_not_a_filter_of_its_own() -> None:
     """One field at two widths means one filter at two widths. A second
     parameter would be a second thing that could disagree with the first about

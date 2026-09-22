@@ -1778,6 +1778,56 @@ function arrow(key, opts) {
     deselect();
   }
 
+  // The thumbnail says which part of its event it is, and keeps saying the
+  // right thing as the event is edited — a cell changed here and a cell
+  // fetched fresh must not be able to look different.
+  {
+    deselect();
+    const one = document.querySelectorAll('.cell')[0];
+    const partOn = c => c.children.find(k => k._classes.has('part'));
+    // Earlier blocks set `dataset.event` by hand, which the page never does,
+    // so anything they left on the cell is theirs rather than the page's.
+    if (partOn(one)) partOn(one).remove();
+    one.dataset.event = 'Cornwall';
+    one.children.find(k => k._classes.has('pick')).click();
+    check('a file in no part of its event says nothing', !partOn(one));
+
+    actBtn('event').click();
+    await settle(); await settle();
+    const menu = document.byId.menu;
+    const boxes = menu.querySelectorAll('.subnew');
+    if (boxes.length) {
+      boxes[0].children[0].click();
+      boxes[0].children[1].value = 'Beach day';
+      boxes[0].children[2].click();
+    }
+    for (let k = 0; k < 8; k++) await settle();
+
+    const part = partOn(one);
+    check('naming one puts it on the thumbnail', !!part,
+          'nothing marks which part of the event it is');
+    check('as the part alone', !!part && part._text === 'Beach day',
+          part ? String(part._text) : 'missing');
+    check('with the whole name to hand',
+          !!part && /Cornwall > Beach day/.test(
+            String(part.getAttribute('title'))),
+          part ? String(part.getAttribute('title')) : 'missing');
+
+    // Taking the event off takes the part with it: there is no part of
+    // nothing.
+    document.byId.grid.click();
+    actBtn('event').click();
+    await settle(); await settle();
+    const none = menu.querySelectorAll('.opt').find(
+      o => /<span>No event<\/span>/.test(o.innerHTML));
+    if (none) none.click();
+    for (let k = 0; k < 8; k++) await settle();
+    check('and clearing the event clears it', !partOn(one),
+          'a part outlived the event it was part of');
+    one.dataset.event = '';
+    deselect();
+  }
+
   // A selection is not one thing, and the box has to be able to say so at
   // both widths — two files in different parts of the same event agree about
   // the event and disagree about the part.
