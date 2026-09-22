@@ -473,93 +473,167 @@ def test_the_bars_are_not_the_colour_of_the_page(client: TestClient) -> None:
     assert "var(--bg)" in body, body
 
 
-def _two_files(writable: Path) -> None:
-    """The fixture puts one file in master; a stack needs at least two."""
+def _two_files(writable: Path, app_env: dict[str, Path]) -> None:
+    """A second photograph, in master *and* in the index.
+
+    The fixture puts one file in master and a stack needs at least two — and
+    two of a kind. A stack says *these are the same shot*, so the fixture's
+    clip cannot be the other half of one, and the page and the API both
+    refuse to make it so.
+    """
+    import json
+
+    from pix.nas import index as ix
+
     (writable / "b.mp4").write_bytes(b"fake")
+    (writable / "b.jpg").write_bytes(b"fake")
+    share = app_env["share"]
+    (share / "meta" / "init_2026" / "b.jpg.json").write_text(json.dumps({
+        "file": "b.jpg", "folder": "init_2026", "size": 30, "mtime_ns": 1,
+        "exif": {"EXIF:DateTimeOriginal": "2026:08:30 15:39:00",
+                 "XMP:EventAuto": "Italy - Sicily"},
+    }), encoding="utf-8")
+    ix.build(app_env["db"], meta_dir=share / "meta",
+             master_dir=share / "master")
 
 
 def test_stacking_folds_a_file_behind_another(
-    client: TestClient, writable: Path
+    client: TestClient, writable: Path,
+    app_env: dict[str, Path]
 ) -> None:
     """Each file records which one it defers to; the top records nothing,
     because being spoken for is the decision and speaking is what is left."""
-    _two_files(writable)
+    _two_files(writable, app_env)
     r = client.post("/api/decide/bulk", json={
         "stacked_under": "init_2026/a.jpg",
-        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
+        "files": [{"folder": "init_2026", "name": "b.jpg"}]})
     assert r.status_code == 200, r.text
 
-    assert decisions.read(writable / "b.mp4") == Decision(
+    assert decisions.read(writable / "b.jpg") == Decision(
         stacked_under="init_2026/a.jpg")
     assert decisions.read(writable / "a.jpg") is None, "the top recorded something"
 
     html = client.get("/browse?event=Italy%20-%20Sicily").text
-    assert "b.mp4" not in html, "a stacked file appeared on its own"
+    assert "b.jpg" not in html, "a stacked file appeared on its own"
     assert "a.jpg" in html
     assert 'class="stack"' in html, "the top is not badged"
     assert "within=init_2026%2Fa.jpg" in html, "no way to open the stack"
 
 
-def test_opening_a_stack_shows_what_is_behind_it(
-    client: TestClient, writable: Path
+def test_a_stack_cannot_hold_two_kinds_of_thing(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
 ) -> None:
-    _two_files(writable)
-    client.post("/api/decide/bulk", json={
+    """A stack says *these are the same shot, and this one speaks for the
+    rest*. A photograph and a clip are not the same shot whatever else they
+    share, and neither can stand in for the other — so folding one behind the
+    other hides a thing nothing on screen represents.
+
+    Refused here as well as in the page, because this is the scripting
+    surface: a rule only the page holds is one the next client does not."""
+    _two_files(writable, app_env)
+
+    r = client.post("/api/decide/bulk", json={
         "stacked_under": "init_2026/a.jpg",
         "files": [{"folder": "init_2026", "name": "b.mp4"}]})
 
-    html = client.get("/browse?within=init_2026/a.jpg").text
-    assert "a.jpg" in html and "b.mp4" in html
+    assert r.status_code == 400, r.text
+    assert "one shot" in r.text, r.text
+    # And it says what it found, rather than only that it refused.
+    assert "photograph" in r.text and "video" in r.text, r.text
+    assert decisions.read(writable / "b.mp4") is None, "written anyway"
+
+    # Both doors: the page writes through one of these and a script through
+    # the other, and a rule that only one of them holds is not a rule.
+    one = client.post("/api/decide", json={
+        "folder": "init_2026", "name": "b.mp4",
+        "stacked_under": "init_2026/a.jpg"})
+
+    assert one.status_code == 400, one.text
+    assert decisions.read(writable / "b.mp4") is None, "written anyway"
 
 
-def test_unstacking_puts_a_file_back_on_its_own(
-    client: TestClient, writable: Path
+def test_a_clip_can_still_be_taken_out_of_a_stack_made_before_the_rule(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
 ) -> None:
-    _two_files(writable)
-    client.post("/api/decide/bulk", json={
-        "stacked_under": "init_2026/a.jpg",
-        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
-    client.post("/api/decide/bulk", json={
+    """Unstacking names no file to defer to, so there is nothing for it to be
+    the same kind as. A library that already holds a mixed stack has to be
+    able to take it apart, or the rule would strand what it came too late to
+    prevent."""
+    _two_files(writable, app_env)
+    decisions.change(writable / "b.mp4", stacked_under="init_2026/a.jpg")
+
+    r = client.post("/api/decide/bulk", json={
         "stacked_under": None,
         "files": [{"folder": "init_2026", "name": "b.mp4"}]})
 
+    assert r.status_code == 200, r.text
     assert decisions.read(writable / "b.mp4") is None
-    assert "b.mp4" in client.get("/browse?event=Italy%20-%20Sicily").text
+
+
+def test_opening_a_stack_shows_what_is_behind_it(
+    client: TestClient, writable: Path,
+    app_env: dict[str, Path]
+) -> None:
+    _two_files(writable, app_env)
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/a.jpg",
+        "files": [{"folder": "init_2026", "name": "b.jpg"}]})
+
+    html = client.get("/browse?within=init_2026/a.jpg").text
+    assert "a.jpg" in html and "b.jpg" in html
+
+
+def test_unstacking_puts_a_file_back_on_its_own(
+    client: TestClient, writable: Path,
+    app_env: dict[str, Path]
+) -> None:
+    _two_files(writable, app_env)
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/a.jpg",
+        "files": [{"folder": "init_2026", "name": "b.jpg"}]})
+    client.post("/api/decide/bulk", json={
+        "stacked_under": None,
+        "files": [{"folder": "init_2026", "name": "b.jpg"}]})
+
+    assert decisions.read(writable / "b.jpg") is None
+    assert "b.jpg" in client.get("/browse?event=Italy%20-%20Sicily").text
 
 
 def test_stacking_leaves_the_other_decisions_alone(
-    client: TestClient, writable: Path
+    client: TestClient, writable: Path,
+    app_env: dict[str, Path]
 ) -> None:
     """It is one field like the rest: a file keeps its event and its audience
     when it goes behind another, and gets them back when it comes out."""
-    _two_files(writable)
+    _two_files(writable, app_env)
     client.post("/api/decide", json={
-        "folder": "init_2026", "name": "b.mp4", "event": "Sicily Trip",
+        "folder": "init_2026", "name": "b.jpg", "event": "Sicily Trip",
         "add_audience": ["family"]})
     client.post("/api/decide/bulk", json={
         "stacked_under": "init_2026/a.jpg",
-        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
+        "files": [{"folder": "init_2026", "name": "b.jpg"}]})
 
-    assert decisions.read(writable / "b.mp4") == Decision(
+    assert decisions.read(writable / "b.jpg") == Decision(
         event="Sicily Trip", audience=("family",),
         stacked_under="init_2026/a.jpg")
 
 
 def test_a_stack_is_recorded_and_can_be_put_back(
-    client: TestClient, writable: Path
+    client: TestClient, writable: Path,
+    app_env: dict[str, Path]
 ) -> None:
     """Like any other decision — nothing new was built for the undo."""
-    _two_files(writable)
+    _two_files(writable, app_env)
     client.post("/api/decide/bulk", json={
         "stacked_under": "init_2026/a.jpg",
-        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
+        "files": [{"folder": "init_2026", "name": "b.jpg"}]})
 
     op = history.recent()[0]
     assert op.summary == "stacked 1 file under a.jpg", op.summary
 
     client.post("/history/revert", data={"id": op.id})
-    assert decisions.read(writable / "b.mp4") is None
-    assert "b.mp4" in client.get("/browse?event=Italy%20-%20Sicily").text
+    assert decisions.read(writable / "b.jpg") is None
+    assert "b.jpg" in client.get("/browse?event=Italy%20-%20Sicily").text
 
 
 def test_the_page_can_ask_which_photograph_to_show(
@@ -590,13 +664,17 @@ def _three_files(writable: Path, app_env: dict[str, Path]) -> None:
     from pix.nas import index as ix
 
     (writable / "b.mp4").write_bytes(b"fake")
-    (writable / "c.jpg").write_bytes(b"fake")
     share = app_env["share"]
-    (share / "meta" / "init_2026" / "c.jpg.json").write_text(json.dumps({
-        "file": "c.jpg", "folder": "init_2026", "size": 30, "mtime_ns": 1,
-        "exif": {"EXIF:DateTimeOriginal": "2026:08:30 15:40:00",
-                 "XMP:EventAuto": "Italy - Sicily"},
-    }), encoding="utf-8")
+    # Two more photographs rather than one, because a stack is one kind of
+    # thing: these tests are about rings and cascades and promotion, and the
+    # fixture's clip was only ever standing in for a second photograph.
+    for i, name in enumerate(("c.jpg", "d.jpg")):
+        (writable / name).write_bytes(b"fake")
+        (share / "meta" / "init_2026" / f"{name}.json").write_text(json.dumps({
+            "file": name, "folder": "init_2026", "size": 30, "mtime_ns": 1,
+            "exif": {"EXIF:DateTimeOriginal": f"2026:08:30 15:4{i}:00",
+                     "XMP:EventAuto": "Italy - Sicily"},
+        }), encoding="utf-8")
     ix.build(app_env["db"], meta_dir=share / "meta",
              master_dir=share / "master")
 
@@ -609,22 +687,22 @@ def test_stacking_a_stack_brings_its_files_up(
     is a stranded one: the members end up a level down where no listing reaches
     them, and the count on the outermost file is wrong about what it holds."""
     _three_files(writable, app_env)
-    # b.mp4 goes behind a.jpg.
+    # c.jpg goes behind a.jpg.
     client.post("/api/decide/bulk", json={
         "stacked_under": "init_2026/a.jpg",
-        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
-    # Now a.jpg — which speaks for b.mp4 — goes behind c.jpg.
+        "files": [{"folder": "init_2026", "name": "c.jpg"}]})
+    # Now a.jpg — which speaks for c.jpg — goes behind d.jpg.
     client.post("/api/decide/bulk", json={
-        "stacked_under": "init_2026/c.jpg",
+        "stacked_under": "init_2026/d.jpg",
         "files": [{"folder": "init_2026", "name": "a.jpg"}]})
 
     assert decisions.read(writable / "a.jpg") == Decision(
-        stacked_under="init_2026/c.jpg")
-    assert decisions.read(writable / "b.mp4") == Decision(
-        stacked_under="init_2026/c.jpg"), "left a level down"
+        stacked_under="init_2026/d.jpg")
+    assert decisions.read(writable / "c.jpg") == Decision(
+        stacked_under="init_2026/d.jpg"), "left a level down"
 
-    inside = client.get("/browse?within=init_2026/c.jpg").text
-    for name in ("a.jpg", "b.mp4", "c.jpg"):
+    inside = client.get("/browse?within=init_2026/d.jpg").text
+    for name in ("a.jpg", "c.jpg", "d.jpg"):
         assert name in inside, name
     # And nothing inside it claims a stack of its own.
     assert 'class="stack"' not in inside
@@ -641,7 +719,7 @@ def test_an_open_stack_says_which_one_is_the_top(
     _three_files(writable, app_env)
     client.post("/api/decide/bulk", json={
         "stacked_under": "init_2026/a.jpg",
-        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
+        "files": [{"folder": "init_2026", "name": "c.jpg"}]})
 
     outside = client.get("/browse?event=Italy%20-%20Sicily").text
     assert 'class="stack"' in outside
@@ -663,7 +741,7 @@ def test_a_stack_mark_does_not_cover_the_tags(
     _three_files(writable, app_env)
     client.post("/api/decide/bulk", json={
         "stacked_under": "init_2026/a.jpg",
-        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
+        "files": [{"folder": "init_2026", "name": "c.jpg"}]})
     client.post("/api/decide", json={
         "folder": "init_2026", "name": "a.jpg", "add_tags": ["beach"]})
 
@@ -680,17 +758,17 @@ def test_bringing_a_stack_up_is_part_of_the_same_gesture(
     _three_files(writable, app_env)
     client.post("/api/decide/bulk", json={
         "stacked_under": "init_2026/a.jpg",
-        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
+        "files": [{"folder": "init_2026", "name": "c.jpg"}]})
     client.post("/api/decide/bulk", json={
-        "stacked_under": "init_2026/c.jpg",
+        "stacked_under": "init_2026/d.jpg",
         "files": [{"folder": "init_2026", "name": "a.jpg"}]})
 
     op = history.recent()[0]
-    assert {f.name for f in op.files} == {"a.jpg", "b.mp4"}, [
+    assert {f.name for f in op.files} == {"a.jpg", "c.jpg"}, [
         f.name for f in op.files]
 
     client.post("/history/revert", data={"id": op.id})
-    assert decisions.read(writable / "b.mp4") == Decision(
+    assert decisions.read(writable / "c.jpg") == Decision(
         stacked_under="init_2026/a.jpg"), "it did not go back where it was"
 
 
@@ -710,13 +788,13 @@ def test_unstacking_takes_a_file_out_of_the_open_stack(
     _three_files(writable, app_env)
     client.post("/api/decide/bulk", json={
         "stacked_under": "init_2026/a.jpg",
-        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
+        "files": [{"folder": "init_2026", "name": "c.jpg"}]})
 
     r = client.post("/api/decide/bulk?within=init_2026/a.jpg", json={
         "stacked_under": None,
-        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
+        "files": [{"folder": "init_2026", "name": "c.jpg"}]})
 
-    assert [d["name"] for d in r.json()["dropped"]] == ["b.mp4"], r.text
+    assert [d["name"] for d in r.json()["dropped"]] == ["c.jpg"], r.text
 
 
 def test_unstacking_the_top_takes_the_whole_stack_apart(
@@ -729,17 +807,17 @@ def test_unstacking_the_top_takes_the_whole_stack_apart(
     _three_files(writable, app_env)
     client.post("/api/decide/bulk", json={
         "stacked_under": "init_2026/a.jpg",
-        "files": [{"folder": "init_2026", "name": "b.mp4"},
-                  {"folder": "init_2026", "name": "c.jpg"}]})
+        "files": [{"folder": "init_2026", "name": "c.jpg"},
+                  {"folder": "init_2026", "name": "d.jpg"}]})
 
     client.post("/api/decide/bulk", json={
         "stacked_under": None,
         "files": [{"folder": "init_2026", "name": "a.jpg"}]})
 
-    for name in ("a.jpg", "b.mp4", "c.jpg"):
+    for name in ("a.jpg", "c.jpg", "d.jpg"):
         assert decisions.read(writable / name) is None, name
     html = client.get("/browse?event=Italy%20-%20Sicily").text
-    for name in ("a.jpg", "b.mp4", "c.jpg"):
+    for name in ("a.jpg", "c.jpg", "d.jpg"):
         assert name in html, name
     assert 'class="stack"' not in html
 
@@ -752,15 +830,15 @@ def test_taking_one_photograph_out_leaves_the_rest_stacked(
     _three_files(writable, app_env)
     client.post("/api/decide/bulk", json={
         "stacked_under": "init_2026/a.jpg",
-        "files": [{"folder": "init_2026", "name": "b.mp4"},
-                  {"folder": "init_2026", "name": "c.jpg"}]})
+        "files": [{"folder": "init_2026", "name": "c.jpg"},
+                  {"folder": "init_2026", "name": "d.jpg"}]})
 
     client.post("/api/decide/bulk", json={
         "stacked_under": None,
-        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
+        "files": [{"folder": "init_2026", "name": "c.jpg"}]})
 
-    assert decisions.read(writable / "b.mp4") is None
-    assert decisions.read(writable / "c.jpg") == Decision(
+    assert decisions.read(writable / "c.jpg") is None
+    assert decisions.read(writable / "d.jpg") == Decision(
         stacked_under="init_2026/a.jpg"), "the rest came out too"
 
 
@@ -772,20 +850,20 @@ def test_taking_a_stack_apart_is_one_gesture(
     _three_files(writable, app_env)
     client.post("/api/decide/bulk", json={
         "stacked_under": "init_2026/a.jpg",
-        "files": [{"folder": "init_2026", "name": "b.mp4"},
-                  {"folder": "init_2026", "name": "c.jpg"}]})
+        "files": [{"folder": "init_2026", "name": "c.jpg"},
+                  {"folder": "init_2026", "name": "d.jpg"}]})
     client.post("/api/decide/bulk", json={
         "stacked_under": None,
         "files": [{"folder": "init_2026", "name": "a.jpg"}]})
 
     op = history.recent()[0]
-    assert {f.name for f in op.files} == {"a.jpg", "b.mp4", "c.jpg"}, [
+    assert {f.name for f in op.files} == {"a.jpg", "c.jpg", "d.jpg"}, [
         f.name for f in op.files]
 
     client.post("/history/revert", data={"id": op.id})
-    assert decisions.read(writable / "b.mp4") == Decision(
-        stacked_under="init_2026/a.jpg")
     assert decisions.read(writable / "c.jpg") == Decision(
+        stacked_under="init_2026/a.jpg")
+    assert decisions.read(writable / "d.jpg") == Decision(
         stacked_under="init_2026/a.jpg")
 
 
@@ -799,13 +877,13 @@ def test_the_files_behind_a_stack_can_be_fetched_as_cells(
     _three_files(writable, app_env)
     client.post("/api/decide/bulk", json={
         "stacked_under": "init_2026/a.jpg",
-        "files": [{"folder": "init_2026", "name": "b.mp4"},
-                  {"folder": "init_2026", "name": "c.jpg"}]})
+        "files": [{"folder": "init_2026", "name": "c.jpg"},
+                  {"folder": "init_2026", "name": "d.jpg"}]})
 
     cells = client.get("/api/behind/init_2026/a.jpg").json()["cells"]
 
-    assert 'data-name="b.mp4"' in cells
     assert 'data-name="c.jpg"' in cells
+    assert 'data-name="d.jpg"' in cells
     assert 'data-name="a.jpg"' not in cells, "returned the top as well"
     assert 'class="cell' in cells and 'class="pick"' in cells
 
@@ -820,7 +898,7 @@ def test_what_is_behind_a_stack_is_still_scoped_to_the_viewer(
     client.post("/accounts/save", data={"name": "kid", "password": "pw"})
     client.post("/api/decide/bulk", json={
         "stacked_under": "init_2026/a.jpg",
-        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
+        "files": [{"folder": "init_2026", "name": "c.jpg"}]})
 
     kid = sign_in("kid", "pw")
     assert kid.get("/api/behind/init_2026/a.jpg").json()["cells"] == ""
@@ -836,19 +914,19 @@ def test_promoting_a_file_does_not_leave_it_behind_itself(
     _three_files(writable, app_env)
     client.post("/api/decide/bulk", json={
         "stacked_under": "init_2026/a.jpg",
-        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
+        "files": [{"folder": "init_2026", "name": "c.jpg"}]})
 
-    # Promote b.mp4: everything else comes to defer to it.
+    # Promote c.jpg: everything else comes to defer to it.
     client.post("/api/decide/bulk", json={
-        "stacked_under": "init_2026/b.mp4",
+        "stacked_under": "init_2026/c.jpg",
         "files": [{"folder": "init_2026", "name": "a.jpg"}]})
 
-    assert decisions.read(writable / "b.mp4") is None, "left behind itself"
+    assert decisions.read(writable / "c.jpg") is None, "left behind itself"
     assert decisions.read(writable / "a.jpg") == Decision(
-        stacked_under="init_2026/b.mp4")
+        stacked_under="init_2026/c.jpg")
     # And the stack is on screen, with the promoted file speaking for it.
     html = client.get("/browse?event=Italy%20-%20Sicily").text
-    assert "b.mp4" in html
+    assert "c.jpg" in html
     assert "a.jpg" not in html
     assert 'class="stack"' in html
 
@@ -861,18 +939,18 @@ def test_taking_a_file_out_of_a_stack_is_part_of_promoting_it(
     _three_files(writable, app_env)
     client.post("/api/decide/bulk", json={
         "stacked_under": "init_2026/a.jpg",
-        "files": [{"folder": "init_2026", "name": "b.mp4"},
-                  {"folder": "init_2026", "name": "c.jpg"}]})
+        "files": [{"folder": "init_2026", "name": "c.jpg"},
+                  {"folder": "init_2026", "name": "d.jpg"}]})
     client.post("/api/decide/bulk", json={
-        "stacked_under": "init_2026/b.mp4",
+        "stacked_under": "init_2026/c.jpg",
         "files": [{"folder": "init_2026", "name": "a.jpg"}]})
 
     op = history.recent()[0]
-    assert {f.name for f in op.files} == {"a.jpg", "b.mp4", "c.jpg"}, [
+    assert {f.name for f in op.files} == {"a.jpg", "c.jpg", "d.jpg"}, [
         f.name for f in op.files]
 
     client.post("/history/revert", data={"id": op.id})
-    assert decisions.read(writable / "b.mp4") == Decision(
+    assert decisions.read(writable / "c.jpg") == Decision(
         stacked_under="init_2026/a.jpg")
     assert decisions.read(writable / "a.jpg") is None
 
@@ -887,16 +965,16 @@ def test_a_stale_index_cannot_put_a_file_behind_itself(
     _three_files(writable, app_env)
     client.post("/api/decide/bulk", json={
         "stacked_under": "init_2026/a.jpg",
-        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
+        "files": [{"folder": "init_2026", "name": "c.jpg"}]})
 
-    # Master says b.mp4 is free; the index still says it is behind a.jpg.
-    decisions.sidecar_path(writable / "b.mp4").unlink()
+    # Master says c.jpg is free; the index still says it is behind a.jpg.
+    decisions.sidecar_path(writable / "c.jpg").unlink()
 
     client.post("/api/decide/bulk", json={
-        "stacked_under": "init_2026/b.mp4",
+        "stacked_under": "init_2026/c.jpg",
         "files": [{"folder": "init_2026", "name": "a.jpg"}]})
 
-    assert decisions.read(writable / "b.mp4") is None, "put behind itself"
+    assert decisions.read(writable / "c.jpg") is None, "put behind itself"
 
 
 def test_the_grid_has_three_thumbnail_sizes(client: TestClient) -> None:
@@ -933,25 +1011,30 @@ def test_promoting_renames_the_stack_so_its_old_address_empties(
     _three_files(writable, app_env)
     client.post("/api/decide/bulk", json={
         "stacked_under": "init_2026/a.jpg",
-        "files": [{"folder": "init_2026", "name": "b.mp4"},
-                  {"folder": "init_2026", "name": "c.jpg"}]})
+        "files": [{"folder": "init_2026", "name": "c.jpg"},
+                  {"folder": "init_2026", "name": "d.jpg"}]})
     assert client.get("/browse?within=init_2026/a.jpg").text.count(
         "data-name=") == 3
 
-    # Promote c.jpg the way `Make top` does.
+    # Promote d.jpg the way `Make top` does.
     client.post("/api/decide/bulk", json={
-        "stacked_under": "init_2026/c.jpg",
+        "stacked_under": "init_2026/d.jpg",
         "files": [{"folder": "init_2026", "name": "a.jpg"},
-                  {"folder": "init_2026", "name": "b.mp4"}]})
+                  {"folder": "init_2026", "name": "c.jpg"}]})
 
     was = client.get("/browse?within=init_2026/a.jpg").text
     assert was.count("data-name=") == 1, "the old address still holds a stack"
-    now = client.get("/browse?within=init_2026/c.jpg").text
+    now = client.get("/browse?within=init_2026/d.jpg").text
     assert now.count("data-name=") == 3, "the stack is not at its new address"
 
 
-def _burst(app_env: dict[str, Path], writable: Path, *names: str) -> None:
-    """Two files a second apart on one camera, in master and in the index."""
+def _burst(app_env: dict[str, Path], writable: Path, *names: str,
+           at: str = "11:00:0") -> None:
+    """Files a second apart on one camera, in master and in the index.
+
+    `at` moves them away from an earlier call's, for when what is wanted is a
+    photograph the app proposes nothing about.
+    """
     import json
 
     from pix.nas import index as ix
@@ -961,7 +1044,7 @@ def _burst(app_env: dict[str, Path], writable: Path, *names: str) -> None:
         (writable / name).write_bytes(b"fake")
         (share / "meta" / "init_2026" / f"{name}.json").write_text(json.dumps({
             "file": name, "folder": "init_2026", "size": 30, "mtime_ns": 1,
-            "exif": {"EXIF:DateTimeOriginal": f"2026:08:30 11:00:0{i}",
+            "exif": {"EXIF:DateTimeOriginal": f"2026:08:30 {at}{i}",
                      "EXIF:Model": "iPhone 17 Pro"},
         }), encoding="utf-8")
     ix.build(app_env["db"], meta_dir=share / "meta",
@@ -1043,11 +1126,14 @@ def test_only_stacks_is_every_stack_however_it_was_made(
     """The chip is about stacks, so *only stacks* means the ones somebody made
     as well as the ones the app proposes — they are the same thing decided by
     different parties."""
-    (writable / "b.mp4").write_bytes(b"fake")
     _burst(app_env, writable, "x.jpg", "y.jpg")
+    # Hours from the burst and on another camera, so the app proposes nothing
+    # about it — what goes behind `a.jpg` here is a stack somebody made. A
+    # photograph, because a stack is one kind of thing.
+    _burst(app_env, writable, "m.jpg", at="18:00:0")
     client.post("/api/decide/bulk", json={
         "stacked_under": "init_2026/a.jpg",
-        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
+        "files": [{"folder": "init_2026", "name": "m.jpg"}]})
 
     html = client.get("/browse?stacks=only").text
 
@@ -4463,7 +4549,7 @@ def test_a_household_member_skips_the_takes_that_are_not_theirs(
     client.post("/api/decide", json={
         "folder": "init_2026", "name": "a.jpg", "add_audience": ["kid"]})
     client.post("/api/decide", json={
-        "folder": "init_2026", "name": "c.jpg",
+        "folder": "init_2026", "name": "d.jpg",
         "stacked_under": "init_2026/a.jpg"})
     kid = sign_in("kid", "pw")
 
@@ -4474,7 +4560,7 @@ def test_a_household_member_skips_the_takes_that_are_not_theirs(
     assert r.status_code == 200
     top = decisions.read(writable / "a.jpg")
     assert top is not None and top.tags == ("mine",)
-    hidden = decisions.read(writable / "c.jpg")
+    hidden = decisions.read(writable / "d.jpg")
     assert hidden is not None and hidden.tags == (), "reached what is not theirs"
 
 
@@ -4488,16 +4574,19 @@ def test_promoting_a_take_still_moves_the_stack_rather_than_breaking_it(
     _three_files(writable, app_env)
     client.post("/api/decide/bulk", json={
         "stacked_under": "init_2026/a.jpg",
-        "files": [{"folder": "init_2026", "name": "b.mp4"},
-                  {"folder": "init_2026", "name": "c.jpg"}]})
+        "files": [{"folder": "init_2026", "name": "c.jpg"},
+                  {"folder": "init_2026", "name": "d.jpg"}]})
 
     client.post("/api/decide/bulk", json={
-        "stacked_under": "init_2026/b.mp4",
+        "stacked_under": "init_2026/c.jpg",
         "files": [{"folder": "init_2026", "name": "a.jpg"}]})
 
-    top = decisions.read(writable / "b.mp4")
+    top = decisions.read(writable / "c.jpg")
     assert top is None or top.stacked_under is None, "the top is behind itself"
-    assert {r["name"] for r in client.get("/api/files").json()} == {"b.mp4"}
+    # `b.mp4` is in the index and in no stack: a clip cannot be in one with
+    # photographs, which is what these three are.
+    assert ({r["name"] for r in client.get("/api/files").json()}
+            == {"c.jpg", "b.mp4"})
 
 
 # --- deciding about a folder --------------------------------------------------

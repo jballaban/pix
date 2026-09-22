@@ -5992,6 +5992,54 @@ def download(folder: str, name: str,
 META_READERS: int = 8
 
 
+#: What each kind is called where a refusal has to name it.
+_KIND_WORDS: dict[str, str] = {
+    "image": "photographs", "video": "video", "other": "other files"}
+
+
+def _one_kind(conn: sqlite3.Connection | None, change: _Change,
+              targets: Sequence[Target]) -> None:
+    """Refuse a stack that would mix photographs with video.
+
+    A stack says *these are the same shot, and this one speaks for the rest*.
+    A photograph and a clip are not the same shot whatever else they share —
+    same second, same camera, same name — and neither can stand in for the
+    other, so folding one behind the other hides a thing nothing on screen
+    represents.
+
+    Here as well as in the page, because this is the scripting surface: a rule
+    only the page holds is one the next client does not.
+
+    Checked after the expansion, like the permission check above it and for
+    the same reason: `_behind` brings in the rest of a stack, and those come
+    along whether or not the request named them.
+
+    One query rather than one per file, with the file being deferred to
+    counted among them — which makes *is more than one kind of thing in play*
+    a single question.
+    """
+    top = change.stacked_under
+    if conn is None or isinstance(top, Unset) or not top:
+        return
+    folder, _, name = str(top).rpartition("/")
+    keys = [f"{t.folder}{chr(10)}{t.name}" for t in targets]
+    keys.append(f"{folder}{chr(10)}{name}")
+    rows = conn.execute(
+        "SELECT files.kind AS kind, COUNT(*) AS n FROM files "
+        "JOIN json_each(:keys) "
+        "  ON json_each.value = files.folder || char(10) || files.name "
+        "GROUP BY files.kind", {"keys": json.dumps(keys)}).fetchall()
+    if len(rows) < 2:
+        return
+    counts = " and ".join(
+        f'{r["n"]} {_KIND_WORDS.get(str(r["kind"]), str(r["kind"]))}'
+        for r in sorted(rows, key=lambda r: -int(r["n"])))
+    raise HTTPException(
+        status.HTTP_400_BAD_REQUEST,
+        f"a stack is one shot, and this one would be {counts} — "
+        f"none of them can speak for the rest")
+
+
 def _records_for(targets: Sequence[Target]
                  ) -> dict[tuple[str, str], dict[str, Any]]:
     """The probed facts for a whole batch, fetched together.
@@ -6345,6 +6393,7 @@ def api_decide(user: Annotated[Principal, Depends(require_user)],
         targets = _mine(user, conn, _behind(
             conn, view, [named],
             members=isinstance(change.stacked_under, Unset)))
+        _one_kind(conn, change, targets)
         was, decision, indexed = _decide(body.folder, body.name, change,
                                          conn=conn)
         undo = [history.Before(body.folder, body.name, was,
@@ -6552,6 +6601,7 @@ def api_decide_bulk(user: Annotated[Principal, Depends(require_user)],
     targets = _mine(user, conn, _behind(
         conn, view, body.files,
         members=isinstance(change.stacked_under, Unset)))
+    _one_kind(conn, change, targets)
     done: list[tuple[str, str]] = []
     undo: list[history.Before] = []
     dropped: list[dict[str, str]] = []
