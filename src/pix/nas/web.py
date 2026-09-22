@@ -1002,6 +1002,40 @@ h2.year span { font-size:13px; font-weight:400; }
    below, because these are two different questions and a device can answer
    them differently — a touchscreen laptop has a pointer and a phone plugged
    into a trackpad has a coarse one. */
+/* --- where there is a pointer to rest on something ------------------------
+   A shelf heading reads *September 2026 › By event  +  2*, and only the
+   first of those says which shelf this is. The rest is the cut it was made
+   by, a control for making another, and a count — true, and not what you
+   are scanning a page of headings for.
+
+   So they wait to be pointed at. Faded rather than removed, so the row does
+   not change width when they arrive: a heading that reflows under the pointer
+   is a heading you cannot aim at.
+
+   **Only on a shelf.** The grid's headings end in a *value* — the name of
+   the section under them — and hiding that would hide what the heading is
+   for. `.shelf` is already the class that tells the two apart.
+
+   **And only where hovering is a thing.** Somewhere without it, all of this
+   stays on screen, which is what it did before and is the right answer there:
+   a control you cannot reveal is a control you do not have. */
+@media (hover: hover) {
+  h3.group.shelf .crumbsep,
+  h3.group.shelf .crumb:last-child:not(:first-child),
+  h3.group.shelf .addgrp,
+  h3.group.shelf > span.dim {
+    opacity:0; pointer-events:none; transition:opacity .12s; }
+  h3.group.shelf:hover .crumbsep,
+  h3.group.shelf:hover .crumb:last-child:not(:first-child),
+  h3.group.shelf:hover .addgrp,
+  h3.group.shelf:hover > span.dim,
+  h3.group.shelf:focus-within .crumbsep,
+  h3.group.shelf:focus-within .crumb:last-child:not(:first-child),
+  h3.group.shelf:focus-within .addgrp,
+  h3.group.shelf:focus-within > span.dim {
+    opacity:1; pointer-events:auto; }
+}
+
 @media (hover: none) {
   /* Touch has no hover, so here the circle is the only way to select at all. */
   .pick { opacity:.55; }
@@ -1868,6 +1902,16 @@ _SPREAD_FILTER: dict[str, str] = {
     "audience": "audience", "people": "person", "tags": "tag",
 }
 
+#: What kind of thing a chip names, in the words the filter bar uses for it.
+#:
+#: The chip says `family` and its colour says which kind of `family` that is
+#: — which works once the colours are learnt and not before. The name of the
+#: kind is the thing a tooltip should carry, not the value, which is already
+#: the word being pointed at.
+_SPREAD_LABEL: dict[str, str] = {
+    "audience": "Access", "people": "People", "tags": "Tag",
+}
+
 
 def _spread_chips(kind: str, values: list[tuple[str, int]], n: int,
                   lead: tuple[str, int] | None = None) -> str:
@@ -1909,15 +1953,19 @@ def _spread_chips(kind: str, values: list[tuple[str, int]], n: int,
     def chip(value: str, count: int, cls: str = "", filter_on: str = "") -> str:
         # Opening the folder *and* narrowing it to this, which is the one
         # thing the card could say and the page could not then do. A chip
-        # reading `undecided 50%` is the half of an event still to work
-        # through, and clicking it is how you get to exactly those.
+        # reading `undecided` is the part of an event still to work through,
+        # and clicking it is how you get to exactly those.
         where = (f' data-col="{col}" data-val="{_h(filter_on or value)}"'
                  if col else "")
-        say = ("" if not col else
-               f" — click for the {_h(value)} ones in here")
+        # **What kind, and how many.** It used to repeat the value, which is
+        # the word already under the pointer, and then explain the click,
+        # which the cursor and the hover already offer. What it could not say
+        # without being asked is which of the four kinds this is — the
+        # colour says that, once you know the colours.
+        what = "No access yet" if cls == "none" else _SPREAD_LABEL.get(kind, kind)
+        files = f"{count:,} file" + ("" if count == 1 else "s")
         return (f'<i class="{cls or kind}"{where} '
-                f'title="{_h(value)} — {count:,} of {n:,}{say}">'
-                + _h(value) + "</i>")
+                f'title="{what} — {files}">' + _h(value) + "</i>")
 
     # `undecided` is not a value anything carries, it is the absence of one —
     # and the audience filter has a word for that, the same one its own chip
@@ -4122,6 +4170,7 @@ const FOLDERS = PAGE==='/';
 // Which filter each kind of chip narrows by, kept in step with the server's
 // own map by the test that renders a card and presses one.
 const SPREAD_FILTER={audience:'audience', people:'person', tags:'tag'};
+const SPREAD_LABEL={audience:'Access', people:'People', tags:'Tag'};
 const tiles = FOLDERS && grid
   ? [...grid.querySelectorAll('.tile')].filter(t=>t.getAttribute('href')) : [];
 const pickedFolders = new Set();
@@ -4224,10 +4273,12 @@ function redrawFolder(t){
   const kinds=ADMIN?['audience','people','tags']:['people','tags'];
   // The same chip the server draws, filter and all: without `data-col` a
   // redrawn card would look the same and do nothing when pressed.
+  // The same title the server writes: what kind of thing this is, and how
+  // many of them — never the value, which is the word being pointed at.
   const chip=(kind,v,c,cls,on)=>`<i class="${cls||kind}"`
     +` data-col="${SPREAD_FILTER[kind]}" data-val="${esc(on||v)}"`
-    +` title="${esc(v)} — ${c} of ${n} — click for the ${esc(v)} ones`
-    +` in here">${esc(v)}</i>`;
+    +` title="${cls==='none'?'No access yet':SPREAD_LABEL[kind]}`
+    +` — ${c} file${c===1?'':'s'}">${esc(v)}</i>`;
   // One run for all of them, in the order the server writes them: the colour
   // is on each chip, so the kinds stay legible without a break between them.
   let html='';

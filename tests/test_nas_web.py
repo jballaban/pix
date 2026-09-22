@@ -4618,9 +4618,9 @@ def test_a_chip_says_the_name_and_nothing_else(
     assert "%" not in tags, tags
     assert "<b>" not in tags, tags
     assert ">beach</i>" in tags, tags
-    # Still there for anyone who wants it, and costing nothing to anyone who
-    # does not.
-    assert "of 5" in tags, tags
+    # What kind of thing it is and how many, where it costs nothing to
+    # anybody who does not want it.
+    assert 'title="Tag — 1 file"' in tags, tags
 
 
 def test_a_folder_names_every_value_it_holds(
@@ -5027,3 +5027,103 @@ def test_a_heading_is_words_rather_than_a_toolbar() -> None:
         assert found is not None, control
         assert "box-shadow:none" in found.group(0), control
         assert "background:none" in found.group(0), control
+
+
+def test_a_pill_says_what_kind_of_thing_it_names(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """A chip says `family`, and its colour says which kind of `family` that
+    is — which works once the colours are learnt and not before.
+
+    So the tooltip carries the kind and the count, not the value: the value is
+    the word already under the pointer, and the click is already offered by
+    the cursor and the hover.
+    """
+    _burst(app_env, writable, "w.jpg", "x.jpg")
+    every = client.get("/api/files?date=2026&stacks=firm").json()
+    client.post("/api/decide/bulk", json={
+        "add_audience": ["family"], "add_people": ["Mom"],
+        "add_tags": ["beach"],
+        "files": [{"folder": r["folder"], "name": r["name"]} for r in every]})
+
+    card = _card(client.get("/?date=2026&group=year&stacks=firm").text)
+
+    assert 'title="Access — 3 files"' in card, card
+    assert 'title="People — 3 files"' in card, card
+    assert 'title="Tag — 3 files"' in card, card
+    # Never the value, which is the word being pointed at.
+    assert 'title="family' not in card and 'title="Mom' not in card, card
+
+
+def test_what_is_left_says_what_being_left_means(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """*Undecided — 7 files* would spend the tooltip repeating the word under
+    the pointer. What it can add is what the word means."""
+    _burst(app_env, writable, "w.jpg")
+
+    card = _card(client.get("/?date=2026&group=year&stacks=firm").text)
+
+    assert 'title="No access yet' in card, card
+    assert ">undecided</i>" in card, card
+
+
+def test_one_file_is_not_one_files(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    _burst(app_env, writable, "w.jpg")
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "w.jpg", "add_tags": ["beach"]})
+
+    card = _card(client.get("/?date=2026&group=year&stacks=firm").text)
+
+    assert 'title="Tag — 1 file"' in card, card
+
+
+def test_a_shelf_heading_leads_with_the_only_part_that_names_it() -> None:
+    """*September 2026 › By event + 2* — and only the first of those says
+    which shelf this is. The rest is the cut it was made by, a control for
+    making another, and a count: true, and not what you are scanning a page
+    of headings for.
+
+    Faded rather than removed, so the row does not change width when they
+    arrive — a heading that reflows under the pointer is one you cannot aim
+    at.
+    """
+    block = _media_block(web._STYLE, "(hover: hover)")
+
+    assert "h3.group.shelf .crumbsep" in block
+    assert "opacity:0; pointer-events:none" in block
+    # And back on a hover or a tab into it.
+    assert "h3.group.shelf:hover .addgrp" in block
+    assert "h3.group.shelf:focus-within .addgrp" in block
+
+
+def test_the_grid_keeps_the_crumb_that_names_its_section() -> None:
+    """A grid heading ends in a *value* — the name of the section under it —
+    where a shelf heading ends in the name of the cut. Hiding the last crumb
+    on both would hide what half of them are for."""
+    block = _media_block(web._STYLE, "(hover: hover)")
+
+    assert ".shelf" in block
+    for line in block.splitlines():
+        if "crumb:last-child" in line:
+            assert "shelf" in line, line
+
+
+def test_only_one_crumb_means_it_is_the_one_that_names_it() -> None:
+    """Grouped one level deep the cut's name is the whole heading, and fading
+    it leaves a blank row."""
+    block = _media_block(web._STYLE, "(hover: hover)")
+
+    assert ".crumb:last-child:not(:first-child)" in block
+
+
+def test_nothing_hides_where_there_is_no_way_to_ask_for_it(
+    client: TestClient
+) -> None:
+    """A control you cannot reveal is a control you do not have, so on a phone
+    all of it stays on screen."""
+    hover = _media_block(web._STYLE, "(hover: none)")
+
+    assert "crumbsep" not in hover and "addgrp { opacity:0" not in hover
