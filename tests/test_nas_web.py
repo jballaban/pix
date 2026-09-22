@@ -5302,6 +5302,32 @@ def test_the_folder_of_an_event_itself_opens_on_what_it_counted(
     assert opened == {"e1.jpg"}, opened
 
 
+def test_dividing_an_event_up_takes_the_file_out_of_the_undivided_folder(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """The folder of an event *itself* asks for the files in no part of it, so
+    giving one a part is the file leaving that folder — which looks like the
+    edit undoing itself if the grid empties and nothing says why.
+
+    It is the honest answer and it stays: the way out is the cross on the
+    chip, which widens to the whole event. Pinned because it is the one edit
+    that empties the view it was made in, and a future change that quietly
+    stopped reporting it would leave the grid claiming files it no longer
+    holds."""
+    _evented(client, writable, app_env)
+    exact = _quote(f"Sicily{decisions.EVENT_SEP}{ix.NO_EVENT}")
+
+    # `firm`, so the guessed stack the two of them make does not cascade the
+    # write onto the other one — this is about one file leaving one view.
+    out = client.post(f"/api/decide/bulk?event={exact}&stacks=firm", json={
+        "event_leaf": "Beach day",
+        "files": [{"folder": "init_2026", "name": "e1.jpg"}]}).json()
+
+    assert decisions.read(writable / "e1.jpg") is not None
+    assert _named(writable, "e1.jpg") == "Sicily > Beach day"
+    assert [f["name"] for f in out["dropped"]] == ["e1.jpg"], out
+
+
 def test_a_sub_event_is_not_a_filter_of_its_own() -> None:
     """One field at two widths means one filter at two widths. A second
     parameter would be a second thing that could disagree with the first about

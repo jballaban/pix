@@ -3633,7 +3633,12 @@ async function openMenu(anchorEl,ctx){
   // meant nobody could see what an event was divided into without first
   // choosing it. A sub-event is a part of an event and reads as one:
   // indented under it, in a list you can see all of at once.
-  const nested = ctx.mode==='set' && ctx.as==='event';
+  // The filter reads the same shape as the action, because it is a list of
+  // the same names: *Sicily* with its parts under it, rather than *Sicily*,
+  // *Sicily > Taormina*, *Sicily > Catania* — three rows repeating a word
+  // and burying the one thing that differs at the end of each.
+  const nested = ctx.as==='event'
+              || (ctx.mode==='filter' && ctx.column==='event');
   // A file saying *Sicily > Taormina* does say *Sicily* when the question is
   // which event it is in, and says *Sicily > Taormina* when the question is
   // which part of it. So a row is ticked against its own width rather than
@@ -3666,6 +3671,9 @@ async function openMenu(anchorEl,ctx){
       // event's; a sub-event's stands in only while nothing better has been
       // seen, or an event known solely by its parts falls to the bottom.
       if(!leaf||h.scope==null) h.scope=o.scope;
+      // How many are in the event and in no part of it — which is a row of
+      // its own once some of them *are* in a part.
+      if(!leaf) h.own=o.n;
       if(leaf) h.subs.push({value:o.value,label:leaf,sub:true,n:o.n});
     }
     // The event the selection is already in belongs in the list whether or
@@ -3720,7 +3728,9 @@ async function openMenu(anchorEl,ctx){
     // Ticking the event a file already has writes it again rather than
     // clearing it — there is a second half to name and the panel stays on
     // it — so taking an event off has to be a row of its own.
-    if(nested) list.appendChild(opt(
+    // Only where a press writes something. In the filter this would mean
+    // *clear*, and no menu here offers a row that means everything.
+    if(nested&&ctx.mode==='set') list.appendChild(opt(
       {label:'No event',n:null},()=>choose(null,'event')));
     // What these files already say comes first, ticked, so the menu opens
     // showing the answer instead of asking a question whose answer is on
@@ -3742,6 +3752,21 @@ async function openMenu(anchorEl,ctx){
         const s=opt(sub,()=>choose(sub.value,'event'),checkable);
         s.classList.add('sub'); into.appendChild(s);
       });
+      // An event that has been divided up, and still has files in none of
+      // the parts: those files are a set you can ask for, and the folder the
+      // grouping makes for them is reachable from the bar as well.
+      //
+      // Only in the filter. In the action menu the event's own name already
+      // means *and no part of it*, so a row here would be the same answer
+      // twice in less plain words. And only where there is something in it:
+      // an event divided all the way up has no leftovers, and a row matching
+      // nothing is a row that looks broken when pressed.
+      if(ctx.mode==='filter'&&(o.subs||[]).length&&o.own){
+        const rest=o.value+EVENT_SEP+NO_EVENT;
+        const d=opt({value:rest,label:'No sub-event',n:o.own},
+                    ()=>choose(rest));
+        d.classList.add('sub'); into.appendChild(d);
+      }
       // After the parts there are, not before them: naming a new one is rare
       // beside picking one that exists, and the list is what the panel is
       // for.

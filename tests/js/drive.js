@@ -1567,6 +1567,63 @@ function arrow(key, opts) {
     deselect();
   }
 
+  // --- the filter reads the same shape as the action -----------------------
+  // It is a list of the same names, so it is drawn the same way: the event
+  // once, its parts indented under it. Three rows each beginning *Sicily >*
+  // repeat a word and bury the one thing that differs at the end of each.
+  {
+    deselect();
+    const menu = document.byId.menu;
+    // The event chip, which is the first on this bar.
+    document.byId.chips.children.find(c => c._classes.has('chip')).click();
+    await settle(); await settle();
+    const opts = () => menu.querySelectorAll('.opt');
+    const rows = () => opts().map(
+      o => (o.innerHTML.match(/<span>([^<]*)<\/span>/) || [])[1]);
+    const row = name => opts().find(
+      o => new RegExp('<span>' + name + '</span>').test(o.innerHTML));
+
+    check('the event is listed once', rows().filter(r => r === 'Sicily')
+          .length === 1, rows().join(','));
+    check('its parts under it, named short',
+          rows().includes('Taormina') && rows().includes('Catania'),
+          rows().join(','));
+    check('and no row repeats the event',
+          !rows().some(r => /Sicily &gt;|Sicily >/.test(r || '')),
+          rows().join(','));
+    check('a part is marked as one',
+          !!row('Taormina') && row('Taormina')._classes.has('sub'),
+          'not indented under its event');
+    // *Clear* is what the cross on the chip is for. No menu here offers a
+    // row that means everything.
+    check('and nothing here offers to stop filtering',
+          !rows().includes('No event'), rows().join(','));
+
+    // An event that has been divided up and still has files in none of the
+    // parts: those files are a set you can ask for, and the folder the
+    // grouping makes for them is reachable from the bar as well.
+    const rest = row('No sub-event');
+    check('an event with parts offers the files in none of them', !!rest,
+          rows().join(','));
+    check('counted as its own, not as the whole event',
+          !!rest && /<span class="n">4<\/span>/.test(rest.innerHTML),
+          rest ? rest.innerHTML : 'missing');
+    check('and indented, because it is one of that event\'s answers',
+          !!rest && rest._classes.has('sub'), 'not indented');
+    // Cornwall has no parts at all, so it has no leftovers to name: a row
+    // matching everything the event already matches looks broken when pressed.
+    check('an event with no parts offers no such thing',
+          rows().filter(r => r === 'No sub-event').length === 1,
+          rows().join(','));
+
+    if (rest) rest.click();
+    check('and it asks for the event with nothing on the end',
+          decodeURIComponent(location.href.replace(/\+/g, ' '))
+            === '/browse?event=Sicily > (none)&group=day', location.href);
+    location.href = '/browse';
+    deselect();
+  }
+
   // --- an event and the parts of it are one list ----------------------------
   // A sub-event is a part of an event and reads as one: indented under it,
   // visible without opening anything. It used to be a second panel you
