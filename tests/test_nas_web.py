@@ -1621,23 +1621,21 @@ def test_a_folder_says_how_much_of_it_is_done(
     """A year you have finished and a year you have not started are the same
     sentence and different bars.
 
-    What is left reads as a chip like every other fact about the folder, and
-    a share of it rather than a count: it was the one negative thing on the
-    card and the only one shaped differently from all the positive ones.
+    What is left reads as a chip like every other fact about the folder: it
+    was the one negative thing on the card and the only one shaped differently
+    from all the positive ones. The bar is what says *how much*; the chip says
+    *there is some*, and a percentage beside the word said neither better.
     """
     (writable / "b.mp4").write_bytes(b"fake")
     folders = _folders(client.get("/?group=event").text)
     assert 'class="bar"' in folders
-    # Everything is undecided, so there is no share to print — the same rule
-    # every other chip follows.
     assert 'class="none"' in folders and ">undecided<" in folders
-    assert "%</b>" not in folders
 
     client.post("/api/decide/bulk", json={
         "add_audience": ["family"],
         "files": [{"folder": "init_2026", "name": "a.jpg"}]})
     half = _folders(client.get("/?group=event").text)
-    assert ">undecided<b>50%</b>" in half, half
+    assert ">undecided<" in half, half
     assert 'width:50%' in half, "the bar does not move"
 
     client.post("/api/decide/bulk", json={
@@ -2982,12 +2980,16 @@ def test_the_filter_is_called_access(client: TestClient) -> None:
 
 # --- layout and the viewer ----------------------------------------------------
 
-def test_counts_and_messages_live_in_the_footer(client: TestClient) -> None:
-    """Every row of chrome at the top is a row of photographs pushed off."""
+def test_nothing_stands_along_the_bottom(client: TestClient) -> None:
+    """A version, a count and an index age do not change while you read them
+    and nobody is waiting for any of them — so a fixed band of screen spent
+    on saying so is a band of photographs not shown. They are under the
+    account now, where you go when you want to know."""
     html = client.get("/browse").text
 
-    assert 'class="footbar"' in html
-    assert html.index('class="footbar"') > html.index('id="grid"')
+    assert "footbar" not in html
+    for moved in ("v" + web._PIX_VERSION, "indexed "):
+        assert moved in html, moved
 
 
 def test_the_identity_controls_sit_top_right(client: TestClient) -> None:
@@ -3361,7 +3363,6 @@ def test_the_page_script_comes_last(client: TestClient) -> None:
     anything — and said nothing, because saying things was the broken part."""
     html = client.get("/browse").text
 
-    assert html.index("<footer") < html.index("const VIEW=")
     assert html.index('id="note"') < html.index("const VIEW=")
     assert html.index('id="count"') < html.index("const VIEW=")
     assert html.index('id="grid"') < html.index("const VIEW=")
@@ -3982,16 +3983,16 @@ def test_an_unknown_name_draws_nothing_rather_than_a_broken_shape() -> None:
     assert web._mark("nonesuch") == ""
 
 
-def test_the_footer_carries_no_instructions(client: TestClient) -> None:
+def test_the_page_carries_no_instructions(client: TestClient) -> None:
     """A standing sentence about clicking and holding is read once and then
     occupies a fixed strip at the bottom of every screen for as long as the
     app exists — which on a phone was three lines of it."""
     html = client.get("/browse").text
-    footer = html[html.index('<footer'):html.index("</footer>")]
 
-    assert "shift" not in footer and "circle to select" not in footer
-    # What is left is what this page is now.
-    assert 'id="count"' in footer and 'id="note"' in footer
+    assert "circle to select" not in html
+    # The one thing that was down there and had to stay: how every write says
+    # whether it happened.
+    assert 'id="note"' in html
 
 
 def test_taking_a_copy_away_is_drawn_too(client: TestClient) -> None:
@@ -4665,17 +4666,30 @@ def test_a_share_the_whole_folder_carries_prints_no_percentage(
     assert "<b>" not in who, who
 
 
-def test_a_tag_only_some_of_it_carries_prints_the_share(
+def test_a_chip_says_the_name_and_nothing_else(
     client: TestClient, writable: Path, app_env: dict[str, Path]
 ) -> None:
-    """Which is the whole reason to look: *half of this event is done* is a
-    thing you would otherwise have had to open it to learn."""
+    """A share was printed beside each one while *undecided* was still a count
+    in a sentence underneath, and the number kept that reading alive. Once
+    what is left became a chip of its own, `bob 5%` stopped answering anything
+    anybody asks of a folder — *who is in here* and *what is left* are the
+    questions, and neither is a percentage.
+
+    It cost horizontal room on the one screen with none to spare, which is how
+    it was noticed. The counts stay in the tooltip, where they cost nothing.
+    """
     _mixed(client, writable, app_env)
 
     card = _card(client.get("/?date=2026&group=year&stacks=firm").text)
     tags = card[card.index('class="spread tags"'):]
+    tags = tags[:tags.index("</span>") + 7]
 
-    assert "%</b>" in tags, tags
+    assert "%" not in tags, tags
+    assert "<b>" not in tags, tags
+    assert ">beach</i>" in tags, tags
+    # Still there for anyone who wants it, and costing nothing to anyone who
+    # does not.
+    assert "of 5" in tags, tags
 
 
 def test_a_folder_names_every_value_it_holds(
@@ -4796,12 +4810,13 @@ def test_the_landing_page_opens_on_the_folders(client: TestClient) -> None:
 
 
 def test_but_it_still_says_what_the_library_holds(client: TestClient) -> None:
-    """Moved, not dropped. The strip along the bottom was carrying a version
-    number and nothing else."""
+    """Moved, not dropped — into the account menu, which is where the rest
+    of what you reach for once in a while already lives."""
     html = client.get("/?date=2026&group=year").text
-    foot = html[html.index("<footer"):html.index("</footer>")]
+    menu = html[html.index('class="memenu"'):]
+    menu = menu[:menu.index("</span></span>")]
 
-    assert "files" in foot and "undated" in foot and "indexed" in foot
+    assert "files" in menu and "undated" in menu and "indexed" in menu
 
 
 # --- the bar on a phone -------------------------------------------------------
@@ -4845,22 +4860,15 @@ def test_what_is_waiting_rides_on_the_control_you_can_see(
     assert 'class="dot"' in bar
 
 
-def test_the_corner_moves_to_the_footer_where_there_is_no_room(
-    client: TestClient
-) -> None:
-    """The corner is a picture of the grid under it, which is worth a row of
-    nothing on a phone. A second element rather than the corner moved: down
-    there, among a version number and a count, a picture alone would be a
-    mystery, so it carries the word too."""
+def test_the_corner_stays_where_it_can_be_read(client: TestClient) -> None:
+    """It went to the bottom while the bar was four rows deep. The bar is the
+    filters and a gear now, and a picture of the grid under it earns the
+    thirty pixels — which is the whole reason the corner is a picture."""
     html = client.get("/browse?event=Italy%20-%20Sicily").text
-    foot = html[html.index("<footer"):html.index("</footer>")]
     coarse = _media_block(web._STYLE, "(max-width: 720px)")
 
-    assert 'class="zoom"' in foot and "Folders" in foot
-    assert ".topbar .brand { display:none; }" in coarse
-    assert ".footbar .zoom { display:inline-flex; }" in coarse
-    # And it is not there on a desktop, where the corner is.
-    assert ".footbar .zoom { display:none;" in web._STYLE
+    assert 'class="brand"' in html
+    assert ".topbar .brand { display:none; }" not in coarse
 
 
 def test_a_filter_doing_nothing_is_not_on_a_phones_bar() -> None:
@@ -4910,3 +4918,50 @@ def test_making_a_control_bigger_does_not_make_it_visible() -> None:
 
     assert "display" not in rule, rule
     assert "min-height:44px" in rule
+
+
+# --- one surface from another -------------------------------------------------
+
+def _luminance(colour: str) -> float:
+    raw = colour.lstrip("#")
+    parts = [int(raw[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+    lit = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+           for c in parts]
+    return 0.2126 * lit[0] + 0.7152 * lit[1] + 0.0722 * lit[2]
+
+
+def _contrast(a: str, b: str) -> float:
+    high, low = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (high + 0.05) / (low + 0.05)
+
+
+def _var(name: str) -> str:
+    found = re.search(re.escape(name) + r":\s*(#[0-9a-f]+)", web._STYLE)
+    assert found is not None, name
+    return found.group(1)
+
+
+def test_a_card_reads_as_a_thing_on_the_page() -> None:
+    """They were a shade apart and measured it: a tile against the page was
+    1.08:1 and its own border 1.04:1 against the tile — which is not an edge,
+    it is a rumour of one. Forty of them read as a single grey field with text
+    in it."""
+    assert _contrast(_var("--panel"), _var("--bg")) > 1.18
+    assert _contrast(_var("--line"), _var("--panel")) > 1.35
+    assert _contrast(_var("--chrome"), _var("--bg")) > 1.25
+
+
+def test_the_quiet_text_is_still_readable_on_it() -> None:
+    """Lifting the surfaces moves the floor under everything written on them,
+    and the half of the app that is dim text is the half that notices."""
+    assert _contrast(_var("--dim"), _var("--panel")) >= 4.5
+    assert _contrast(_var("--fg"), _var("--panel")) >= 7
+
+
+def test_a_card_is_lifted_as_well_as_outlined() -> None:
+    """An edge and a shadow say *this is on top of that* twice, which is what
+    a card needs to say when there are forty of them."""
+    tile = web._STYLE[web._STYLE.index(".tile { display:flex"):]
+    tile = tile[:tile.index("}")]
+
+    assert "box-shadow" in tile and "border:1px solid var(--line)" in tile

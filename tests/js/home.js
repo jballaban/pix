@@ -364,10 +364,12 @@ const press = key => (keys.keydown || []).forEach(fn => fn(
       k => k._classes.has('spread') && k._classes.has('audience')
     ) || { innerHTML: '' }).innerHTML || '';
 
-    // What is left to decide reads as a chip like every other fact about the
-    // folder — one of the two files here is shared and the other is not.
-    check('what is undecided is a chip, with its share',
-          /class="none"[^>]*>undecided<b>50%<\/b>/.test(audience()),
+    // What is left to decide reads as a chip like every other fact about
+    // the folder, and says the name and nothing else — one of the two files
+    // here is shared and the other is not.
+    check('what is undecided is a chip like the rest',
+          /class="none"[^>]*>undecided<\/i>/.test(audience()), audience());
+    check('and no chip carries a percentage', !/%/.test(audience()),
           audience());
 
     act('access').click();
@@ -383,9 +385,7 @@ const press = key => (keys.keydown || []).forEach(fn => fn(
       check('the menu is still open to tick another', menu.hidden === false);
       check('and the card underneath it has changed',
             /family/.test(audience()), audience());
-      // Both files were written, so that one is all of them and prints no
-      // share — while the file that was already shared with `kid` still does.
-      check('the new one covers the folder, so no percentage',
+      check('and the new one is named plainly too',
             />family<\/i>/.test(audience()), audience());
       check('and nothing is undecided any more',
             !/undecided/.test(audience()), audience());

@@ -216,9 +216,16 @@ async def shapes_disagree(request: Request, exc: Exception) -> Response:
 # --- pages -------------------------------------------------------------------
 
 _STYLE = """
-:root { color-scheme: dark; --bg:#14161a; --fg:#e7e9ee; --dim:#8b93a3;
-        --line:#272b33; --accent:#6aa3ff; --keep:#56c16a; --top:#e3b341; --gone:#e06c5a;
-        --panel:#1b1e24;
+/* **A card has to look like a card.** The surfaces were a shade apart and
+   measured it: a tile against the page was 1.08:1, and its own border 1.04:1
+   against the tile — which is not an edge, it is a rumour of one. Forty of
+   them read as a single grey field with text in it, which is the complaint.
+   Raised until each plane is told from the one beneath it: the page, the
+   surfaces on it, and the lines that end them. No colour changed; the steps
+   between them did. */
+:root { color-scheme: dark; --bg:#14161a; --fg:#e7e9ee; --dim:#98a1b2;
+        --line:#3a4250; --accent:#6aa3ff; --keep:#56c16a; --top:#e3b341; --gone:#e06c5a;
+        --panel:#222833;
         /* Accent at a sixth, for saying *this one* behind a word rather than
            through it. */
         --tint:#6aa3ff2b;
@@ -228,7 +235,7 @@ _STYLE = """
            first group, on the same background, looking like the same kind of
            control. Reaching for the group and selecting the library is a
            mistake the colour was inviting. */
-        --chrome:#1e232b;
+        --chrome:#262d38;
         /* One control's outer height: a 21px line (14px at 1.5), 4px of
            padding each side, 1px of border each side. Named because two rules
            have to agree on it — see `.row`. */
@@ -251,7 +258,7 @@ a { color:var(--accent); text-decoration:none; }
 a:hover { background:var(--tint); box-shadow:0 0 0 3px var(--tint);
           border-radius:2px; }
 .dim { color:var(--dim); }
-main { padding:16px max(var(--gut),env(safe-area-inset-right)) 40px
+main { padding:16px max(var(--gut),env(safe-area-inset-right)) 20px
                max(var(--gut),env(safe-area-inset-left)); }
 
 /* The bar never leaves: filters are the address of what you are looking at,
@@ -319,21 +326,11 @@ main { padding:16px max(var(--gut),env(safe-area-inset-right)) 40px
 .chips .addchip { display:none; }
 .addchip { padding:3px 9px; font-weight:600; color:var(--dim); }
 .addchip:hover { color:var(--fg); border-color:var(--dim); }
-/* Counts and messages along the bottom, so the header is only controls:
-   every row of chrome up there is a row of photographs pushed off. */
-.footbar { position:fixed; left:0; right:0; bottom:0; z-index:4;
-           background:var(--chrome); border-top:1px solid #0008;
-           padding:6px max(var(--gut),env(safe-area-inset-right))
-                   calc(6px + env(safe-area-inset-bottom))
-                   max(var(--gut),env(safe-area-inset-left));
-           display:flex; gap:14px; align-items:baseline;
-           flex-wrap:wrap; font-size:12px; }
-.footbar:empty { display:none; }
 /* The install offer, above the footer rather than over the photographs. It is
    an aside, not a decision to make, so it has the weight of one: panel colours,
    one line, and a way to end it permanently. */
 .install { position:fixed; left:12px; right:12px; z-index:6;
-           bottom:calc(40px + env(safe-area-inset-bottom));
+           bottom:calc(12px + env(safe-area-inset-bottom));
            display:flex; gap:10px; align-items:center; font-size:13px;
            background:var(--panel); border:1px solid var(--line);
            border-radius:8px; padding:9px 11px;
@@ -343,22 +340,36 @@ main { padding:16px max(var(--gut),env(safe-area-inset-right)) 40px
 .install .no { background:none; border:none; color:var(--dim);
                cursor:pointer; padding:4px 6px; }
 .install .no:hover { color:var(--fg); }
-.footbar .note { margin:0; margin-left:auto; }
-.ver { color:var(--dim); font-variant-numeric:tabular-nums;
-       white-space:nowrap; }
-/* The other view of the same library, for where the corner cannot be. */
-.footbar .zoom { display:none; align-items:center; gap:6px; color:var(--fg); }
-.footbar .zoom svg { display:block; }
-.note.loud { background:#5a1d16; color:#ffd9d2; padding:2px 8px;
-             border-radius:3px; font-weight:600; }
-main { padding-bottom:48px; }
+/* Not a strip that is usually empty — a note that is not there until there
+   is something to say. It is how every write reports whether it happened, so
+   it has to be unmissable when it speaks and take nothing when it does not. */
+.note { position:fixed; z-index:22;
+        left:50%; transform:translateX(-50%);
+        bottom:calc(14px + env(safe-area-inset-bottom));
+        max-width:min(560px, calc(100vw - 24px));
+        background:var(--panel); color:var(--fg);
+        border:1px solid var(--line); border-radius:6px;
+        padding:9px 14px; font-size:13px;
+        box-shadow:0 14px 34px -12px #000e; }
+.note[hidden] { display:none; }
+/* What the library is, under the account. Read when wanted, never standing
+   in front of the photographs. */
+.memenu .info { display:block; border-top:1px solid var(--line);
+                margin-top:4px; padding-top:5px; }
+.memenu .info .line { display:block; padding:3px 10px; color:var(--dim);
+                      font-size:11px; white-space:nowrap; }
+.memenu .info .ver { font-variant-numeric:tabular-nums; }
+
+.note.loud { background:#5a1d16; color:#ffd9d2; border-color:#7c2f24;
+             font-weight:600; }
+
 /* Still used inside the date menu, which explains what an empty box will
    do — a sentence about the control you are looking at, which is not the
    same thing as a standing list of gestures along the bottom of the app. */
 .hint { color:var(--dim); font-size:12px; }
 .hint b { color:var(--fg); font-weight:600; }
 
-button, .chip { background:#222833; color:var(--fg); border:1px solid var(--line);
+button, .chip { background:#2b3340; color:var(--fg); border:1px solid var(--line);
         border-radius:4px; padding:4px 10px; font:inherit; cursor:pointer; }
 /* A chip is a drawing, a value and a cross in a row, so it lays them out
    rather than relying on them being inline. `gap` is what stops the glyph
@@ -460,7 +471,10 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
 .grid.folders { grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); }
 .tile { display:flex; flex-direction:column; gap:3px; padding:11px 13px 12px;
         background:var(--panel); border:1px solid var(--line);
-        border-radius:4px; text-decoration:none; color:var(--fg); }
+        border-radius:5px; text-decoration:none; color:var(--fg);
+        /* An edge and a shadow say *this is a thing on top of that* twice,
+           which is what a card needs to say when there are forty of them. */
+        box-shadow:0 1px 2px #0006, 0 6px 14px -10px #000a; }
 .tile .name { font-size:14px; font-weight:600; line-height:1.3;
               overflow-wrap:anywhere; }
 .tile .name .sep { color:var(--dim); font-style:normal; font-weight:400;
@@ -481,8 +495,8 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
    inside the blue is how much of *that* has been decided. A year you have
    finished and a year you have not started are the same sentence and
    different bars, and so are a whole event and a fortnight of one. */
-.tile .bar { height:4px; margin-top:8px; border-radius:2px;
-             background:#2a3038; overflow:hidden; }
+.tile .bar { height:5px; margin-top:8px; border-radius:3px;
+             background:#11141a; overflow:hidden; }
 .tile .bar i { display:block; height:100%; background:var(--accent);
                border-radius:2px; }
 .tile .bar i b { display:block; height:100%; background:var(--keep);
@@ -494,11 +508,7 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
             padding:1px 5px; border-radius:3px; background:#000b;
             max-width:100%; overflow:hidden; white-space:nowrap;
             text-overflow:ellipsis; }
-/* The share that carries it, and only where that is not all of it: a value
-   the whole folder has is a fact about the folder and reads as a plain word,
-   exactly as it does on a thumbnail. `100%` beside everything would bury the
-   one chip that is not. */
-.spread i b { font-weight:600; margin-left:4px; opacity:.72; }
+
 /* Each one opens the folder cut down to itself, so it reads as something to
    press rather than as a label that happens to be there. */
 .spread i[data-col] { cursor:pointer; }
@@ -517,8 +527,8 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
    was drawn green for as long as it sat higher up the file. Anything added
    below this that colours a chip takes it back. */
 .spread.audience i.none { color:var(--top); }
-.tile:hover { border-color:var(--accent); background:#20242b;
-             box-shadow:none; }
+.tile:hover { border-color:var(--accent); background:#272e3b;
+             box-shadow:0 1px 2px #0006, 0 10px 22px -12px #000c; }
 /* A folder can be selected, so it carries the same circle a thumbnail does
    and reads the same when it is chosen. Top right rather than top left: a
    card leads with its name, and a control over the first word of it is a
@@ -878,7 +888,7 @@ h2.year span { font-size:13px; font-weight:400; }
    same, which is a control that does nothing two-thirds of the time. */
 @media (max-width: 720px) {
   :root { --gut:10px; }
-  main { padding-top:12px; padding-bottom:56px; }
+  main { padding-top:12px; padding-bottom:16px; }
   .grid { grid-template-columns:repeat(auto-fill,minmax(108px,1fr)); }
   .grid[data-size="medium"] {
           grid-template-columns:repeat(auto-fill,minmax(165px,1fr)); }
@@ -896,11 +906,9 @@ h2.year span { font-size:13px; font-weight:400; }
   .memenu .whoami { display:block; color:var(--dim); font-size:11px;
                     text-transform:uppercase; letter-spacing:.07em;
                     padding:7px 10px 3px; }
-  /* The corner is a picture of the grid under it, which is worth a row of
-     nothing on a screen this size. It moves to the strip along the bottom,
-     which had a version number and a count on it. */
-  .topbar .brand { display:none; }
-  .footbar .zoom { display:inline-flex; }
+  /* The corner stays. It was moved to the bottom when the bar was four rows
+     deep; the bar is the filters and a gear now, and a picture of the grid
+     under it earns the thirty pixels. */
 
   /* The unused filters are ten glyphs, which fit across a desktop bar and
      do not fit across a phone. Here the same list stays behind the `+`.
@@ -1152,25 +1160,6 @@ _FAVICON = "data:image/svg+xml," + quote(
     'stroke-linecap="round" stroke-linejoin="round"/></svg>', safe="")
 
 
-def _zoom_link(zoom: str) -> str:
-    """The same control as the corner, for the strip along the bottom.
-
-    Rendered always and shown only where the corner is not — a second element
-    rather than the corner moved, because the two say it differently: up there
-    it is a picture of the grid under it, and down here, among a version
-    number and a count, a picture alone would be a mystery. So it carries the
-    word as well.
-    """
-    if not zoom:
-        return ""
-    folders = zoom.startswith("/browse")
-    say = "Show the files" if folders else "Show the folders"
-    return (f'<a class="zoom" href="{_h(zoom)}" title="{say}" '
-            f'aria-label="{say}">'
-            f'{_FOLDERS_MARK if folders else _FILES_MARK}'
-            f'<span>{"Files" if folders else "Folders"}</span></a>')
-
-
 def _brand(zoom: str) -> str:
     """The corner: on the two library pages a control, everywhere else the logo.
 
@@ -1302,7 +1291,7 @@ _INSTALL_JS: str = """
 
 
 def _page(title: str, body: str, *, tools: str = "", rows: str = "",
-          right: str = "", footer: str = "", script: str = "",
+          right: str = "", info: str = "", script: str = "",
           zoom: str = "", status_code: int = 200,
           user: Principal | None = None) -> HTMLResponse:
     """One shell.
@@ -1322,16 +1311,25 @@ def _page(title: str, body: str, *, tools: str = "", rows: str = "",
     live down there so the header is only controls — every row of chrome at the
     top is a row of photographs pushed off the screen.
 
-    The **version** is in the footer of every page, for the same reason the CLI
-    prints it on every run: so that what is on screen and what is in the tree
-    can be compared. The page script is inlined into this HTML, so an open tab
-    keeps the script it was served with — a stale tab and a broken build look
-    identical from the outside, and this is what tells them apart.
+    **There is no strip along the bottom.** It held a version, a count and an
+    index age — three things that do not change while you read them and that
+    nobody is waiting for — and it was a fixed band of screen spent on saying
+    so. They are `info` now, under the account menu, where you go when you
+    want to know rather than all the time.
 
-    `script` goes **last**, after the footer. A page script that runs from
-    inside `<main>` cannot see anything below it: moving the count and the
-    message line into the footer left both as `null`, and the first thing every
-    write did was set a message — so nothing was ever sent, silently.
+    The **version** is still on every page, for the same reason the CLI prints
+    it on every run: the script is inlined into this HTML, so an open tab
+    keeps the build it was served with, and a stale tab and a broken build
+    look identical from the outside.
+
+    What was down there and had to stay is the **message line**, which is how
+    all forty-odd writes say whether they happened. It is not a strip any
+    more; it is a note that is not on screen until there is something to say.
+
+    `script` goes **last**. A page script that runs from inside `<main>`
+    cannot see anything below it: moving the count and the message line out of
+    it once left both as `null`, and the first thing every write did was set a
+    message — so nothing was ever sent, silently.
     """
     # **Never reuse a page.** It carries its own script inlined, so a cached
     # page is a cached *build* — and nothing here says how old one is: no
@@ -1360,9 +1358,9 @@ def _page(title: str, body: str, *, tools: str = "", rows: str = "",
 <link rel="icon" href="{_FAVICON}"><style>{_STYLE}</style></head><body>
 <div class="topbar">
 <div class="row">{_brand(zoom)}{tools}
-<span class="spacer"></span><span class="right">{_whoami(user, right)}</span></div>{rows}
+<span class="spacer"></span><span class="right">{_whoami(user, right, info)}</span></div>{rows}
 </div><main>{body}</main>
-<footer class="footbar"><span class="ver">v{_PIX_VERSION}</span>{_zoom_link(zoom)}{footer}</footer>
+<span class="note" id="note" hidden></span>
 {script}
 <script>if('serviceWorker' in navigator)window.addEventListener('load',function(){{
   navigator.serviceWorker.register('/sw.js').catch(function(){{}});}});</script>
@@ -1387,7 +1385,8 @@ _GEAR: str = (
     'h-.1a1.5 1.5 0 0 0-1.4.9z"/></svg>')
 
 
-def _whoami(user: Principal | None, extra: str = "") -> str:
+def _whoami(user: Principal | None, extra: str = "",
+            info: str = "") -> str:
     """Who you are, what is waiting, and everything you do rarely — one
     control.
 
@@ -1432,6 +1431,8 @@ def _whoami(user: Principal | None, extra: str = "") -> str:
         f'<span class="memenu">'
         f'<span class="whoami">{_h(user.name)}</span>'
         f'{extra}{activity}{quiet}{manage}'
+        f'<span class="info">{info}'
+        f'<span class="line ver">v{_PIX_VERSION}</span></span>'
         f'<form method="post" action="/logout">'
         f'<button>Sign out</button></form></span></span>')
 
@@ -1720,15 +1721,13 @@ def home(request: Request,
                  f'{body}<div id="menu" hidden></div>{_WORKING}',
                  tools='<div class="chips" id="chips"></div>',
                  rows=_actions(user, folders=True),
-                 # Along the bottom rather than over the folders. It is a
-                 # standing description of the library — how much of it
-                 # there is, how much is undated, when it was last indexed —
-                 # and none of it changes while you are reading, so a row of it
-                 # above the grid was a row of folders pushed off the screen to
-                 # say something that had not moved since yesterday. The strip
-                 # down there was carrying a version number and nothing else.
-                 footer=f'<span class="count">{head}</span>'
-                        '<span id="note" class="note"></span>',
+                 # Under the account rather than over the folders or along the
+                 # bottom. It is a standing description of the library — how
+                 # much there is, how much is undated, when it was last
+                 # indexed — and none of it changes while you read, so
+                 # anywhere permanent is a row of folders spent on something
+                 # that has not moved since yesterday.
+                 info=head,
                  script=_view_script(user, view, groups, page="/"),
                  zoom="/browse" + (f"?{q}" if q else ""),
                  user=user)
@@ -1783,11 +1782,15 @@ def _spread_html(kind: str, values: list[tuple[str, int]], n: int,
                  lead: tuple[str, int] | None = None) -> str:
     """What a section says about itself, one kind of value at a time.
 
-    **A percentage only where it is news.** A value the whole folder carries
-    is a fact about the folder and reads as a plain word, exactly as it does
-    on a thumbnail; one that half of it carries is the interesting case, and
-    the number is the whole reason to look. Printing `100%` beside everything
-    would bury the one chip that is not.
+    **The name and nothing else.** A share was printed beside each one while
+    *undecided* was still a count in a sentence underneath, and the number was
+    there to keep that reading alive. Once what is left became a chip of its
+    own, `bob 5%` stopped answering anything anybody asks of a folder —
+    *who is in here* and *what is left* are the questions, and neither of them
+    is a percentage. It cost horizontal room on the one screen with none to
+    spare, which is how it was noticed.
+
+    The counts stay in the tooltip, where they cost nothing.
 
     **All of them, and the card grows.** The first version named three and
     finished with `+4`, which is the one thing a summary must not do: it says
@@ -1817,9 +1820,7 @@ def _spread_html(kind: str, values: list[tuple[str, int]], n: int,
                f" — click for the {_h(value)} ones in here")
         return (f'<i class="{cls}"{where} '
                 f'title="{_h(value)} — {count:,} of {n:,}{say}">'
-                + _h(value)
-                + (f'<b>{round(count * 100 / n)}%</b>' if count < n else "")
-                + "</i>")
+                + _h(value) + "</i>")
 
     # `undecided` is not a value anything carries, it is the absence of one —
     # and the audience filter has a word for that, the same one its own chip
@@ -2081,8 +2082,8 @@ def browse(request: Request,
         # phone was three lines of it. The gestures are the ordinary ones; the
         # footer is for what this page is *now*, which is the count and
         # whatever the last write had to say.
-        footer=f"""<span class="count" id="count">{shown}</span>
-<span class="note" id="note" hidden></span>""",
+        info=(f'<span class="line" id="count">{shown}</span>'
+              f'<span class="line">indexed {_age(ix.built_at(conn))}</span>'),
         user=user)
 
 
@@ -4151,8 +4152,7 @@ function redrawFolder(t){
     const chip=(v,c,cls,on)=>`<i class="${cls||''}"`
       +` data-col="${col}" data-val="${esc(on||v)}"`
       +` title="${esc(v)} — ${c} of ${n} — click for the ${esc(v)} ones`
-      +` in here">${esc(v)}`
-      +(c<n?`<b>${Math.round(c*100/n)}%</b>`:'')+'</i>';
+      +` in here">${esc(v)}</i>`;
     el.innerHTML=(none?chip('undecided',none,'none',UNREVIEWED):'')
                 +sorted.map(([v,c])=>chip(v,c)).join('');
   }
