@@ -51,6 +51,41 @@ from pix.nas.decisions import Decision
 #: machinery to maintain for something a `pix2 index` reproduces exactly.
 SCHEMA_VERSION: int = 11
 
+#: What separates an event from a sub-event inside one name.
+#:
+#: **One field, two widths** — the same shape `date` already has, where
+#: `2026`, `2026-08` and `2026-08-30` are one filter answering one question at
+#: three widths. *Sicily* and *Sicily > Taormina* are that question at two, so
+#: they are one value and one column, and there is no schema for a sub-event
+#: to have.
+#:
+#: Spaces around it on purpose: the name goes out to other tools in
+#: `Iptc4xmpExt:Event`, which is free text, and *Sicily > Taormina* reads
+#: there as a name rather than as a path somebody forgot to parse.
+#:
+#: Two levels and no more, refused on the way in — see `decisions`. Nothing
+#: below is structurally limited to two; the grouping, the menus and the
+#: three-deep cap on the landing page all are.
+EVENT_SEP: str = " > "
+
+#: The event a name belongs to, with any sub-event taken off it.
+_EVENT_HEAD: str = (
+    f"CASE WHEN instr(files.event, '{EVENT_SEP}') > 0 "
+    f"THEN substr(files.event, 1, instr(files.event, '{EVENT_SEP}') - 1) "
+    f"ELSE files.event END")
+
+
+def under(event: str) -> str:
+    """A `LIKE` pattern for everything below `event`.
+
+    Escaped, because an event is free text and a `%` in one would otherwise
+    match the rest of the library.
+    """
+    safe = (event.replace("\\", "\\\\")
+            .replace("%", "\\%").replace("_", "\\_"))
+    return f"{safe}{EVENT_SEP}%"
+
+
 #: `audience` filter value meaning *nobody yet* — the "New" chip in the UI.
 #: A sentinel rather than a separate reviewed flag: a file with no audience
 #: has had no decision made about it, and modelling that twice invites the
@@ -82,7 +117,15 @@ GROUPINGS: dict[str, str | None] = {
     "month": ("CASE WHEN files.precision >= 7 "
               "THEN substr(files.effective_date, 1, 7) END"),
     "year": "CASE WHEN files.precision >= 4 THEN files.year END",
-    "event": "COALESCE(files.event, '(none)')",
+    # The event proper, which is the whole name where there is no sub-event
+    # and the part in front of the separator where there is. Grouping by event
+    # puts *Sicily* and *Sicily > Taormina* under one heading, which is what
+    # makes a sub-event a subdivision rather than a second event.
+    "event": f"COALESCE({_EVENT_HEAD}, '(none)')",
+    # And the whole name, which for a file with no sub-event is the event. So
+    # *by sub-event* is every event, opened one level further where there is
+    # one level further to open.
+    "subevent": "COALESCE(files.event, '(none)')",
     "camera": "COALESCE(files.camera, '(unknown)')",
     # Where it came into the library from, in the words the person doing the
     # importing used. Not the same question as which camera: a phone is
@@ -950,8 +993,14 @@ def _clauses(filters: Filters) -> dict[str, tuple[str, dict[str, Any]]]:
             {"f_chosen": json.dumps(
                 [f + chr(10) + n for f, n in filters.chosen])})
     if filters.event is not None:
-        out["event"] = ("COALESCE(files.event, '(none)') = :f_event",
-                        {"f_event": filters.event})
+        # This one **and everything below it**, the way a date filter answers
+        # a year with every day in it. `event=Sicily` is the trip; picking
+        # `Sicily > Taormina` narrows to the afternoon, and no second filter
+        # had to be invented for it.
+        out["event"] = (
+            "(COALESCE(files.event, '(none)') = :f_event "
+            " OR files.event LIKE :f_event_under ESCAPE '\\')",
+            {"f_event": filters.event, "f_event_under": under(filters.event)})
     if filters.date == UNDATED:
         # Undated is *no date at all*, not *not to that precision*. A file
         # known to be from August is not undated, and answering a day filter

@@ -5129,3 +5129,122 @@ def test_nothing_hides_where_there_is_no_way_to_ask_for_it(
     hover = _media_block(web._STYLE, "(hover: none)")
 
     assert "crumbsep" not in hover and "addgrp { opacity:0" not in hover
+
+
+# --- an event, and one level inside it ----------------------------------------
+
+def _named(writable: Path, name: str) -> str | None:
+    """What one file calls its event, whole."""
+    decision = decisions.read(writable / name)
+    assert decision is not None, name
+    return decision.event
+
+
+def _evented(client: TestClient, writable: Path,
+             app_env: dict[str, Path]) -> None:
+    """Two files under one event, one of them in a sub-event of it."""
+    _burst(app_env, writable, "e1.jpg", "e2.jpg")
+    for name, event in (("e1.jpg", "Sicily"),
+                        ("e2.jpg", "Sicily > Taormina")):
+        client.post("/api/decide", json={
+            "folder": "init_2026", "name": name, "event": event})
+
+
+def test_an_event_filter_reaches_inside_itself(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """The way a date filter answers a year with every day in it. `Sicily` is
+    the trip; picking `Sicily > Taormina` narrows to the afternoon, and no
+    second filter had to be invented for it."""
+    _evented(client, writable, app_env)
+
+    trip = {r["name"] for r in
+            client.get("/api/files?event=Sicily&stacks=firm").json()}
+    inside = {r["name"] for r in client.get(
+        "/api/files?event=Sicily%20%3E%20Taormina&stacks=firm").json()}
+
+    assert trip == {"e1.jpg", "e2.jpg"}
+    assert inside == {"e2.jpg"}
+
+
+def test_grouping_by_event_puts_a_sub_event_under_it(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """Which is what makes a sub-event a subdivision rather than a second
+    event sitting beside the first."""
+    _evented(client, writable, app_env)
+    conn = ix.open_ro(app_env["db"])
+    try:
+        by_event = {r["grp0"]: r["n"] for r in
+                    ix.sections(conn, ix.Filters(stacks="firm"),
+                                groups=["event"])}
+        by_sub = {r["grp0"]: r["n"] for r in
+                  ix.sections(conn, ix.Filters(stacks="firm"),
+                              groups=["subevent"])}
+    finally:
+        conn.close()
+
+    assert by_event["Sicily"] == 2
+    assert by_sub["Sicily"] == 1 and by_sub["Sicily > Taormina"] == 1
+
+
+def test_renaming_an_event_over_a_selection_keeps_each_sub_event(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """One request, a different answer per file — which is the whole reason
+    the halves are written separately rather than composed by the caller."""
+    _evented(client, writable, app_env)
+
+    client.post("/api/decide/bulk", json={
+        "event_head": "Family Trip",
+        "files": [{"folder": "init_2026", "name": "e1.jpg"},
+                  {"folder": "init_2026", "name": "e2.jpg"}]})
+
+    assert _named(writable, "e1.jpg") == "Family Trip"
+    assert _named(writable, "e2.jpg") == "Family Trip > Taormina"
+
+
+def test_reverting_a_rename_puts_each_name_back(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """A half-name write resolves differently per file, so the log records the
+    name each one ended up with rather than the half that was asked for —
+    reverting compares what it recorded against what the file says now, and a
+    batch-wide *event_head* would match neither."""
+    _evented(client, writable, app_env)
+    client.post("/api/decide/bulk", json={
+        "event_head": "Family Trip",
+        "files": [{"folder": "init_2026", "name": "e1.jpg"},
+                  {"folder": "init_2026", "name": "e2.jpg"}]})
+
+    client.post("/history/revert", data={"id": history.recent()[0].id})
+
+    assert _named(writable, "e1.jpg") == "Sicily"
+    assert _named(writable, "e2.jpg") == "Sicily > Taormina"
+
+
+def test_a_sub_event_is_not_a_filter_of_its_own() -> None:
+    """One field at two widths means one filter at two widths. A second
+    parameter would be a second thing that could disagree with the first about
+    which files are in an event."""
+    assert "subevent" not in dict(web._CHIPS)
+    assert "subevent" not in ix.Filters.NAMES
+    # But it is a way to cut the library up, and drilling one sets the event.
+    assert ("subevent", "By sub-event") in web._GRID_GROUPS
+    assert web._DRILL["subevent"] == "event"
+
+
+def test_a_household_member_may_name_one_but_not_smuggle_a_share(
+    household: dict[str, object], writable: Path
+) -> None:
+    """Half-name writes are not in the log's vocabulary, so they had to be
+    named in the permission check or they would have reached the archive
+    unchecked."""
+    kid = cast(TestClient, household["kid"])
+
+    assert kid.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "event_head": "Sicily"
+    }).status_code == 200
+    assert kid.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "add_audience": ["kid"]
+    }).status_code == 403

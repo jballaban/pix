@@ -625,6 +625,10 @@ h3.group.shelf .crumb:last-child .grpname { color:var(--dim);
          font:inherit; cursor:pointer; opacity:0; transition:opacity .1s; }
 .crumb:hover .rmgrp, .rmgrp:focus { opacity:1; }
 .rmgrp:hover { color:#ffb4a2; }
+/* Back out of one event to the list of them. Reads as a way up rather than
+   as one more thing to pick, which is what it is. */
+.opt.up { color:var(--dim); }
+.opt.up:hover { color:var(--fg); }
 /* The name is the control: click it to regroup, `+` to group within it. */
 .grpname { background:none; border:0; box-shadow:none; padding:0; margin:0;
            color:inherit; font:inherit; cursor:pointer; }
@@ -2093,6 +2097,7 @@ def _span(first: object, last: object) -> str:
 #: and then had nowhere to send you.
 _DRILL: dict[str, str] = {
     "day": "date", "month": "date", "year": "date", "event": "event",
+    "subevent": "event",
     "camera": "camera", "source": "source", "kind": "kind",
     "stack": "within",
 }
@@ -2247,6 +2252,7 @@ def _view_script(user: Principal, view: ix.Filters, groups: list[str], *,
         # spelled again here: the page draws a chip that sets it, and two
         # copies of a sentinel are two chances to disagree about what it is.
         f"UNREVIEWED={_js(ix.UNREVIEWED)},"
+        f"EVENT_SEP={_js(decisions.EVENT_SEP)},"
         f"USUAL={_js(store().usual)},PAGE={_js(page)},"
         f"TIERS={_js(_TIERS)},"
         f"GRID_GROUPS={_js(_GRID_GROUPS)},GROUPING={_js(groups)};</script>"
@@ -2332,6 +2338,14 @@ def _writable(user: Principal, change: _Change) -> None:
     if user.is_admin:
         return
     sent = set(_recorded(change))
+    # Half-name writes are not in the log's vocabulary — it records the name
+    # each file ended up with, not the half that was asked for — so they have
+    # to be named here or they would reach the archive unchecked. A field this
+    # cannot see is a field nobody is refusing.
+    if not isinstance(change.event_head, decisions.Unset):
+        sent.add("event")
+    if not isinstance(change.event_leaf, decisions.Unset):
+        sent.add("event")
     # `add_tags` and the rest name the field they edit; one prefix strip puts
     # them back with it rather than needing their own list.
     touched = {f.removeprefix("add_").removeprefix("remove_") for f in sent}
@@ -3021,7 +3035,8 @@ _GRID_GROUPS: tuple[tuple[str, str], ...] = (
     # be a second arrangement to learn: `kind` sat after `camera` here and
     # before `source` there, for no reason anybody chose.
     ("day", "By day"), ("month", "By month"), ("year", "By year"),
-    ("event", "By event"), ("kind", "By type"), ("source", "By source"),
+    ("event", "By event"), ("subevent", "By sub-event"),
+    ("kind", "By type"), ("source", "By source"),
     ("camera", "By camera"),
     ("stack", "By stack"), ("none", "Ungrouped"),
 )
@@ -3460,13 +3475,30 @@ async function openMenu(anchorEl,ctx){
   if(menuCtx!==ctx) return;   // a later menu opened while this was loading
 
   async function choose(value){
-    closeMenu();
+    // Picking an event does not close: it writes the event and then offers
+    // that event's sub-events, which is the second half of the same gesture.
+    // Everything else is one answer and closing is the end of it.
+    const drilling = nested && ctx.head==null && value!=null;
+    if(!drilling) closeMenu();
     if(ctx.mode==='filter'){location.href=url({[ctx.column]:value});return;}
     const cs=await acting();
     if(!cs) return;
     if(!cs.length){workClose();say('nothing selected');return;}
-    await applyToSelection(ctx.as||ctx.column,value,true,cs);
+    // Half a name each. The other half is whatever each file already has,
+    // which is a different answer per file and so is worked out where the
+    // files are rather than here.
+    const act = !nested ? (ctx.as||ctx.column)
+              : ctx.head==null ? 'event_head' : 'event_leaf';
+    const said = nested&&ctx.head!=null&&value!=null
+               ? splitEvent(value)[1] : value;
+    await applyToSelection(act,said,true,cs);
     if(FOLDERS) redrawFolders();
+    if(drilling){
+      ctx.head=value;
+      const q=document.getElementById('menuq');
+      if(q) q.value='';
+      render('');
+    }
   }
 
   // A checklist, not a list of commands — and a half-ticked box completes,
@@ -3499,7 +3531,10 @@ async function openMenu(anchorEl,ctx){
     const state=shareState(cs,FIELD,value);
     if(FIELD==='event'){
       // Ticking the event they already have clears it; anything else sets
-      // it. One value, so there is nothing to add to.
+      // it. One value, so there is nothing to add to. Nested, the tick is
+      // not what does the work — `choose` is, because picking an event has
+      // a second step after it.
+      if(nested){ await choose(value); return; }
       await applyToSelection('event',state==='all'?null:value,true,cs);
     }else{
       await applyToSelection(ctx.as,value,state!=='all',cs);
@@ -3512,10 +3547,50 @@ async function openMenu(anchorEl,ctx){
     const box=row.querySelector('.box');
     if(box) box.textContent=state==='all'?'\u2713':state==='some'?'\u25cf':'';
   }
+  // **Two steps, because a name has two halves.** The list of every event
+  // and every sub-event at once is a list of combinations; what anybody is
+  // choosing is one of thirty events, and then — sometimes — one of its
+  // afternoons. So the first step collapses the names to their events, and
+  // choosing one opens that event's own list rather than closing.
+  //
+  // Naming the event is still one press: the head is written when you pick
+  // it, and the second step is an offer rather than a question you have to
+  // answer.
+  const nested = ctx.mode==='set' && ctx.as==='event';
+  function heads(){
+    const by=new Map();
+    for(const o of opts){
+      const head=splitEvent(o.value)[0];
+      const at=by.get(head);
+      if(at) at.n=(at.n||0)+(o.n||0);
+      else by.set(head,{value:head,label:head,n:o.n,scope:o.scope});
+    }
+    return [...by.values()];
+  }
+  function leaves(head){
+    return opts.filter(o=>splitEvent(o.value)[0]===head
+                          &&splitEvent(o.value)[1])
+               .map(o=>({...o,label:splitEvent(o.value)[1]}));
+  }
+  function shown(){
+    return !nested ? opts : (ctx.head==null ? heads() : leaves(ctx.head));
+  }
+  // What the selected files already say, at the width this step asks about.
+  function standing(){
+    if(!FIELD) return [];
+    const have=currentValues(targets(),FIELD);
+    if(!nested) return have;
+    const parts=have.map(v=>splitEvent(v)[ctx.head==null?0:1]);
+    return [...new Set(parts.filter(v=>v&&(ctx.head==null
+                                           ||splitEvent(
+                                              have.find(h=>splitEvent(h)[1]===v)
+                                              ||'')[0]===ctx.head)))];
+  }
+
   function render(text){
     const t=(text||'').toLowerCase();
     const checkable=ctx.mode==='set'&&!!FIELD;
-    const hits=opts.filter(o=>o.label.toLowerCase().includes(t));
+    const hits=shown().filter(o=>o.label.toLowerCase().includes(t));
     const list=document.createElement('div');
     list.id='menulist';
     const typed=(text||'').trim();
@@ -3524,8 +3599,11 @@ async function openMenu(anchorEl,ctx){
     // create one here would write a grant that reaches nobody.
     // Tags are invented as you go; access is not. Somebody who can be given
     // access is an account or a role, made under Accounts.
-    const invent=ctx.mode==='set'&&ctx.column==='tag';
-    if(invent&&typed&&!opts.some(o=>o.label===typed)){
+    // An event is invented as you go in the same way a tag is — naming
+    // one is the work, not picking from a list of names somebody already
+    // made. Access is not: a name that can be granted is an account.
+    const invent=ctx.mode==='set'&&(ctx.column==='tag'||nested);
+    if(invent&&typed&&!shown().some(o=>o.label===typed)){
       const o=opt({label:'Add “'+typed+'”',n:null},()=>choose(typed));
       o.classList.add('new'); list.appendChild(o);
     }
@@ -3535,7 +3613,7 @@ async function openMenu(anchorEl,ctx){
     // What these files already say comes first, ticked, so the menu opens
     // showing the answer instead of asking a question whose answer is on
     // the screen behind it.
-    const present=checkable?currentValues(targets(),FIELD):[];
+    const present=checkable?standing():[];
     if(present.length){
       const shown=present.filter(v=>v.toLowerCase().includes(t));
       if(shown.length){
@@ -3553,7 +3631,16 @@ async function openMenu(anchorEl,ctx){
       band.forEach(o=>list.appendChild(
         opt(o,()=>choose(o.value),checkable)));
     };
-    const left=hits.filter(o=>!present.includes(o.value));
+    const left=hits.filter(o=>!present.includes(
+      nested&&ctx.head!=null?o.label:o.value));
+    if(nested&&ctx.head!=null){
+      // Back out of the event, and a way to say this one has no afternoon.
+      const up=opt({label:'‹ all events',n:null},()=>{
+        ctx.head=null; render('');});
+      up.classList.add('up');
+      list.appendChild(up);
+      list.appendChild(opt({label:'No sub-event',n:null},()=>choose(null)));
+    }
     if(ctx.column==='audience'){
       // The sentinel first and on its own: *nobody has this yet* is the
       // pile of work, not a name, and grouping it with the names buried it
@@ -4167,6 +4254,17 @@ const FOLDERS = PAGE==='/';
 // own map by the test that renders a card and presses one.
 const SPREAD_FILTER={audience:'audience', people:'person', tags:'tag'};
 const SPREAD_LABEL={audience:'Access', people:'People', tags:'Tag'};
+
+// An event and its sub-event are one name at two widths — *Sicily* and
+// *Sicily > Taormina* — so splitting and rejoining it is something the page
+// does as often as the server, and in exactly the same two places.
+function splitEvent(v){
+  const at=String(v||'').indexOf(EVENT_SEP);
+  return at<0?[v||'',null]:[v.slice(0,at),v.slice(at+EVENT_SEP.length)||null];
+}
+function joinEvent(head,leaf){
+  return !head?'':(leaf?head+EVENT_SEP+leaf:head);
+}
 const tiles = FOLDERS && grid
   ? [...grid.querySelectorAll('.tile')].filter(t=>t.getAttribute('href')) : [];
 const pickedFolders = new Set();
@@ -4955,6 +5053,13 @@ async function applyToSelection(act,value,add,only,batch){
                            deleted:c.dataset.deleted||''}));
   if(multi) todo.forEach(c=>paint(c,multi[0],value,add));
   else if(act==='event') todo.forEach(c=>{c.dataset.event=value||'';});
+  // Half a name: the other half is what the cell already says, so the cell
+  // is where it is worked out.
+  else if(act==='event_head'||act==='event_leaf') todo.forEach(c=>{
+    const [head,leaf]=splitEvent(c.dataset.event||'');
+    c.dataset.event=joinEvent(act==='event_head'?value:head,
+                              act==='event_leaf'?value:leaf);
+  });
   // Under `Including deleted` a restored file stays on screen, so the cross
   // has to go the moment the decision does. Under `Only deleted` it leaves
   // instead, and `drop` takes the cell with it.
@@ -5104,6 +5209,12 @@ if(chooseCancel) chooseCancel.onclick=e=>{e.stopPropagation();
 // button itself rather than kept as a second vocabulary for the same four
 // actions, which would be free to drift from the one on screen.
 function actLabel(act,value,add){
+  // Neither half has a button of its own — they are two steps of the one
+  // marked *Event* — so the word has to be said here rather than read off it.
+  if(act==='event_head') return value?'Event &mdash; <b>'+esc(value)+'</b>'
+                                     :'Event &mdash; clearing';
+  if(act==='event_leaf') return value?'Sub-event &mdash; <b>'+esc(value)+'</b>'
+                                     :'Sub-event &mdash; clearing';
   // `deleted` is the one action whose button is not named after its field:
   // one flag, two controls, and the word for it depends on which way it is
   // going.
@@ -5893,6 +6004,12 @@ class DecideBody(BaseModel):
     folder: str
     name: str
     event: str | None = None
+    #: Half a name each: set the event and keep whatever sub-event each file
+    #: has, or set the sub-event and keep each file's event. One request, a
+    #: different answer per file, which is why neither can be worked out by
+    #: the caller.
+    event_head: str | None = None
+    event_leaf: str | None = None
     date_override: str | None = None
     tags: list[str] | None = None
     add_tags: list[str] = []
@@ -5941,20 +6058,21 @@ def api_decide(user: Annotated[Principal, Depends(require_user)],
         was, decision, indexed = _decide(body.folder, body.name, change,
                                          conn=conn)
         undo = [history.Before(body.folder, body.name, was,
-                               did=_recorded(change))]
+                               did=_did(change, _recorded(change), decision))]
         for target in targets:
             if (target.folder, target.name) == (body.folder, body.name):
                 continue
             try:
-                before, _, _ = _decide(target.folder, target.name, change,
-                                       conn=conn)
+                before, after, _ = _decide(target.folder, target.name, change,
+                                           conn=conn)
             except HTTPException:
                 # One unwritable take does not cost the decision about the
                 # rest, the same way a bulk edit reports a failure and carries
                 # on.
                 continue
             undo.append(history.Before(target.folder, target.name, before,
-                                       did=_recorded(change)))
+                                       did=_did(change, _recorded(change),
+                                                after)))
     finally:
         if conn is not None:
             conn.close()
@@ -6074,6 +6192,12 @@ class DecideBulkBody(BaseModel):
     #: about the transport, and without this it read as several edits.
     batch: str | None = None
     event: str | None = None
+    #: Half a name each: set the event and keep whatever sub-event each file
+    #: has, or set the sub-event and keep each file's event. One request, a
+    #: different answer per file, which is why neither can be worked out by
+    #: the caller.
+    event_head: str | None = None
+    event_leaf: str | None = None
     date_override: str | None = None
     tags: list[str] | None = None
     add_tags: list[str] = []
@@ -6162,7 +6286,7 @@ def api_decide_bulk(user: Annotated[Principal, Depends(require_user)],
         with rows:
             for target in targets:
                 try:
-                    was, _, was_indexed = _decide(
+                    was, now, was_indexed = _decide(
                         target.folder, target.name, change, conn=conn,
                         record=records.get((target.folder, target.name)),
                         commit=False)
@@ -6174,7 +6298,7 @@ def api_decide_bulk(user: Annotated[Principal, Depends(require_user)],
                 indexed += 1 if was_indexed else 0
                 done.append((target.folder, target.name))
                 undo.append(history.Before(target.folder, target.name, was,
-                                           did=did))
+                                           did=_did(change, did, now)))
             # The file everything is being stacked onto stops being stacked
             # itself. Promoting one photograph out of a stack is exactly this —
             # the others come to defer to it, and it has to stop deferring to the
@@ -6223,6 +6347,8 @@ class _Change:
     """One decision edit, with "leave it alone" distinct from "clear it"."""
 
     event: str | None | Unset = decisions.UNSET
+    event_head: str | None | Unset = decisions.UNSET
+    event_leaf: str | None | Unset = decisions.UNSET
     date_override: str | None | Unset = decisions.UNSET
     tags: Sequence[str] | None | Unset = decisions.UNSET
     add_tags: Sequence[str] = field(default_factory=tuple)
@@ -6250,6 +6376,7 @@ def _change(body: DecideBody | DecideBulkBody) -> _Change:
     def got(name: str) -> Any:
         return getattr(body, name) if name in sent else decisions.UNSET
     return _Change(event=got("event"),
+                   event_head=got("event_head"), event_leaf=got("event_leaf"),
                    date_override=got("date_override"), tags=got("tags"),
                    add_tags=tuple(body.add_tags),
                    remove_tags=tuple(body.remove_tags),
@@ -6262,6 +6389,22 @@ def _change(body: DecideBody | DecideBulkBody) -> _Change:
                    deleted=_flag(got("deleted")),
                    stacked_under=got("stacked_under"),
                    no_stack=_flag(got("no_stack")))
+
+
+def _did(change: _Change, base: dict[str, Any],
+         decision: Decision) -> dict[str, Any]:
+    """What the operation did to *this* file.
+
+    A half-name write resolves differently per file — *Sicily > Taormina*
+    and *Sicily > Catania* both become *Family Trip > something* — so the
+    log records the name each one ended up with rather than the half that was
+    asked for. Reverting compares what it recorded against what the file says
+    now, and a batch-wide *event_head* would match neither of them.
+    """
+    if (isinstance(change.event_head, Unset)
+            and isinstance(change.event_leaf, Unset)):
+        return base
+    return {**base, "event": decision.event}
 
 
 def _recorded(change: _Change) -> dict[str, Any]:
@@ -6339,6 +6482,7 @@ def _decide(folder: str, name: str, change: _Change,
         try:
             was, decision = decisions.change(
                 media, event=change.event,
+                event_head=change.event_head, event_leaf=change.event_leaf,
                 date_override=change.date_override, tags=change.tags,
                 add_tags=change.add_tags, remove_tags=change.remove_tags,
                 people=change.people,

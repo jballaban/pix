@@ -171,6 +171,8 @@ const GROUPS = ['family'];
 const USUAL = 'family';
 // The audience value meaning *nobody yet*, as the server sends it.
 const UNREVIEWED = 'new';
+// What separates an event from a sub-event in one name.
+const EVENT_SEP = ' > ';
 const PAGE = '/browse';
 // What each derived tier is capped at, longest edge.
 const TIERS = [['/thumb/', 400], ['/large/', 1000],
@@ -198,10 +200,10 @@ function deselect() {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS,
-      GROUPING, PAGE, TIERS, UNREVIEWED, fn => fn());
+      GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
   } catch (e) {
     console.log('FAIL the script threw on load: ' + e.message);
     process.exit(1);

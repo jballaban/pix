@@ -145,6 +145,16 @@ const fetch = async (url, opts) => {
     document.byId.workstop.click();
   }
   if (url.startsWith('/api/suggest')) {
+    if (/column=event/.test(url)) {
+      // Whole names, as the server stores them: an event and, where there is
+      // one, its sub-event in the same string.
+      return { ok: true, json: async () => [
+        { value: 'Sicily', n: 4, scope: 'all' },
+        { value: 'Sicily > Taormina', n: 2, scope: 'all' },
+        { value: 'Sicily > Catania', n: 1, scope: 'all' },
+        { value: 'Cornwall', n: 3, scope: 'all' },
+      ] };
+    }
     return { ok: true, json: async () => [{ value: 'ghost', n: 1, scope: 'all' }] };
   }
   if (url.startsWith('/api/behind/')) {
@@ -196,6 +206,8 @@ const GROUPS = ['family'];
 const USUAL = 'family';
 // The audience value meaning *nobody yet*, as the server sends it.
 const UNREVIEWED = 'new';
+// What separates an event from a sub-event in one name.
+const EVENT_SEP = ' > ';
 const PAGE = '/browse';
 // What each derived tier is capped at, longest edge.
 const TIERS = [['/thumb/', 400], ['/large/', 1000],
@@ -218,9 +230,9 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS', 'GROUPING',
-      'PAGE', 'TIERS', 'UNREVIEWED', 'setTimeout', js,
+      'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
-      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, fn => fn());
+      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
   } catch (e) {
     console.log('FAIL the script threw on load: ' + e.message);
     process.exit(1);
@@ -952,10 +964,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, fn => fn());
+      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
 
     // One file out of the first section, and the whole of the second.
     s1[0].querySelector('.pick').click();
@@ -1017,10 +1029,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, fn => fn());
+      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
 
     // Push the first one out of the view, the way an edit does.
     shelf[0].querySelector('.pick').click();
@@ -1067,10 +1079,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, fn => fn());
+      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
 
     // Scrolled a couple of rows down: c2 straddles the top of the screen.
     scrolled = 250;
@@ -1109,10 +1121,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, fn => fn());
+      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
 
     document.byId.selall.click();          // all 250
     const n = calls.length;
@@ -1226,10 +1238,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, fn => fn());
+      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
     check('a new page opens at the size you left it',
           grid.dataset.size === 'large', grid.dataset.size);
 
@@ -1238,10 +1250,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, fn => fn());
+      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
     check('and one saved under the old names still opens there',
           grid.dataset.size === 'large', grid.dataset.size);
   }
@@ -1267,10 +1279,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, fn => fn());
+      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
 
     three[0].querySelector('.pick').click();
     three[1].querySelector('.pick').click();
@@ -1310,10 +1322,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'setTimeout', js,
+      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, fn => fn());
+      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
 
     const get = actBtn('download');
     check('nothing selected offers no download', get.hidden === true);
@@ -1491,6 +1503,68 @@ function arrow(key, opts) {
               c => c.url.startsWith('/api/decide')).length));
     }
     document.byId.grid.click();
+    deselect();
+  }
+
+  // --- an event and its sub-event are one name, asked in two steps ----------
+  // Every event and every sub-event in one list is a list of combinations.
+  // What anybody is choosing is one of thirty events and then, sometimes, one
+  // of its afternoons.
+  {
+    deselect();
+    const one = document.querySelectorAll('.cell')[0];
+    one.dataset.event = '';
+    one.children.find(k => k._classes.has('pick')).click();
+
+    actBtn('event').click();
+    await settle(); await settle();
+    const menu = document.byId.menu;
+    const rows = () => menu.querySelectorAll('.opt').map(
+      o => (o.innerHTML.match(/<span>([^<]*)<\/span>/) || [])[1]);
+
+    check('the first step is the events, each once',
+          rows().filter(r => r === 'Sicily').length === 1, rows().join(','));
+    check('and not one row per combination',
+          !rows().some(r => /Taormina/.test(r || '')), rows().join(','));
+
+    const n = calls.length;
+    menu.querySelectorAll('.opt').find(
+      o => /<span>Sicily<\/span>/.test(o.innerHTML)).click();
+    for (let k = 0; k < 8; k++) await settle();
+
+    const wrote = calls.slice(n).filter(c => c.url.startsWith('/api/decide'));
+    check('picking one writes the event straight away', wrote.length === 1,
+          String(wrote.length));
+    if (wrote.length) {
+      const body = JSON.parse(wrote[0].body);
+      check('as the half of the name it is',
+            body.event_head === 'Sicily' && body.event === undefined,
+            wrote[0].body);
+    }
+    check('and the menu stays open on that event', menu.hidden === false);
+    check('now offering its sub-events, named short',
+          rows().includes('Taormina') && rows().includes('Catania'),
+          rows().join(','));
+    check('with a way back up', rows().some(r => /all events/.test(r || '')),
+          rows().join(','));
+    check('and a way to say there is no sub-event',
+          rows().includes('No sub-event'), rows().join(','));
+
+    const m = calls.length;
+    menu.querySelectorAll('.opt').find(
+      o => /<span>Taormina<\/span>/.test(o.innerHTML)).click();
+    for (let k = 0; k < 8; k++) await settle();
+    const second = calls.slice(m).filter(c => c.url.startsWith('/api/decide'));
+    check('picking a sub-event writes the other half', second.length === 1,
+          String(second.length));
+    if (second.length) {
+      const body = JSON.parse(second[0].body);
+      check('and only the other half', body.event_leaf === 'Taormina'
+            && body.event_head === undefined, second[0].body);
+    }
+    check('and that one closes it', menu.hidden === true);
+    check('the cell says the whole name',
+          one.dataset.event === 'Sicily > Taormina', one.dataset.event);
     deselect();
   }
 

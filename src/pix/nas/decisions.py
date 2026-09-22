@@ -123,6 +123,35 @@ _RDF_NS: str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
 _DC_NS: str = "http://purl.org/dc/elements/1.1/"
 
 
+#: What separates an event from a sub-event inside one name.
+#:
+#: **One field, two widths** — the shape `date` already has, where `2026`,
+#: `2026-08` and `2026-08-30` are one value answering one question at three
+#: widths. *Sicily* and *Sicily > Taormina* are that question at two, so they
+#: are one name, and a sub-event has no field of its own to be out of step
+#: with the event it belongs to.
+#:
+#: Spaces around it because this goes out to other tools in
+#: `Iptc4xmpExt:Event`, which is free text: *Sicily > Taormina* reads there as
+#: a name, where *Sicily>Taormina* reads as a path somebody forgot to parse.
+EVENT_SEP: str = " > "
+
+
+def split_event(value: str | None) -> tuple[str | None, str | None]:
+    """An event name as its two parts, the second of which is usually None."""
+    if not value:
+        return None, None
+    head, sep, leaf = value.partition(EVENT_SEP)
+    return head, (leaf or None) if sep else None
+
+
+def join_event(head: str | None, leaf: str | None) -> str | None:
+    """The two parts as one name. No head is no event, whatever the leaf."""
+    if not head:
+        return None
+    return f"{head}{EVENT_SEP}{leaf}" if leaf else head
+
+
 class Unset:
     """Sentinel: this field is not being changed.
 
@@ -296,6 +325,8 @@ def write(media: Path, decision: Decision) -> None:
 
 def change(media: Path, *,
            event: str | None | Unset = UNSET,
+           event_head: str | None | Unset = UNSET,
+           event_leaf: str | None | Unset = UNSET,
            date_override: str | None | Unset = UNSET,
            tags: Sequence[str] | None | Unset = UNSET,
            add_tags: Sequence[str] = (),
@@ -323,14 +354,31 @@ def change(media: Path, *,
     kids must add to whatever each is already shared with, not flatten them
     all to one list.
 
+    **`event_head` and `event_leaf` change one half of the name and keep the
+    other.** An event and its sub-event are one value, so renaming *Sicily* to
+    *Family Trip* across two hundred files has to put each file's own
+    sub-event back on the end of the new name — which the caller cannot do,
+    because it is a different answer per file and the request carries one.
+    Here it is a read-modify-write on one field, which is what this function
+    is for.
+
     Returns **both** the previous decision and the new one. The caller needs the
     previous value to be able to undo it, and it has already been read here —
     asking for it again would double the SMB reads of every bulk edit.
     """
     was = read(media)
     current = was or Decision()
+    if not isinstance(event, Unset):
+        chosen = event
+    elif isinstance(event_head, Unset) and isinstance(event_leaf, Unset):
+        chosen = current.event
+    else:
+        had_head, had_leaf = split_event(current.event)
+        chosen = join_event(
+            had_head if isinstance(event_head, Unset) else event_head,
+            had_leaf if isinstance(event_leaf, Unset) else event_leaf)
     updated = Decision(
-        event=current.event if isinstance(event, Unset) else event,
+        event=chosen,
         date_override=(current.date_override
                        if isinstance(date_override, Unset)
                        else date_override),
@@ -398,6 +446,21 @@ def _validate(decision: Decision) -> None:
             raise DecisionError(
                 "date override pins nothing — clear it instead of storing "
                 "all-`*`, which would record a decision nobody made")
+    if decision.event is not None:
+        # **Two levels, and the refusal is here.** Nothing below this is
+        # structurally limited to two — the string would hold five — but
+        # the grouping, the menus and the landing page's three-deep cap all
+        # assume one event and one subdivision of it. A name that quietly
+        # became three would be a record no part of the app could draw.
+        if decision.event.count(EVENT_SEP) > 1:
+            raise DecisionError(
+                f"{decision.event!r} has more than one {EVENT_SEP!r} in it — "
+                "an event may have a sub-event, and that is as deep as it goes")
+        head, leaf = split_event(decision.event)
+        if not head or (EVENT_SEP in decision.event and not leaf):
+            raise DecisionError(
+                f"{decision.event!r} has an empty half — both an event and "
+                "its sub-event have to be something")
     for value in (*decision.tags, *decision.audience):
         if len(value) > 120:
             raise DecisionError(f"{value[:40]!r}… is too long")

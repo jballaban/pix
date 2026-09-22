@@ -130,6 +130,8 @@ const GROUPS = ['family'];
 const USUAL = 'family';
 // The audience value meaning *nobody yet*, as the server sends it.
 const UNREVIEWED = 'new';
+// What separates an event from a sub-event in one name.
+const EVENT_SEP = ' > ';
 const PAGE = '/browse';
 const TIERS = [['/thumb/', 400], ['/large/', 1000],
                ['/preview/', 1600]];
@@ -144,11 +146,11 @@ const viewerOpen = () => document.byId.viewer._classes.has('on');
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'history',
       'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS',
-      'GROUPS', 'USUAL', 'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED',
+      'GROUPS', 'USUAL', 'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP',
       'setTimeout', js,
     )(document, window, fetch, localStorage, location, history, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS,
-      GROUPING, PAGE, TIERS, UNREVIEWED, fn => fn());
+      GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
   } catch (e) {
     console.log('FAIL the script threw on load: ' + e.message);
     process.exit(1);

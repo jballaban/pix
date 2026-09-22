@@ -489,3 +489,78 @@ def test_a_real_change_is_still_written(tmp_path: Path) -> None:
     assert after.audience == ("family", "kid")
     read_back = decisions.read(media)
     assert read_back is not None and read_back.audience == ("family", "kid")
+
+
+# --- an event and its sub-event are one name ----------------------------------
+
+def test_an_event_may_have_one_sub_event(tmp_path: Path) -> None:
+    """One field at two widths, the shape `date` already has: `2026` and
+    `2026-08` are one value answering one question at two widths, and so are
+    *Sicily* and *Sicily > Taormina*."""
+    assert decisions.split_event("Sicily > Taormina") == ("Sicily", "Taormina")
+    assert decisions.split_event("Sicily") == ("Sicily", None)
+    assert decisions.join_event("Sicily", "Taormina") == "Sicily > Taormina"
+    assert decisions.join_event("Sicily", None) == "Sicily"
+    # No event is no name, whatever somebody hoped to hang off it.
+    assert decisions.join_event(None, "Taormina") is None
+
+
+def test_renaming_the_event_keeps_each_file_s_sub_event(tmp_path: Path) -> None:
+    """The reason the halves are written separately at all. Renaming *Sicily*
+    to *Family Trip* across two hundred files has to put each file's own
+    sub-event back on the end of the new name — a different answer per file,
+    which the request cannot carry."""
+    one, two = tmp_path / "a.jpg", tmp_path / "b.jpg"
+    for media, event in ((one, "Sicily > Taormina"), (two, "Sicily > Catania")):
+        media.write_bytes(b"x")
+        decisions.write(media, decisions.Decision(event=event))
+
+    for media in (one, two):
+        decisions.change(media, event_head="Family Trip")
+
+    assert decisions.read(one).event == "Family Trip > Taormina"  # type: ignore[union-attr]
+    assert decisions.read(two).event == "Family Trip > Catania"  # type: ignore[union-attr]
+
+
+def test_the_sub_event_can_be_changed_or_taken_off(tmp_path: Path) -> None:
+    media = tmp_path / "a.jpg"
+    media.write_bytes(b"x")
+    decisions.write(media, decisions.Decision(event="Sicily > Taormina"))
+
+    _, after = decisions.change(media, event_leaf="Catania")
+    assert after.event == "Sicily > Catania"
+
+    _, bare = decisions.change(media, event_leaf=None)
+    assert bare.event == "Sicily"
+
+
+def test_two_levels_and_no_more(tmp_path: Path) -> None:
+    """Nothing below this is structurally limited to two — the string would
+    hold five — but the grouping, the menus and the landing page's three-deep
+    cap all assume one event and one subdivision of it."""
+    media = tmp_path / "a.jpg"
+    media.write_bytes(b"x")
+
+    with pytest.raises(decisions.DecisionError, match="as deep as it goes"):
+        decisions.write(media, decisions.Decision(event="a > b > c"))
+
+
+def test_neither_half_may_be_empty(tmp_path: Path) -> None:
+    media = tmp_path / "a.jpg"
+    media.write_bytes(b"x")
+
+    for bad in ("Sicily > ", " > Taormina"):
+        with pytest.raises(decisions.DecisionError, match="empty half"):
+            decisions.write(media, decisions.Decision(event=bad))
+
+
+def test_the_whole_name_is_what_goes_to_other_tools(tmp_path: Path) -> None:
+    """`Iptc4xmpExt:Event` is free text, and *Sicily > Taormina* reads there as
+    a name rather than as a path somebody forgot to parse — which is what the
+    spaces around the separator are for."""
+    media = tmp_path / "a.jpg"
+    media.write_bytes(b"x")
+    decisions.write(media, decisions.Decision(event="Sicily > Taormina"))
+
+    raw = decisions.sidecar_path(media).read_text(encoding="utf-8")
+    assert "Sicily &gt; Taormina" in raw or "Sicily > Taormina" in raw
