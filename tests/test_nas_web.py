@@ -4948,6 +4948,23 @@ def test_the_way_back_is_part_of_the_app_everywhere(client: TestClient) -> None:
     assert "html[data-inapp]" not in css
 
 
+def test_the_way_back_is_as_tall_as_what_stands_beside_it(
+    client: TestClient
+) -> None:
+    """It holds a 19px drawing where every chip beside it holds a 21px line of
+    text, so the same padding made it two pixels shorter — and the top row
+    aligns to the top, which puts that difference at the bottom edge where it
+    reads as a smaller button rather than a centred one. `--ctl` is the number
+    they have to agree on."""
+    css = web._STYLE
+
+    rule = css[css.index(".back {"):css.index("}", css.index(".back {"))]
+    assert "min-height:var(--ctl)" in rule, rule
+    # Two pixels taller than the drawing, so the drawing has to be told where
+    # to sit in what is left.
+    assert "justify-content:center" in rule, rule
+
+
 def test_a_way_back_that_goes_nowhere_says_so(client: TestClient) -> None:
     """A fresh launch has nothing behind it, and a button that does nothing
     teaches you to stop believing the rest of them."""
@@ -5230,7 +5247,9 @@ def test_a_sub_event_is_not_a_filter_of_its_own() -> None:
     assert "subevent" not in dict(web._CHIPS)
     assert "subevent" not in ix.Filters.NAMES
     # But it is a way to cut the library up, and drilling one sets the event.
-    assert ("subevent", "By sub-event") in web._GRID_GROUPS
+    # And it is named for grouping on the whole name — events with no
+    # sub-event stand as themselves rather than dropping out of the view.
+    assert ("subevent", "By event and sub-event") in web._GRID_GROUPS
     assert web._DRILL["subevent"] == "event"
 
 

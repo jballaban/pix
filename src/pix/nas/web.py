@@ -329,7 +329,13 @@ main { padding:16px max(var(--gut),env(safe-area-inset-right)) 20px
    are should be part of it and in the same place every time, rather than
    something you reach for outside the window on one platform and inside it on
    another. */
-.back { display:inline-flex; align-items:center; padding:4px 7px;
+/* `--ctl` rather than padding, because this one holds a 19px drawing and
+   everything beside it holds a 21px line of text: matched padding gave a
+   29px button against 31px chips, two pixels short in a row that aligns to
+   the top. The height is the number to agree on; the glyph centres in
+   whatever that leaves. */
+.back { display:inline-flex; align-items:center; justify-content:center;
+        min-height:var(--ctl); padding:4px 7px;
         margin-right:2px; flex:none; }
 .back:disabled { opacity:.3; }
 /* Three frames, one in front, with a picture in it — the app in one glyph:
@@ -1476,13 +1482,15 @@ def _page(title: str, body: str, *, tools: str = "", rows: str = "",
 </body></html>""")
 
 
-#: Back, for where the browser's own is not on screen.
+#: Back, on every page and every platform.
 #:
-#: **Only there.** Installed on a phone the app owns the whole window and
-#: there is no chrome around it at all — every filter, every grouping and
-#: every folder opened is a navigation, so the history is right there and
-#: nothing could reach it. In a tab the browser already draws this button, and
-#: a second one beside it is a second thing to wonder about.
+#: Installed on a phone the app owns the whole window and there is no chrome
+#: around it at all — every filter, every grouping and every folder opened is
+#: a navigation, so the history is right there and nothing could reach it.
+#: It is drawn in a tab as well, beside the browser's own: this is an app on a
+#: desktop too, and the way out of where you are belongs inside it rather than
+#: somewhere you reach for outside the window on one platform and inside it on
+#: another.
 _BACK: str = (
     '<svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true" '
     'fill="none" stroke="currentColor" stroke-width="2" '
@@ -3035,7 +3043,12 @@ _GRID_GROUPS: tuple[tuple[str, str], ...] = (
     # be a second arrangement to learn: `kind` sat after `camera` here and
     # before `source` there, for no reason anybody chose.
     ("day", "By day"), ("month", "By month"), ("year", "By year"),
-    ("event", "By event"), ("subevent", "By sub-event"),
+    # Named for what it actually does. It groups on the whole event name, so
+    # an event with no sub-event stands as itself and one with a sub-event
+    # stands under its own full name — *By sub-event* read as though it were
+    # about the sub-events alone and left you wondering where the rest had
+    # gone, and it is the only choice here that has to say two things.
+    ("event", "By event"), ("subevent", "By event and sub-event"),
     ("kind", "By type"), ("source", "By source"),
     ("camera", "By camera"),
     ("stack", "By stack"), ("none", "Ungrouped"),
