@@ -322,12 +322,15 @@ main { padding:16px max(var(--gut),env(safe-area-inset-right)) 20px
    ask for the control *plus* its own chrome. */
 .row + .row { margin-top:8px; border-top:1px solid var(--line); padding-top:8px;
               min-height:calc(var(--ctl) + 8px + 1px); }
-/* Where the browser draws no chrome of its own. Never in a tab, where it
-   already draws this and a second one is a second thing to wonder about. */
-.back { display:none; padding:4px 7px; margin-right:2px; flex:none; }
-html[data-inapp] .back { display:inline-flex; align-items:center; }
-@media (display-mode: standalone) { .back { display:inline-flex;
-                                            align-items:center; } }
+/* Everywhere, including a tab that has one of its own.
+   It was gated to the installed app on the grounds that a second back button
+   beside the browser's is clutter. The answer to that is that this is an app
+   on a desktop too, and an app is self-contained: the way out of where you
+   are should be part of it and in the same place every time, rather than
+   something you reach for outside the window on one platform and inside it on
+   another. */
+.back { display:inline-flex; align-items:center; padding:4px 7px;
+        margin-right:2px; flex:none; }
 .back:disabled { opacity:.3; }
 /* Three frames, one in front, with a picture in it — the app in one glyph:
    photographs, and one of them standing for the others. */
@@ -1458,13 +1461,6 @@ def _page(title: str, body: str, *, tools: str = "", rows: str = "",
 <script>if('serviceWorker' in navigator)window.addEventListener('load',function(){{
   navigator.serviceWorker.register('/sw.js').catch(function(){{}});}});</script>
 <script>(function(){{
-  // Installed, the app is the whole window: no address bar, no back. The
-  // media query is the standard reading and `navigator.standalone` is how iOS
-  // has always said it — the same pair the install offer asks.
-  var app = (window.matchMedia
-             && window.matchMedia('(display-mode: standalone)').matches)
-            || navigator.standalone === true;
-  if (app) document.documentElement.setAttribute('data-inapp', '');
   var back = document.getElementById('back');
   if (!back) return;
   // A fresh launch has nowhere to go back to, and a button that does nothing

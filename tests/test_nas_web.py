@@ -4936,14 +4936,16 @@ def test_every_page_carries_a_way_back(client: TestClient) -> None:
         assert 'id="back"' in html, path
 
 
-def test_the_way_back_is_only_where_there_is_no_other(client: TestClient) -> None:
-    """In a tab the browser already draws this, and a second one beside it is
-    a second thing to wonder about."""
+def test_the_way_back_is_part_of_the_app_everywhere(client: TestClient) -> None:
+    """It was gated to the installed app, on the grounds that a second back
+    button beside the browser's own is clutter. The answer is that this is an
+    app on a desktop too, and an app is self-contained: the way out of where
+    you are belongs in the same place every time, not outside the window on
+    one platform and inside it on another."""
     css = web._STYLE
 
-    assert ".back { display:none;" in css
-    assert "html[data-inapp] .back { display:inline-flex;" in css
-    assert "@media (display-mode: standalone)" in css
+    assert ".back { display:inline-flex;" in css
+    assert "html[data-inapp]" not in css
 
 
 def test_a_way_back_that_goes_nowhere_says_so(client: TestClient) -> None:
