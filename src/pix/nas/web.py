@@ -4717,9 +4717,20 @@ let choiceBtns=[];
 // to show. Choosing between the two that happen to be speaking is choosing
 // between two of ten, and the other eight are only hidden because stacking
 // them is what hid them.
+// A stack says *these are the same shot*, so it cannot hold two kinds of
+// thing: a photograph and a clip are not the same shot whatever else they
+// share, and neither can speak for the other. The server refuses it too —
+// this is so that nobody is asked which of them to show first.
+function mixed(cs){
+  return new Set(cs.map(c=>c.dataset.kind||'')).size>1;
+}
+const MIXED='a stack is one shot — photographs and video cannot be stacked '
+           +'together';
+
 async function stackSelection(){
   const cs=targetsOn('live');
   if(cs.length<2){say('select the ones to stack');return;}
+  if(mixed(cs)){say(MIXED,true);return;}
   choosing=cs; fetched=[]; opened=[]; wasPicked=cs.slice();
   // Where you were, because it is about to be taken from you. Hiding the rest
   // of the grid collapses the page to a few rows, and a browser will not hold
@@ -5137,6 +5148,10 @@ async function makeTop(){
   // screen because promoting happens inside an opened stack.
   const family=cells.filter(c=>c!==top&&stackKey(c)===key);
   if(!family.length){say('nothing else is in that stack');return;}
+  // A stack made before this rule existed can still be taken apart — that
+  // write has no top to be the same kind as — but it cannot be rearranged
+  // into another one.
+  if(mixed([top,...family])){say(MIXED,true);return;}
   // One write. The other half — taking the new top out of what it was behind —
   // is the server's, because a file everything defers to cannot be left
   // deferring to one of them whoever asks for it.

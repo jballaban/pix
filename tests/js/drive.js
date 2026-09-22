@@ -996,6 +996,37 @@ function arrow(key, opts) {
   }
 
 
+  // A stack says *these are the same shot, and this one speaks for the rest*.
+  // A photograph and a clip are not the same shot whatever else they share —
+  // same second, same camera, same name — and neither can stand in for the
+  // other, so the fold would hide a thing nothing on screen represents.
+  {
+    deselect();
+    const two = document.querySelectorAll('.cell').slice(0, 2);
+    const wasKind = two[1].dataset.kind;
+    two[1].dataset.kind = 'video';
+    two.forEach(c => c.children.find(k => k._classes.has('pick')).click());
+
+    const n = calls.length;
+    actBtn('stack').click();
+    for (let i = 0; i < 8; i++) await settle();
+
+    check('stacking a photograph with a clip is refused',
+          /one shot/i.test(String(document.byId.note._text)),
+          String(document.byId.note._text));
+    // Refused before the question, not after it: nobody is asked which of
+    // them should show and then told it cannot happen.
+    check('and nothing is asked about which one shows',
+          !grid.children.some(c => !!chooseOn(c)), 'the chooser opened');
+    check('and nothing is written',
+          calls.slice(n).filter(c => c.url.startsWith('/api/decide'))
+            .length === 0,
+          'a mixed stack reached the server');
+
+    two[1].dataset.kind = wasKind;
+    deselect();
+  }
+
   // A write that pushes files out of the view has to leave the sections
   // honest behind it: the count says what is there now, a heading whose last
   // file has gone goes with it, and nothing is ticked that nobody ticked.

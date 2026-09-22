@@ -1315,7 +1315,14 @@ def suggestions(rows: Sequence[sqlite3.Row]) -> list[list[sqlite3.Row]]:
         if row["no_stack"] or row["stacked_under"]:
             continue
         if row["precision"] == datestr.FULL and row["effective_date"]:
-            by_camera.setdefault(str(row["camera"] or ""), []).append(row)
+            # **Kind is part of the bucket.** A stack says *these are the same
+            # shot, and this one speaks for the rest* — a photograph and a
+            # clip are not the same shot whatever else they share, and neither
+            # can stand in for the other. Two seconds on one camera is exactly
+            # how a photograph and the clip beside it look, so without this
+            # the burst signal proposed the mixture regularly.
+            by_camera.setdefault(
+                f'{row["kind"]}:{row["camera"] or ""}', []).append(row)
 
     for camera, items in by_camera.items():
         items.sort(key=lambda r: str(r["effective_date"]))
@@ -1341,7 +1348,12 @@ def suggestions(rows: Sequence[sqlite3.Row]) -> list[list[sqlite3.Row]]:
         # The file without a suffix belongs to the family too — it is the one
         # the others collided with.
         base = _SUFFIX.sub("", str(row["name"]).rsplit(".", 1)[0])
-        groups.setdefault(f"name:{row['folder']}:{base}", []).append(row)
+        # And here more than anywhere: this signal strips the extension, so
+        # `IMG_4471.HEIC` and `IMG_4471.MOV` — a photograph and its motion —
+        # were the same name to it and the likeliest mixed group in the
+        # library.
+        groups.setdefault(
+            f"name:{row['folder']}:{row['kind']}:{base}", []).append(row)
 
     return _merged(groups)
 

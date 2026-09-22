@@ -1432,6 +1432,39 @@ def test_photographs_seconds_apart_are_one_suggestion(
     assert [sorted(r["name"] for r in g) for g in got] == [["a.jpg", "b.jpg"]]
 
 
+def test_a_photograph_and_a_clip_of_the_same_moment_are_not_one_stack(
+    tree: dict[str, Path]
+) -> None:
+    """A stack says *these are the same shot, and this one speaks for the
+    rest*. A photograph and a clip are not the same shot whatever else they
+    share, and neither can stand in for the other — so the fold would hide a
+    thing nothing on screen represents.
+
+    Two seconds apart on one camera is exactly how a photograph and the clip
+    beside it look, which is why the burst signal proposed the mixture."""
+    _shot(tree, "a.jpg", "2026:08:30 10:00:00")
+    _shot(tree, "b.mp4", "2026:08:30 10:00:01")
+
+    assert ix.suggestions(_rows(tree)) == []
+
+
+def test_a_photograph_and_its_motion_are_not_one_stack(
+    tree: dict[str, Path]
+) -> None:
+    """The likeliest mixture in the library: the name signal strips the
+    extension to catch collision suffixes, which made `IMG_4471.HEIC` and
+    `IMG_4471.MOV` — a photograph and its own motion — the same name to it.
+
+    Dated to the day only, so the burst signal is out of it and this is the
+    name signal alone."""
+    _record(tree, "f", "IMG_4471.HEIC", {"EXIF:DateTimeOriginal":
+                                         "2026:08:30 10:00:00"})
+    _record(tree, "f", "IMG_4471.MOV", {"EXIF:DateTimeOriginal":
+                                        "2026:08:30 10:00:00"})
+
+    assert ix.suggestions(_rows(tree)) == []
+
+
 def test_a_photograph_on_its_own_is_not_a_suggestion(
     tree: dict[str, Path]
 ) -> None:
