@@ -195,7 +195,9 @@ const confirm = () => true;
 const VIEW = { event: null, year: null, tag: null, audience: null, kind: null,
                band: null };
 const GRID_GROUPS = [['day', 'By day'], ['event', 'By event'],
+                     ['subevent', 'By event and sub-event'],
                      ['none', 'Ungrouped']];
+const ONE_FIELD = { event: 'event', subevent: 'event' };
 const GROUPING = ['day'];
 const CHIPS = [['event', 'Event'], ['audience', 'Access']];
 const FIXED = {};
@@ -229,10 +231,10 @@ function arrow(key, opts) {
   try {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
-      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS', 'GROUPING',
+      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING',
       'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
-      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
+      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
   } catch (e) {
     console.log('FAIL the script threw on load: ' + e.message);
     process.exit(1);
@@ -925,12 +927,60 @@ function arrow(key, opts) {
       o => (o.innerHTML.match(/<span>([^<]*)<\/span>/) || [])[1]);
     check('the plus offers a grouping to nest',
           labels.includes('By event'), labels.join(','));
+    // It hung off the day heading, and a day inside a day is nothing: the
+    // level being added to counted as free before, so this row was there and
+    // choosing it did not move the page at all.
+    check('and not the level it is hanging off',
+          !labels.includes('By day'), labels.join(','));
     check('and does not offer to remove the level it is adding to',
           !labels.includes('Remove this grouping'), labels.join(','));
     rows[labels.indexOf('By event')].click();
     check('choosing one keeps the outer level and adds inside it',
           /group=day%2Cevent|group=day,event/.test(location.href),
           location.href);
+    location.href = '/browse';
+  }
+
+  // Event and sub-event read one column at two widths. Either inside the
+  // other divides by a question the outer level has already answered, so
+  // picking one takes the other off the menu — while a crumb sitting on one
+  // still offers the swap to the other, which is a change of width, not a
+  // second level of it.
+  {
+    // The same heading, re-bound by a page that is grouping by event.
+    document.querySelectorAll = sel => (sel === '.cell' ? cells
+                                      : sel === '.group' ? [heading]
+                                      : sel === '.stage' ? [stage] : realQsa(sel));
+    new Function(
+      'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
+      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
+      'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED',
+      'EVENT_SEP', 'setTimeout', js,
+    )(document, window, fetch, localStorage, location, confirm,
+      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
+      GRID_GROUPS, ONE_FIELD, ['event'], PAGE, TIERS, UNREVIEWED, EVENT_SEP,
+      fn => fn());
+
+    const named = () => menu.querySelectorAll('.opt').map(
+      o => (o.innerHTML.match(/<span>([^<]*)<\/span>/) || [])[1]);
+
+    addBtn.click();
+    await settle();
+    let labels = named();
+    check('grouping by event does not offer sub-event inside it',
+          !labels.includes('By event and sub-event'), labels.join(','));
+    check('nor a second helping of event',
+          !labels.includes('By event'), labels.join(','));
+    check('while the groupings that ask something else are still there',
+          labels.includes('By day'), labels.join(','));
+    grid.click();
+
+    crumb.querySelector('.grpname').click();
+    await settle();
+    labels = named();
+    check('but the crumb itself offers the swap to sub-event',
+          labels.includes('By event and sub-event'), labels.join(','));
+    grid.click();
     location.href = '/browse';
   }
 
@@ -964,10 +1014,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', js,
+      'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
+      GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
 
     // One file out of the first section, and the whole of the second.
     s1[0].querySelector('.pick').click();
@@ -1029,10 +1079,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', js,
+      'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
+      GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
 
     // Push the first one out of the view, the way an edit does.
     shelf[0].querySelector('.pick').click();
@@ -1079,10 +1129,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', js,
+      'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
+      GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
 
     // Scrolled a couple of rows down: c2 straddles the top of the screen.
     scrolled = 250;
@@ -1121,10 +1171,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', js,
+      'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
+      GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
 
     document.byId.selall.click();          // all 250
     const n = calls.length;
@@ -1238,10 +1288,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', js,
+      'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
+      GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
     check('a new page opens at the size you left it',
           grid.dataset.size === 'large', grid.dataset.size);
 
@@ -1250,10 +1300,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', js,
+      'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
+      GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
     check('and one saved under the old names still opens there',
           grid.dataset.size === 'large', grid.dataset.size);
   }
@@ -1279,10 +1329,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', js,
+      'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
+      GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
 
     three[0].querySelector('.pick').click();
     three[1].querySelector('.pick').click();
@@ -1322,10 +1372,10 @@ function arrow(key, opts) {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', js,
+      'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
+      GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
 
     const get = actBtn('download');
     check('nothing selected offers no download', get.hidden === true);

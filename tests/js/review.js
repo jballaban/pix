@@ -159,6 +159,7 @@ const VIEW = { event: null, date: null, tag: null, audience: null, kind: null,
                band: null, deleted: null, stacks: null, within: null };
 const GRID_GROUPS = [['day', 'By day'], ['stack', 'By stack'],
                      ['none', 'Ungrouped']];
+const ONE_FIELD = { event: 'event', subevent: 'event' };
 const GROUPING = ['day'];
 const CHIPS = [['event', 'Event'], ['stacks', 'Stacks']];
 const FIXED = { stacks: [['only', 'Only stacks'],
@@ -200,9 +201,9 @@ function deselect() {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', js,
+      'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
-      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS,
+      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD,
       GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
   } catch (e) {
     console.log('FAIL the script threw on load: ' + e.message);

@@ -140,6 +140,7 @@ const VIEW = { event: null, date: '2026', tag: null, audience: null,
                stacks: null, within: null };
 const GRID_GROUPS = [['day', 'By day'], ['year', 'By year'],
                      ['event', 'By event'], ['none', 'Ungrouped']];
+const ONE_FIELD = { event: 'event', subevent: 'event' };
 const GROUPING = ['year'];
 const CHIPS = [['event', 'Event'], ['date', 'Date'], ['camera', 'Camera']];
 // Each filter's drawing, as the server hands it over. Stand-ins rather than
@@ -176,9 +177,9 @@ const press = key => (keys.keydown || []).forEach(fn => fn(
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'MARKS', 'setTimeout', js,
+      'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'MARKS', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
-      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS,
+      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD,
       GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, MARKS, fn => fn());
   } catch (e) {
     console.log('FAIL the script threw on load: ' + e.message);

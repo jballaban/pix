@@ -3474,6 +3474,23 @@ def test_groupings_nest(client: TestClient) -> None:
     assert "30 August 2026" in html
 
 
+def test_one_column_is_not_grouped_on_twice(client: TestClient) -> None:
+    """Event and sub-event read one field at two widths. Either inside the
+    other cuts by a question the outer level has already answered — *Sicily*
+    holding *Sicily › Taormina* is a heading and no new information, and the
+    other way round is a group of one every time. The menu stops offering it;
+    this is the same rule where the state actually lives, because the grouping
+    comes out of a URL that people type and edit by hand."""
+    assert web._groupings("event,subevent") == ["event"]
+    assert web._groupings("subevent,event") == ["subevent"]
+    # The outer one wins, and what asks something else is untouched.
+    assert web._groupings("event,day,subevent") == ["event", "day"]
+    # Day, month and year read one column too and are deliberately *not* in
+    # this: a month inside a year is a real division, and it is the reason the
+    # grouping is a list at all.
+    assert web._groupings("year,month,day") == ["year", "month", "day"]
+
+
 def test_a_section_has_one_heading_reading_as_a_path(
     client: TestClient
 ) -> None:

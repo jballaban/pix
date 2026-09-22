@@ -2263,7 +2263,8 @@ def _view_script(user: Principal, view: ix.Filters, groups: list[str], *,
         f"EVENT_SEP={_js(decisions.EVENT_SEP)},"
         f"USUAL={_js(store().usual)},PAGE={_js(page)},"
         f"TIERS={_js(_TIERS)},"
-        f"GRID_GROUPS={_js(_GRID_GROUPS)},GROUPING={_js(groups)};</script>"
+        f"GRID_GROUPS={_js(_GRID_GROUPS)},ONE_FIELD={_js(_ONE_FIELD)},"
+        f"GROUPING={_js(groups)};</script>"
         f"<script>{_BROWSE_JS}</script>")
 
 
@@ -2496,7 +2497,7 @@ def _groupings(raw: str) -> list[str]:
     out: list[str] = []
     for name in raw.split(","):
         name = name.strip()
-        if name in ix.GROUPINGS and name != "none" and name not in out:
+        if name in ix.GROUPINGS and name != "none" and name not in out                 and not any(_same_field(name, had) for had in out):
             out.append(name)
     # Nothing recognisable is a typo, not a request to stop grouping — `none`
     # says that, and says it on purpose.
@@ -3053,6 +3054,25 @@ _GRID_GROUPS: tuple[tuple[str, str], ...] = (
     ("camera", "By camera"),
     ("stack", "By stack"), ("none", "Ungrouped"),
 )
+
+#: Which column each grouping reads, for the ones that share.
+#:
+#: *Event* and *sub-event* are one field at two widths — the head of the name
+#: and the whole of it. Nesting either inside the other cuts by a question the
+#: outer level has already answered: *Sicily* holding *Sicily › Taormina* is a
+#: heading and no new information, and *Sicily › Taormina* holding *Sicily* is
+#: a group of one, every time. So picking one takes the other off the menu.
+#:
+#: Day, month and year are deliberately **not** in here. They read the same
+#: column too, but a month inside a year is a real division and the reason the
+#: grouping is a list in the first place.
+_ONE_FIELD: dict[str, str] = {"event": "event", "subevent": "event"}
+
+
+def _same_field(a: str, b: str) -> bool:
+    """Two groupings that read one column, so only one of them can be on."""
+    return a != b and _ONE_FIELD.get(a, a) == _ONE_FIELD.get(b, b)
+
 
 #: Offered *in addition* to whatever already exists. Audience names are free
 #: text, but "nobody yet" is a state rather than a name, and it is the single
@@ -5452,9 +5472,17 @@ function groupMenu(anchorEl,level,insert){
   head.className='band';
   head.textContent=insert?'Then group by':'Group by';
   list.appendChild(head);
+  // What is already in the order, and so not on offer again. Replacing a
+  // level does not count its own key as taken — that is the row showing which
+  // choice is current, ticked. Inserting replaces nothing, so there every
+  // level counts, including the one the + hangs off: it was exempt before,
+  // which left the innermost grouping offered again in its own *Then group
+  // by* menu, and picking it did nothing at all.
+  const taken=levels.filter((_,i)=>insert||i!==level);
+  const field=k=>ONE_FIELD[k]||k;
   for(const [key,label] of GRID_GROUPS){
     if(key==='none') continue;
-    if(levels.includes(key)&&levels[level]!==key) continue;
+    if(taken.some(k=>field(k)===field(key))) continue;
     row(label,()=>{
       const next=[...levels];
       if(insert) next.splice(level+1,0,key); else next[level]=key;

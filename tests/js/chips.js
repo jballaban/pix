@@ -75,6 +75,7 @@ const VIEW = { event: null, tag: null, date: startDate, audience: null,
                kind: 'image', band: null, source: null, camera: null,
                deleted: null, stacks: null, within: null };
 const GRID_GROUPS = [['day', 'By day'], ['none', 'Ungrouped']];
+const ONE_FIELD = { event: 'event', subevent: 'event' };
 const GROUPING = ['day'];
 const CHIPS = [['date', 'Date'], ['kind', 'Type']];
 const FIXED = { kind: [['image', 'Photos'], ['video', 'Video'],
@@ -105,10 +106,10 @@ const optionLabels = () => document.byId.menu.querySelectorAll('.opt')
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'history',
       'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS',
-      'GROUPS', 'USUAL', 'GRID_GROUPS', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP',
+      'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP',
       'setTimeout', js,
     )(document, window, fetch, localStorage, location, history, confirm,
-      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS,
+      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD,
       GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, fn => fn());
   } catch (e) {
     console.log('FAIL the script threw on load: ' + e.message);

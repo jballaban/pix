@@ -151,6 +151,7 @@ const confirm = () => true;
 const VIEW = { event: null, year: null, tag: null, audience: null, kind: null,
                band: null };
 const GRID_GROUPS = [['day', 'By day'], ['none', 'Ungrouped']];
+const ONE_FIELD = { event: 'event', subevent: 'event' };
 const GROUPING = ['day'];
 const CHIPS = [['event', 'Event']];
 const FIXED = {};
@@ -186,13 +187,13 @@ const settled = async () => { for (let i = 0; i < 12; i++) await settle(); };
 
 const PARAMS = ['document', 'window', 'fetch', 'localStorage', 'location',
                 'confirm', 'matchMedia', 'navigator', 'VIEW', 'CHIPS', 'FIXED',
-                'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS',
+                'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD',
                 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'setTimeout', 'clearTimeout'];
 function run() {
   new Function(...PARAMS, js)(
     document, window, fetch, localStorage, location, confirm, matchMedia,
     navigator, VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-    GRID_GROUPS, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, timer, cancelTimer);
+    GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, timer, cancelTimer);
 }
 
 (async () => {
