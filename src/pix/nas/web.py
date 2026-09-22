@@ -511,6 +511,10 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
 .tile .name .sep { color:var(--dim); font-style:normal; font-weight:400;
                    margin:0 5px; }
 .tile .when { font-size:11px; color:var(--dim); }
+/* The same *of* the count uses, for the same reason: this card is a slice of
+   something longer, and saying so about the files and not about the days told
+   half of one fact. */
+.tile .when.split i { font-style:normal; opacity:.72; margin:0 2px; }
 .tile .n { font-size:12px; margin-top:3px;
            font-variant-numeric:tabular-nums; }
 .tile .kinds { font-style:normal; color:var(--dim); }
@@ -521,17 +525,6 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
    no highlight on it. */
 .tile .split i { font-style:normal; color:var(--dim); }
 .tile .kinds::before { content:" · "; }
-/* Two readings in one bar, because they nest. The track is the whole group
-   this card belongs to; the blue is how much of it is in this card; the green
-   inside the blue is how much of *that* has been decided. A year you have
-   finished and a year you have not started are the same sentence and
-   different bars, and so are a whole event and a fortnight of one. */
-.tile .bar { height:5px; margin-top:8px; border-radius:3px;
-             background:#11141a; overflow:hidden; }
-.tile .bar i { display:block; height:100%; border-radius:3px;
-               background:linear-gradient(90deg,#4f86e0,#6aa3ff); }
-.tile .bar i b { display:block; height:100%; border-radius:3px;
-                 background:linear-gradient(90deg,#3f9e55,#6ad07e); }
 /* What the folder holds, in the same chips a thumbnail wears — so a card
    and a photograph say the same kind of thing about themselves. */
 .spread { display:flex; flex-wrap:wrap; gap:3px; margin-top:6px; }
@@ -609,13 +602,20 @@ h3.group.shelf .crumb:not(:last-child) .grpname { color:var(--fg);
                                                   font-weight:600; }
 h3.group.shelf .crumb:last-child .grpname { color:var(--dim);
                                             font-weight:400; }
-.rmgrp { background:none; border:0; margin:0; padding:0 4px; color:var(--dim);
+/* **A heading is words, not a toolbar.** Three of these are buttons, and a
+   button here got a border, a gradient and a hairline of light along its top
+   when those were given to buttons generally — so the heading grew a line
+   above its own text and a box around its plus sign. They wear nothing until
+   they are pointed at; `box-shadow:none` is the part that is easy to forget,
+   because clearing the background and the border looks like it was enough. */
+.rmgrp { background:none; border:0; box-shadow:none; margin:0; padding:0 4px;
+         color:var(--dim);
          font:inherit; cursor:pointer; opacity:0; transition:opacity .1s; }
 .crumb:hover .rmgrp, .rmgrp:focus { opacity:1; }
 .rmgrp:hover { color:#ffb4a2; }
 /* The name is the control: click it to regroup, `+` to group within it. */
-.grpname { background:none; border:0; padding:0; margin:0; color:inherit;
-           font:inherit; cursor:pointer; }
+.grpname { background:none; border:0; box-shadow:none; padding:0; margin:0;
+           color:inherit; font:inherit; cursor:pointer; }
 .grpname:hover { color:var(--accent); background:var(--tint);
                  box-shadow:0 0 0 3px var(--tint); border-radius:2px; }
 /* Beside the name it belongs to, not marooned at the end of the row, where it
@@ -623,6 +623,7 @@ h3.group.shelf .crumb:last-child .grpname { color:var(--dim);
    hover the right thing is a control you never learn is there, and a page of
    faint plus signs is quiet enough. */
 .addgrp { margin:0; padding:0 7px; line-height:1.3; font-size:14px;
+          background:none; border-color:transparent; box-shadow:none;
           opacity:.3; transition:opacity .1s; }
 h3.group:hover .addgrp, .addgrp:focus { opacity:1; }
 .addgrp:hover { border-color:var(--accent); color:var(--accent); }
@@ -1756,8 +1757,9 @@ def home(request: Request,
     # An event running from February into March is two cards, and without this
     # each of them is a folder saying 312 files with nothing to say it is part
     # of eleven hundred. Same query, one level: what a thing is on its own.
-    whole = ({r["grp0"]: int(r["n"]) for r in
-              ix.sections(conn, view, groups=groups[-1:], limit=PAGE_LIMIT)}
+    whole = ({r["grp0"]: (int(r["n"]), r["first_seen"], r["last_seen"])
+              for r in ix.sections(conn, view, groups=groups[-1:],
+                                   limit=PAGE_LIMIT)}
              if len(groups) > 1 else {})
     s = ix.summary(conn, view)
     # What each section carries, one query per kind. The same `GROUP BY` the
@@ -1813,7 +1815,8 @@ def home(request: Request,
 
 
 def _shelves(rows: list[sqlite3.Row], groups: list[str], view: ix.Filters,
-             user: Principal, whole: dict[object, int] | None = None,
+             user: Principal,
+             whole: dict[object, tuple[int, object, object]] | None = None,
              spread: dict[str, dict[tuple[object, ...],
                                     list[tuple[str, int]]]]
              | None = None) -> str:
@@ -1911,7 +1914,8 @@ def _spread_html(kind: str, values: list[tuple[str, int]], n: int,
 
 
 def _folder(row: sqlite3.Row, groups: list[str], view: ix.Filters,
-            user: Principal, whole: dict[object, int] | None = None,
+            user: Principal,
+            whole: dict[object, tuple[int, object, object]] | None = None,
             spread: dict[str, dict[tuple[object, ...], list[tuple[str, int]]]]
             | None = None) -> str:
     """One section of the grid, drawn as what is worth knowing about it.
@@ -1934,7 +1938,8 @@ def _folder(row: sqlite3.Row, groups: list[str], view: ix.Filters,
     # folder saying *312 files* with nothing to say it is part of eleven
     # hundred is a folder describing the grouping rather than the library.
     # The count says both, which is also the shortest way to say it is split.
-    entire = (whole or {}).get(row[f"grp{last}"], n) if groups else n
+    outer = (whole or {}).get(row[f"grp{last}"]) if groups else None
+    entire = outer[0] if outer else n
     videos = int(row["videos"] or 0)
     left = int(row["unreviewed"] or 0) if user.is_admin else 0
     # Not under a heading that already says it: grouped by day, the name *is*
@@ -1942,9 +1947,23 @@ def _folder(row: sqlite3.Row, groups: list[str], view: ix.Filters,
     # you two things.
     dated = not (groups and groups[-1] == "day")
     when = _span(row["first_seen"], row["last_seen"]) if dated else ""
+    # **And the dates say it too.** The count already said *312 of 1,100*, so
+    # a card that was a fortnight of a three-week event said so about its
+    # files and not about its days — two facts about the same split, one of
+    # them told and one of them not. Same shape as the count, so the two read
+    # as one sentence about one thing.
+    across = _span(outer[1], outer[2]) if (outer and dated) else ""
+    if across and across != when:
+        when = f'{when} <i>of</i> {across}'
+        split_when = " split"
+    else:
+        split_when = ""
     inner = (
         f'<b class="name">{_h(name)}</b>'
-        + (f'<span class="when">{_h(when)}</span>' if when else
+        # `when` may already carry its own markup, so it is not escaped
+        # again here; every value inside it came through `_span`, which builds
+        # from parsed dates and never from anything a person typed.
+        + (f'<span class="when{split_when}">{when}</span>' if when else
            '<span class="when dim">no dates</span>' if dated else "")
         + ('<span class="n split" title="Split by the grouping above it — '
            f'{entire:,} files in all">{n:,} <i>of</i> {entire:,} files'
@@ -1959,7 +1978,6 @@ def _folder(row: sqlite3.Row, groups: list[str], view: ix.Filters,
         # card holding all of an event is a full bar; one holding a fortnight
         # of it is a quarter of one, and the green grows inside either as the
         # work gets done.
-        + _bar(n, entire, left, user)
         # What is *in* it, not just how much of it is done. A thumbnail says
         # which tags and which audience it carries; this is the same sentence
         # for a folder, with the share that carries each — and what is
@@ -1984,31 +2002,6 @@ def _folder(row: sqlite3.Row, groups: list[str], view: ix.Filters,
     return (f'<a class="tile" href="{_h(href)}">'
             f'<button class="pick" aria-label="Select this folder"></button>'
             f'{inner}</a>')
-
-
-def _bar(n: int, entire: int, left: int, user: Principal) -> str:
-    """This card's share of its group, with the decided part drawn inside it.
-
-    The track is the *whole* group rather than this card, so the bar answers
-    the question the two numbers beside it ask — `312 of 1,143` is a quarter
-    of a bar, and it looks like a quarter. A card that is all of its group
-    fills it, which is the plain reading of a full bar.
-
-    The decided part is nested rather than beside it: it is a share of this
-    card, and this card is a share of the group, so it is drawn as a share of
-    a share and stays true at both levels.
-    """
-    # Two files out of eleven hundred rounds to nothing, and an empty bar
-    # reads as *nothing here* rather than as *a sliver of something big*. A
-    # sliver is what it is, so it gets drawn as one.
-    share = max(round(100 * n / entire), 2) if entire else 0
-    done = round(100 * (n - left) / n) if n and user.is_admin else 0
-    said = f"{n:,} of {entire:,} files" if entire > n else f"{n:,} files"
-    if user.is_admin:
-        said += f" · {n - left:,} decided"
-    return (f'<span class="bar" title="{_h(said)}">'
-            f'<i style="width:{share}%">'
-            f'<b style="width:{done}%"></b></i></span>')
 
 
 def _span(first: object, last: object) -> str:

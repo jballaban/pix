@@ -1421,13 +1421,6 @@ def _spread(app_env: dict[str, Path], writable: Path,
              master_dir=share / "master")
 
 
-def _shelf(folders: str, heading: str) -> str:
-    """One shelf of the landing page, from its heading to the next."""
-    at = folders.index(heading)
-    end = folders.find("<h3", at)
-    return folders[at:end if end > 0 else len(folders)]
-
-
 def _folders(html: str) -> str:
     """Just the folders. The page script is inlined below them and mentions
     `/thumb/` and half the words on the card."""
@@ -1580,72 +1573,6 @@ def test_nothing_is_split_when_nothing_is_above_it(
     folders = _folders(client.get("/?date=2026&group=event").text)
 
     assert "<i>of</i>" not in folders
-
-
-def test_the_bar_is_this_card_within_its_group(
-    client: TestClient, writable: Path, app_env: dict[str, Path]
-) -> None:
-    """The track is the whole group, so the bar answers the question the two
-    numbers beside it ask: *1 of 3* is a third of a bar and looks like one."""
-    _spread(app_env, writable, {"jan.jpg": "2026:01:20 10:00:00",
-                                "feb1.jpg": "2026:02:02 10:00:00",
-                                "feb2.jpg": "2026:02:03 10:00:00"})
-    client.post("/api/decide/bulk", json={
-        "event": "Ski Trip",
-        "files": [{"folder": "init_2026", "name": n}
-                  for n in ("jan.jpg", "feb1.jpg", "feb2.jpg")]})
-
-    folders = _folders(client.get("/?date=2026&group=month,event").text)
-    jan = _shelf(folders, "January")
-
-    assert '<i style="width:33%"' in jan, jan
-    assert "1 of 3 files" in jan
-
-
-def test_a_sliver_is_drawn_as_one() -> None:
-    """Two files out of eleven hundred rounds to nothing, and an empty bar
-    reads as *nothing here* rather than as a sliver of something big. Asked of
-    the arithmetic directly, because the ratio that needs saying is one no
-    fixture of a dozen files can produce."""
-    admin = web.Principal(name="admin", is_admin=True, grants=frozenset())
-
-    assert '<i style="width:0%"' not in web._bar(2, 1143, 2, admin)
-    assert '<i style="width:2%"' in web._bar(2, 1143, 2, admin)
-    # And it does not invent a share where there is none to round up.
-    assert '<i style="width:100%"' in web._bar(9, 9, 9, admin)
-
-
-def test_a_folder_says_how_much_of_it_is_done(
-    client: TestClient, writable: Path
-) -> None:
-    """A year you have finished and a year you have not started are the same
-    sentence and different bars.
-
-    What is left reads as a chip like every other fact about the folder: it
-    was the one negative thing on the card and the only one shaped differently
-    from all the positive ones. The bar is what says *how much*; the chip says
-    *there is some*, and a percentage beside the word said neither better.
-    """
-    (writable / "b.mp4").write_bytes(b"fake")
-    folders = _folders(client.get("/?group=event").text)
-    assert 'class="bar"' in folders
-    assert 'class="none"' in folders and ">undecided<" in folders
-
-    client.post("/api/decide/bulk", json={
-        "add_audience": ["family"],
-        "files": [{"folder": "init_2026", "name": "a.jpg"}]})
-    half = _folders(client.get("/?group=event").text)
-    assert ">undecided<" in half, half
-    assert 'width:50%' in half, "the bar does not move"
-
-    client.post("/api/decide/bulk", json={
-        "add_audience": ["family"],
-        "files": [{"folder": "init_2026", "name": "b.mp4"}]})
-    done = _folders(client.get("/?group=event").text)
-    # Nothing left to say. A folder with none outstanding says so by carrying
-    # no such chip, the way one with no tags says that by carrying no tags.
-    assert "undecided" not in done
-    assert "all decided" not in done
 
 
 def test_opening_a_folder_is_this_view_plus_what_the_folder_is(
@@ -3609,10 +3536,14 @@ def test_the_add_button_is_visible_without_hovering(
 ) -> None:
     """A control you cannot see until you hover the right thing is a control
     you never learn is there."""
-    css = client.get("/browse").text
+    css = web._STYLE
+    # The whole rule, not the first hundred-odd characters of it: a property
+    # is still declared when somebody adds one above it.
+    rule = css[css.index(".addgrp {"):]
+    rule = rule[:rule.index("}")]
 
-    assert "visibility:hidden" not in css.split(".addgrp")[1][:120]
-    assert "opacity:.3" in css.split(".addgrp")[1][:120]
+    assert "visibility:hidden" not in rule, rule
+    assert "opacity:.3" in rule, rule
 
 
 def test_three_levels_is_the_limit(client: TestClient) -> None:
@@ -5021,3 +4952,77 @@ def test_a_way_back_that_goes_nowhere_says_so(client: TestClient) -> None:
 
     assert "history.length <= 1" in html and "back.disabled = true" in html
     assert "history.back()" in html
+
+
+def test_a_card_says_it_is_a_slice_of_something_longer(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """An event running from February into March is a card under each month.
+    The count said *1 of 2 files* and the dates said only this card's, so one
+    split was told twice over and the other not at all.
+
+    The same `of` the count uses, so the two read as one sentence about one
+    thing rather than two facts that happen to be adjacent.
+    """
+    share = app_env["share"]
+    for name, when in (("m1.jpg", "2026:02:26 10:00:00"),
+                       ("m2.jpg", "2026:03:03 10:00:00")):
+        (writable / name).write_bytes(b"fake")
+        (share / "meta" / "init_2026" / f"{name}.json").write_text(json.dumps({
+            "file": name, "folder": "init_2026", "size": 30, "mtime_ns": 1,
+            "exif": {"EXIF:DateTimeOriginal": when},
+        }), encoding="utf-8")
+    ix.build(app_env["db"], meta_dir=share / "meta",
+             master_dir=share / "master")
+    client.post("/api/decide/bulk", json={
+        "event": "Sicily",
+        "files": [{"folder": "init_2026", "name": "m1.jpg"},
+                  {"folder": "init_2026", "name": "m2.jpg"}]})
+
+    html = client.get("/?date=2026&group=month,event&stacks=firm").text
+    card = next(c for c in re.findall(r'<a class="tile".*?</a>', html, re.S)
+                if ">Sicily<" in c)
+
+    assert 'class="when split"' in card, card
+    assert "26 Feb" in card and "3 Mar" in card, card
+    # And the count still says its half of the same thing.
+    assert "<i>of</i> 2 files" in card, card
+
+
+def test_a_card_that_is_all_of_its_group_says_nothing_of_the_sort(
+    client: TestClient
+) -> None:
+    """Most cards are whole, and a card that announced it was not split would
+    be a card describing the grouping rather than the library."""
+    html = client.get("/?group=event").text
+    card = next(iter(re.findall(r'<a class="tile".*?</a>', html, re.S)), "")
+
+    assert 'class="when split"' not in card, card
+
+
+def test_nothing_draws_a_progress_bar_any_more() -> None:
+    """It said how much of a group a card was, which the count says in words,
+    and how much of it was done, which the chip beside it says by being there.
+    A third telling of two things nobody asked twice about."""
+    assert ".tile .bar" not in web._STYLE
+    assert not hasattr(web, "_bar")
+
+
+def test_a_heading_is_words_rather_than_a_toolbar() -> None:
+    """Three of the things in a grouping heading are buttons, so giving
+    buttons generally a border, a gradient and a hairline of light along the
+    top gave the heading a line above its own text and a box around its plus
+    sign.
+
+    `box-shadow:none` is the part that is easy to forget: clearing the
+    background and the border looks like it was enough, and the highlight is
+    the one that draws on a transparent element.
+    """
+    for control in (".rmgrp {", ".grpname {", ".addgrp {"):
+        # At the start of a line, or this finds the narrower rule that only
+        # recolours one of them inside a shelf heading.
+        found = re.search(r"^" + re.escape(control) + r"[^}]*}",
+                          web._STYLE, re.M)
+        assert found is not None, control
+        assert "box-shadow:none" in found.group(0), control
+        assert "background:none" in found.group(0), control
