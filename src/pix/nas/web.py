@@ -484,14 +484,17 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
    screen at once — an event divided into three is three rows under it, not a
    second panel you have to open the event to find. */
 .opt.sub { padding-left:27px; }
-/* Naming a part of an event, under the event it is part of. Its own box,
-   because the one at the top of the panel names events and a single box
-   cannot be asked two questions at once. */
-.subnew { display:flex; gap:6px; padding:3px 11px 6px 27px;
+/* Naming a part of an event, under the event it is part of and after the
+   parts it already has. A word until it is wanted: dividing an event up is
+   done once and picked from ever after, so a box standing open under every
+   event on screen is furniture for the rare half of the job. */
+.subnew { display:flex; gap:6px; padding:2px 11px 6px 27px;
           align-items:center; }
+.subnew .addsub { background:none; border:0; box-shadow:none; padding:2px 0;
+                  color:var(--dim); font-size:12px; }
+.subnew .addsub:hover { color:var(--accent); border-color:transparent; }
 .subnew input { flex:1 1 auto; width:auto; min-width:0; padding:4px 7px;
-                border:1px solid var(--line); border-radius:4px;
-                border-bottom:1px solid var(--line); }
+                border:1px solid var(--line); border-radius:4px; }
 .subnew input:focus { border-color:var(--accent); }
 .subnew button { padding:3px 9px; flex:none; }
 .band { padding:7px 11px 3px; color:var(--dim); font-size:11px;
@@ -3566,12 +3569,23 @@ async function openMenu(anchorEl,ctx){
     const cs=await acting();
     if(!cs) return;
     if(!cs.length){workClose();say('nothing selected');return;}
-    // An event row writes the event and keeps each file's own sub-event; a
-    // sub-event row writes the whole name, both halves at once. Neither
-    // clears: *No event* and *No sub-event* are rows of their own, because a
-    // box that opens onto a second question cannot also be an undo.
-    if(nested){ await choose(o.value,o.sub?'event':'event_head',!o.sub);
-                return; }
+    // A sub-event row writes the whole name, both halves at once.
+    //
+    // An event row depends on whether they are all in that event already,
+    // and it is the tri-state rule the rest of this menu follows: none and
+    // some add, all removes. Somewhere else, that event is where these files
+    // are going, and each one's own sub-event goes with it — which is why it
+    // is written as half a name. On the event they are all in, the same row
+    // can only mean *this event and no part of it*, so it writes the whole
+    // name, which is the name with no part on the end. There is no separate
+    // *No sub-event* row: it would say the same thing twice, and the event's
+    // own name is the plainer way to say it.
+    if(nested){
+      const flat=!o.sub&&cs.length&&cs.every(
+        c=>splitEvent(c.dataset.event||'')[0]===o.value);
+      await choose(o.value,(o.sub||flat)?'event':'event_head',!o.sub);
+      return;
+    }
     const state=shareState(cs,FIELD,o.value);
     if(FIELD==='event'){
       // Ticking the value they already have clears it; anything else sets
@@ -3692,23 +3706,21 @@ async function openMenu(anchorEl,ctx){
     // has. The box only under an event these files are in — a sub-event of
     // an event they are not in is a name with nothing to attach it to.
     const place=(o,into)=>{
-      into.appendChild(opt(o,()=>choose(o.value),checkable));
+      const d=opt(o,()=>choose(o.value),checkable);
+      // One row, two meanings, depending on where these files already are.
+      if(nested&&!o.sub) d.title=stateOf(o)==='all'
+        ? o.label+', and no part of it'
+        : 'Put these in '+o.label+', each keeping its own sub-event';
+      into.appendChild(d);
       if(!nested) return;
-      if(present.includes(o.value)){
-        into.appendChild(newSub(o));
-        if(targets().some(c=>{
-          const [head,leaf]=splitEvent(c.dataset.event||'');
-          return head===o.value&&leaf;
-        })){
-          const none=opt({label:'No sub-event',n:null},
-                         ()=>choose(null,'event_leaf'));
-          none.classList.add('sub'); into.appendChild(none);
-        }
-      }
       (o.subs||[]).forEach(sub=>{
-        const d=opt(sub,()=>choose(sub.value,'event'),checkable);
-        d.classList.add('sub'); into.appendChild(d);
+        const s=opt(sub,()=>choose(sub.value,'event'),checkable);
+        s.classList.add('sub'); into.appendChild(s);
       });
+      // After the parts there are, not before them: naming a new one is rare
+      // beside picking one that exists, and the list is what the panel is
+      // for.
+      if(present.includes(o.value)) into.appendChild(newSub(o));
     };
     if(present.length){
       const seen=present.filter(v=>v.toLowerCase().includes(t));
@@ -3761,25 +3773,44 @@ async function openMenu(anchorEl,ctx){
   }
   // Naming a part of an event, in the list under the event it is part of —
   // its own box, because the one at the top of the panel names events and a
-  // single box cannot be asked two questions at once. It does not filter as
-  // it is typed: rebuilding a list under a box takes the focus out of it.
+  // single box cannot be asked two questions at once.
+  //
+  // A word until it is wanted. Dividing an event up is done once and then
+  // picked from ever after, so a box and a button standing open under every
+  // event these files are in is a lot of furniture for the rare half of the
+  // job. It does not filter as it is typed: rebuilding a list under a box
+  // takes the focus out of it.
   function newSub(h){
     const row=document.createElement('div');
     row.className='subnew';
+    const ask=document.createElement('button');
+    ask.className='addsub';
+    ask.textContent='Add a sub-event';
     const box=document.createElement('input');
     box.autocomplete='off';
     box.placeholder='Name a sub-event of '+h.label;
-    const add=document.createElement('button');
-    add.textContent='Add';
-    const go=()=>{const v=box.value.trim(); if(v) choose(v,'event_leaf');};
-    add.onclick=e=>{e.stopPropagation();go();};
+    box.hidden=true;
+    const save=document.createElement('button');
+    save.textContent='Save';
+    save.hidden=true;
+    const shut=()=>{box.hidden=true; save.hidden=true; ask.hidden=false;};
+    const go=()=>{const v=box.value.trim(); if(v) choose(v,'event_leaf');
+                  else shut();};
+    ask.onclick=e=>{
+      e.stopPropagation();
+      ask.hidden=true; box.hidden=false; save.hidden=false;
+      if(box.focus) box.focus();
+    };
+    save.onclick=e=>{e.stopPropagation();go();};
     box.onclick=e=>e.stopPropagation();
     box.onkeydown=e=>{
       if(e.key==='Enter'){go();e.preventDefault();}
-      if(e.key==='Escape'){closeMenu();}
+      // Out of the box, not out of the menu: the list is still the thing
+      // being read and folding the box away is what was asked for.
+      if(e.key==='Escape') shut();
       e.stopPropagation();
     };
-    row.appendChild(box); row.appendChild(add);
+    row.appendChild(ask); row.appendChild(box); row.appendChild(save);
     return row;
   }
   function opt(o,fn,checkable){
@@ -3788,6 +3819,7 @@ async function openMenu(anchorEl,ctx){
     d.innerHTML=(checkable?'<span class="box"></span>':'')
                +`<span>${esc(o.label)}</span>`
                +(o.n!==null&&o.n!==undefined?`<span class="n">${o.n}</span>`:'');
+    if(o.tip) d.title=o.tip;
     if(checkable){
       mark(d,stateOf(o));
       d.onclick=e=>{e.stopPropagation();toggle(o,d);};

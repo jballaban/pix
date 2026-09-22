@@ -1645,22 +1645,12 @@ function arrow(key, opts) {
     check('but not a part it did not name',
           row('Catania').dataset.state === 'none',
           String(row('Catania').dataset.state));
-    // There is something to take off, so the way to take it off is offered.
-    check('and a part can be taken off again',
-          !!row('No sub-event'), 'nothing offers to remove the sub-event');
-
-    const n = calls.length;
-    row('No sub-event').click();
-    for (let k = 0; k < 8; k++) await settle();
-    const wrote = calls.slice(n).filter(c => c.url.startsWith('/api/decide'));
-    if (wrote.length) {
-      const body = JSON.parse(wrote[0].body);
-      check('which takes off the part and leaves the event',
-            body.event_leaf === null && body.event_head === undefined,
-            wrote[0].body);
-    }
-    check('so the file keeps its event', one.dataset.event === 'Sicily',
-          one.dataset.event);
+    // Taking the part off is pressing the event's own name, which is the
+    // name with no part on the end — so a row saying it again would be the
+    // same answer twice, in less plain words.
+    check('and nothing says it a second time',
+          !row('No sub-event'), 'a row repeating what the event name says');
+    document.byId.grid.click();
     one.dataset.event = '';
     deselect();
   }
@@ -1682,23 +1672,36 @@ function arrow(key, opts) {
       o => new RegExp('<span>' + name + '</span>').test(o.innerHTML));
 
     const boxes = menu.querySelectorAll('.subnew');
-    check('the event these files are in carries a box for a part of it',
+    check('the event these files are in offers to divide it up',
           boxes.length === 1, String(boxes.length));
-    check('named after that event',
+    const ask = boxes.length ? boxes[0].children[0] : null;
+    const box = boxes.length ? boxes[0].children[1] : null;
+    const save = boxes.length ? boxes[0].children[2] : null;
+    // Done once and picked from ever after, so it is a word until it is
+    // wanted rather than a box and a button standing open under every event.
+    check('as a word rather than a box',
+          !!ask && /add a sub-event/i.test(ask.textContent)
+          && box.hidden === true && save.hidden === true,
+          ask ? String(ask.textContent) : 'nothing there');
+    check('and it is the last thing under that event, after its parts',
           boxes.length === 1
-          && /sub-event of Cornwall/i.test(boxes[0].children[0].placeholder),
-          boxes.length ? String(boxes[0].children[0].placeholder) : 'none');
-    check('and it is not the box at the top of the panel',
+          && menu.querySelectorAll('.opt, .subnew').indexOf(boxes[0])
+             === menu.querySelectorAll('.opt, .subnew').length - 1,
+          'the box is not at the end of the list');
+    check('the box at the top still names events',
           /name an event/i.test(document.getElementById('menuq').placeholder),
           document.getElementById('menuq').placeholder);
-    // Nothing here has a part yet, so there is nothing to take off.
-    check('with nothing offering to remove a part it has not got',
-          !row('No sub-event'), 'offered to remove a sub-event there is none of');
 
     const n = calls.length;
-    if (boxes.length) {
-      boxes[0].children[0].value = 'Beach day';
-      boxes[0].children[1].click();
+    if (ask) {
+      ask.click();
+      check('pressing it opens a box named after that event',
+            ask.hidden === true && box.hidden === false
+            && save.hidden === false
+            && /sub-event of Cornwall/i.test(box.placeholder),
+            String(box.placeholder));
+      box.value = 'Beach day';
+      save.click();
     }
     for (let k = 0; k < 8; k++) await settle();
     const made = calls.slice(n).filter(c => c.url.startsWith('/api/decide'));
@@ -1713,6 +1716,117 @@ function arrow(key, opts) {
     }
     check('the cell says the whole name',
           one.dataset.event === 'Cornwall > Beach day', one.dataset.event);
+    one.dataset.event = '';
+    deselect();
+  }
+
+  // A selection is not one thing, and the box has to be able to say so at
+  // both widths — two files in different parts of the same event agree about
+  // the event and disagree about the part.
+  {
+    deselect();
+    const two = document.querySelectorAll('.cell').slice(0, 2);
+    two[0].dataset.event = 'Sicily > Taormina';
+    two[1].dataset.event = 'Sicily > Catania';
+    two.forEach(c => c.children.find(k => k._classes.has('pick')).click());
+
+    actBtn('event').click();
+    await settle(); await settle();
+    const menu = document.byId.menu;
+    const row = name => menu.querySelectorAll('.opt').find(
+      o => new RegExp('<span>' + name + '</span>').test(o.innerHTML));
+
+    check('every one of them is in the event, so the event is full',
+          row('Sicily').dataset.state === 'all',
+          String(row('Sicily').dataset.state));
+    check('but only one of them is in this part of it',
+          row('Taormina').dataset.state === 'some',
+          String(row('Taormina').dataset.state));
+    check('and only the other is in that one',
+          row('Catania').dataset.state === 'some',
+          String(row('Catania').dataset.state));
+    // A part of an event nothing here is in says nothing, at either width.
+    check('and an event none of them is in is empty',
+          row('Cornwall').dataset.state === 'none',
+          String(row('Cornwall').dataset.state));
+    document.byId.grid.click();
+    two.forEach(c => { c.dataset.event = ''; });
+    deselect();
+  }
+
+  // One in, one out — of the event as well as of the part.
+  {
+    deselect();
+    const two = document.querySelectorAll('.cell').slice(0, 2);
+    two[0].dataset.event = 'Sicily > Taormina';
+    two[1].dataset.event = 'Cornwall';
+    two.forEach(c => c.children.find(k => k._classes.has('pick')).click());
+
+    actBtn('event').click();
+    await settle(); await settle();
+    const menu = document.byId.menu;
+    const row = name => menu.querySelectorAll('.opt').find(
+      o => new RegExp('<span>' + name + '</span>').test(o.innerHTML));
+
+    check('an event half of them are in says half',
+          row('Sicily').dataset.state === 'some',
+          String(row('Sicily').dataset.state));
+    check('and so does the other event',
+          row('Cornwall').dataset.state === 'some',
+          String(row('Cornwall').dataset.state));
+    check('and the part only one of them is in',
+          row('Taormina').dataset.state === 'some',
+          String(row('Taormina').dataset.state));
+    check('while a part neither is in stays empty',
+          row('Catania').dataset.state === 'none',
+          String(row('Catania').dataset.state));
+    document.byId.grid.click();
+    two.forEach(c => { c.dataset.event = ''; });
+    deselect();
+  }
+
+  // A file in an event but in no part of it: the event is full, every part
+  // of it is empty. Nothing about being in *Sicily* says *Sicily > Taormina*.
+  {
+    deselect();
+    const one = document.querySelectorAll('.cell')[0];
+    one.dataset.event = 'Sicily';
+    one.children.find(k => k._classes.has('pick')).click();
+
+    actBtn('event').click();
+    await settle(); await settle();
+    const menu = document.byId.menu;
+    const row = name => menu.querySelectorAll('.opt').find(
+      o => new RegExp('<span>' + name + '</span>').test(o.innerHTML));
+
+    check('the event it is in is full', row('Sicily').dataset.state === 'all',
+          String(row('Sicily').dataset.state));
+    check('and no part of that event claims it',
+          row('Taormina').dataset.state === 'none'
+          && row('Catania').dataset.state === 'none',
+          row('Taormina').dataset.state + ',' + row('Catania').dataset.state);
+
+    // They are all in it already, so this row can only mean *and no part of
+    // it* — the tri-state rule the rest of the menu follows: a full box is
+    // the one place a press reads as *undo this*.
+    one.dataset.event = 'Sicily > Taormina';
+    document.byId.grid.click();
+    actBtn('event').click();
+    await settle(); await settle();
+    const n = calls.length;
+    row('Sicily').click();
+    for (let k = 0; k < 8; k++) await settle();
+    const wrote = calls.slice(n).filter(c => c.url.startsWith('/api/decide'));
+    if (wrote.length) {
+      check('pressing the event they are all in takes the part off',
+            JSON.parse(wrote[0].body).event === 'Sicily', wrote[0].body);
+    } else {
+      check('pressing the event they are all in takes the part off', false,
+            'nothing written');
+    }
+    check('and the file keeps the event', one.dataset.event === 'Sicily',
+          one.dataset.event);
+    document.byId.grid.click();
     one.dataset.event = '';
     deselect();
   }
