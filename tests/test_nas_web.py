@@ -1120,6 +1120,31 @@ def test_folding_a_guess_is_the_off_position_for_everybody(
     assert ('data-name="y.jpg"' not in client.get("/browse").text)
 
 
+def test_an_opened_guess_says_what_each_photograph_is_in(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """A guessed stack lists its members through `suggested_under`, and the
+    cell carried only what a file had been *decided* to be behind — so with
+    the guess open, nothing in it was in a stack as far as the page was
+    concerned. Neither question could be asked of a photograph in there:
+    *this is the one to show*, and *this one does not belong*.
+
+    Only while the view folds guesses, the same rule the count follows. With
+    them off these are ordinary photographs sitting in the grid on their own
+    and nothing is behind anything."""
+    _burst(app_env, writable, "x.jpg", "y.jpg")
+
+    inside = client.get("/browse?within=init_2026/x.jpg").text
+    cell = inside[inside.index('data-name="y.jpg"'):]
+    cell = cell[:cell.index(">") + 1]
+
+    assert 'data-proposed-under="init_2026/x.jpg"' in cell, cell
+
+    # And nothing to be in, where the guesses are switched off.
+    firm = client.get("/browse?within=init_2026/x.jpg&stacks=firm").text
+    assert 'data-proposed-under=""' in firm, "a guess that is not being folded"
+
+
 def test_only_stacks_is_every_stack_however_it_was_made(
     client: TestClient, writable: Path, app_env: dict[str, Path]
 ) -> None:

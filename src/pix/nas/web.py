@@ -2732,6 +2732,17 @@ def _cell(row: sqlite3.Row, view: ix.Filters | None = None, *,
         f'data-date="{_h(str(row["effective_date"] or "no date"))}" '
         f'data-deleted="{"1" if row["deleted"] else ""}" '
         f'data-under="{_h(row["stacked_under"] or "")}" '
+        # What it is only *proposed* to be behind, which is a different fact
+        # and was missing: opened, a guessed stack listed its members through
+        # this column and the page could not see it, so nothing in there was
+        # in a stack as far as the bar was concerned and there was no way to
+        # say which of them should be the one that shows.
+        #
+        # Only while the view folds guesses, the same rule the count follows:
+        # with them off these are ordinary photographs sitting in the grid on
+        # their own, and nothing is behind anything.
+        f'data-proposed-under="'
+        f'{_h(row["suggested_under"] or "") if (view or ix.Filters()).folds_guesses else ""}" '
         f'data-ar="{_squareness(row)}" '
         f'data-copy="{"1" if _has_render(row) else ""}" '
         f'data-behind="{row["behind"] or 0}" '
@@ -4056,14 +4067,14 @@ function drawSel(){
   // Only for a file that is behind something. Offered on the one already
   // showing, it could do nothing but say so — a button whose whole answer is
   // that it should not have been there.
-  show('top', live.length === 1 && stacked(live[0]));
+  show('top', live.length === 1 && inStack(live[0]));
   // Not for a guess: there is nothing to take apart yet, and undoing
   // something nobody did would be a button whose whole answer is that it
   // should not have been there. Refusing is what a guess answers to.
   show('unstack', live.some(c => stacked(c) || +(c.dataset.behind||0) > 0));
   // Only where there is a guess to refuse. On a stack somebody made it would
   // be offering to un-decide a decision, which is what Unstack is for.
-  show('nostack', live.some(guessed));
+  show('nostack', live.some(inGuess));
   // Anything selected can be downloaded, deleted or not: what it is on the
   // disk does not depend on what has been decided about it.
   show('download', live.length + dead > 0);
@@ -4692,12 +4703,24 @@ function sideOf(act,value){
 // of the others records which file it defers to; the top records nothing,
 // because being spoken for is the decision and speaking is what is left.
 function keyOf(c){ return c.dataset.folder+'/'+c.dataset.name; }
+// **Decided**, and only decided. Taking a file out of a stack is undoing a
+// decision, and there is no decision to undo about a guess — refusing is what
+// a guess answers to.
 function stacked(c){ return !!c.dataset.under; }
+// In a stack at all, whoever put it there. Which of these photographs should
+// be the one that shows is the same question either way, and answering it is
+// what turns a guess into a decision.
+function inStack(c){ return !!(c.dataset.under||c.dataset.proposedUnder); }
 // Anything folded behind this one, however it got there. A guessed stack opens
 // like a decided one — the question *which of these do I keep* is the same
 // question, and the answer to it is what turns one into the other.
 function tops(c){ return +(c.dataset.behind||0)+ +(c.dataset.proposed||0) > 0; }
 function guessed(c){ return +(c.dataset.proposed||0) > 0; }
+// In a guessed group, speaking for it or standing in it. *This one does not
+// belong* is a thing to be able to say about any of them, and it was only
+// askable of the one the shelf is drawn on — so opening a guess and pointing
+// at the photograph that does not fit left nothing to press.
+function inGuess(c){ return guessed(c) || !!c.dataset.proposedUnder; }
 
 // Stacking asks which one to show, rather than taking the first ticked and
 // hoping. The rule was invisible: nothing on screen said that the order you
@@ -4818,14 +4841,21 @@ function offerChoice(c){
 // and leaves, which the server already reports. In the mixed view the files
 // are still here and still match, and leaving them off the grid until the next
 // reload would be the page quietly holding some of the library back.
+// Refusing the whole group and refusing one photograph of it are the same
+// write: `no_stack` is a fact about a file, and the server carries it to the
+// members of anything the file speaks for. Said of the one that speaks it
+// takes the group with it; said of one standing in it, that one leaves and
+// the rest are still a guess.
 async function notAStack(){
-  const cs=targetsOn('live').filter(guessed);
+  const cs=targetsOn('live').filter(inGuess);
   if(!cs.length){say('nothing selected that the app guessed at');return;}
   // Only in the ordinary view. Where the view is *only stacks* or *only
   // suggested*, refusing takes the whole thing out of it — the server says so
   // and the grid drops it — so there is nothing to fan back out into.
+  // Only what was hiding something has anything to fan back out.
   const fan=!VIEW.stacks
-    ? new Map(await Promise.all(cs.map(async c=>[c,await behind(c)])))
+    ? new Map(await Promise.all(
+        cs.filter(guessed).map(async c=>[c,await behind(c)])))
     : null;
   const out=await applyToSelection('no_stack',true,undefined,cs);
   if(out&&out.done&&fan) cs.forEach(c=>fanOut(c,fan.get(c)));
@@ -5134,7 +5164,10 @@ function markStack(c,behind){
 // like a member of the same stack as every other, because they all share the
 // empty string. Selecting a stack's top in the ordinary grid and promoting it
 // swept the entire visible grid underneath it.
-function stackKey(c){ return c.dataset.under || (tops(c) ? keyOf(c) : ''); }
+function stackKey(c){
+  return c.dataset.under || c.dataset.proposedUnder
+      || (tops(c) ? keyOf(c) : '');
+}
 
 async function makeTop(){
   const cs=targetsOn('live');

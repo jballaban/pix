@@ -996,6 +996,66 @@ function arrow(key, opts) {
   }
 
 
+  // Opening a stack the app guessed at and pointing at one of the
+  // photographs in it. Both questions are askable there — *this is the one to
+  // show* and *this one does not belong* — and neither was: the members are
+  // listed through a column the cell did not carry, so as far as the bar was
+  // concerned nothing in there was in a stack at all.
+  {
+    deselect();
+    cells.forEach(c => { c.dataset.under = ''; c.dataset.behind = '0';
+                         c.dataset.proposed = '0';
+                         c.dataset.proposedUnder = ''; });
+    // a.jpg speaks for the guess; b.jpg is one of the photographs in it.
+    cells[0].dataset.proposed = '1';
+    cells[1].dataset.proposedUnder = 'f/a.jpg';
+    cells[1].querySelector('.pick').click();
+
+    check('one of them can be made the one that shows',
+          actBtn('top').hidden === false);
+    check('and can be said not to belong',
+          actBtn('nostack').hidden === false);
+    // Undoing a decision is what Unstack is for, and there is no decision
+    // here — refusing is what a guess answers to.
+    check('but not taken out of a stack nobody made',
+          actBtn('unstack').hidden === true);
+
+    const n = calls.length;
+    actBtn('top').click();
+    for (let i = 0; i < 8; i++) await settle();
+    const sent = calls.slice(n).filter(c => c.url.startsWith('/api/decide'));
+    check('promoting inside a guess writes once', sent.length === 1,
+          String(sent.length));
+    if (sent.length === 1) {
+      const body = JSON.parse(sent[0].body);
+      // Answering *which of these shows* is what turns a guess into a stack,
+      // and it is the same write either way.
+      check('pointing everything else at the one chosen',
+            body.stacked_under === 'f/b.jpg', sent[0].body);
+      check('including the one that had been speaking',
+            body.files.some(f => f.name === 'a.jpg'), sent[0].body);
+    }
+
+    const m = calls.length;
+    actBtn('nostack').click();
+    for (let i = 0; i < 8; i++) await settle();
+    const said = calls.slice(m).filter(c => c.url.startsWith('/api/decide'));
+    if (said.length) {
+      const body = JSON.parse(said[0].body);
+      check('and refusing one of them names only that one',
+            body.no_stack === true
+            && body.files.length === 1 && body.files[0].name === 'b.jpg',
+            said[0].body);
+    } else {
+      check('and refusing one of them names only that one', false,
+            'nothing written');
+    }
+
+    cells.forEach(c => { c.dataset.proposed = '0';
+                         c.dataset.proposedUnder = ''; });
+    deselect();
+  }
+
   // A stack says *these are the same shot, and this one speaks for the rest*.
   // A photograph and a clip are not the same shot whatever else they share —
   // same second, same camera, same name — and neither can stand in for the
