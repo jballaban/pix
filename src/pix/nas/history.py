@@ -130,17 +130,52 @@ def record(who: str, summary: str, files: list[Before], *,
     return op
 
 
-def recent(limit: int = RECENT, *, path: Path | None = None) -> list[Operation]:
-    """The most recent operations, newest first.
+@dataclass(frozen=True)
+class Log:
+    """One read of the log, and the three questions the page asks of it.
+
+    Three, from one read, because the file is on the share and grows without
+    bound: two of these answers are about operations the page is *not* showing,
+    so neither can be worked out from `ops` afterwards, and asking the share
+    again for a file it has just read is an SMB round trip to learn something
+    it already had in front of it.
+    """
+
+    #: The operations to show, newest first, already narrowed to `who`.
+    ops: tuple[Operation, ...] = ()
+    #: Everyone who appears anywhere in the log, however long ago. The choice
+    #: the page offers has to outlive the window it is showing: somebody who
+    #: did four hundred things last month and nothing since is exactly who you
+    #: go looking for, and a list built from the visible rows would not have
+    #: them in it.
+    curators: tuple[str, ...] = ()
+    #: Which operations have already been reverted, worked out across the
+    #: whole log rather than across `ops`. A revert is an operation like any
+    #: other and is usually somebody else's — narrowed to one person it drops
+    #: out of the list, and the page would offer Revert on something that has
+    #: already been put back.
+    undone: frozenset[str] = frozenset()
+
+
+def read(limit: int = RECENT, *, who: str | None = None,
+         path: Path | None = None) -> Log:
+    """The log, as the page needs it.
 
     A malformed line is skipped rather than fatal: the log is a convenience,
     and one bad line should cost one entry rather than the whole history.
+
+    **`who` narrows before the limit, not after.** Filtering the last two
+    hundred operations down to one person answers *what has this person done
+    lately among everyone's work*, which is nobody's question and reads as a
+    broken filter — four rows for somebody who knows they changed three
+    hundred things. Narrowed first, the limit means the same thing it always
+    meant: the last two hundred of what you asked for.
     """
     target = path if path is not None else OPERATIONS_FILE
     try:
         lines = target.read_text(encoding="utf-8").splitlines()
     except OSError:
-        return []
+        return Log()
 
     # Grouped by id rather than by adjacency: two curators working at once
     # interleave their lines, and a gesture is still one gesture when somebody
@@ -157,14 +192,30 @@ def recent(limit: int = RECENT, *, path: Path | None = None) -> list[Operation]:
         first["files"].extend(data["files"])
         first["n"] += data["n"]
 
+    names = {str(data["who"]) for data in merged.values() if data.get("who")}
+    reverted = {str(data["reverts"]) for data in merged.values()
+                if data.get("reverts")}
+
     out: list[Operation] = []
     for data in reversed(list(merged.values())):
         if len(out) >= limit:
             break
+        if who is not None and str(data.get("who") or "") != who:
+            continue
         op = _build(data)
         if op is not None:
             out.append(op)
-    return out
+    # Sorted by how it is written rather than by case, so `Alina` and `alina`
+    # — which are two accounts, because a login is what it is typed as — do
+    # not swap places between page loads.
+    return Log(tuple(out), tuple(sorted(names, key=str.casefold)),
+               frozenset(reverted))
+
+
+def recent(limit: int = RECENT, *, who: str | None = None,
+           path: Path | None = None) -> list[Operation]:
+    """The most recent operations, newest first."""
+    return list(read(limit, who=who, path=path).ops)
 
 
 def get(op_id: str, *, path: Path | None = None) -> Operation | None:
@@ -289,7 +340,13 @@ def put_back(op_id: str, *, path: Path | None = None) -> set[tuple[str, str]]:
 
 
 def undone(ops: list[Operation]) -> set[str]:
-    """Which of these have already been reverted."""
+    """Which of these have already been reverted.
+
+    Only ever true of what is in the list. `Log.undone` is the same question
+    asked of the whole log, which is the one the page has to ask — a revert
+    is usually somebody else's, and narrowed to one person it is not here to
+    be counted.
+    """
     return {op.reverts for op in ops if op.reverts}
 
 

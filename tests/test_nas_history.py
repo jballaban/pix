@@ -118,6 +118,70 @@ def test_a_deletion_is_part_of_what_was_there_before(log: Path) -> None:
         event="Sicily", deleted=True)
 
 
+# --- whose work ---------------------------------------------------------------
+
+def test_the_log_can_be_narrowed_to_one_persons_work(log: Path) -> None:
+    """Several people curate here — which is the reason this is a list of
+    named operations rather than an undo stack — and *what did I do this
+    afternoon* is the question a safety net is reached for with."""
+    history.record("admin", "tagged", [Before("f", "a.jpg", None)])
+    history.record("james", "shared", [Before("f", "b.jpg", None)])
+    history.record("admin", "named", [Before("f", "c.jpg", None)])
+
+    assert [op.summary for op in history.recent(who="admin")] == \
+        ["named", "tagged"]
+    assert [op.summary for op in history.recent(who="james")] == ["shared"]
+    assert history.recent(who="nobody") == []
+
+
+def test_narrowing_happens_before_the_limit(log: Path) -> None:
+    """Otherwise the filter answers *what has this person done lately among
+    everyone else's work*, which is nobody's question and reads as broken: a
+    handful of rows for somebody who knows they changed three hundred things.
+    """
+    for i in range(30):
+        history.record("james", f"james {i}", [Before("f", "a.jpg", None)])
+    history.record("admin", "the one admin did", [Before("f", "a.jpg", None)])
+    for i in range(30):
+        history.record("james", f"james later {i}", [Before("f", "a.jpg", None)])
+
+    # A window that would hold nothing of theirs if it were applied first.
+    mine = history.recent(limit=5, who="admin")
+
+    assert [op.summary for op in mine] == ["the one admin did"]
+
+
+def test_who_there_is_to_choose_between_outlives_the_window(log: Path) -> None:
+    """Somebody who did four hundred things last month and nothing since is
+    exactly who you go looking for, and a list of names built from the visible
+    rows would not have them in it."""
+    history.record("alina", "long ago", [Before("f", "a.jpg", None)])
+    for i in range(10):
+        history.record("admin", f"since {i}", [Before("f", "a.jpg", None)])
+
+    seen = history.read(limit=3)
+
+    assert [op.summary for op in seen.ops] == ["since 9", "since 8", "since 7"]
+    assert seen.curators == ("admin", "alina"), seen.curators
+
+
+def test_what_is_already_undone_is_asked_of_the_whole_log(log: Path) -> None:
+    """A revert is an operation like any other, and it is usually somebody
+    else's. Narrowed to one person it drops out of the list — and a page
+    working that out from the rows in front of it would offer Revert on
+    something that has already been put back."""
+    first = history.record("admin", "tagged", [Before("f", "a.jpg", None)])
+    history.record("james", "reverted: tagged", [Before("f", "a.jpg", None)],
+                   reverts=first.id)
+
+    mine = history.read(who="admin")
+
+    assert [op.summary for op in mine.ops] == ["tagged"]
+    assert mine.undone == {first.id}
+    # The narrow reading, which is what the page used to have.
+    assert history.undone(list(mine.ops)) == set()
+
+
 # --- through the app ----------------------------------------------------------
 
 @pytest.fixture
@@ -625,3 +689,107 @@ def test_following_an_operation_never_widens_what_you_can_see(
     html = kid.get(f"/browse?op={op.id}&deleted=with").text
     assert "a.jpg" not in html, "a deleted file reached somebody without the bin"
     assert "b.mp4" not in html, "a file nobody shared with them"
+
+
+def test_the_history_page_offers_whose_work_to_look_at(
+    curating: TestClient
+) -> None:
+    """Links, and the name is in the URL. Every other filter in this app lives
+    there, which is what makes a view something you can send to somebody and
+    back out of — and /history carries no page script, so a control needing
+    one would be a filter that worked everywhere except the page it is on."""
+    history.record("james", "shared", [Before("init_2026", "a.jpg", None)])
+    history.record("admin", "tagged", [Before("init_2026", "a.jpg", None)])
+
+    html = curating.get("/history").text
+    row = html[html.index('class="byline"'):html.index("</p>")]
+
+    assert '<a href="/history" aria-current="page">Everyone</a>' in row
+    assert '<a href="/history?who=james">james</a>' in row
+    assert '<a href="/history?who=admin">admin</a>' in row
+
+    on_his = curating.get("/history?who=james").text
+    row = on_his[on_his.index('class="byline"'):on_his.index("</p>")]
+    assert '<a href="/history?who=james" aria-current="page">' in row
+    body = on_his[on_his.index("<tbody>"):on_his.index("</tbody>")]
+    assert "shared" in body and "tagged" not in body, body
+
+
+def test_one_person_who_did_everything_is_not_a_choice(
+    curating: TestClient
+) -> None:
+    """A control offering a single option is not a choice, it is the answer
+    written twice."""
+    history.record("admin", "tagged", [Before("init_2026", "a.jpg", None)])
+
+    assert 'class="byline"' not in curating.get("/history").text
+
+
+def test_a_name_in_the_table_asks_for_only_their_work(
+    curating: TestClient
+) -> None:
+    """The gesture is on the thing it is about, rather than only on a control
+    above the table that has to be found first."""
+    history.record("james", "shared", [Before("init_2026", "a.jpg", None)])
+    history.record("admin", "tagged", [Before("init_2026", "a.jpg", None)])
+
+    html = curating.get("/history").text
+
+    assert '<a href="/history?who=james" title="Only what james changed">' in html
+
+
+def test_the_who_column_goes_once_it_says_the_same_thing_every_row(
+    curating: TestClient
+) -> None:
+    """Narrowed to one person it is the same name two hundred times, and the
+    row of names above already says which. A column true of everything on
+    screen is furniture, the same rule a thumbnail follows about the audience
+    all of them share."""
+    history.record("james", "shared", [Before("init_2026", "a.jpg", None)])
+    history.record("admin", "tagged", [Before("init_2026", "a.jpg", None)])
+
+    everyone = curating.get("/history").text
+    assert "<th>Who</th>" in everyone
+
+    his = curating.get("/history?who=james").text
+    assert "<th>Who</th>" not in his
+    # And the table still balances: as many headings as there are cells.
+    head = his[his.index("<thead>"):his.index("</thead>")]
+    body = his[his.index("<tbody>"):his.index("</tbody>")]
+    assert head.count("<th>") == body.count("<td")
+
+
+def test_a_name_nobody_has_worked_under_is_empty_rather_than_broken(
+    curating: TestClient
+) -> None:
+    """The filter comes out of a URL, which people type, edit and keep."""
+    history.record("admin", "tagged", [Before("init_2026", "a.jpg", None)])
+    history.record("james", "shared", [Before("init_2026", "a.jpg", None)])
+
+    r = curating.get("/history?who=ghost")
+
+    assert r.status_code == 200
+    assert "Nothing by ghost." in r.text
+    # And the way back to everybody, which is the row that is still there.
+    assert '<a href="/history">Everyone</a>' in r.text
+
+
+def test_a_revert_comes_back_to_the_list_you_were_reading(
+    curating: TestClient
+) -> None:
+    """Pressing a button in a narrowed list does not ask for everybody back."""
+    history.record("james", "shared", [Before("init_2026", "a.jpg", None)])
+    curating.post("/api/decide/bulk", json={
+        "add_tags": ["x"], "files": _targets("a.jpg")})
+    op = history.recent(who=accounts.ADMIN)[0]
+
+    html = curating.get(f"/history?who={accounts.ADMIN}").text
+    form = html[html.index('action="/history/revert"'):]
+    assert f'name="who" value="{accounts.ADMIN}"' in form[:400], form[:400]
+
+    r = curating.post("/history/revert",
+                      data={"id": op.id, "who": accounts.ADMIN},
+                      follow_redirects=False)
+    assert r.status_code == 303
+    assert f"who={accounts.ADMIN}" in r.headers["location"], \
+        r.headers["location"]

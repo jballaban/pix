@@ -906,6 +906,32 @@ h3.group[data-state="some"] .grppick { background:var(--top);
    sitting under the part. */
 .cell:has(.part) .badge { bottom:21px; }
 
+/* Whose work to look at. Links rather than a control, because /history
+   carries no page script and because every filter in this app lives in the
+   URL — which is what makes a view something you can send to somebody and
+   back out of.
+
+   `aria-current` rather than a class, because *this is the one you are on* is
+   exactly what the attribute is for, and a link that is already where it goes
+   should say so to something that cannot see the colour. */
+.byline { display:flex; gap:7px; align-items:center; flex-wrap:wrap;
+          margin:0 0 16px; }
+.byline .dim { margin-right:2px; }
+.byline a { padding:3px 11px; border-radius:999px; color:var(--dim);
+            border:1px solid var(--line); font-size:13px;
+            /* The rounded outline is the hit area, so the halo every other
+               link in here wears would sit outside it as a second, squarer
+               edge. */
+            box-shadow:none; }
+.byline a:hover { color:var(--fg); border-color:var(--accent);
+                  background:var(--tint); box-shadow:none; }
+.byline a[aria-current="page"] { color:var(--fg); border-color:var(--accent);
+                                 background:var(--accent-bed); }
+/* A name in the table is the same filter, on the thing it is about — a
+   gesture you find by reading rather than by looking for a control first.
+   Dim until pointed at, like everything else in a column of them. */
+.acct td a:hover { box-shadow:0 0 0 2px var(--tint); }
+
 table { border-collapse:collapse; width:100%; max-width:900px; }
 th,td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line); }
 th { color:var(--dim); font-weight:500; font-size:12px;
@@ -8103,20 +8129,59 @@ def _back(message: str) -> Response:
 
 # --- history ------------------------------------------------------------------
 
+def _byline(curators: tuple[str, ...], who: str) -> str:
+    """Whose work to look at, as a row of names.
+
+    **Links, and the name is in the URL.** Every other filter in this app
+    lives there, which is what makes a view something you can send to
+    somebody, bookmark, and back out of; and /history carries no page script
+    at all, so a control that needed one would be a filter that worked
+    everywhere except the page it is on.
+
+    Nothing at all where one person has done everything. A control offering a
+    single choice is not a choice — it is the answer, written twice.
+    """
+    if len(curators) < 2:
+        return ""
+    def one(name: str, label: str) -> str:
+        here = ' aria-current="page"' if name == who else ""
+        where = f"/history?who={_q(name)}" if name else "/history"
+        return f'<a href="{where}"{here}>{_h(label)}</a>'
+    return ('<p class="byline"><span class="dim">Changed by</span>'
+            + one("", "Everyone")
+            + "".join(one(name, name) for name in curators) + "</p>")
+
+
 @app.get("/history", response_class=HTMLResponse)
 def history_page(user: Annotated[Principal, Depends(require_admin)],
                  msg: Annotated[str, Query()] = "",
-                 look: Annotated[str, Query()] = "") -> HTMLResponse:
+                 look: Annotated[str, Query()] = "",
+                 who: Annotated[str, Query()] = "") -> HTMLResponse:
     """What has been changed, newest first, each with a way back.
 
     A bulk edit can touch several hundred files from one click, and *I just
     gave the children access to three hundred photographs* has no other cure:
     the decisions are individually correct in three hundred sidecars, and
     nothing else remembers they used to say something else.
-    """
-    ops = history.recent()
-    already = history.undone(ops)
 
+    **`who` narrows it to one person's work.** Several people curate here —
+    that is the reason this is a list of named operations rather than an undo
+    stack — and *what did I do this afternoon* is the question a safety net is
+    reached for with. Two hundred rows of everybody's work is where the answer
+    is, not what it is.
+
+    A name that nobody in the log has done anything under is not an error: the
+    filter comes out of a URL, which people type, edit and keep. It shows an
+    empty list and the way back to everyone, which is what it is.
+    """
+    log = history.read(who=who or None)
+    ops = list(log.ops)
+
+    # Filtered to one person, the Who column is the same name two hundred
+    # times, and the row of names above already says which. A column true of
+    # everything on screen is furniture, the same rule the thumbnails follow
+    # about the audience they all share.
+    said = bool(who)
     rows = "".join(
         f'<tr><td class="dim">{_h(_when(op.when))}</td>'
         + (f'<td><a href="/browse?op={_q(op.id)}" '
@@ -8126,12 +8191,21 @@ def history_page(user: Annotated[Principal, Depends(require_admin)],
            # Offering a link to them would lead to an empty grid that reads as
            # broken rather than as *there is nothing left to look at*.
            f'<td>{_h(op.summary)}</td>')
-        + f'<td class="dim">{_h(op.who)}</td>'
-        + ('<td class="dim">undone</td>' if op.id in already else
+        + ("" if said else
+           # The name is the way to ask for only their work: the gesture is on
+           # the thing it is about, rather than only on a control above the
+           # table that has to be found first.
+           f'<td class="dim"><a href="/history?who={_q(op.who)}" '
+           f'title="Only what {_h(op.who)} changed">{_h(op.who)}</a></td>')
+        + ('<td class="dim">undone</td>' if op.id in log.undone else
            '<td class="dim">a revert</td>' if op.reverts else
            f'<td><form method="post" action="/history/revert">'
            f'<input type="hidden" name="id" value="{_h(op.id)}">'
-           f'<button>Revert</button></form></td>')
+           # So a revert comes back to the list you were reading rather than
+           # to everybody's.
+           + (f'<input type="hidden" name="who" value="{_h(who)}">'
+              if who else "")
+           + f'<button>Revert</button></form></td>')
         + "</tr>"
         for op in ops
     )
@@ -8140,15 +8214,18 @@ def history_page(user: Annotated[Principal, Depends(require_admin)],
     seeing = (f' <a href="/browse?op={_q(look)}&amp;stale=1">'
               f'see the ones it left &rarr;</a>' if look else "")
     note = f'<p class="note">{_h(msg)}{seeing}</p>' if msg else ""
+    byline = _byline(log.curators, who)
     if not ops:
-        return _page("History", f'{note}<p class="empty">Nothing changed yet.</p>',
+        empty = (f'Nothing by {_h(who)}.' if who else "Nothing changed yet.")
+        return _page("History", f'{note}{byline}<p class="empty">{empty}</p>',
                      user=user)
-    return _page("History", f"""{note}
+    return _page("History", f"""{note}{byline}
 <p class="dim">Reverting puts those files back to exactly what they said
 before — not an undo stack, because several people curate here and the last
 thing done is not always yours. A revert is itself recorded, so it can be
 reverted in turn.</p>
-<table class="acct"><thead><tr><th>When</th><th>What</th><th>Who</th>
+<table class="acct"><thead><tr><th>When</th><th>What</th>
+{"" if said else "<th>Who</th>"}
 <th></th></tr></thead><tbody>{rows}</tbody></table>""", user=user)
 
 
@@ -8171,16 +8248,22 @@ async def history_revert(
     some always will have, and refusing the whole operation for one of them
     would make revert useless exactly when it is needed most.
     """
-    op_id = (await _form(request)).get("id", "")
+    form = await _form(request)
+    op_id = form.get("id", "")
+    # Whose work was being read. A revert that dropped the filter would answer
+    # *and now here is everybody again*, which is not what pressing a button
+    # in a narrowed list asks for.
+    back = f"&who={_q(form.get('who', ''))}" if form.get("who") else ""
     op = history.get(op_id)
     if op is None:
-        return RedirectResponse("/history?msg=no+such+operation", status_code=303)
+        return RedirectResponse(f"/history?msg=no+such+operation{back}",
+                                status_code=303)
 
     if not op.revertable():
         return RedirectResponse(
             "/history?msg=" + quote("that was recorded before reverting knew "
                                     "what an operation had done, so it cannot "
-                                    "be put back"),
+                                    "be put back") + back,
             status_code=303)
 
     restored = 0
@@ -8234,7 +8317,7 @@ async def history_revert(
     # A count is not much use on its own. The ones it left alone are the work
     # still to look at, so the message carries a way to go and look at them.
     tail = f"&look={_q(op.id)}" if moved else ""
-    return RedirectResponse(f"/history?msg={quote(said)}{tail}",
+    return RedirectResponse(f"/history?msg={quote(said)}{tail}{back}",
                             status_code=303)
 
 
