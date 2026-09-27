@@ -4391,6 +4391,112 @@ def test_people_do_not_become_an_audience(
     assert after.audience == ()
 
 
+def test_a_thumbnail_says_who_is_in_it(
+    client: TestClient, writable: Path
+) -> None:
+    """It was the one fact a cell carried and never showed. The name was in
+    `data-people` for the script, on the folder card, in the viewer rail, in
+    its own filter and its own bulk action — everywhere except the thing you
+    are looking at while you decide."""
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "add_people": ["Mom", "Dad"]})
+
+    html = client.get("/browse").text
+    cell = html[html.index('data-name="a.jpg"'):]
+    cell = cell[:cell.index("</div>")]
+
+    folk = cell[cell.index('class="folk"'):]
+    assert "<i title=\"Dad\">Dad</i>" in folk, folk[:200]
+    assert "<i title=\"Mom\">Mom</i>" in folk, folk[:200]
+
+
+def test_who_is_in_it_is_not_who_can_see_it(
+    client: TestClient, writable: Path
+) -> None:
+    """Two facts about people in one corner, one line each. They are opposite
+    questions that happen to take the same kind of word — *pictures of Mum*
+    and *pictures Mum may see* — and on a 150px tile the colour must not be
+    asked to carry the whole difference."""
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg",
+        "add_people": ["Mom"], "add_audience": ["bob"]})
+
+    html = client.get("/browse").text
+    cell = html[html.index('data-name="a.jpg"'):]
+    cell = cell[:cell.index("</div>")]
+
+    # Two runs of chips, not one with two colours in it.
+    assert 'class="folk"' in cell and 'class="who"' in cell
+    assert "Mom" in cell[cell.index('class="folk"'):cell.index('class="who"')]
+
+    css = html[html.index("<style>"):html.index("</style>")]
+    # Both in the bottom-left corner, the people above.
+    assert ".folk { left:5px; bottom:4px; }" in css
+    assert ".cell:has(.who) .folk, .cell:has(.unshared) .folk"             " { bottom:21px; }" in css
+    # And in the blue people wear — the same value a folder card gives them,
+    # because one kind of thing is one colour on every surface.
+    assert ".folk i { color:#a6c8ff; }" in css
+    assert ".spread i.people { color:#a6c8ff;" in css
+
+
+def test_a_thumbnail_leaves_off_the_person_the_view_is_already_about(
+    client: TestClient, writable: Path
+) -> None:
+    """Filtered to `person:Mom` every thumbnail on screen says Mom, and a chip
+    that is true of everything is furniture. The same rule access applies to
+    the usual audience and a sub-event applies to an event the heading already
+    names."""
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "add_people": ["Mom", "Dad"]})
+
+    narrowed = client.get("/browse?person=Mom").text
+    cell = narrowed[narrowed.index('data-name="a.jpg"'):]
+    cell = cell[:cell.index("</div>")]
+    folk = cell[cell.index('class="folk"'):]
+
+    assert "Dad" in folk, "the name that is still news is gone too"
+    assert ">Mom<" not in folk, folk[:200]
+    # Still on the cell, because the page reads it off there.
+    assert "Mom" in cell[:cell.index('class="folk"')]
+
+
+def test_a_person_is_painted_into_their_own_chips_not_the_access_ones(
+    client: TestClient
+) -> None:
+    """The page paints what it has just written straight onto the cell, and
+    the rule that said which chips was a ternary reading *tags, or else
+    access* — so putting Mum in a photograph wrote her name into the chips
+    saying who can see it, and took away the mark saying nobody could.
+
+    Three fields is one too many for *or else*."""
+    js = web._BROWSE_JS
+
+    assert "const PAINTS={tags:'tags', people:'folk', audience:'who'};" in js
+    assert "field==='tags'?'tags':'who'" not in js, "the ternary is back"
+
+    # And the page keeps the server's own silences, or a cell edited here and
+    # a cell fetched fresh could look different.
+    at = js.index("function repaint(")
+    body = js[at:js.index("\n}", at)]
+    assert "v!==USUAL" in body and "v!==VIEW.person" in body, body
+
+
+def test_a_half_written_people_change_is_put_back(
+    client: TestClient
+) -> None:
+    """A write that stops part way — cancelled, or a share that dropped — has
+    really written the first part, so the cells it never reached go back to
+    what they said. `people` was missing from the list of what to remember,
+    so those cells were left claiming the name."""
+    js = web._BROWSE_JS
+    at = js.index("const before=todo.map(")
+    snapshot = js[at:js.index("}));", at)]
+
+    assert "people:c.dataset.people" in snapshot, snapshot
+    assert "c.dataset.people=was.people" in js
+    assert "repaint(c,'people')" in js
+
+
 def test_an_audience_does_not_become_a_person(
     client: TestClient, writable: Path
 ) -> None:

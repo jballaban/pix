@@ -858,19 +858,33 @@ h3.group[data-state="some"] .grppick { background:var(--top);
             padding:2px 6px; border-radius:3px; }
 /* Both of them stand where the tags do, and were simply covering them. */
 .cell.marked .tags { padding-right:40px; }
-/* Access bottom-left, tags top-right, duration bottom-right — three corners,
-   nothing overlapping. Each value is its own chip: a thumbnail is 150px and
-   three role names are not, so one run of text just gets cut off mid-word
-   with no way to find out what it said. */
-.who, .tags { position:absolute; display:flex; gap:3px; overflow:hidden;
-              max-width:64%; }
+/* People and access bottom-left, tags top-right, duration bottom-right —
+   three corners, nothing overlapping. Each value is its own chip: a thumbnail
+   is 150px and three role names are not, so one run of text just gets cut off
+   mid-word with no way to find out what it said. */
+.who, .tags, .folk { position:absolute; display:flex; gap:3px;
+                     overflow:hidden; max-width:64%; }
 .who  { left:5px; bottom:4px; }
 .tags { right:4px; top:4px; justify-content:flex-end; max-width:72%; }
-.who i, .tags i { font-style:normal; max-width:80px; overflow:hidden;
+/* **Who is in it, above who can see it.** Two facts about people in one
+   corner, one line each, rather than one run in two colours: *pictures of
+   Mum* and *pictures Mum may see* are opposite questions that happen to take
+   the same kind of word, and the hue should not have to carry the whole
+   difference between them on a 150px tile.
+
+   The blue people wear, the same value a folder card gives them, because one
+   kind of thing is one colour whichever surface it is written on. */
+.folk { left:5px; bottom:4px; }
+/* Above whatever else is already down there — the access chips, or the mark
+   that says nobody has access yet. The same step the duration badge takes
+   over a sub-event, and the same number. */
+.cell:has(.who) .folk, .cell:has(.unshared) .folk { bottom:21px; }
+.who i, .tags i, .folk i { font-style:normal; max-width:80px; overflow:hidden;
                   white-space:nowrap; text-overflow:ellipsis;
                   padding:1px 5px; border-radius:3px; background:#000b;
                   font-size:10px; font-weight:600; }
 .who i  { color:var(--keep); }
+.folk i { color:#a6c8ff; }
 /* Nobody can see this yet — quiet, because early on that is most of the
    library, and unmistakable once it is not. */
 .unshared { position:absolute; left:6px; bottom:6px; width:8px; height:8px;
@@ -3023,6 +3037,27 @@ def _access_html(shared: list[str]) -> str:
     return _chips_html("who", unusual)
 
 
+def _people_html(people: list[str], view: ix.Filters) -> str:
+    """Who is **in** the photograph, on the thumbnail.
+
+    It was the one fact a cell carried and never showed. The name was in
+    `data-people` for the script, on the folder card, in the viewer rail, in
+    its own filter and its own bulk action — everywhere except the thing you
+    are actually looking at while you decide.
+
+    Never collapsed into access, and drawn on its own line above it. *Pictures
+    of Mum* and *pictures Mum may see* are opposite questions that take the
+    same kind of word, and on a 150px tile the colour should not have to carry
+    the whole difference.
+
+    **The name the view is already filtered to is left off.** Filtered to
+    `person:Ana` every thumbnail on screen says Ana, and a chip that is true
+    of everything is furniture — the same rule `_access_html` applies to the
+    usual audience and `_part_html` to an event the heading already names.
+    """
+    return _chips_html("folk", [p for p in people if p != view.person])
+
+
 def _part_html(row: sqlite3.Row, view: ix.Filters, said: bool) -> str:
     """Which part of its event this file is, on the thumbnail.
 
@@ -3083,6 +3118,7 @@ def _cell(row: sqlite3.Row, view: ix.Filters | None = None, *,
         + (f'<span class="badge">{_dur(row["duration"])}</span>'
            if row["kind"] == "video" else "")
         + mark
+        + _people_html(_split(row["people"]), view or ix.Filters())
         + _access_html(shared) + _chips_html("tags", tags)
         + _part_html(row, view or ix.Filters(), said)
         + "</div>"
@@ -5688,9 +5724,12 @@ async function applyToSelection(act,value,add,only,batch){
   if(!todo.length){say('already set on all of them');return {done:0};}
   const body = multi ? {[add?multi[1]:multi[2]]:[value]} : {[act]:value};
   // Everything each cell said before, so the ones that never got written can
-  // be put back. All four fields rather than the one being edited: it costs
-  // nothing and means the restore cannot be wrong about which was in play.
+  // be put back. All five fields rather than the one being edited: it costs
+  // nothing and means the restore cannot be wrong about which was in play —
+  // and `people` was missing from the list, so a half-written People change
+  // left the cells it never reached claiming the name.
   const before=todo.map(c=>({tags:c.dataset.tags||'',
+                           people:c.dataset.people||'',
                            audience:c.dataset.audience||'',
                            event:c.dataset.event||'',
                            deleted:c.dataset.deleted||''}));
@@ -5720,16 +5759,18 @@ async function applyToSelection(act,value,add,only,batch){
   const wrote=out?out.done:0;
   todo.slice(wrote).forEach((c,i)=>{
     const was=before[wrote+i];
-    c.dataset.tags=was.tags; c.dataset.audience=was.audience;
+    c.dataset.tags=was.tags; c.dataset.people=was.people;
+    c.dataset.audience=was.audience;
     c.dataset.event=was.event; c.dataset.deleted=was.deleted;
     c.classList.toggle('gone',!!was.deleted);
-    repaint(c,'tags'); repaint(c,'audience'); paintPart(c);
+    repaint(c,'tags'); repaint(c,'people'); repaint(c,'audience');
+    paintPart(c);
   });
   return out;
 }
 
-// The grid shows tags and audience, so both have to change the moment the
-// gesture lands rather than when the round trip finishes.
+// The grid shows people, tags and audience, so all three have to change the
+// moment the gesture lands rather than when the round trip finishes.
 function paint(c,field,value,add){
   const set=new Set(c.dataset[field]?c.dataset[field].split('\\n'):[]);
   add?set.add(value):set.delete(value);
@@ -5751,13 +5792,23 @@ function paintPart(c){
   el.setAttribute('title','Sub-event \u2014 '+whole);
   el.textContent=leaf;
 }
+// Which chips on a cell each field is drawn as. It used to be a ternary
+// reading *tags, or else access* — so painting `people` wrote the names of
+// the people in the photograph into the access chips, and took away the mark
+// saying nobody could see it. Three fields is one too many for *or else*.
+const PAINTS={tags:'tags', people:'folk', audience:'who'};
 function repaint(c,field){
-  const cls=field==='tags'?'tags':'who';
+  const cls=PAINTS[field];
+  if(!cls) return;
   const all=valuesOf(c,field);
-  // Access says only what is unusual: the usual audience is silent, and
-  // nobody-at-all gets a mark. Same rule the server renders by, so a cell
-  // edited here and a cell fetched fresh cannot look different.
-  const list=cls==='who'?all.filter(v=>v!==USUAL):all;
+  // Each kind is silent about what the view has already said. Access says
+  // only what is unusual, and nobody-at-all gets a mark instead; people leave
+  // off the one the view is filtered to, because filtered to `person:Ana`
+  // every thumbnail on screen carries Ana. Same rules the server renders by,
+  // so a cell edited here and a cell fetched fresh cannot look different.
+  const list=cls==='who'?all.filter(v=>v!==USUAL)
+            :cls==='folk'?all.filter(v=>v!==VIEW.person)
+            :all;
   let mark=c.querySelector('.unshared');
   if(cls==='who'){
     if(!all.length&&!mark){
