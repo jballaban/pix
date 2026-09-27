@@ -6,7 +6,7 @@
 // to leave a stack was the browser's own back button, and pressing it put a
 // photograph on screen that nobody had asked to see.
 const fs = require('fs');
-const { El, document } = require('./dom.js');
+const { El, document, sizeset, section } = require('./dom.js');
 
 const js = fs.readFileSync(process.argv[2], 'utf8');
 const failures = [];
@@ -46,7 +46,7 @@ const badge = new El('a');
 badge.className = 'stack';
 badge.attrs.href = '/browse?within=f%2Flead.jpg';
 cells[0].appendChild(badge);
-cells.forEach(c => grid.appendChild(c));
+section(null, cells, grid);
 
 const actions = mk('actions');
 const tick = new El('button');
@@ -75,7 +75,7 @@ const cancelBtn = new El('button');
 cancelBtn.id = 'choosecancel';
 document.byId.choosecancel = cancelBtn;
 chooseActs.appendChild(cancelBtn);
-mk('sizepick');
+sizeset();
 for (const id of ['menu', 'chips', 'selcount', 'count', 'note', 'viewer',
                   'vimg', 'vvid', 'vmeta', 'rail', 'railtoggle', 'viewclose',
                   'working', 'workwhat', 'workbar', 'worktally',

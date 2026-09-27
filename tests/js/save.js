@@ -14,7 +14,7 @@
 // Usage: node save.js <path to the extracted browse script>
 'use strict';
 const fs = require('fs');
-const { El, document } = require('./dom.js');
+const { El, document, sizeset, section } = require('./dom.js');
 
 // The stub's `focus` does nothing, which is exactly what a phone must not be
 // asked to do: raising the keyboard is the whole question. Recorded, and it
@@ -59,7 +59,7 @@ const grid = mk('grid');
 // them are the same answer, so a two-cell grid cannot tell a hold that was
 // cancelled from one that was not.
 const cells = [cell('a.jpg'), cell('b.heic'), cell('c.jpg')];
-cells.forEach(c => grid.appendChild(c));
+section(null, cells, grid);
 
 const actions = mk('actions');
 const tick = new El('button');
@@ -83,8 +83,9 @@ const actBtn = name => actions.querySelectorAll('[data-act]')
 
 for (const id of ['menu', 'chips', 'selcount', 'count', 'note', 'viewer',
                   'vimg', 'vvid', 'vmeta', 'rail', 'railtoggle', 'viewclose',
-                  'viewget', 'sizepick', 'working', 'workwhat', 'workbar',
+                  'viewget', 'working', 'workwhat', 'workbar',
                   'worktally', 'workstop', 'worksave', 'bincount']) mk(id);
+sizeset();
 const stage = new El('div');
 stage.className = 'stage';
 document.byId.viewer.appendChild(stage);
@@ -463,11 +464,13 @@ function run() {
     // Three columns of a 393px screen, which is what the narrow grid gives.
     shown._rect = { left: 0, top: 0, width: 114, height: 114 };
 
-    // There is one control and it cycles, so three presses redraw three times
-    // and land back where they started. Pressed rather than merely read: a
-    // check on the source the page was *rendered* with proves nothing about
-    // the one it would choose.
-    const round = () => { for (let i = 0; i < 3; i++) document.byId.sizepick.click(); };
+    // Out to another size and back, so the grid is redrawn twice and lands
+    // where it started. Pressed rather than merely read: a check on the
+    // source the page was *rendered* with proves nothing about the one it
+    // would choose.
+    const sizeBtn = k => document.querySelectorAll('.sizeopt')
+                                 .find(b => b.dataset.size === k);
+    const round = () => { sizeBtn('medium').click(); sizeBtn('small').click(); };
     round();
     check('the grid is back at the size it started', grid.dataset.size === 'small',
           grid.dataset.size);

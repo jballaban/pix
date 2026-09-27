@@ -248,4 +248,41 @@ document.getElementById = id => document.byId[id] || null;
 document.createElement = t => new El(t);
 document.addEventListener = (t, fn) => (document._listeners[t] ||= []).push(fn);
 
-module.exports = { El, document };
+// The thumbnail size control as the server renders it: three buttons in one
+// group, and no id on any of them, because the page renders two of these —
+// one in the bar and one inside the account menu — and the script drives
+// every copy it finds rather than the first.
+function sizeset(into) {
+  const set = new El('span');
+  set.className = 'sizeset';
+  const opts = ['small', 'medium', 'large'].map(k => {
+    const b = new El('button');
+    b.className = 'sizeopt';
+    b.dataset.size = k;
+    b.attrs['aria-pressed'] = 'false';
+    set.appendChild(b);
+    return b;
+  });
+  (into || document).appendChild(set);
+  return opts;
+}
+
+// A section as the server renders it: a heading and a `.cells` box under it,
+// both inside one `<section>`. Being in a box with the cells it names is what
+// lets a heading stay at the top of the screen for as long as you are inside
+// it — a heading that is merely the sibling before them has nowhere to stick
+// to. The script reads a section the same way, so a flat stage here would be
+// answering a question the page never asks.
+function section(head, kids, into) {
+  const sec = new El('section');
+  sec.className = 'sect';
+  if (head) sec.appendChild(head);
+  const box = new El('div');
+  box.className = 'cells';
+  (kids || []).forEach(k => box.appendChild(k));
+  sec.appendChild(box);
+  (into || document).appendChild(sec);
+  return sec;
+}
+
+module.exports = { El, document, sizeset, section };

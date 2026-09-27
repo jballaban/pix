@@ -262,7 +262,13 @@ _STYLE = """
            itself have to agree about it — and because in landscape the notch
            lies over the left of the screen, so each of them has to take the
            larger of the gutter and whatever the device says is unusable. */
-        --gut:20px; }
+        --gut:20px;
+        /* How far down the page the sticky section headings start, which is
+           whatever the bar above them currently measures. `_BAR_JS` writes
+           the real number; this is the bar at its shortest — one row of
+           controls between its two 9px margins — so the first frame before
+           the observer has run is close rather than wrong. */
+        --bar:calc(49px + env(safe-area-inset-top,0px)); }
 * { box-sizing: border-box; }
 body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5
        system-ui,-apple-system,Segoe UI,sans-serif; }
@@ -395,9 +401,9 @@ main { padding:16px max(var(--gut),env(safe-area-inset-right)) 20px
 .ver { color:var(--dim); font-size:11px; margin-right:10px;
        font-variant-numeric:tabular-nums; }
 /* What the library is, under the account. Read when wanted, never standing
-   in front of the photographs. */
-.memenu .info { display:block; border-top:1px solid var(--line);
-                margin-top:4px; padding-top:5px; }
+   in front of the photographs. The rule above it is with the other group
+   breaks, so there is one rule about where a menu divides rather than two. */
+.memenu .info { display:block; }
 .memenu .info .line { display:block; padding:3px 10px; color:var(--dim);
                       font-size:11px; white-space:nowrap; }
 .memenu .info .ver { font-variant-numeric:tabular-nums; }
@@ -520,18 +526,35 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
    Bigger than that has to come from the preview tier, which is four times the
    edge and eleven times the bytes; that is the trade the third size makes and
    the reason it is a choice rather than the default. */
-.grid { display:grid; gap:6px;
-        grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); }
-.grid[data-size="medium"] {
-        grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); }
-.grid[data-size="large"] {
-        grid-template-columns:repeat(auto-fill,minmax(380px,1fr)); }
+/* **The grid is a column of sections, and each section is a grid.** It was
+   one grid with the headings spanning every column, which is the tidier
+   markup and cannot do the one thing a long page of photographs most needs:
+   keep the heading on screen while you are inside the section it names.
+
+   A sticky grid item is confined to its own grid area, and a heading's grid
+   area is the one row it occupies — so it has nowhere to travel and sticks
+   to nothing. Confined to a *section* it has the whole section to travel
+   through, and the next section's heading pushes it off at exactly the right
+   moment, which is the behaviour without anybody writing a scroll handler.
+
+   The columns still line up across sections: every `.cells` is the same
+   `auto-fill` over the same width, so it resolves to the same count. And a
+   heading always started a new row anyway, because it spanned them all — so
+   nothing about the shape of the page has changed. */
+.grid { display:flex; flex-direction:column; }
+.cells { display:grid; gap:6px;
+         grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); }
+.grid[data-size="medium"] .cells {
+         grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); }
+.grid[data-size="large"] .cells {
+         grid-template-columns:repeat(auto-fill,minmax(380px,1fr)); }
 /* A folder: one section of the library, and what is worth knowing about it
    before you open it. No photograph — a cover was whichever file happened to
    be first, which said what one picture in there looks like and nothing about
    the section, and a wall of unrelated pictures is harder to read than a wall
    of text rather than easier. */
-.grid.folders { grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); }
+.grid.folders .cells {
+         grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); }
 .tile { display:flex; flex-direction:column; gap:3px; padding:11px 13px 12px;
         background:var(--panel); border:1px solid var(--line);
         border-radius:5px; text-decoration:none; color:var(--fg);
@@ -601,27 +624,69 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
    shown — it just cannot be opened on its own. */
 .tile.dead { cursor:default; opacity:.7; }
 .tile.dead:hover { border-color:var(--line); background:var(--panel); }
-/* A thumbnail with a letter in it. Three words took three buttons' worth of
-   bar for something nobody reads twice — the shape says what it is about and
-   the letter says where it is, which is all a size control has to say. */
-#sizepick { width:30px; height:24px; padding:0; font-size:11px;
-            font-weight:700; letter-spacing:.02em;
-            display:inline-flex; align-items:center; justify-content:center;
-            color:var(--dim); }
-#sizepick:hover { color:var(--fg); }
-/* A heading spans every column, so one flow holds headings and thumbnails —
-   which keeps arrow-key movement walking straight through the sections
-   rather than having to know they are there. */
-h3.group { grid-column:1/-1; margin:18px 0 2px; font-size:13px;
+/* The three sizes, all three on show, the one you are in pressed.
+
+   It was a single button carrying one letter, and the letter said what you
+   would get *next*: the size you were in was written nowhere, the third
+   setting existed only for somebody who pressed twice to find it, and the
+   only way back to the one you liked was round the loop. A control whose
+   values are invisible until you have been through them is a control nobody
+   finds the value they wanted in — and this one is a preference, not a
+   verb, so it should read as a setting with a state. */
+.sizeset { display:inline-flex; align-items:center; flex:none;
+           border:1px solid var(--line); border-radius:5px; overflow:hidden; }
+.sizeopt { min-width:29px; height:calc(var(--ctl) - 2px); padding:0;
+           border:0; border-radius:0; background:none; color:var(--dim);
+           font-size:11px; font-weight:700; letter-spacing:.02em;
+           display:inline-flex; align-items:center; justify-content:center;
+           box-shadow:none; }
+.sizeopt + .sizeopt { border-left:1px solid var(--line); }
+.sizeopt:hover:not(:disabled) { color:var(--fg); background:#2f3745;
+                                border-color:var(--line); }
+/* The pressed one is a bed of accent rather than a fill of it: these sit in
+   the bar beside the filters, and a solid blue lozenge there would read as a
+   filter doing something rather than as which of three sizes is on. */
+.sizeopt[aria-pressed="true"] { background:var(--accent-bed);
+                                color:var(--fg); }
+/* **It stays at the top of the screen for as long as you are in it.** Two
+   thousand thumbnails scroll past in a few seconds and they all look alike
+   from four feet away; without this the only thing saying which day you are
+   looking at is a line of text that left the screen a long time ago, and the
+   answer is to scroll back up until you find out — which loses the place you
+   were reading.
+
+   Under the bar rather than at the top of the window: `--bar` is what the
+   topbar currently measures, which is not a constant — the filters take a
+   second line when there are enough of them, and an installed app adds the
+   strip behind the clock. `_BAR_JS` keeps it honest; the value here is the
+   bar at its shortest, so the first frame is close and nothing jumps.
+
+   It needs a background of its own for the first time: a heading standing
+   over the section below it has photographs sliding underneath, and a
+   transparent one shows them through the words. */
+h3.group { position:sticky; top:var(--bar); z-index:4;
+           background:var(--bg);
+           /* The room under the words is `padding`, not `margin`. A margin
+              is outside the background, so every cell in the section rose
+              through a two-pixel strip of clear air below a heading that was
+              otherwise covering them. */
+           margin:18px 0 0; font-size:13px;
            font-weight:600; display:flex; gap:8px; align-items:center;
-           padding-bottom:5px;
+           padding-top:6px; padding-bottom:7px;
            /* Fading out rather than ruled across: a line that stops where the
               words do says *this heading* where a full-width rule says
               *another table*. */
            border-bottom:1px solid transparent;
            border-image:linear-gradient(90deg,var(--accent),var(--line) 38%,
                                         transparent) 1; }
-h3.group:first-child { margin-top:0; }
+/* The first one on the page, which has the bar above it rather than a
+   section. It was `:first-child` when every heading was a child of the one
+   grid; each is the first child of its own section now, so the question has
+   to be asked of the section. */
+.sect:first-child h3.group { margin-top:0; }
+/* A section is what the heading is stuck inside, so it has to be a box — and
+   a box with nothing of its own to say. */
+.sect { display:block; }
 h3.group > span.dim { font-weight:400;
                       font-variant-numeric:tabular-nums; }
 /* A path, so the last crumb — the one that actually changed — is the one
@@ -708,8 +773,13 @@ h3.group[data-state="some"] .grppick { background:var(--top);
    relying on the absence of one is how the fifth gets written. */
 .cell[hidden], h3.group[hidden] { display:none; }
 #actions .grp b { font-weight:600; }
+/* Far enough down that closing the viewer does not leave the photograph you
+   were looking at under the bar and the heading standing on it. Only the
+   viewer scrolls the grid, and only to the cursor, so this is the one place
+   it matters — and it is a property rather than arithmetic in a handler. */
 .cell { position:relative; aspect-ratio:1; background:#0d0f12; overflow:hidden;
-        border-radius:3px; cursor:pointer; }
+        border-radius:3px; cursor:pointer;
+        scroll-margin-top:calc(var(--bar) + 44px); }
 .cell img { width:100%; height:100%; object-fit:cover; display:block; }
 /* The cursor is not drawn. It said *which one the keyboard is on*, and there
    is no grid keyboard any more — so the dashed ring marked a position nothing
@@ -837,55 +907,136 @@ h2.year span { font-size:13px; font-weight:400; }
 .warn { color:#e3b341; }
 .who-link { margin-left:10px; display:inline-flex; align-items:center; }
 /* Everything about you, and everything you do rarely, under one control.
-   Opens on hover *and* on focus, with no script, because /history and
-   /accounts carry none — and a Sign out that only worked where the grid was
-   loaded would be missing from the page you are most likely to be stuck on. */
-.me { position:relative; display:inline-flex; align-items:center;
-      outline:none; }
-.me .name { cursor:default; color:var(--fg); gap:5px; }
+
+   **It is a `<details>`.** So the trigger is a real button with a real
+   expanded state, Enter and Space work on it, and none of it needs a script
+   — which matters, because /history and /accounts carry no page script at
+   all, and a Sign out that worked only where the grid was loaded would be
+   missing from the page you are most likely to be stuck on.
+
+   It opened on hover before, and hover is not how a menu opens. It opens by
+   being walked past; it has no closed state to return to on a touchscreen,
+   where the first tap is the hover and the second lands on whatever the
+   panel has just put under your finger; and it told assistive technology
+   nothing, because a `tabindex` on a span is not a control and has no
+   expanded state to report. Click, Enter and Space open it now, Escape and a
+   click anywhere else close it, and the trigger says which of the two it is.
+   */
+.right { display:inline-flex; align-items:center; }
+.me { position:relative; display:inline-flex; align-items:center; }
+.me > summary { display:inline-flex; align-items:center; gap:5px;
+                margin-left:10px; padding:3px 6px; min-height:var(--ctl);
+                border-radius:5px; color:var(--fg); cursor:pointer;
+                /* Both spellings: one engine still draws the triangle from
+                   the list marker and the other from its own pseudo. */
+                list-style:none; }
+.me > summary::-webkit-details-marker { display:none; }
+.me > summary:hover { background:#2f3745; }
+/* Keyboard traversal has to be visible, or the menu is a list of rows you
+   cannot tell you are standing on. `:focus-visible` rather than `:focus`, so
+   a mouse click does not leave a ring behind it. */
+.me > summary:focus-visible,
+.memenu a:focus-visible, .memenu button:focus-visible {
+          outline:2px solid var(--accent); outline-offset:-2px; }
+/* The name is never *removed*, only taken off the screen — see the narrow
+   block. It is the accessible name of the control, and a gear whose label is
+   a drawing announces itself as a button called nothing. */
+.me .name { color:var(--fg); max-width:22ch; overflow:hidden;
+            white-space:nowrap; text-overflow:ellipsis; }
 /* The name where there is room, the gear where there is not. Both are in the
    markup and the width picks, because the one that is hidden must not be a
-   second copy of anything — two `#sizepick`s is one id and two controls. */
-.me .gearbtn { display:none; cursor:default; align-items:center; }
-.memenu .whoami { display:none; }
+   second copy of anything. */
+.me .gearbtn { display:none; align-items:center; }
 /* What is waiting, on the control rather than beside it. A notification that
    needs opening to be seen is not one. */
-.me .dot { display:none; position:absolute; right:-2px; top:0;
+.me .dot { display:none; position:absolute; right:-1px; top:1px;
            width:7px; height:7px; border-radius:50%;
            background:var(--gone); border:1.5px solid var(--chrome); }
 .me[data-any="1"] .dot { display:block; }
 /* One or the other: something to report, or the fact that there is nothing. */
 .me[data-any="1"] .memenu .quiet { display:none; }
-.memenu .quiet { color:var(--dim); padding:6px 10px; white-space:nowrap; }
-.memenu .bin-link { display:block; padding:6px 10px; border-radius:3px; }
-.memenu .bin-link:hover { background:#242a33; box-shadow:none; }
-/* The size control reads as a row of the menu now, not a lozenge in the bar:
-   it has a whole line to say what it is on, so it says it. */
-.memenu .sizerow { display:block; width:100%; text-align:left;
-                   background:none; border:0; color:var(--fg);
-                   padding:6px 10px; border-radius:3px; cursor:pointer; }
-.memenu .sizerow:hover { background:#242a33; }
+.memenu .quiet { color:var(--dim); padding:7px 10px; white-space:nowrap; }
 .me .caret { font-style:normal; font-size:9px; color:var(--dim);
              transition:transform .12s; }
-.me:hover .caret, .me:focus-within .caret { transform:rotate(180deg); }
+.me[open] .caret { transform:rotate(180deg); }
 .memenu { position:absolute; right:0; top:100%; margin-top:6px; z-index:21;
-          min-width:150px; display:none; flex-direction:column;
+          min-width:212px;
+          /* Never wider than the screen it is pinned to the corner of, and
+             never taller than what is under it: a panel you cannot reach the
+             bottom of without dismissing it is the trap `#menu` fell into
+             twice. */
+          max-width:min(19rem,calc(100vw - 2*var(--gut)));
+          max-height:calc(100vh - 88px); overflow-y:auto;
+          overscroll-behavior:contain;
+          display:none; flex-direction:column;
           background:var(--panel); border:1px solid var(--line);
-          border-radius:4px; padding:4px; box-shadow:0 10px 24px -8px #000d; }
-.me:hover .memenu, .me:focus-within .memenu { display:flex; }
-/* A hover menu that starts below its own trigger has a gap to cross, and the
-   pointer leaves through it. This is that gap, made part of the control. */
-.me::after { content:""; position:absolute; right:0; top:100%;
-             width:100%; height:8px; }
-.memenu a, .memenu button { display:block; width:100%; text-align:left;
-          padding:6px 10px; border:0; background:none; color:var(--fg);
-          font:inherit; border-radius:3px; text-decoration:none;
-          cursor:pointer; }
-.memenu a:hover, .memenu button:hover { background:#242a33;
-                                        box-shadow:none; }
+          border-radius:6px; padding:5px; box-shadow:0 14px 30px -10px #000e; }
+.me[open] > .memenu { display:flex; }
+/* It arrives from under its own trigger rather than appearing there. Twelve
+   hundredths of a second is not decoration: a panel that is simply *present*
+   on the next frame reads as the page having changed, and one that comes out
+   of the control reads as that control having opened — which is the whole
+   difference between a menu and a second page.
+
+   On the way in only. Going out would mean keeping the panel rendered after
+   it has been dismissed, which is `display` interpolation and a good deal
+   more machinery than a menu closing is worth. And not at all for somebody
+   who has said they do not want movement — on this page that setting is
+   about vestibular symptoms, not about taste. */
+@media (prefers-reduced-motion: no-preference) {
+  .me[open] > .memenu { animation:menuopen .12s ease-out; }
+  @keyframes menuopen { from { opacity:0; transform:translateY(-5px); } }
+}
+/* Who you are, at the top, at every width. The trigger says the name on a
+   desk and a gear on a phone, and neither says which *kind* of account it is
+   — which is the thing that goes wrong invisibly: this app is used as two
+   different people, and sharing a photograph as the wrong one is not noticed
+   until somebody else's household has it. */
+.memenu .whoami { display:flex; flex-direction:column; gap:1px;
+                  padding:6px 10px 8px; }
+.memenu .whoami b { font-weight:600; }
+.memenu .whoami .role { color:var(--dim); font-size:11px;
+                        text-transform:uppercase; letter-spacing:.07em; }
+/* Rules between the kinds of thing, not between every pair of rows. Eight
+   undifferentiated lines is a list; the breaks are what make it read as
+   *who you are*, *how you are looking*, *what you administer*, *what this
+   page holds* and *the way out*. */
+.memenu .group, .memenu .info, .memenu form {
+          border-top:1px solid var(--line); margin-top:5px; padding-top:5px; }
+.memenu .group { display:flex; flex-direction:column; }
+.memenu .bin-link { display:block; padding:7px 10px; border-radius:4px; }
+.memenu .bin-link:hover { background:#2f3745; box-shadow:none; }
+/* And it has to be able to go away again. Every rule above gives it a
+   `display`, and every one of them outranks the user agent's `[hidden]`, so
+   the row said *0 deleted* on top of *Nothing waiting* — the menu answering
+   its own question twice, in opposite directions. There was a guard for
+   exactly this, written as `.who-link[hidden]`, and the bin link stopped
+   being a `.who-link` at some point and walked out from under it. Named for
+   what it is this time, and heavier than anything that sets the other way,
+   so no later rule can take it back. */
+.memenu .bin-link[hidden] { display:none; }
+/* How you are looking, as against what you are looking at. Only ever on
+   screen where the bar has no room for the control itself — and the *group*
+   is what is hidden, not the row inside it: hiding the row left a section
+   divider and its padding standing over nothing. */
+.memenu .viewrow { display:none; }
+/* The size control keeps a whole row, and the row says what it is on — a
+   segmented control with no label is three letters in a box. */
+.memenu .sizerow { display:flex; align-items:center;
+                   justify-content:space-between; gap:12px; padding:5px 10px; }
+.memenu .rowlab { color:var(--dim); }
+/* Every row but the segmented one, which is three buttons side by side and
+   is the one thing in here that must not be stretched to the width. */
+.memenu a, .memenu button:not(.sizeopt) {
+          display:block; width:100%; text-align:left;
+          padding:7px 10px; border:0; background:none; color:var(--fg);
+          font:inherit; border-radius:4px; text-decoration:none;
+          cursor:pointer; box-shadow:none; }
+.memenu a:hover, .memenu button:not(.sizeopt):hover {
+          background:#2f3745; box-shadow:none; border-color:transparent; }
 .memenu form { margin:0; }
 /* The way out is the one thing in here that is not navigation. */
-.memenu button { color:var(--gone); }
+.memenu form button { color:var(--gone); }
 /* Another `display` that would outrank the user agent's `[hidden]`. The bin
    count is hidden at zero and shown the moment something is deleted, without
    a reload, so it has to be hideable. */
@@ -986,23 +1137,33 @@ h2.year span { font-size:13px; font-weight:400; }
 @media (max-width: 720px) {
   :root { --gut:10px; }
   main { padding-top:12px; padding-bottom:16px; }
-  .grid { grid-template-columns:repeat(auto-fill,minmax(108px,1fr)); }
-  .grid[data-size="medium"] {
+  .cells { grid-template-columns:repeat(auto-fill,minmax(108px,1fr)); }
+  .grid[data-size="medium"] .cells {
           grid-template-columns:repeat(auto-fill,minmax(165px,1fr)); }
-  .grid[data-size="large"] { grid-template-columns:1fr; }
+  .grid[data-size="large"] .cells { grid-template-columns:1fr; }
   /* Above the footer rather than across it. */
   .install { bottom:calc(46px + env(safe-area-inset-bottom)); }
 
   /* The bar is for what you are looking at. Everything you reach for once in
-     a while goes behind the gear, and the name goes to the first line of the
-     menu it opens — one tap rather than none, which is what the room costs.
-     The three of them plus the filters had the bar at four rows and nearly
-     half the screen. */
-  .me .name { display:none; }
+     a while goes behind the gear, and the name is read off the first line of
+     the menu it opens — one tap rather than none, which is what the room
+     costs. The three of them plus the filters had the bar at four rows and
+     nearly half the screen.
+
+     Clipped rather than `display:none`, because the name is the accessible
+     name of the trigger: hidden that way the control announces itself as a
+     button with no label at all, which is the one width where knowing who
+     you are signed in as is hardest to check. */
+  .me .name { position:absolute; width:1px; height:1px; margin:-1px;
+              padding:0; overflow:hidden; clip-path:inset(50%);
+              white-space:nowrap; }
+  .me .caret { display:none; }
   .me .gearbtn { display:inline-flex; }
-  .memenu .whoami { display:block; color:var(--dim); font-size:11px;
-                    text-transform:uppercase; letter-spacing:.07em;
-                    padding:7px 10px 3px; }
+  /* And the size control comes back inside, where it was before there was
+     room for it in the bar. Both copies are always rendered: which one
+     applies changes while the page is open, by turning the phone over. */
+  .memenu .viewrow { display:flex; }
+  .right .sizeset { display:none; }
   /* The corner stays. It was moved to the bottom when the bar was four rows
      deep; the bar is the filters and a gear now, and a picture of the grid
      under it earns the thirty pixels. */
@@ -1139,20 +1300,25 @@ h2.year span { font-size:13px; font-weight:400; }
      them, while `.chips .spare { display:none }` sat two blocks above being
      outweighed. A button centres its own text; nothing here needed to say so.
      */
-  button:not(.tick):not(.grppick):not(.pick), .chip {
+  button:not(.tick):not(.grppick):not(.pick):not(.sizeopt), .chip {
     min-height:44px; padding:8px 12px; }
   /* Rows in a dropdown are full width, so they stay blocks and simply get
-     taller. Carrying the same three `:not()`s as the rule above, and not for
+     taller. Carrying the same `:not()`s as the rule above, and not for
      tidiness: each of those counts as a class, so `.memenu button` is the
      lighter selector and loses — and Sign out shrink-wraps to its own text
      under History and Accounts, which do not, because they are links and that
      rule never touched them. Equal weight and later in the sheet is what
      makes this the one that counts. */
-  .memenu a, .memenu .quiet, .memenu .bin-link, .memenu .whoami,
-  .memenu button:not(.tick):not(.grppick):not(.pick) {
+  .memenu a, .memenu .quiet, .memenu .bin-link,
+  .memenu button:not(.tick):not(.grppick):not(.pick):not(.sizeopt) {
     min-height:44px; display:flex; align-items:center; width:100%; }
+  /* `.sizeopt` is out of both, and out of them by name. It is three buttons
+     in one lozenge: stretched to the width there is one of them per line,
+     and given a 44px `min-height` inside a menu row that has its own it
+     simply grows the row. It gets the thumb-sized square it needs instead. */
+  .sizeopt { min-width:46px; height:44px; }
   .opt { min-height:44px; align-items:center; }
-  #sizepick { width:44px; height:44px; }
+  .me > summary { min-height:44px; }
 
   /* The circles. An invisible slug either side, so twenty pixels on screen is
      forty-four to a thumb. `.pick` is already positioned and already uses
@@ -1421,20 +1587,108 @@ _INSTALL_JS: str = """
 """
 
 
+#: How tall the bar is, said in a number the stylesheet can use.
+#:
+#: The section headings stick *under* it, and it is not a constant: the
+#: filters take a second line when there are enough of them, the selection row
+#: is there on the grid and not on the landing page, and an installed app adds
+#: the strip behind the clock. A heading pinned to a guess sits either over
+#: the bar or a gap below it, and the guess is wrong at the moment the page is
+#: busiest.
+#:
+#: A `ResizeObserver` rather than a scroll or resize handler: what matters is
+#: the bar changing height, which happens when the filters wrap — something
+#: neither of those events reports. It fires once on `observe`, so the value
+#: is right before the first paint the reader sees.
+_BAR_JS: str = """
+(function () {
+  var bar = document.querySelector('.topbar');
+  if (!bar) return;
+  function say() {
+    document.documentElement.style.setProperty(
+      '--bar', Math.round(bar.getBoundingClientRect().height) + 'px');
+  }
+  say();
+  if (typeof ResizeObserver === 'function') {
+    new ResizeObserver(say).observe(bar);
+  } else {
+    window.addEventListener('resize', say);
+  }
+})();
+"""
+
+
+#: The three things a `<details>` does not do on its own, on every page.
+#:
+#: The menu works without this — that is the whole reason it is a `<details>`
+#: — and none of what is here is the difference between opening it and not.
+#: What is here is the difference between a panel and a menu: a menu goes away
+#: when you have finished with it, and the ways people finish with one are
+#: Escape, a click somewhere else, and tabbing past the end of it. A panel
+#: that stays open over the grid until you press the one control that opened
+#: it is a panel you dismiss by navigating, which is the opposite of what it
+#: is for.
+#:
+#: In the shell rather than in the browse script, because it has to work on
+#: `/history`, `/accounts` and the login screen too — the same reason the
+#: menu carries no page script of its own.
+_MENU_JS: str = """
+(function () {
+  var me = document.getElementById('me');
+  if (!me) return;
+  function shut() { me.open = false; }
+  // Escape closes it and puts the keyboard back on the control that opened
+  // it. Without the second half the next Tab starts from the top of the
+  // document, which on this page is the Back button.
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape' || !me.open) return;
+    shut();
+    var s = me.querySelector('summary');
+    if (s && s.focus) s.focus();
+  });
+  // On the way *down*, not on the way up. Half the controls on the browse
+  // page stop a click propagating — every filter chip does, because the
+  // handler that opens a filter menu has to keep the handler that dismisses
+  // one from undoing it — so a dismissal listening on the bubble never hears
+  // about them. The account menu stayed open underneath a filter menu that
+  // had just opened over it. Capture runs before any of them and before the
+  // `<summary>` toggles, which is early enough that `me.open` still says
+  // whether this click is the one opening it.
+  document.addEventListener('click', function (e) {
+    if (me.open && !me.contains(e.target)) shut();
+  }, true);
+  // Tabbing off the last row closes it too. Guarded on there being somewhere
+  // the focus went: a click on the dead space inside the panel reports a
+  // `relatedTarget` of null, and closing on that would make the menu
+  // impossible to click around in.
+  me.addEventListener('focusout', function (e) {
+    if (me.open && e.relatedTarget && !me.contains(e.relatedTarget)) shut();
+  });
+})();
+"""
+
+
 def _page(title: str, body: str, *, tools: str = "", rows: str = "",
-          right: str = "", info: str = "", script: str = "",
+          right: str = "", bar: str = "", info: str = "", script: str = "",
           zoom: str = "", status_code: int = 200,
           user: Principal | None = None) -> HTMLResponse:
     """One shell.
 
     `tools` sits beside the brand on the first row, `right` goes **inside** the
-    account menu at the far end of it, `rows` are whole extra rows below it,
-    and `footer` is the strip along the bottom.
+    account menu at the far end of it, `bar` stands beside that menu rather
+    than in it, and `rows` are whole extra rows below.
 
     `right` used to stand in the bar. It is one control — the thumbnail size
     — used once in a while, and on a phone it was one of three such controls
     holding a row open in front of the filters. Inside the menu it costs a tap
     and no room at all.
+
+    `bar` is the same control again, for the width where the room is not
+    scarce: a view control you change while you are looking at the thing it
+    changes is worth a glance rather than a trip into a menu, and a desktop
+    bar has ninety pixels to spare that a phone does not. Which of the two is
+    on screen is a media query, and both are always rendered — turning a
+    phone over changes the answer while the page is open.
 
     The two ends of that row are two different kinds of thing. On the left, what
     you are looking at — the filters, which are the address. On the right, how
@@ -1497,7 +1751,7 @@ def _page(title: str, body: str, *, tools: str = "", rows: str = "",
 <div class="topbar">
 <div class="row"><button class="back" id="back" aria-label="Back"
  title="Back">{_BACK}</button>{_brand(zoom)}{tools}
-<span class="spacer"></span><span class="right">{_whoami(user, right, info)}</span></div>{rows}
+<span class="spacer"></span><div class="right">{bar}{_whoami(user, right, info)}</div></div>{rows}
 </div><main>{body}</main>
 <span class="note" id="note" hidden></span>
 {script}
@@ -1511,6 +1765,8 @@ def _page(title: str, body: str, *, tools: str = "", rows: str = "",
   if (history.length <= 1) back.disabled = true;
   back.onclick = function () {{ history.back(); }};
 }})();</script>
+<script>{_BAR_JS}</script>
+<script>{_MENU_JS}</script>
 <script>{_INSTALL_JS}</script>
 </body></html>""")
 
@@ -1560,45 +1816,94 @@ def _whoami(user: Principal | None, extra: str = "",
     bar is actually for is the same mistake the filters made before they
     learned to fold away.
 
+    **It is a `<details>`, and it opens on a click.** It used to open on
+    hover, which is a thing a menu is walked into rather than opened: on a
+    touchscreen the first tap is the hover and the second lands on whatever
+    the panel has just put under the finger, and to a screen reader a
+    `tabindex` on a span is not a control at all and has nothing to say about
+    being open. A `<summary>` is a button with an expanded state, for free and
+    with no script — which is the property that mattered, because `/history`
+    and `/accounts` carry no page script and a Sign out that worked only
+    where the grid was loaded would be missing from the page you are most
+    likely to be stuck on. `_MENU_JS` adds Escape and dismissal on top; both
+    are improvements on a menu that already works without them.
+
     **The name stays visible where there is room for it.** This app is used as
     two different people — the owner curating and the admin granting access
     — and acting as the wrong one is invisible until something is shared with
-    the wrong household. On a phone the name gives way to a gear and moves to
-    the first line inside the menu, which is one tap rather than none; that is
-    the cost of the room, and it is paid where the room is scarce.
+    the wrong household. On a phone the name gives way to a gear; it is
+    clipped rather than dropped, so it is still the control's accessible name,
+    and it is the first line of the menu at every width. The line says the
+    *kind* of account as well, which nothing anywhere else does.
 
     **The dot rides on the trigger** either way. What is waiting has to be
     visible without opening anything, or it is not a notification.
 
-    **No script.** `/history` and `/accounts` carry no page script at all, so
-    this opens on hover and on keyboard focus with CSS alone. A settings menu
-    that worked only where the grid was loaded would be a sign-out button
-    missing from the page you are most likely to be stuck on.
+    The rows are grouped, with a rule between the kinds rather than between
+    each pair: how you are looking, what you administer, what this page holds,
+    and the way out. Eight undifferentiated lines is a list, not a menu.
     """
     if user is None:
         return (f'<span class="ver">v{_PIX_VERSION}</span>'
                 f'<a class="who-link" href="/login">Sign in</a>')
     waiting = _binned() if user.is_admin else 0
-    manage = ('<a href="/history">History</a>'
-              '<a href="/accounts">Accounts</a>' if user.is_admin else "")
-    # What is waiting, as a row of the menu rather than a bell of its own.
-    activity = (bin_link_html(waiting) if user.is_admin else "")
-    quiet = ('<span class="quiet">Nothing waiting</span>'
+    # What is waiting, as a row of the menu rather than a bell of its own —
+    # and beside the two pages only an admin has, because they are one kind of
+    # thing: what you look after rather than what you are looking at.
+    admin = (f'<span class="group">{bin_link_html(waiting)}'
+             f'<span class="quiet">Nothing waiting</span>'
+             f'<a href="/history">History</a>'
+             f'<a href="/accounts">Accounts</a></span>'
              if user.is_admin else "")
+    view = f'<span class="group viewrow">{extra}</span>' if extra else ""
     return (
-        f'<span class="me" id="me" tabindex="0" data-any="{"1" if waiting else ""}">'
-        f'<span class="who-link name">{_h(user.name)}'
-        f'<i class="caret">&#9662;</i></span>'
-        f'<span class="who-link gearbtn" aria-label="Settings" '
-        f'title="Settings">{_GEAR}</span>'
-        f'<i class="dot"></i>'
-        f'<span class="memenu">'
-        f'<span class="whoami">{_h(user.name)}</span>'
-        f'{extra}{activity}{quiet}{manage}'
+        f'<details class="me" id="me" data-any="{"1" if waiting else ""}">'
+        f'<summary>'
+        f'<span class="name">{_h(user.name)}</span>'
+        f'<i class="caret">&#9662;</i>'
+        f'<span class="gearbtn" aria-hidden="true">{_GEAR}</span>'
+        f'<i class="dot"></i></summary>'
+        f'<div class="memenu">'
+        f'<span class="whoami"><b>{_h(user.name)}</b>'
+        f'<span class="role">'
+        f'{"Administrator" if user.is_admin else "Household"}</span></span>'
+        f'{view}{admin}'
         f'<span class="info">{info}'
         f'<span class="line ver">v{_PIX_VERSION}</span></span>'
         f'<form method="post" action="/logout">'
-        f'<button>Sign out</button></form></span></span>')
+        f'<button>Sign out</button></form></div></details>')
+
+
+#: Thumbnail size: three values, all three on show, the one you are in
+#: pressed.
+#:
+#: It was one button that cycled, carrying a single letter which said what you
+#: would get *next* — so the size you were in was written nowhere, the third
+#: setting was only reachable by pressing twice to find out it existed, and
+#: going back to the one you liked meant going round. Three values is exactly
+#: the number a segmented control is for.
+#:
+#: **Rendered twice, and that is deliberate.** Where there is room it stands
+#: in the bar, because it is the one view control that is worth a glance while
+#: you are looking rather than a trip into a menu; where there is not it is a
+#: row of the menu, which is where it has lived since the bar was four rows
+#: deep on a phone. Both are always in the markup, because which one applies
+#: changes while the page is open — by turning the phone over — and the page
+#: script drives every copy it finds rather than the first.
+_SIZES: tuple[tuple[str, str, str], ...] = (
+    ("small", "S", "Small thumbnails"),
+    ("medium", "M", "Medium thumbnails"),
+    ("large", "L", "Large thumbnails"))
+
+
+def _sizeset() -> str:
+    """The three sizes as one control. No `id`: there are two of these."""
+    opts = "".join(
+        f'<button type="button" class="sizeopt" data-size="{key}" '
+        f'aria-pressed="false" title="{say}">{letter}</button>'
+        for key, letter, say in _SIZES)
+    return (f'<span class="sizeset" role="group" '
+            f'aria-label="Thumbnail size">{opts}</span>')
 
 
 def _stacks(stacks: str | None, user: Principal) -> str | None:
@@ -1920,9 +2225,10 @@ def _shelves(rows: list[sqlite3.Row], groups: list[str], view: ix.Filters,
     inner = groups[-1] if groups else ""
     outer = groups[:-1]
     if not groups:
-        return (_heading([], 0, len(rows), pick=False, cut=True)
-                + "".join(_folder(r, groups, view, user, spread=spread)
-                          for r in rows))
+        return _section(
+            _heading([], 0, len(rows), pick=False, cut=True),
+            "".join(_folder(r, groups, view, user, spread=spread)
+                    for r in rows))
     out: list[str] = []
     for keys, run in groupby(rows, key=lambda r: tuple(
             r[f"grp{i}"] for i in range(len(outer)))):
@@ -1930,10 +2236,10 @@ def _shelves(rows: list[sqlite3.Row], groups: list[str], view: ix.Filters,
         labels = [_group_label(k, g, outer[:i], shelf[0])
                   for i, (k, g) in enumerate(zip(keys, outer))]
         labels.append(dict(_GRID_GROUPS).get(inner, inner))
-        out.append(_heading(labels, len(groups), len(shelf), pick=False,
-                            cut=True))
-        out.extend(_folder(r, groups, view, user, whole or {}, spread)
-                   for r in shelf)
+        out.append(_section(
+            _heading(labels, len(groups), len(shelf), pick=False, cut=True),
+            "".join(_folder(r, groups, view, user, whole or {}, spread)
+                    for r in shelf)))
     return "".join(out)
 
 
@@ -2252,11 +2558,12 @@ def browse(request: Request,
         # photographs are here — and standing among the chips it read as one
         # more thing narrowing the library.
         #
-        # It says what it will do rather than what is true. With two sizes that
-        # is the whole of it: no state to read off a label that might mean
-        # either.
-        right=('<button id="sizepick" class="sizerow" '
-               'aria-label="Thumbnail size"></button>'),
+        # Twice, and the width picks: a labelled row inside the menu, where
+        # there is no room for it in the bar, and the bare control in the bar
+        # where there is. See `_sizeset`.
+        right=('<span class="sizerow"><span class="rowlab">Thumbnail size'
+               f'</span>{_sizeset()}</span>'),
+        bar=_sizeset(),
         rows=_actions(user),
         # Up a zoom: the same query, minus the stack. A folder view of one
         # stack is the stack, so the only thing the coarser view can say about
@@ -2564,8 +2871,8 @@ def _sections(rows: list[sqlite3.Row], groups: list[str],
     """
     said = "subevent" in groups
     if not groups:
-        return (_heading([], 0, len(rows))
-                + "".join(_cell(r, view) for r in rows))
+        return _section(_heading([], 0, len(rows)),
+                        "".join(_cell(r, view) for r in rows))
 
     out: list[str] = []
     for keys, run in groupby(rows, key=lambda r: tuple(
@@ -2573,9 +2880,33 @@ def _sections(rows: list[sqlite3.Row], groups: list[str],
         batch = list(run)
         labels = [_group_label(k, g, groups[:i], batch[0])
                   for i, (k, g) in enumerate(zip(keys, groups))]
-        out.append(_heading(labels, len(groups), len(batch)))
-        out.extend(_cell(r, view, said=said) for r in batch)
+        out.append(_section(
+            _heading(labels, len(groups), len(batch)),
+            "".join(_cell(r, view, said=said) for r in batch)))
     return "".join(out)
+
+
+def _section(heading: str, items: str) -> str:
+    """One heading and everything under it, in a box of their own.
+
+    The heading used to be a grid item spanning every column, and the cells
+    its siblings — one flow, which is tidier markup and is why it was
+    written that way. It cannot stick, though: a grid item is confined to its
+    own grid area for the purpose of `position: sticky`, and a heading's grid
+    area is the single row it sits in, so it has nowhere to travel.
+
+    Given a box it has the section to travel through, and the next heading
+    arrives and pushes it off — which is what *stays at the top while you are
+    in it* means, done by the browser rather than by a scroll handler.
+
+    Nothing else about the page moved. The columns still line up across
+    sections, because every `.cells` resolves the same `auto-fill` over the
+    same width; a heading already started a new row, because it spanned them
+    all; and the cells are still in document order, so arrow-key movement
+    walks straight through the sections without knowing they are there.
+    """
+    return (f'<section class="sect">{heading}'
+            f'<div class="cells">{items}</div></section>')
 
 
 def _heading(labels: list[str], levels: int, count: int, *,
@@ -3166,7 +3497,13 @@ const actions=document.getElementById('actions');
 const selcount=document.getElementById('selcount');
 const countEl=document.getElementById('count');
 const binEl=document.getElementById('bincount');
-const sizePick=document.getElementById('sizepick');
+// Every copy of the size control, not the first: the bar carries one where
+// there is room and the account menu carries one where there is not, both are
+// always rendered, and turning a phone over changes which is on screen without
+// reloading the page. A `getElementById` here wired one of the two and left
+// the other inert — a control that silently does nothing at one width.
+const sizeOpts=Array.prototype.slice.call(
+  document.querySelectorAll('.sizeopt'));
 const note=document.getElementById('note');
 const viewer=document.getElementById('viewer');
 const vimg=document.getElementById('vimg'), vvid=document.getElementById('vvid');
@@ -3211,12 +3548,11 @@ const picked=new Set();
 // A preference about looking, not about which photographs — so it lives in the
 // browser rather than the URL, beside the details rail. A view is a link; how
 // big you like the thumbnails is not part of where you are.
-// Small, medium, large — the names the letters stand for, so the code and the
-// control say the same thing.
+// Small, medium, large. The letters and the words for them are in the markup
+// the server sends — the script only has to know which names are real, so a
+// stale value in `localStorage` cannot put the grid into a size that has no
+// rule behind it.
 const SIZES=['small','medium','large'];
-const LABEL={small:'S',medium:'M',large:'L'};
-const SIZE_NAME={small:'Small thumbnails',medium:'Medium thumbnails',
-                 large:'Large thumbnails'};
 let thumbSize='small';
 try{
   const saved=localStorage.getItem('pix2.thumb');
@@ -3276,31 +3612,40 @@ function useSource(c,px){
 
 function drawSize(){
   if(grid) grid.dataset.size=thumbSize;
-  if(sizePick){
-    sizePick.textContent=LABEL[thumbSize];
-    sizePick.title=SIZE_NAME[thumbSize]+' — click for the next size';
-  }
+  // Which one is on, on every copy. `aria-pressed` rather than a class: these
+  // are three buttons of which exactly one is the state, which is what that
+  // attribute means — and it is what the styling reads, so there is one fact
+  // here rather than two that can disagree.
+  sizeOpts.forEach(b=>b.setAttribute(
+    'aria-pressed',b.dataset.size===thumbSize?'true':'false'));
   // After the grid has been told its new size, or every cell is measured at
   // the width it is about to stop being.
   const px=cellPixels();
   cells.forEach(c=>useSource(c,px));
 }
 
-if(sizePick) sizePick.onclick=e=>{
-  e.stopPropagation();
+function chooseSize(next){
+  if(!SIZES.includes(next)||next===thumbSize) return;
   // Anchored the way a write is: the row heights are about to change under
   // whatever you were looking at, and the point of a bigger thumbnail is to
   // look harder at the one you had already found.
   const at=cells.find(c=>c.getBoundingClientRect().bottom>0);
   const was=at?at.getBoundingClientRect().top:null;
-  thumbSize=SIZES[(SIZES.indexOf(thumbSize)+1)%SIZES.length];
+  thumbSize=next;
   try{localStorage.setItem('pix2.thumb',thumbSize);}catch(e){}
   drawSize();
   if(at&&was!==null){
     const now=at.getBoundingClientRect().top;
     if(now!==was) window.scrollBy(0,now-was);
   }
-};
+}
+
+sizeOpts.forEach(b=>{
+  // Not letting the click reach the document: the menu copy sits inside the
+  // account menu, and the shell dismisses that on any click outside it. This
+  // one is inside, but the grid's own handlers are on the way past.
+  b.onclick=e=>{e.stopPropagation();chooseSize(b.dataset.size);};
+});
 drawSize();
 
 // --- filter chips ------------------------------------------------------------
@@ -5488,8 +5833,14 @@ function drawBin(n){
   binEl.hidden=!n;
   // The dot is the whole of what you see without asking, so it follows the
   // count rather than the page load: deleting something has to light it up.
-  const bell=document.getElementById('activity');
-  if(bell) bell.dataset.any=n?'1':'';
+  //
+  // It looked up `activity`, which is the name of a *variable* in the header
+  // builder and the id of nothing at all. So this found null on every page
+  // and the dot stayed at whatever it was rendered with — which is the one
+  // failure it exists to prevent, and it looked exactly like working, because
+  // the count beside it was being updated in the line above.
+  const me=document.getElementById('me');
+  if(me) me.dataset.any=n?'1':'';
 }
 
 function workClose(){
@@ -5778,13 +6129,13 @@ function groupMenu(anchorEl,level,insert){
 
 // Every cell under a heading, down to the next one. There is one heading per
 // section now, so this is simply "until the next heading".
+// A section is a box: its heading and its cells are inside it together, which
+// is what lets the heading stay at the top of the screen for as long as you
+// are in it. It used to be a run of siblings walked until the next heading —
+// which is the same set of cells and a good deal more to get wrong.
 function sectionCells(h){
-  const out=[];
-  for(let el=h.nextElementSibling; el; el=el.nextElementSibling){
-    if(el.classList.contains('group')) break;
-    if(el.classList.contains('cell')) out.push(el);
-  }
-  return out;
+  const box=h.parentNode;
+  return box?[...box.querySelectorAll('.cell')]:[];
 }
 
 // A section is its heading and the cells beneath it, so when files leave the
@@ -5798,7 +6149,9 @@ function sectionCells(h){
 function resection(){
   document.querySelectorAll('.group').forEach(h=>{
     const mine=sectionCells(h);
-    if(!mine.length){ h.remove(); return; }
+    // The whole box, not the heading out of it: what would be left is an
+    // empty section holding the gap where a section used to be.
+    if(!mine.length){ (h.parentNode||h).remove(); return; }
     const n=h.querySelector('.dim');
     if(n) n.textContent=mine.length.toLocaleString();
   });

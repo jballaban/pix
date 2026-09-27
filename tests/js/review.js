@@ -6,7 +6,7 @@
 // those three apart is the whole of the feature, and drive.js's two cells
 // cannot pose the question.
 const fs = require('fs');
-const { El, document } = require('./dom.js');
+const { El, document, sizeset, section } = require('./dom.js');
 
 const js = fs.readFileSync(process.argv[2], 'utf8');
 const failures = [];
@@ -62,13 +62,11 @@ const count = new El('span');
 count.className = 'dim';
 count.textContent = '3';
 heading.appendChild(count);
-grid.appendChild(heading);
-
 // A guess, a decision, and a photograph that is neither.
 const cells = [cell('lead.jpg', { proposed: '2' }),
                cell('real.jpg', { behind: '1' }),
                cell('plain.jpg')];
-cells.forEach(c => grid.appendChild(c));
+section(heading, cells, grid);
 const lead = cells[0];
 
 const actions = mk('actions');
@@ -98,7 +96,7 @@ const cancelBtn = new El('button');
 cancelBtn.id = 'choosecancel';
 document.byId.choosecancel = cancelBtn;
 chooseActs.appendChild(cancelBtn);
-mk('sizepick');
+sizeset();
 for (const id of ['menu', 'chips', 'selcount', 'count', 'note', 'viewer',
                   'vimg', 'vvid', 'vmeta', 'rail', 'railtoggle', 'viewclose',
                   'working', 'workwhat', 'workbar', 'worktally',
@@ -187,10 +185,11 @@ function arrow(key) {
     { key, preventDefault() {}, target: { tagName: 'DIV' } }));
 }
 const writes = () => calls.filter(c => c.url.startsWith('/api/decide'));
-const inGrid = n => grid.children.some(
-  c => c._classes.has('cell') && c.dataset.name === n);
-const at = n => grid.children.filter(c => c._classes.has('cell'))
-                            .findIndex(c => c.dataset.name === n);
+// A section is a box, so the cells are a level down inside the grid rather
+// than its own children.
+const gridCells = () => grid.querySelectorAll('.cell');
+const inGrid = n => gridCells().some(c => c.dataset.name === n);
+const at = n => gridCells().findIndex(c => c.dataset.name === n);
 function deselect() {
   if (document.byId.selcount.textContent !== '0 selected') tick.click();
 }

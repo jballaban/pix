@@ -6,7 +6,7 @@
 // load* is not visible in either the markup or the script, and the difference
 // is the whole page: one throw takes the chips and the grouping menu with it.
 const fs = require('fs');
-const { El, document } = require('./dom.js');
+const { El, document, sizeset, section } = require('./dom.js');
 
 const js = fs.readFileSync(process.argv[2], 'utf8');
 const failures = [];
@@ -41,7 +41,6 @@ heading.appendChild(crumb);
 const addBtn = new El('button');
 addBtn.className = 'addgrp';
 heading.appendChild(addBtn);
-document.appendChild(heading);
 
 // Folders, not cells: the script's grid machinery must find nothing to do.
 // Each carries the circle the server draws on it, because a folder can be
@@ -59,9 +58,11 @@ for (const name of ['2025', '2026']) {
   const spread = new El('span');
   spread.className = 'spread';
   t.appendChild(spread);
-  grid.appendChild(t);
   tiles.push(t);
 }
+// The heading and its shelf in one box, the way the server lays a section
+// out — which is what lets the heading stay at the top while you are in it.
+section(heading, tiles, grid);
 
 // **Every element the real page has, and no others.** This stage used to be a
 // hand-picked list, which is how it came to hold a `#menu` the landing page
@@ -70,7 +71,7 @@ for (const name of ['2025', '2026']) {
 // stage had one. The ids now come from the served HTML.
 const ids = process.argv[3]
   ? JSON.parse(fs.readFileSync(process.argv[3], 'utf8'))
-  : ['grid', 'menu', 'chips', 'note', 'sizepick'];
+  : ['grid', 'menu', 'chips', 'note'];
 for (const id of ids) if (!document.byId[id]) mk(id);
 
 // The folder bar, as the server draws it: a tick, a count, and the four

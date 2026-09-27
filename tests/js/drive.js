@@ -6,7 +6,7 @@
 // Usage: node drive.js <path to the extracted browse script>
 'use strict';
 const fs = require('fs');
-const { El, document } = require('./dom.js');
+const { El, document, sizeset, section } = require('./dom.js');
 
 const js = fs.readFileSync(process.argv[2], 'utf8');
 const failures = [];
@@ -57,22 +57,33 @@ heading.appendChild(crumb);
 const addBtn = new El('button');
 addBtn.className = 'addgrp';
 heading.appendChild(addBtn);
-grid.appendChild(heading);
 const cells = [cell('a.jpg', 'ghost'), cell('b.jpg', '')];
-cells.forEach(c => grid.appendChild(c));
+section(heading, cells, grid);
 
 const actions = mk('actions');
 // A tri-state tick, a count, and two sets of actions — one per side of the
 // deletion line, each shown only when the selection holds files it applies to.
-// One button carrying the current size, as the page renders it.
-const sizePick = mk('sizepick');
+// The size control as the page renders it: three buttons, one pressed —
+// and *twice*, because the served page renders one in the bar and one inside
+// the account menu and the width picks between them. A script that wired the
+// first it found left the other inert, which is a control that silently does
+// nothing at one width and works at the other.
+const sizeOpts = sizeset();
+const sizeAlso = sizeset();
+const sizeBtn = k => sizeOpts.find(b => b.dataset.size === k);
+const pressed = set => set.filter(b => b.getAttribute('aria-pressed') === 'true')
+                          .map(b => b.dataset.size).join();
 
 const badgeOn = c => c.children.find(k => k._classes.has('stack')) || null;
 // Choosing a top is a control on the photograph now, not the photograph
 // itself: clicking one opens it, here as everywhere else.
 const chooseOn = c => c.children.find(k => k._classes.has('choose')) || null;
+// The cells actually on the page, fetched ones included. Not `gridCells()`
+// — a section is a box now, so the grid's children are sections and the cells
+// are a level down inside them.
+const gridCells = () => grid.querySelectorAll('.cell');
 // Still asking, i.e. the choose controls are on the page.
-const choosing_still = () => grid.children.some(c => !!chooseOn(c));
+const choosing_still = () => gridCells().some(c => !!chooseOn(c));
 const tick = new El('button');
 tick.id = 'selall';
 tick.className = 'tick';
@@ -760,9 +771,9 @@ function arrow(key, opts) {
     // hold a scroll position past the bottom of a document.
     scrolled = 0; window.scrollY = 0;
 
-    const opened = grid.children.find(c => c.dataset.name === 'hidden.jpg');
+    const opened = gridCells().find(c => c.dataset.name === 'hidden.jpg');
     check('the stack being merged is opened up', !!opened,
-          grid.children.map(c => c.dataset.name).join(','));
+          gridCells().map(c => c.dataset.name).join(','));
     check('and what came out of it can be chosen',
           !!opened && opened.hidden === false);
     // The count means *there are more of these, somewhere else*. They are
@@ -802,7 +813,7 @@ function arrow(key, opts) {
     check('the page is not thrown away to do it', reloaded === 0,
           String(reloaded));
     check('and the one chosen stays, now speaking for the rest',
-          !!grid.children.find(c => c.dataset.name === 'hidden.jpg'),
+          !!gridCells().find(c => c.dataset.name === 'hidden.jpg'),
           'the promoted file was given back with the borrowed ones');
     // Hiding the rest of the grid collapses the page, and a browser will not
     // hold a scroll position past the bottom of a document.
@@ -819,7 +830,7 @@ function arrow(key, opts) {
     // section it landed in.
     check('and the mark goes when the question is answered',
           !wasTop(cells[0]), 'a stale Top pill outlived the choosing');
-    const stayed = grid.children.find(c => c.dataset.name === 'hidden.jpg');
+    const stayed = gridCells().find(c => c.dataset.name === 'hidden.jpg');
     if (stayed) stayed.remove();
     behindCells = '';
     cells.forEach(c => { c.dataset.under = ''; c.dataset.behind = '0'; });
@@ -877,11 +888,11 @@ function arrow(key, opts) {
     for (let i = 0; i < 8; i++) await settle();
     scrolled = 0; window.scrollY = 0;      // the same collapse, by hand
     check('it was borrowed',
-          !!grid.children.find(c => c.dataset.name === 'borrowed.jpg'));
+          !!gridCells().find(c => c.dataset.name === 'borrowed.jpg'));
     document.byId.choosecancel.click();
     await settle();
     check('and given back',
-          !grid.children.find(c => c.dataset.name === 'borrowed.jpg'),
+          !gridCells().find(c => c.dataset.name === 'borrowed.jpg'),
           'a file from inside a stack was left in the grid');
     check('at the place you were standing', window.scrollY === 640,
           String(window.scrollY));
@@ -1077,7 +1088,7 @@ function arrow(key, opts) {
     // Refused before the question, not after it: nobody is asked which of
     // them should show and then told it cannot happen.
     check('and nothing is asked about which one shows',
-          !grid.children.some(c => !!chooseOn(c)), 'the chooser opened');
+          !gridCells().some(c => !!chooseOn(c)), 'the chooser opened');
     check('and nothing is written',
           calls.slice(n).filter(c => c.url.startsWith('/api/decide'))
             .length === 0,
@@ -1107,8 +1118,7 @@ function arrow(key, opts) {
     const h1 = mkHead(2), h2 = mkHead(1);
     const s1 = [cell('s1a.jpg', ''), cell('s1b.jpg', '')];
     const s2 = [cell('s2a.jpg', '')];
-    room.appendChild(h1); s1.forEach(c => room.appendChild(c));
-    room.appendChild(h2); s2.forEach(c => room.appendChild(c));
+    const box1 = section(h1, s1, room), box2 = section(h2, s2, room);
     const all = [...s1, ...s2];
     document.querySelectorAll = sel => (sel === '.cell' ? all
                                       : sel === '.group' ? [h1, h2]
@@ -1139,10 +1149,12 @@ function arrow(key, opts) {
     check('a section that loses a file recounts',
           h1.querySelector('.dim').textContent === '1',
           h1.querySelector('.dim').textContent);
+    // The whole box, not the heading out of it: what would be left is an
+    // empty section holding the gap where a section used to be.
     check('a section that loses its last file goes too',
-          !room.children.includes(h2));
+          !room.children.includes(box2));
     check('one that kept a file keeps its heading',
-          room.children.includes(h1));
+          room.children.includes(box1) && box1.children.includes(h1));
     // The cursor lands on a survivor so the keyboard has somewhere to resume,
     // but landing is not choosing: nobody asked for that move.
     check('nothing is left selected once the selection has gone',
@@ -1304,21 +1316,40 @@ function arrow(key, opts) {
           document.byId.note.textContent);
   }
 
-  // Thumbnail size is a preference about looking, so it says what it will do
-  // rather than what is true, and it outlives the page.
+  // Thumbnail size is a preference about looking, so it shows which size is
+  // on rather than which one is next, and it outlives the page.
   {
     check('it starts at the ordinary size', grid.dataset.size === 'small',
           grid.dataset.size);
-    check('and carries the letter for it', sizePick.textContent === 'S',
-          sizePick.textContent);
+    // The state is on the control. One button carrying a letter said what
+    // you would get by pressing it, so the size you were *in* was written
+    // nowhere and the third setting existed only for somebody who pressed
+    // twice to find out it was there.
+    check('and the control says which of the three that is',
+          pressed(sizeOpts) === 'small', pressed(sizeOpts));
+    check('on every copy of it', pressed(sizeAlso) === 'small',
+          pressed(sizeAlso));
 
-    sizePick.click();
-    check('and the grid goes up a size', grid.dataset.size === 'medium',
-          grid.dataset.size);
-    check('with the letter following it', sizePick.textContent === 'M',
-          sizePick.textContent);
+    sizeBtn('medium').click();
+    check('and the grid goes to the one that was pressed',
+          grid.dataset.size === 'medium', grid.dataset.size);
+    check('the control follows it', pressed(sizeOpts) === 'medium',
+          pressed(sizeOpts));
+    // The point of rendering two: pressing the one in the bar has to move
+    // the one in the menu, or turning the phone over shows a stale answer.
+    check('and so does the copy nobody touched', pressed(sizeAlso) === 'medium',
+          pressed(sizeAlso));
     check('with the choice remembered', stored['pix2.thumb'] === 'medium',
           String(stored['pix2.thumb']));
+
+    // Straight there and straight back. With one button that cycled, the way
+    // back to the size you liked was through the ones you did not.
+    sizeBtn('large').click();
+    check('any of the three is one press away', grid.dataset.size === 'large',
+          grid.dataset.size);
+    sizeBtn('small').click();
+    check('and so is the way back', grid.dataset.size === 'small',
+          grid.dataset.size);
 
     // Which tier a thumbnail is read from is not the size on the label. The
     // grid shows squares and the tiers are capped on the long edge, so the
@@ -1336,19 +1367,17 @@ function arrow(key, opts) {
     const shown = document.querySelectorAll('.cell')[0];
     shown.appendChild(img);
     shown._rect = { left: 0, top: 0, width: 400, height: 400 };
-    // Every redraw goes through the one control there is, so each of these
-    // also advances the size — which the stub has no layout to care about:
-    // the cell is whatever `_rect` says.
+    // Every redraw goes through the control, and only a *change* of size is
+    // one now — so these alternate between two of them. Which is on does not
+    // enter into the arithmetic: the cell is whatever `_rect` says.
+    let flip = 0;
     const source = (ar, dpr) => {
       shown.dataset.ar = String(ar);
       window.devicePixelRatio = dpr;
-      sizePick.click();
+      sizeBtn(flip++ % 2 ? 'large' : 'medium').click();
       return img.attrs.src.split('/')[1];
     };
 
-    sizePick.click();                       // medium -> large
-    check('and is labelled for it', sizePick.textContent === 'L',
-          sizePick.textContent);
     // 400 across at one device pixel each. A 4:3 photograph in the 400px tier
     // is 300 on its short edge, which is not enough.
     const a = source(0.75, 1);
@@ -1370,16 +1399,11 @@ function arrow(key, opts) {
     const tight = source(1, 1);
     check('a source that only just covers the cell is not good enough',
           tight === 'large', tight);
-    shown._rect = { left: 0, top: 0, width: 400, height: 400 };
 
-    // One button, so it cycles: there is nowhere else to go from the end.
     window.devicePixelRatio = 1;
     shown.dataset.ar = '1';
     shown._rect = { left: 0, top: 0, width: 150, height: 150 };
-    while (grid.dataset.size !== 'large') sizePick.click();
-    sizePick.click();
-    check('the next one round is back to the smallest',
-          grid.dataset.size === 'small', grid.dataset.size);
+    sizeBtn('small').click();
     check('and a small square cell is what the thumbnail tier is for',
           img.attrs.src === '/thumb/f/a.jpg', img.attrs.src);
     img.remove();

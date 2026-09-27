@@ -977,6 +977,83 @@ def test_a_stale_index_cannot_put_a_file_behind_itself(
     assert decisions.read(writable / "c.jpg") is None, "put behind itself"
 
 
+def test_a_heading_stays_at_the_top_while_you_are_in_its_section(
+    client: TestClient
+) -> None:
+    """Two thousand thumbnails go past in a few seconds and they all look
+    alike from four feet away. Without this the only thing saying which day
+    you are in left the screen a long way back, and finding out costs you the
+    place you were reading."""
+    html = client.get("/browse?event=Italy%20-%20Sicily").text
+    css = html[html.index("<style>"):html.index("</style>")]
+    at = css.index("h3.group { ")
+    rule = css[at:css.index("}", at)]
+
+    assert "position:sticky" in rule, rule
+    # Under the bar, not at the top of the window — and by a measurement
+    # rather than a guess, because the bar is not one height.
+    assert "top:var(--bar)" in rule, rule
+    # A heading standing over its own section has photographs sliding under
+    # it, so for the first time it needs something to stand on.
+    assert "background:var(--bg)" in rule, rule
+    # And nothing of the section may show between the two. A margin is outside
+    # the background; padding is inside it.
+    assert "margin:18px 0 0;" in rule, rule
+
+
+def test_a_section_is_a_box_so_the_next_heading_pushes_the_last_one_off(
+    client: TestClient
+) -> None:
+    """A sticky grid item is confined to its own grid area, and a heading's
+    grid area is the single row it occupies — so as a child of the one grid
+    it had nowhere to travel and stuck to nothing. Inside a section it has the
+    section to travel through, and the next one arrives and displaces it,
+    which is the whole behaviour with no scroll handler anywhere.
+    """
+    html = client.get("/?date=2026&group=year").text
+
+    assert '<section class="sect">' in html
+    # The heading first, then the things it names, both inside the box.
+    sect = html[html.index('<section class="sect">'):]
+    assert sect.index("<h3 class=\"group") < sect.index('<div class="cells">')
+
+    # And the grid is no longer the grid: it is a column of them, one per
+    # section, which is what gives each heading a box to be confined to.
+    css = html[html.index("<style>"):html.index("</style>")]
+    assert ".grid { display:flex; flex-direction:column; }" in css
+    assert ".cells { display:grid;" in css
+    # The columns still have to line up across sections, which they do because
+    # every one of them resolves the same track list over the same width.
+    for size, px in (("medium", "230px"), ("large", "380px")):
+        assert f'.grid[data-size="{size}"] .cells' in css, size
+        assert px in css, px
+
+
+def test_the_bar_says_how_tall_it_is_rather_than_being_guessed_at(
+    client: TestClient
+) -> None:
+    """The filters take a second line when there are enough of them, the
+    selection row is on the grid and not on the landing page, and an installed
+    app adds the strip behind the clock. A heading pinned to a constant sits
+    over the bar or a gap below it, and it is wrong exactly when the page is
+    busiest.
+
+    A `ResizeObserver`, because what matters is the bar *changing height* —
+    which is what the filters wrapping does, and which neither `scroll` nor
+    `resize` reports."""
+    js = web._BAR_JS
+
+    assert "ResizeObserver" in js and ".topbar" in js
+    assert "setProperty(" in js and "'--bar'" in js
+    # The fallback is the bar at its shortest, so the first frame is close
+    # rather than wrong.
+    assert "--bar:calc(49px + env(safe-area-inset-top,0px))" in web._STYLE
+
+    # On every page that has a bar, which is every page.
+    for url in ("/browse", "/", "/history", "/accounts"):
+        assert "'--bar'" in client.get(url).text, url
+
+
 def test_the_grid_has_three_thumbnail_sizes(client: TestClient) -> None:
     """The third is where the thumbnail runs out. Cells stretch past their
     minimum to fill the row, so 230px already renders around 263 on a wide
@@ -984,14 +1061,15 @@ def test_the_grid_has_three_thumbnail_sizes(client: TestClient) -> None:
     largest reads `large`, derived at 1000px for exactly this."""
     html = client.get("/browse?event=Italy%20-%20Sicily").text
 
-    assert 'id="sizepick"' in html
-    # Inside the account menu, not standing in the bar: it changes how you are
-    # looking, never which photographs are here, and it is reached once in a
-    # while. Three such controls held a row open in front of the filters.
+    # All three on show, with the one you are in pressed — not one button
+    # carrying a letter for the size you would get by pressing it.
+    for size in ("small", "medium", "large"):
+        assert f'data-size="{size}"' in html, size
+    assert 'aria-pressed' in html and 'aria-label="Thumbnail size"' in html
+    # Whichever copy, it is at the far end of the row and never among the
+    # chips: it changes how you are looking, never which photographs are here.
     row = html[html.index('class="row"'):html.index("</div><main")]
-    menu = row[row.index('class="memenu"'):]
-    assert 'id="sizepick"' in menu, row
-    assert row.index('id="sizepick"') > row.index("spacer")
+    assert row.index('class="sizeset"') > row.index("spacer")
 
     for rule in ("minmax(150px,1fr)", "minmax(230px,1fr)", "minmax(380px,1fr)"):
         assert rule in html, rule
@@ -3201,27 +3279,151 @@ def test_what_is_waiting_is_an_icon_not_a_sentence(
     assert 'id="bincount"' in bar, "the page can no longer update it"
 
 
+def test_the_menu_does_not_answer_its_own_question_twice(
+    client: TestClient, writable: Path
+) -> None:
+    """*Nothing waiting* and *0 deleted*, one above the other. The link is
+    rendered with `hidden` at zero, and every rule that gives it a `display`
+    — and they all do, because it is a row of a menu — outranks the user
+    agent's `[hidden]`. So it has to be said in a selector heavier than any of
+    them, and said about the element it is actually about."""
+    css = client.get("/browse").text
+    assert ".memenu .bin-link[hidden] { display:none; }" in css
+
+    # The two halves of it, each shown only when it is the true one.
+    quiet = client.get("/browse").text
+    assert 'id="bincount" href="/browse?deleted=only" hidden>' in quiet
+    assert "Nothing waiting" in quiet
+
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "deleted": True})
+    loud = client.get("/browse").text
+    assert 'id="bincount" href="/browse?deleted=only">1 deleted' in loud
+    # The sentence saying there is nothing goes the other way, by a rule on
+    # the control rather than by not being rendered — the page flips the dot
+    # without a reload and the two have to move together.
+    assert 'data-any="1"' in loud
+    assert '.me[data-any="1"] .memenu .quiet { display:none; }' in loud
+
+
 def test_the_dot_follows_a_delete_without_a_reload(client: TestClient) -> None:
     """The count is rendered with the page, so the write that changes it has
-    to say so — and the dot is what anybody actually sees."""
+    to say so — and the dot is what anybody actually sees.
+
+    Checking the *id*, not that a line of code exists. It looked one up called
+    `activity`, which is the name of a variable in the header builder and the
+    id of nothing at all: the lookup returned null on every page, the dot kept
+    whatever it was rendered with, and the assertion here — that a line
+    mentioning it was present — went on passing for as long as the line was.
+    """
     js = web._BROWSE_JS
     at = js.index("function drawBin(")
+    body = js[at:js.index("\n}", at)]
+    found = re.search(r"getElementById\('([a-z]+)'\)", body)
 
-    assert "bell.dataset.any" in js[at:at + 400], "the dot is left stale"
+    assert found, "nothing carries the dot"
+    html = client.get("/browse").text
+    assert f'id="{found.group(1)}"' in html, \
+        f"drawBin lights up #{found.group(1)}, which the page does not render"
+    assert f'{found.group(1)}.dataset.any' in body
 
 
 def test_the_name_menu_needs_no_script(client: TestClient) -> None:
     """It has to work on /history and /accounts, which carry no page script at
     all — and a Sign out that only worked where the grid was loaded would be
-    missing from the page you are most likely to be stuck on."""
+    missing from the page you are most likely to be stuck on.
+
+    Which is why it is a `<details>`: the trigger is a real button with a real
+    expanded state, and opening it is the browser's job rather than a
+    handler's."""
     for url in ("/history", "/accounts"):
         html = client.get(url).text
-        assert 'class="memenu"' in html, url
-        assert "Sign out" in html, url
+        assert "<details class=\"me\"" in html, url
+        assert 'class="memenu"' in html and "Sign out" in html, url
 
     css = client.get("/browse").text
-    assert ".me:hover .memenu" in css
-    assert ".me:focus-within .memenu" in css, "unreachable from the keyboard"
+    assert ".me[open] > .memenu { display:flex; }" in css
+    # And never on hover. A menu that opens by being walked past has no closed
+    # state to return to on a touchscreen, where the first tap is the hover
+    # and the second lands on whatever the panel has just put under the finger.
+    assert ".me:hover .memenu" not in css
+    assert ".me:focus-within .memenu" not in css
+
+
+def test_the_menu_can_be_dismissed_without_going_back_to_the_trigger(
+    client: TestClient
+) -> None:
+    """A menu goes away when you have finished with it, and the ways people
+    finish with one are Escape, a click elsewhere, and tabbing off the end.
+    None of the three is what a `<details>` does on its own.
+
+    In the shell, so it is on /history, /accounts and the login screen too —
+    the same reason the menu carries no page script of its own."""
+    js = web._MENU_JS
+
+    assert "'Escape'" in js and "me.open = false" in js
+    assert "!me.contains(e.target)" in js, "a click elsewhere leaves it open"
+    # And on the way down. Every filter chip stops a click propagating, so a
+    # dismissal listening on the bubble never hears one — which left this
+    # menu standing open underneath the filter menu that had just opened over
+    # it.
+    at = js.index("document.addEventListener('click'")
+    assert "}, true);" in js[at:at + 200], js[at:at + 200]
+    assert "focusout" in js and "relatedTarget" in js
+    # Escape puts the keyboard back where it came from, or the next Tab starts
+    # from the top of the document.
+    assert "s.focus()" in js
+
+    for url in ("/browse", "/history", "/accounts", "/"):
+        assert "getElementById('me')" in client.get(url).text, url
+
+
+def test_the_menu_comes_out_of_the_control_that_opened_it(
+    client: TestClient
+) -> None:
+    """A panel that is simply present on the next frame reads as the page
+    having changed. One that arrives from under its trigger reads as that
+    trigger having opened, which is the difference between a menu and a
+    second page — and it is twelve hundredths of a second.
+
+    Never for somebody who has asked not to be moved: here that setting is
+    about vestibular symptoms rather than taste."""
+    css = client.get("/browse").text
+    at = css.index("@media (prefers-reduced-motion: no-preference)")
+    block = css[at:at + 260]
+
+    assert ".me[open] > .memenu { animation:menuopen" in block, block
+    assert "@keyframes menuopen" in block, block
+
+
+def test_the_menu_says_which_kind_of_account_you_are_signed_in_as(
+    client: TestClient
+) -> None:
+    """The trigger says a name on a desk and a gear on a phone, and neither
+    says which *kind* of account it is. This app is used as two different
+    people, and acting as the wrong one is invisible until something has been
+    shared with the wrong household."""
+    html = client.get("/browse").text
+    menu = html[html.index('class="memenu"'):]
+
+    assert '<span class="role">Administrator</span>' in menu
+
+
+def test_the_name_is_clipped_on_a_phone_rather_than_dropped(
+    client: TestClient
+) -> None:
+    """It is the accessible name of the control. Hidden with `display:none`
+    the trigger is a gear whose only label is a drawing, which announces
+    itself as a button called nothing — at the one width where checking who
+    you are signed in as is hardest."""
+    coarse = _media_block(web._STYLE, "(max-width: 720px)")
+    at = coarse.index(".me .name {")
+    rule = coarse[at:coarse.index("}", at)]
+
+    assert "clip-path:inset(50%)" in rule, rule
+    assert "display:none" not in rule, rule
+    # And the gear itself carries no label of its own to compete with it.
+    assert 'class="gearbtn" aria-hidden="true"' in client.get("/browse").text
 
 
 def test_the_filters_wrap_without_carrying_the_way_out_with_them(
@@ -4878,7 +5080,7 @@ def test_but_it_still_says_what_the_library_holds(client: TestClient) -> None:
     of what you reach for once in a while already lives."""
     html = client.get("/?date=2026&group=year").text
     menu = html[html.index('class="memenu"'):]
-    menu = menu[:menu.index("</span></span>")]
+    menu = menu[menu.index('class="info"'):]
 
     assert "files" in menu and "undated" in menu and "indexed" in menu
 
@@ -4889,26 +5091,53 @@ def test_three_rarely_used_controls_became_one() -> None:
     """The account, the thumbnail size and what is waiting were three separate
     things standing permanently in the bar. Each is small, each is reached
     once in a while, and together with the filters they had the top of a phone
-    at four rows and nearly half the screen."""
+    at four rows and nearly half the screen.
+
+    Only on a phone, now. The size control is worth ninety pixels of a desktop
+    bar — it is the one view control you reach for *while* looking at what it
+    changes, and a trip into a menu to do that is a trip each way."""
     coarse = _media_block(web._STYLE, "(max-width: 720px)")
 
     # The name gives way to a gear; the gear is the only thing left.
-    assert ".me .name { display:none; }" in coarse
+    assert ".me .name { position:absolute;" in coarse
     assert ".me .gearbtn { display:inline-flex; }" in coarse
-    # And the name is the first line of what it opens, so who you are signed
-    # in as is one tap rather than a guess.
-    assert ".memenu .whoami { display:block;" in coarse
+    # And the size control goes back inside it — the whole group, so that a
+    # section divider and its padding are not left standing over nothing.
+    assert ".memenu .viewrow { display:flex; }" in coarse
+    assert ".right .sizeset { display:none; }" in coarse
+    # Which is the off position everywhere else.
+    assert ".memenu .viewrow { display:none; }" in web._STYLE
+
+
+def test_the_size_control_stands_in_the_bar_where_there_is_room(
+    client: TestClient
+) -> None:
+    """Both copies are always rendered, because which one applies changes
+    while the page is open — by turning the phone over. So the markup carries
+    two and the media query picks, the same arrangement as the name and the
+    gear."""
+    html = client.get("/browse?event=Italy%20-%20Sicily").text
+    row = html[html.index('class="row"'):html.index("</div><main")]
+
+    assert row.count('class="sizeset"') == 2, row
+    # One in the bar, beside the account rather than inside it; one inside,
+    # on a row that says what it is on — three letters in a box say nothing.
+    outside, inside = row.split('class="memenu"')
+    assert 'class="sizeset"' in outside
+    assert 'class="rowlab">Thumbnail size' in inside
+    assert 'class="sizeset"' in inside
 
 
 def test_the_bar_is_not_two_copies_of_anything(client: TestClient) -> None:
-    """The narrow rules hide rather than move, which only works while the
-    thing being hidden is the same element — two `#sizepick`s would be one id
-    and two controls, and the page script would wire whichever it found
-    first."""
+    """The narrow rules hide rather than move, which only works while nothing
+    that is hidden is a second copy of something *identified*. The size
+    control is rendered twice on purpose and carries no id for exactly that
+    reason: the script drives every copy it finds rather than the first."""
     html = client.get("/browse?event=Italy%20-%20Sicily").text
 
-    for once in ('id="sizepick"', 'id="me"', 'id="bincount"'):
+    for once in ('id="me"', 'id="bincount"', 'class="whoami"'):
         assert html.count(once) == 1, f"{once} appears {html.count(once)} times"
+    assert "id=\"sizepick\"" not in html, "an id on a control rendered twice"
 
 
 def test_what_is_waiting_rides_on_the_control_you_can_see(
@@ -4920,7 +5149,7 @@ def test_what_is_waiting_rides_on_the_control_you_can_see(
     html = client.get("/browse").text
     bar = html[html.index('class="topbar"'):html.index("</div><main")]
 
-    assert 'class="me" id="me" tabindex="0" data-any="1"' in bar
+    assert '<details class="me" id="me" data-any="1">' in bar
     assert 'class="dot"' in bar
 
 

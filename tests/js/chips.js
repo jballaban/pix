@@ -9,7 +9,7 @@
 // Run as: node chips.js <browse.js> <date> <expected date after closing>,
 // because the ladder is a step at a time and each step is its own page.
 const fs = require('fs');
-const { El, document } = require('./dom.js');
+const { El, document, sizeset, section } = require('./dom.js');
 
 const js = fs.readFileSync(process.argv[2], 'utf8');
 const startDate = process.argv[3];
@@ -35,7 +35,7 @@ tick.id = 'selall';
 tick.className = 'tick';
 document.byId.selall = tick;
 actions.appendChild(tick);
-mk('sizepick');
+sizeset();
 for (const id of ['menu', 'chips', 'selcount', 'count', 'note', 'viewer',
                   'vimg', 'vvid', 'vmeta', 'rail', 'railtoggle', 'viewclose',
                   'working', 'workwhat', 'workbar', 'worktally',
