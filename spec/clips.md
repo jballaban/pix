@@ -1,6 +1,8 @@
 # Clips — video splitting, and stills from video
 
-**Status: designed in discussion, nothing built.** Extends
+**Status: steps 1–2 of [§10](#10-build-order) built** (v0.1.414–415: `hidden`,
+video stacking deferred, the clip model and its API). The splice page, cuts,
+renders and delivery are not. Extends
 [nas-app.md](nas-app.md); where the two disagree, this file is the newer intent
 for clips, and the code remains the source of truth for what exists.
 
@@ -87,7 +89,9 @@ independent. Live inheritance (*own value, else C's*) fails on the set-valued
 fields: taking Mum off one clip when she is inherited needs a stored *not Mum*,
 a subtraction layer nothing else in the model has. Deleted, stacked-under and
 no-stack are not copied — they are about C's place in the grid, not its
-content. C's own sidecar is left as it was.
+content — and neither is `hidden` (§3), for the same reason: a clip is
+usually made in order to hide its source, and one born hidden would vanish
+the moment it was made. C's own sidecar is left as it was.
 
 **The date is the exception, and is live**: a clip's effective date is C's
 effective date plus its in-point (a still's, plus its timestamp), unless the
@@ -148,7 +152,8 @@ Binning C while it has clips that are not binned offers two choices:
   copied into C's master folder as a real file with its sidecar, becoming an
   ordinary video with no source. A still's JPG likewise. This is a copy, not
   an encode, so the NAS does it. It happens at bin time, so restoring C later
-  re-links nothing. It is offered only once every clip has its files.
+  re-links nothing. It is offered only once every clip has its files —
+  so until cuts exist (step 4) the refusal is all there is.
 
 A materialised clip is a pix-made file in master — the same compromise as
 [seeding](nas-app.md#14-seeding-the-existing-library), the best copy that

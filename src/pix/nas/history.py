@@ -245,12 +245,17 @@ def get(op_id: str, *, path: Path | None = None) -> Operation | None:
 
 #: The scalar decisions: one value, replaced outright.
 _SCALARS: tuple[str, ...] = ("event", "date_override", "deleted",
-                             "stacked_under", "no_stack")
+                             "stacked_under", "no_stack",
+                             "clip_in", "clip_out")
 
 #: The multi-valued ones, as (whole-list key, add key, remove key, attribute).
 _LISTS: tuple[tuple[str, str, str, str], ...] = (
     ("tags", "add_tags", "remove_tags", "tags"),
     ("audience", "add_audience", "remove_audience", "audience"),
+    # Missing until clips, which is when it started to matter: undoing a
+    # clip's creation has to take away the people it was born with, or the
+    # sidecar outlives the clip holding nothing but names.
+    ("people", "add_people", "remove_people", "people"),
 )
 
 
@@ -316,11 +321,17 @@ def undo(did: dict[str, Any], before: Decision | None) -> dict[str, Any]:
 #: ever put back.
 _FLAGS: frozenset[str] = frozenset({"deleted", "no_stack"})
 
+#: Scalars held as a number. Zero is a real value here — a clip that starts
+#: at the beginning — so these cannot take the text rule's *falsy is absent*.
+_NUMBERS: frozenset[str] = frozenset({"clip_in", "clip_out"})
+
 
 def _norm(value: object, name: str) -> object:
     """A stored value as the decision would hold it."""
     if name in _FLAGS:
         return bool(value)
+    if name in _NUMBERS:
+        return None if value is None else float(cast("float", value))
     return str(value) if value else None
 
 
@@ -368,9 +379,11 @@ def _decision_json(decision: Decision | None) -> dict[str, Any] | None:
         return None
     return {"event": decision.event, "date_override": decision.date_override,
             "tags": list(decision.tags), "audience": list(decision.audience),
+            "people": list(decision.people),
             "deleted": decision.deleted,
             "stacked_under": decision.stacked_under,
-            "no_stack": decision.no_stack}
+            "no_stack": decision.no_stack,
+            "clip_in": decision.clip_in, "clip_out": decision.clip_out}
 
 
 def _render(summary: str, n: int) -> str:
@@ -446,4 +459,14 @@ def _decision_from(raw: object) -> Decision | None:
         stacked_under=(str(d["stacked_under"])
                        if d.get("stacked_under") else None),
         no_stack=bool(d.get("no_stack")),
+        people=tuple(str(a) for a in cast("list[Any]", d.get("people") or [])),
+        clip_in=_number(d.get("clip_in")),
+        clip_out=_number(d.get("clip_out")),
     )
+
+
+def _number(value: object) -> float | None:
+    try:
+        return None if value is None else float(cast("float", value))
+    except (TypeError, ValueError):
+        return None

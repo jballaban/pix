@@ -79,7 +79,8 @@ def destroy(media: Path, *, conn: sqlite3.Connection | None = None,
     indexed = False
     if conn is not None and folder and name:
         try:
-            for table in ("file_tags", "file_audience", "files"):
+            for table in ("file_tags", "file_people", "file_audience",
+                          "files"):
                 conn.execute(
                     f"DELETE FROM {table} WHERE folder = ? AND name = ?",
                     (folder, name))

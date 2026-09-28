@@ -101,8 +101,9 @@ def test_previous_values_are_stored_in_full(log: Path) -> None:
     line = json.loads(log.read_text(encoding="utf-8").strip())
     assert line["files"][0]["before"] == {
         "event": "Sicily", "date_override": "1987-*-*-*:*:*",
-        "tags": ["beach"], "audience": ["kid"], "deleted": False,
-        "stacked_under": None, "no_stack": False}
+        "tags": ["beach"], "audience": ["kid"], "people": [],
+        "deleted": False, "stacked_under": None, "no_stack": False,
+        "clip_in": None, "clip_out": None}
 
 
 def test_a_deletion_is_part_of_what_was_there_before(log: Path) -> None:

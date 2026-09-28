@@ -221,6 +221,13 @@ class Decision:
     #: photograph belongs to one burst — and the cost of being wrong is
     #: stacking it by hand, which was always available.
     no_stack: bool = False
+    #: Where this **clip** starts and ends in its source, in seconds
+    #: (spec/clips.md). Set on a clip's sidecar only — a clip has no master
+    #: file of its own, so this range *is* what it is, and the one decision
+    #: that makes a sidecar a clip rather than a record about a file. Equal
+    #: for a still, which is one frame.
+    clip_in: float | None = None
+    clip_out: float | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "tags", normalize_tags(self.tags))
@@ -232,7 +239,18 @@ class Decision:
         """True when nothing has been decided, so no sidecar should exist."""
         return not (self.event or self.date_override or self.tags
                     or self.people or self.audience or self.deleted
-                    or self.stacked_under or self.no_stack)
+                    or self.stacked_under or self.no_stack
+                    or self.clip_in is not None)
+
+    @property
+    def is_clip(self) -> bool:
+        """Whether this sidecar defines a clip or a still."""
+        return self.clip_in is not None
+
+    @property
+    def is_still(self) -> bool:
+        """A clip of no length: one frame, which is a photograph."""
+        return self.clip_in is not None and self.clip_in == self.clip_out
 
 
 def normalize_tags(values: Iterable[str]) -> tuple[str, ...]:
@@ -355,6 +373,8 @@ def change(media: Path, *,
            deleted: bool | Unset = UNSET,
            stacked_under: str | None | Unset = UNSET,
            no_stack: bool | Unset = UNSET,
+           clip_in: float | None | Unset = UNSET,
+           clip_out: float | None | Unset = UNSET,
            ) -> tuple[Decision | None, Decision]:
     """Change some fields of `media`'s decision, leaving the rest alone.
 
@@ -419,6 +439,8 @@ def change(media: Path, *,
                        if isinstance(stacked_under, Unset) else stacked_under),
         no_stack=(current.no_stack
                   if isinstance(no_stack, Unset) else no_stack),
+        clip_in=current.clip_in if isinstance(clip_in, Unset) else clip_in,
+        clip_out=current.clip_out if isinstance(clip_out, Unset) else clip_out,
     )
     # A change that changes nothing writes nothing. Re-recording the same
     # judgement still costs a temp file, a rename and a fresh mtime over SMB,
@@ -506,6 +528,13 @@ def _validate(decision: Decision) -> None:
             raise DecisionError(
                 f"{decision.event!r} has an empty half — both an event and "
                 "its sub-event have to be something")
+    if (decision.clip_in is None) != (decision.clip_out is None):
+        raise DecisionError("a clip needs both ends, or neither")
+    if decision.clip_in is not None and decision.clip_out is not None:
+        if not 0 <= decision.clip_in <= decision.clip_out:
+            raise DecisionError(
+                f"a clip runs forwards from zero — {decision.clip_in:g}s to "
+                f"{decision.clip_out:g}s does not")
     for value in (*decision.tags, *decision.audience):
         if len(value) > 120:
             raise DecisionError(f"{value[:40]!r}… is too long")
@@ -543,6 +572,11 @@ def _to_xml(decision: Decision) -> str:
         props.append(("pix:StackedUnder", decision.stacked_under))
     if decision.no_stack:
         props.append(("pix:NoStack", "true"))
+    if decision.clip_in is not None and decision.clip_out is not None:
+        # Milliseconds, which is finer than any frame, written without a
+        # trailing tail of zeros so the packet reads as a person would.
+        props.append(("pix:ClipIn", _seconds(decision.clip_in)))
+        props.append(("pix:ClipOut", _seconds(decision.clip_out)))
     if decision.deleted:
         # No standard equivalent, deliberately. Expressing it as a rating or a
         # keyword would tell another tool this file is deleted in *its* terms,
@@ -556,6 +590,19 @@ def _to_xml(decision: Decision) -> str:
     return _TEMPLATE.format(rdf=_RDF_NS, pix=PIX_NS, dc=_DC_NS,
                             photoshop=_PHOTOSHOP_NS, iptc=_IPTC_EXT_NS,
                             props=body, children=children)
+
+
+def _seconds(value: float) -> str:
+    return f"{value:.3f}".rstrip("0").rstrip(".")
+
+
+def _float(value: str | None) -> float | None:
+    """A number read back leniently: a damaged one reads as absent, which the
+    validation on the next write then refuses rather than guesses at."""
+    try:
+        return float(value) if value else None
+    except ValueError:
+        return None
 
 
 def _bag(prop: str, values: tuple[str, ...]) -> str:
@@ -596,7 +643,9 @@ def _from_xml(root: ET.Element) -> Decision | None:
                             _read_bag(description, PIX_NS, "Audience")),
                         deleted=_truth(values.get("Deleted")),
                         stacked_under=values.get("StackedUnder") or None,
-                        no_stack=_truth(values.get("NoStack")))
+                        no_stack=_truth(values.get("NoStack")),
+                        clip_in=_float(values.get("ClipIn")),
+                        clip_out=_float(values.get("ClipOut")))
     return None if decision.is_empty() else decision
 
 

@@ -45,6 +45,7 @@ from pix import __version__ as _PIX_VERSION
 from pix import datestr
 from pix.nas import accounts
 from pix.nas import auth
+from pix.nas import clips
 from pix.nas import decisions
 from pix.nas import paths
 from pix.nas import destroy as destroy_mod
@@ -876,6 +877,13 @@ h3.group[data-state="some"] .grppick { background:var(--top);
             background:var(--accent); color:#0d0f12; font-size:10px;
             font-weight:700; letter-spacing:.05em; text-transform:uppercase;
             padding:2px 6px; border-radius:3px; }
+/* Cut from a video (spec/clips.md). Top-left, the one corner nothing else
+   holds — the select circle comes up over it on hover, which is when it is
+   wanted instead. */
+.clip-mark { position:absolute; left:5px; top:5px; z-index:1;
+             background:#000b; color:var(--fg); font-size:10px;
+             font-weight:700; letter-spacing:.05em; text-transform:uppercase;
+             padding:2px 6px; border-radius:3px; }
 /* Both of them stand where the tags do, and were simply covering them. */
 .cell.marked .tags { padding-right:40px; }
 /* People and access bottom-left, tags top-right, duration bottom-right —
@@ -3343,6 +3351,7 @@ def _cell(row: sqlite3.Row, view: ix.Filters | None = None, *,
         f'data-proposed-under="'
         f'{_h(row["suggested_under"] or "") if (view or ix.Filters()).folds_guesses else ""}" '
         f'data-ar="{_squareness(row)}" '
+        f'data-clip="{_clip_attr(row)}" '
         f'data-copy="{"1" if _has_render(row) else ""}" '
         f'data-behind="{row["behind"] or 0}" '
         f'data-proposed="{_guessed(row, view or ix.Filters())}">'
@@ -3350,12 +3359,31 @@ def _cell(row: sqlite3.Row, view: ix.Filters | None = None, *,
         f'<button class="pick" aria-label="select"></button>'
         + (f'<span class="badge">{_dur(row["duration"])}</span>'
            if row["kind"] == "video" else "")
+        + _clip_badge(row)
         + mark
         + _people_html(_split(row["people"]), view or ix.Filters())
         + _access_html(shared) + _chips_html("tags", tags)
         + _part_html(row, view or ix.Filters(), said)
         + "</div>"
     )
+
+
+def _clip_attr(row: sqlite3.Row) -> str:
+    """A clip's range as the page reads it — `start,end` in seconds — or
+    nothing for a file that is not a clip."""
+    if "clip_of" not in row.keys() or row["clip_of"] is None:
+        return ""
+    return f'{float(row["clip_in"] or 0):g},{float(row["clip_out"] or 0):g}'
+
+
+def _clip_badge(row: sqlite3.Row) -> str:
+    """Says that this was cut from a video, and which kind of cut."""
+    if not _clip_attr(row):
+        return ""
+    still = row["clip_in"] == row["clip_out"]
+    word = "Still" if still else "Clip"
+    return (f'<span class="clip-mark" title="{word} from '
+            f'{_h(row["clip_of"])}">{word}</span>')
 
 
 def _stack_badge(row: sqlite3.Row, view: ix.Filters,
@@ -4809,9 +4837,16 @@ function load(c){
   // Always stop the previous clip: moving on while audio keeps playing from the
   // one before is the kind of thing that makes a viewer feel broken.
   vvid.pause(); vvid.removeAttribute('src'); vvid.load();
-  if(c.dataset.kind==='video'){
+  // A clip plays as its source between its two ends, which is what a media
+  // fragment says to the browser; a still is its source stopped on the frame.
+  const clip=c.dataset.clip?c.dataset.clip.split(','):null;
+  if(clip&&c.dataset.kind!=='video'){
     vimg.classList.remove('on'); vvid.classList.add('on');
-    vvid.src=`/media/${f}/${n}`; vvid.play().catch(()=>{});
+    vvid.src=`/media/${f}/${n}#t=${clip[0]}`;
+  }else if(c.dataset.kind==='video'){
+    vimg.classList.remove('on'); vvid.classList.add('on');
+    vvid.src=`/media/${f}/${n}`+(clip?`#t=${clip[0]},${clip[1]}`:'');
+    vvid.play().catch(()=>{});
   }else{
     vvid.classList.remove('on'); vimg.classList.add('on');
     vimg.src=`/preview/${f}/${n}`;
@@ -6854,6 +6889,12 @@ def media(folder: str, name: str,
     year's 724 clips — and where both exist they are the same footage.
     """
     _allowed(user, folder, name)
+    # A clip plays as its source, clamped by the page to its range
+    # (spec/clips.md §7). Only a curator gets here: `_allowed` has already
+    # refused a viewer, who would otherwise be handed all of the source.
+    source = clips.source_of(name)
+    if source is not None and not (MASTER_DIR / folder / name).is_file():
+        name = source
     # Prefer the render: for an HEVC master it is the only playable copy, and
     # where both exist they are the same footage.
     rendered = (RENDER_DIR / folder / (name + ".mp4")).resolve()
@@ -6878,6 +6919,12 @@ def _serve(root: Path, folder: str, name: str) -> FileResponse:
     target = (root / folder / (name + ".jpg")).resolve()
     if root.resolve() not in target.parents:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "bad path")
+    # A clip has no derived images until `process` makes them (spec/clips.md
+    # §6), so it shows its source's meanwhile. Only a curator reaches this:
+    # a viewer is not shown a clip until it has files of its own.
+    source = clips.source_of(name)
+    if not target.is_file() and source is not None:
+        target = (root / folder / (source + ".jpg")).resolve()
     if not target.is_file():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "not derived yet")
     return FileResponse(target, media_type="image/jpeg",
@@ -6896,6 +6943,12 @@ def _to_send(folder: str, name: str, original: bool) -> tuple[Path, str]:
     that is not there.
     """
     media = _master_file(folder, name)
+    if not media.is_file():
+        # A clip, whose file is the lossless cut the NAS has not made yet
+        # (spec/clips.md §6). Its source is not a stand-in: downloading a clip
+        # and receiving the whole video would be the wrong file.
+        raise HTTPException(status.HTTP_404_NOT_FOUND,
+                            "this clip has not been cut yet")
     if not original:
         render = paths.render_path(media, RENDER_DIR)
         if render.is_file():
@@ -7019,6 +7072,62 @@ def _one_kind(conn: sqlite3.Connection | None, change: _Change,
         status.HTTP_400_BAD_REQUEST,
         f"a stack is one shot, and this one would be {counts} — "
         f"none of them can speak for the rest")
+
+
+def _clip_rules(conn: sqlite3.Connection | None, change: _Change,
+                targets: Sequence[Target]) -> list[Target]:
+    """What binning and restoring mean where clips are involved
+    (spec/clips.md §5).
+
+    **A source cannot be binned while it has clips.** A clip is the source's
+    bytes plus a range, and cannot outlive it — and *I only want the clips*
+    is exactly why somebody would bin the source, so the one gesture would
+    destroy what it was meant to keep. The answer is to hide it. Clips binned
+    in the same request count as binned, so taking a whole video and its
+    clips out at once is still one gesture.
+
+    **Restoring a clip restores its source**, because it cannot exist without
+    it — and is refused if it would come back over footage another clip has
+    taken since.
+    """
+    out = list(targets)
+    if conn is None or isinstance(change.deleted, Unset):
+        return out
+    named = {(t.folder, t.name) for t in targets}
+    if change.deleted:
+        for t in targets:
+            if clips.source_of(t.name) is not None:
+                continue
+            live = [c for c in ix.clips_of(conn, t.folder, t.name)
+                    if not c["deleted"] and (t.folder, c["name"]) not in named]
+            if live:
+                n = len(live)
+                them = "it" if n == 1 else "them"
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    f"{t.name} has {n} clip{'s' if n != 1 else ''} cut from "
+                    f"it — hide it instead, or bin {them} first")
+        return out
+    for t in targets:
+        source = clips.source_of(t.name)
+        row = ix.one(conn, t.folder, t.name) if source else None
+        if source is None or row is None or row["clip_of"] is None:
+            continue
+        siblings = [(float(c["clip_in"]), float(c["clip_out"]))
+                    for c in ix.clips_of(conn, t.folder, source)
+                    if not c["deleted"] and c["name"] != t.name]
+        try:
+            clips.check(float(row["clip_in"]), float(row["clip_out"]),
+                        siblings=siblings, duration=None)
+        except clips.ClipError as e:
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                f"{t.name} cannot come back: {e}") from e
+        parent = ix.one(conn, t.folder, source)
+        if (parent is not None and parent["deleted"]
+                and (t.folder, source) not in named):
+            out.append(Target(folder=t.folder, name=source))
+            named.add((t.folder, source))
+    return out
 
 
 def _records_for(targets: Sequence[Target]
@@ -7375,6 +7484,7 @@ def api_decide(user: Annotated[Principal, Depends(require_user)],
             conn, view, [named],
             members=isinstance(change.stacked_under, Unset)))
         _one_kind(conn, change, targets)
+        targets = _clip_rules(conn, change, targets)
         was, decision, indexed = _decide(body.folder, body.name, change,
                                          conn=conn)
         undo = [history.Before(body.folder, body.name, was,
@@ -7464,10 +7574,19 @@ def api_purge(user: Annotated[Principal, Depends(require_admin)],
                 failed.append({"folder": target.folder, "name": target.name,
                                "error": "not deleted — delete it first"})
                 continue
+            # A source's clips go with it: they are its bytes plus a range,
+            # and every one of them is binned already — a source cannot be
+            # binned while any lives.
+            cut = ([str(c["name"]) for c in
+                    ix.clips_of(conn, target.folder, target.name)]
+                   if conn is not None else [])
             with _write_lock:
                 removed = destroy_mod.destroy(media, conn=conn,
                                               folder=target.folder,
                                               name=target.name)
+                for clip in cut:
+                    destroy_mod.destroy(media.parent / clip, conn=conn,
+                                        folder=target.folder, name=clip)
             if removed.nothing():
                 failed.append({"folder": target.folder, "name": target.name,
                                "error": "nothing could be removed"})
@@ -7490,6 +7609,277 @@ def api_purge(user: Annotated[Principal, Depends(require_admin)],
                        batch=body.batch)
     return JSONResponse({"purged": purged, "failed": failed,
                          "dropped": gone, "total": total, "binned": binned})
+
+
+# --- clips (spec/clips.md) ----------------------------------------------------
+
+class ClipRange(BaseModel):
+    """Where a clip starts and ends, in seconds. Equal for a still."""
+
+    start: float
+    end: float
+
+
+class MakeClipsBody(BaseModel):
+    folder: str
+    source: str
+    clips: list[ClipRange]
+
+
+class ClipRangeBody(BaseModel):
+    folder: str
+    name: str
+    start: float
+    end: float
+
+
+class ClipSplitBody(BaseModel):
+    folder: str
+    name: str
+    at: float
+
+
+class ClipMergeBody(BaseModel):
+    folder: str
+    first: str
+    second: str
+
+
+def _ms(value: float) -> float:
+    """Milliseconds, which is finer than any frame and what the sidecar
+    keeps — so a range compared here is the range that will be stored."""
+    return round(value, 3)
+
+
+def _clip_conn() -> sqlite3.Connection:
+    if not DB_PATH.is_file():
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
+                            "the index has not been built")
+    return ix.open_rw(DB_PATH)
+
+
+def _clip_row(conn: sqlite3.Connection, folder: str,
+              name: str) -> sqlite3.Row:
+    row = ix.one(conn, folder, name)
+    if row is None or row["clip_of"] is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such clip")
+    return row
+
+
+def _siblings(conn: sqlite3.Connection, folder: str, source: str,
+              *, besides: Sequence[str] = ()) -> list[tuple[float, float]]:
+    """The ranges a clip must not overlap: its living siblings'."""
+    return [(float(c["clip_in"]), float(c["clip_out"]))
+            for c in ix.clips_of(conn, folder, source)
+            if not c["deleted"] and c["name"] not in besides]
+
+
+def _check(start: float, end: float, *, siblings: list[tuple[float, float]],
+           duration: float | None) -> None:
+    try:
+        clips.check(start, end, siblings=siblings, duration=duration)
+    except clips.ClipError as e:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(e)) from e
+
+
+def _content(decision: Decision, *, start: float, end: float) -> _Change:
+    """A whole clip decision as a write: content and range, nothing left
+    to what the sidecar said before — because before, there was none."""
+    return _Change(event=decision.event, date_override=decision.date_override,
+                   tags=list(decision.tags), people=list(decision.people),
+                   audience=list(decision.audience),
+                   clip_in=start, clip_out=end)
+
+
+def _gone() -> _Change:
+    """Every field cleared: what removing a clip writes, so that the log
+    holds all of it and reverting brings the whole clip back."""
+    return _Change(event=None, date_override=None, tags=[], people=[],
+                   audience=[], deleted=False, stacked_under=None,
+                   no_stack=False, clip_in=None, clip_out=None)
+
+
+def _write_clips(conn: sqlite3.Connection,
+                 writes: Sequence[tuple[str, str, _Change, bool]]
+                 ) -> list[history.Before]:
+    """Write each `(folder, name, change, creating)` and say what it did."""
+    undo: list[history.Before] = []
+    for folder, name, change, creating in writes:
+        was, decision, _ = _decide(folder, name, change, conn=conn,
+                                   creating=creating)
+        undo.append(history.Before(
+            folder, name, was, did=_did(change, _recorded(change), decision)))
+    return undo
+
+
+@app.get("/api/clips/{folder}/{source}")
+def api_clips(folder: str, source: str,
+              user: Annotated[Principal, Depends(require_admin)]
+              ) -> JSONResponse:
+    """A source's clips and stills, in the order they come in the video."""
+    conn = _clip_conn()
+    try:
+        rows = ix.clips_of(conn, folder, source)
+    finally:
+        conn.close()
+    return JSONResponse([{
+        "name": r["name"], "start": r["clip_in"], "end": r["clip_out"],
+        "deleted": bool(r["deleted"]), "event": r["event"],
+    } for r in rows])
+
+
+@app.post("/api/clips/make")
+def api_clips_make(user: Annotated[Principal, Depends(require_admin)],
+                   body: Annotated[MakeClipsBody, Body()]) -> JSONResponse:
+    """Cut one or more clips — or stills — out of a video.
+
+    Each starts with a **copy** of the source's content decisions
+    (`clips.inherited`), then is its own. The source is untouched: nothing
+    about making a clip hides it (spec/clips.md §3).
+    """
+    if not body.clips:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "no clips asked for")
+    media = _master_file(body.folder, body.source)
+    conn = _clip_conn()
+    try:
+        row = ix.one(conn, body.folder, body.source)
+        if row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND,
+                                "not indexed yet — run pix2 index")
+        why = clips.can_splice(body.source, row["kind"])
+        if why is None and (row["stacked_under"]
+                            or ix.members(conn, f"{body.folder}/{body.source}")):
+            # Video does not stack now, but a few stacks from before remain,
+            # and cutting a video out from under one is a question for when
+            # video stacking is designed (spec/clips.md §4).
+            why = "this video is in a stack — take it out first"
+        if why is not None:
+            raise HTTPException(status.HTTP_409_CONFLICT, why)
+        taken = {clips.id_of(str(c["name"]))
+                 for c in ix.clips_of(conn, body.folder, body.source)}
+        siblings = _siblings(conn, body.folder, body.source)
+        base = clips.inherited(decisions.read(media), row["event"])
+        writes: list[tuple[str, str, _Change, bool]] = []
+        for asked in body.clips:
+            start, end = _ms(asked.start), _ms(asked.end)
+            _check(start, end, siblings=siblings, duration=row["duration"])
+            siblings.append((start, end))
+            clip_id = clips.new_id(taken)
+            taken.add(clip_id)
+            writes.append((body.folder, clips.name_of(body.source, clip_id),
+                           _content(base, start=start, end=end), True))
+        undo = _write_clips(conn, writes)
+    finally:
+        conn.close()
+    n = len(undo)
+    history.record(user.name, f"cut {n} clip{'s' if n != 1 else ''} from "
+                   f"{body.source}", undo)
+    return JSONResponse({"made": [b.name for b in undo]})
+
+
+@app.post("/api/clips/range")
+def api_clips_range(user: Annotated[Principal, Depends(require_admin)],
+                    body: Annotated[ClipRangeBody, Body()]) -> JSONResponse:
+    """Move a clip's ends — or a still's frame. Its id and its decisions stay
+    exactly where they were (spec/clips.md §2)."""
+    start, end = _ms(body.start), _ms(body.end)
+    conn = _clip_conn()
+    try:
+        row = _clip_row(conn, body.folder, body.name)
+        if (start == end) != (row["clip_in"] == row["clip_out"]):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "a still stays a still and a clip stays a clip")
+        source = ix.one(conn, body.folder, str(row["clip_of"]))
+        _check(start, end,
+               siblings=_siblings(conn, body.folder, str(row["clip_of"]),
+                                  besides=[body.name]),
+               duration=source["duration"] if source else None)
+        undo = _write_clips(conn, [(body.folder, body.name,
+                                    _Change(clip_in=start, clip_out=end),
+                                    False)])
+    finally:
+        conn.close()
+    history.record(user.name, f"moved the ends of {body.name}", undo)
+    return JSONResponse({"name": body.name, "start": start, "end": end})
+
+
+@app.post("/api/clips/split")
+def api_clips_split(user: Annotated[Principal, Depends(require_admin)],
+                    body: Annotated[ClipSplitBody, Body()]) -> JSONResponse:
+    """Cut a clip in two at `at`.
+
+    The first half keeps the id and everything decided about it; the second
+    is a new clip that starts with a **copy** of those decisions, because
+    both halves were that clip and both start out true to it.
+    """
+    at = _ms(body.at)
+    conn = _clip_conn()
+    try:
+        row = _clip_row(conn, body.folder, body.name)
+        start, end = float(row["clip_in"]), float(row["clip_out"])
+        if row["deleted"]:
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                "that clip is binned")
+        if not start < at < end:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"{at:g}s is not inside the clip ({start:g}s–{end:g}s)")
+        source = str(row["clip_of"])
+        was = decisions.read(_master_file(body.folder, body.name)) or Decision()
+        taken = {clips.id_of(str(c["name"]))
+                 for c in ix.clips_of(conn, body.folder, source)}
+        second = clips.name_of(source, clips.new_id(taken))
+        undo = _write_clips(conn, [
+            (body.folder, body.name, _Change(clip_out=at), False),
+            (body.folder, second, _content(was, start=at, end=end), True)])
+    finally:
+        conn.close()
+    history.record(user.name, f"split {body.name}", undo)
+    return JSONResponse({"first": body.name, "second": second})
+
+
+@app.post("/api/clips/merge")
+def api_clips_merge(user: Annotated[Principal, Depends(require_admin)],
+                    body: Annotated[ClipMergeBody, Body()]) -> JSONResponse:
+    """Take away the split between two clips that meet.
+
+    The earlier one survives, with both clips' decisions merged by the
+    duplicate ladder (`clips.merged`); the later one is removed — logged in
+    full, so reverting the merge brings it back as it was.
+    """
+    conn = _clip_conn()
+    try:
+        a = _clip_row(conn, body.folder, body.first)
+        b = _clip_row(conn, body.folder, body.second)
+        if a["clip_in"] > b["clip_in"]:
+            a, b = b, a
+        if a["clip_of"] != b["clip_of"]:
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                "those are clips of two different videos")
+        if a["deleted"] or b["deleted"]:
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                "one of those clips is binned")
+        if (a["clip_in"] == a["clip_out"] or b["clip_in"] == b["clip_out"]
+                or abs(float(a["clip_out"]) - float(b["clip_in"])) > 0.001):
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                "only two clips that meet can be joined")
+        first = _master_file(body.folder, str(a["name"]))
+        second = _master_file(body.folder, str(b["name"]))
+        content = clips.merged(
+            decisions.read(first) or Decision(),
+            decisions.sidecar_path(first).stat().st_mtime,
+            decisions.read(second) or Decision(),
+            decisions.sidecar_path(second).stat().st_mtime)
+        undo = _write_clips(conn, [
+            (body.folder, str(a["name"]),
+             _content(content, start=float(a["clip_in"]),
+                      end=float(b["clip_out"])), False),
+            (body.folder, str(b["name"]), _gone(), False)])
+    finally:
+        conn.close()
+    history.record(user.name, f"joined {a['name']} and {b['name']}", undo)
+    return JSONResponse({"name": a["name"]})
 
 
 class DecideBulkBody(BaseModel):
@@ -7583,6 +7973,7 @@ def api_decide_bulk(user: Annotated[Principal, Depends(require_user)],
         conn, view, body.files,
         members=isinstance(change.stacked_under, Unset)))
     _one_kind(conn, change, targets)
+    targets = _clip_rules(conn, change, targets)
     done: list[tuple[str, str]] = []
     undo: list[history.Before] = []
     dropped: list[dict[str, str]] = []
@@ -7683,6 +8074,12 @@ class _Change:
     deleted: bool | Unset = decisions.UNSET
     stacked_under: str | None | Unset = decisions.UNSET
     no_stack: bool | Unset = decisions.UNSET
+    #: A clip's range. Never read from a decide request — a range is edited
+    #: through the clip routes, which check it against its siblings — but
+    #: carried here so those routes write through the same path as every
+    #: other decision, and are logged and reverted the same way.
+    clip_in: float | None | Unset = decisions.UNSET
+    clip_out: float | None | Unset = decisions.UNSET
 
 
 def _change(body: DecideBody | DecideBulkBody) -> _Change:
@@ -7738,7 +8135,7 @@ def _recorded(change: _Change) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for name in ("event", "date_override", "tags", "people", "audience",
                  "deleted",
-                 "stacked_under", "no_stack"):
+                 "stacked_under", "no_stack", "clip_in", "clip_out"):
         value: Any = getattr(change, name)
         if isinstance(value, Unset):
             continue
@@ -7771,7 +8168,8 @@ def _flag(value: Any) -> bool | Unset:
 def _decide(folder: str, name: str, change: _Change,
             *, conn: sqlite3.Connection | None = None,
             record: dict[str, Any] | None = None,
-            commit: bool = True
+            commit: bool = True,
+            creating: bool = False
             ) -> tuple[Decision | None, Decision, bool]:
     """Write one decision to master, then bring its index row up to date.
 
@@ -7798,7 +8196,7 @@ def _decide(folder: str, name: str, change: _Change,
     record; the index is a projection of it, and a projection that rolls back
     is behind, which is the one direction drift is allowed to go.
     """
-    media = _master_file(folder, name)
+    media = _master_file(folder, name, creating=creating)
     # The event this file is showing, which for most of the library is in its
     # own tags and not in a sidecar — a half-name write keeps the half it is
     # not replacing, and that half has to be the one on screen.
@@ -7826,7 +8224,8 @@ def _decide(folder: str, name: str, change: _Change,
                 remove_audience=change.remove_audience,
                 deleted=change.deleted,
                 stacked_under=change.stacked_under,
-                no_stack=change.no_stack)
+                no_stack=change.no_stack,
+                clip_in=change.clip_in, clip_out=change.clip_out)
         except decisions.DecisionError as e:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
         except OSError as e:
@@ -8064,13 +8463,19 @@ def _summary(change: _Change) -> str:
     return f"changed {files}"
 
 
-def _master_file(folder: str, name: str) -> Path:
+def _master_file(folder: str, name: str, *, creating: bool = False) -> Path:
     """Resolve a master path from untrusted URL/body components.
 
     Same guard as `_serve`, and needed more here because this one writes: `..`
     in either component would otherwise drop an `.xmp` anywhere on the share.
     A sidecar is refused as a target too — decisions are about media, and
     `a.jpg.xmp.xmp` is nobody's intent.
+
+    **A clip is a path with no file at it** (spec/clips.md §2). It is found by
+    its sidecar, beside a source that is there — or, while it is being made,
+    by the source alone, which is what `creating` allows and nothing else
+    does: a decision about a clip that does not exist is not a way to invent
+    one.
     """
     target = (MASTER_DIR / folder / name).resolve()
     if MASTER_DIR.resolve() not in target.parents:
@@ -8078,9 +8483,17 @@ def _master_file(folder: str, name: str) -> Path:
     if name.lower().endswith(".xmp"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "that is a sidecar, not a file")
-    if not target.is_file():
+    if not target.is_file() and not _is_clip_path(target, creating=creating):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "not in master")
     return target
+
+
+def _is_clip_path(target: Path, *, creating: bool = False) -> bool:
+    """Whether `target` names a clip whose source is in master."""
+    source = clips.source_of(target.name)
+    if source is None or not (target.parent / source).is_file():
+        return False
+    return creating or decisions.sidecar_path(target).is_file()
 
 
 # --- installing it on a phone -------------------------------------------------
@@ -8796,7 +9209,10 @@ async def history_revert(
     try:
         for item in op.files:
             media = MASTER_DIR / item.folder / item.name
-            if not _under(MASTER_DIR, media) or not media.is_file():
+            # A clip has no file, and may have no sidecar either — reverting
+            # the merge that removed it is how it comes back.
+            if not _under(MASTER_DIR, media) or not (
+                    media.is_file() or _is_clip_path(media, creating=True)):
                 failed += 1
                 continue
             with _write_lock:

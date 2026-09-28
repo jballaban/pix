@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Any, Callable, ClassVar, Iterator, Sequence, cast
 
 from pix import datestr
+from pix.nas import clips
 from pix.nas import decisions
 from pix.nas.const import LEDGER_NAME, MASTER_DIR, META_DIR
 from pix.nas.decisions import Decision
@@ -49,7 +50,7 @@ from pix.nas.decisions import Decision
 #: Bumped whenever the shape changes. A mismatch drops and rebuilds rather than
 #: migrating: the index is disposable by design, and a migration path is
 #: machinery to maintain for something a `pix2 index` reproduces exactly.
-SCHEMA_VERSION: int = 11
+SCHEMA_VERSION: int = 12
 
 #: What separates an event from a sub-event inside one name.
 #:
@@ -199,6 +200,9 @@ CREATE TABLE IF NOT EXISTS files (
     content_hash   TEXT,          -- fact: the coded image, metadata excluded
     render_hash    TEXT,          -- fact: the same, for the copy we hand out
     suggested_under TEXT,         -- guessed: the `folder/name` this looks like
+    clip_of        TEXT,          -- a clip: the source's name, same folder
+    clip_in        REAL,          -- decision: where the clip starts, seconds
+    clip_out       REAL,          -- decision: where it ends; = clip_in, a still
     PRIMARY KEY (folder, name)
 );
 CREATE INDEX IF NOT EXISTS files_event ON files(event);
@@ -220,6 +224,9 @@ CREATE INDEX IF NOT EXISTS files_chash ON files(content_hash);
 -- The render is the file that leaves the building, so it is the one that comes
 -- back. An import is checked against both columns.
 CREATE INDEX IF NOT EXISTS files_rhash ON files(render_hash);
+-- A source's clips, asked whenever the source's row changes (its date moves
+-- theirs) and whenever it is binned (it may not be while they live).
+CREATE INDEX IF NOT EXISTS files_clip  ON files(folder, clip_of);
 CREATE TABLE IF NOT EXISTS file_tags (
     folder TEXT NOT NULL,
     name   TEXT NOT NULL,
@@ -547,6 +554,7 @@ def build(db_path: Path, *, echo: Callable[[str], None] = lambda _: None,
             conn.execute("DELETE FROM file_people")
             conn.execute("DELETE FROM file_audience")
             for folder, decided, source in _folders(meta_root, master_root):
+                sources: dict[str, dict[str, Any]] = {}
                 for record in _records(meta_root / folder):
                     row = _row(folder, record, decided, source)
                     if row is None:
@@ -554,6 +562,7 @@ def build(db_path: Path, *, echo: Callable[[str], None] = lambda _: None,
                         continue
                     conn.execute(_INSERT, row)
                     name = str(row["name"])
+                    sources[name] = row
                     decision = decided.get(name)
                     if decision is not None:
                         _write_multi(conn, folder, name, decision)
@@ -565,6 +574,25 @@ def build(db_path: Path, *, echo: Callable[[str], None] = lambda _: None,
                         stats.with_sidecar += 1
                     if row["event"]:
                         events_seen.add(str(row["event"]))
+                # Clips after every file, because a clip is made from its
+                # source's row and the folder is listed in no useful order.
+                for name, decision in decided.items():
+                    if decision is None or not decision.is_clip:
+                        continue
+                    of = clips.source_of(name)
+                    if of is None or of not in sources:
+                        # A clip with nothing to cut from. Never shown: there
+                        # is no footage behind it.
+                        stats.skipped.append(f"{folder}/{name}: no source")
+                        continue
+                    conn.execute(_INSERT, _clip_row(folder, name, sources[of],
+                                                    decision))
+                    _write_multi(conn, folder, name, decision)
+                    tags_seen.update(decision.tags)
+                    stats.files += 1
+                    stats.with_sidecar += 1
+                    if decision.event:
+                        events_seen.add(decision.event)
                 echo(f"indexed {folder}")
             # Last, because it is a question about the library rather than
             # about any one file, and it cannot be asked until they are all in.
@@ -583,11 +611,12 @@ _INSERT: str = (
     "(folder, name, size, mtime_ns, kind, capture_date, camera, width, height, "
     " duration, event, date_override, effective_date, year, band, "
     " has_sidecar, deleted, precision, stacked_under, no_stack, source, "
-    " content_hash, render_hash) "
+    " content_hash, render_hash, clip_of, clip_in, clip_out) "
     "VALUES (:folder, :name, :size, :mtime_ns, :kind, :capture_date, :camera, "
     " :width, :height, :duration, :event, :date_override, "
     " :effective_date, :year, :band, :has_sidecar, :deleted, :precision,"
-    " :stacked_under, :no_stack, :source, :content_hash, :render_hash)"
+    " :stacked_under, :no_stack, :source, :content_hash, :render_hash,"
+    " :clip_of, :clip_in, :clip_out)"
 )
 
 
@@ -628,6 +657,17 @@ def refresh(conn: sqlite3.Connection, folder: str, name: str, *,
     meta_root = meta_dir if meta_dir is not None else META_DIR
     master_root = master_dir if master_dir is not None else MASTER_DIR
 
+    of = clips.source_of(name)
+    if of is not None and record is None:
+        if commit:
+            with conn:
+                done = _refresh_clip(conn, folder, name, of,
+                                     master_root / folder / name, decision)
+        else:
+            done = _refresh_clip(conn, folder, name, of,
+                                 master_root / folder / name, decision)
+        if done is not None:
+            return done
     if record is None:
         record = _record(meta_root / folder / f"{name}.json")
     if record is None:
@@ -663,8 +703,44 @@ def refresh(conn: sqlite3.Connection, folder: str, name: str, *,
     if commit:
         with conn:
             _rewrite(conn, folder, name, row, decided.get(name), was)
+            _follow(conn, folder, name)
     else:
         _rewrite(conn, folder, name, row, decided.get(name), was)
+        _follow(conn, folder, name)
+    return True
+
+
+def _refresh_clip(conn: sqlite3.Connection, folder: str, name: str,
+                  source: str, media: Path,
+                  decision: Decision | None | decisions.Unset
+                  ) -> bool | None:
+    """Rewrite a clip's row — or remove it, or say it is not a clip at all.
+
+    The one place a refresh adds or removes a row, and deliberately: a clip's
+    existence is a decision, where every other file's is a fact `process`
+    found. A clip made is a row added; a clip whose sidecar has gone — its
+    creation reverted, or it purged — is a row removed.
+
+    None means *not a clip after all*: a real file whose name only looks like
+    one, which the ordinary path then handles from its meta record.
+    """
+    if isinstance(decision, decisions.Unset):
+        decision = decisions.read(media)
+    existing = one(conn, folder, name)
+    if decision is None or not decision.is_clip:
+        if existing is not None and existing["clip_of"] is not None:
+            conn.execute("DELETE FROM files WHERE folder = ? AND name = ?",
+                         (folder, name))
+            _write_multi(conn, folder, name, None)
+            return True
+        return None
+    source_row = one(conn, folder, source)
+    if source_row is None:
+        return False
+    was = (str(existing["suggested_under"])
+           if existing is not None and existing["suggested_under"] else None)
+    _rewrite(conn, folder, name, _clip_row(folder, name, source_row, decision),
+             decision, was)
     return True
 
 
@@ -851,7 +927,90 @@ def _row(folder: str, record: dict[str, Any],
         # since identity existed.
         "content_hash": record.get("content_hash"),
         "render_hash": record.get("render_hash"),
+        "clip_of": None, "clip_in": None, "clip_out": None,
     }
+
+
+def _clip_row(folder: str, name: str, source: sqlite3.Row | dict[str, Any],
+              decision: Decision) -> dict[str, Any]:
+    """A clip's row, made from its source's row and its own sidecar.
+
+    A clip has no probed facts of its own — no meta record, because it has no
+    bytes for `process` to open — so what the source's row knows stands in:
+    the camera, the dimensions, the import. The date is the source's plus
+    where the clip starts (`clips.date`). The rest are the clip's decisions,
+    never the source's: those were copied once, when the clip was made.
+    """
+    clip_in = decision.clip_in or 0.0
+    clip_out = decision.clip_out if decision.clip_out is not None else clip_in
+    still = clip_in == clip_out
+    kind = "image" if still else "video"
+    capture, effective, precision = clips.date(
+        source["capture_date"], source["date_override"], clip_in,
+        decision.date_override)
+    duration = None if still else clip_out - clip_in
+    return {
+        "folder": folder,
+        "name": name,
+        "source": source["source"],
+        "size": None,
+        "mtime_ns": None,
+        "kind": kind,
+        "capture_date": capture,
+        "camera": source["camera"],
+        "width": source["width"],
+        "height": source["height"],
+        "duration": duration,
+        "event": decision.event,
+        "date_override": decision.date_override,
+        "effective_date": datestr.format_pix(effective) if effective else None,
+        "year": f"{effective.year:04d}" if effective else None,
+        "band": _band(kind, None, duration),
+        "has_sidecar": 1,
+        "deleted": 1 if decision.deleted else 0,
+        "precision": precision,
+        "stacked_under": decision.stacked_under,
+        "no_stack": 1 if decision.no_stack else 0,
+        "content_hash": None,
+        "render_hash": None,
+        "clip_of": clips.source_of(name),
+        "clip_in": clip_in,
+        "clip_out": clip_out,
+    }
+
+
+def clips_of(conn: sqlite3.Connection, folder: str,
+             source: str) -> list[sqlite3.Row]:
+    """A source's clips and stills, in the order they come in the video."""
+    return list(conn.execute(
+        "SELECT * FROM files WHERE folder = ? AND clip_of = ? "
+        "ORDER BY clip_in, clip_out, name", (folder, source)))
+
+
+def _follow(conn: sqlite3.Connection, folder: str, source: str) -> None:
+    """Move a source's clips with it when its date changes.
+
+    The clip's date is the one live inheritance there is (spec/clips.md §2),
+    and everything it depends on is already in the rows — the source's
+    capture date and override, the clip's start and its own override — so
+    this needs no sidecar read.
+    """
+    row = one(conn, folder, source)
+    if row is None:
+        return
+    for clip in clips_of(conn, folder, source):
+        capture, effective, precision = clips.date(
+            row["capture_date"], row["date_override"],
+            float(clip["clip_in"] or 0.0), clip["date_override"])
+        conn.execute(
+            "UPDATE files SET capture_date = ?, effective_date = ?, year = ?, "
+            "precision = ?, camera = ?, width = ?, height = ?, source = ? "
+            "WHERE folder = ? AND name = ?",
+            (capture,
+             datestr.format_pix(effective) if effective else None,
+             f"{effective.year:04d}" if effective else None,
+             precision, row["camera"], row["width"], row["height"],
+             row["source"], folder, clip["name"]))
 
 
 def _band(kind: str, size: object, duration: float | None) -> str | None:
@@ -1155,6 +1314,12 @@ def _always(filters: Filters) -> list[str]:
     # can say hidden *and* shared, and hidden has to win that too.
     if filters.audience != decisions.HIDDEN or filters.viewer is not None:
         out.append(_NOT_HIDDEN)
+    # A clip reaches a viewer only once it has files of its own
+    # (spec/clips.md §7). Until then it can only play as its source clamped
+    # to a range, which would hand the viewer all of the source. No clip has
+    # files yet, so for a viewer there are none.
+    if filters.viewer is not None:
+        out.append("files.clip_of IS NULL")
     # A file stacked behind another does not appear on its own — that is what
     # stacking is. Opening one stack is the exception, and says which.
     #
