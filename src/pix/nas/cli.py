@@ -141,6 +141,8 @@ def upload() -> None:
             state = "KEPT (cancelled)"
         elif s.staging_cleared:
             state = "cleared"
+        elif s.verified and s.unaccounted:
+            state = "KEPT (files not uploaded)"
         else:
             state = "KEPT (unverified)"
         typer.echo(
@@ -152,6 +154,12 @@ def upload() -> None:
         if len(s.failed) > 10:
             typer.echo(f"  ... and {len(s.failed) - 10} more", err=True)
         failed += len(s.failed)
+        # Named, so what stayed behind is findable rather than merely counted.
+        for line in s.unaccounted[:10]:
+            typer.echo(f"  not uploaded: {line}", err=True)
+        if len(s.unaccounted) > 10:
+            typer.echo(f"  ... and {len(s.unaccounted) - 10} more", err=True)
+        failed += len(s.unaccounted)
 
     if cancelled:
         typer.echo("")

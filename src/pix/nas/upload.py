@@ -10,6 +10,21 @@ staging — so that clearing is gated per-folder on verification (every file
 present at master at a matching size), not on the run merely finishing. A folder
 that fails verification keeps its staging and says so.
 
+**And on accounting for every file in it.** Verification can only speak for the
+files upload recognised; a file it did not recognise was never copied and never
+checked, and "nothing failed" said nothing about it. That is how a GoPro import
+was deleted whole: its records were in the device importer's shape, upload read
+them as nothing, counted zero files, found zero failures, and cleared the
+folder. So staging is cleared only when every file in it is one upload copied
+and verified — anything else keeps the folder and is named.
+
+**Two shapes of import record**, one per importer (spec/nas-app.md §9): a folder
+import's carries its `rel` and `source_root`; a device import's carries the
+device's serial and the object's PUID, and its file is wherever its record says
+by sitting beside it. A device upload writes a device ledger — `source:
+"device"` and the serial in the header, the PUID on every line — which is what
+the next import reads to skip what is already here.
+
 Two properties the spec calls for explicitly:
 
 - **Parallel.** Measured against this NAS, single-threaded small-file throughput
@@ -38,7 +53,7 @@ from blake3 import blake3
 
 from pix.duration import format_duration_compact, format_size
 from pix.ingest import MANIFEST_DIRNAME
-from pix.markers import EXPORT_TMP_SUFFIX
+from pix.markers import EXPORT_TMP_SUFFIX, IMPORT_TMP_SUFFIX
 from pix.progress import LiveProgress
 from pix.nas import ledger, staging as st
 from pix.nas.lock import UploadLock
@@ -80,6 +95,9 @@ class UploadSummary:
     staging_cleared: bool = False
     cancelled: bool = False     # Ctrl+C: queue dropped, in-flight drained
     failed: list[str] = field(default_factory=lambda: [])
+    #: Why staging was kept although nothing failed: files in it that upload
+    #: did not copy, because no import record it understands names them.
+    unaccounted: list[str] = field(default_factory=lambda: [])
 
 
 @dataclass(frozen=True)
@@ -88,9 +106,26 @@ class _Item:
 
     source: Path        # the staged file (a hardlink into the library)
     rel: str            # path relative to the staging root
-    root: str           # the source root it was imported from
+    root: str           # the source root it was imported from; a device's serial
     size: int
     flat: str           # its flattened name in master
+    #: What a device record adds to its ledger line: PUID, device path, name,
+    #: capture date — the committed half of the next import's skip check.
+    extra: dict[str, Any] = field(default_factory=lambda: {})
+
+
+@dataclass
+class _Staged:
+    """What a staging folder holds, as its import records describe it."""
+
+    items: list[_Item]
+    #: `(rel, root, size, extra)` for each record whose media was deleted.
+    culled: list[tuple[str, str, int, dict[str, Any]]]
+    #: Records upload could not read as either shape.
+    unknown: list[str]
+    #: `"device"` or `"folder"` — or both, which is refused.
+    sources: set[str]
+    serials: set[str]
 
 
 def pending_folders() -> list[Path]:
@@ -143,14 +178,29 @@ def _upload_one(staging: Path, *, echo: Callable[[str], None]) -> UploadSummary:
     swept = _sweep_target(target)
     if swept:
         echo(f"swept {swept} partial copy(s) from an interrupted run")
-    items, culled = _collect(staging)
+    staged = _collect(staging)
+    items, culled = staged.items, staged.culled
     summary.culled = len(culled)
+    summary.unaccounted = [
+        *(f"{r}: import record not understood" for r in staged.unknown),
+        *(f"{r}: no import record" for r in _strays(staging, items)),
+    ]
+    if len(staged.sources) > 1 or len(staged.serials) > 1:
+        # One ledger header describes one source. Mixing them would record a
+        # phone's files under a folder's header, and the next import of that
+        # phone would not know they are here.
+        summary.failed.append(
+            "this staging folder holds imports from more than one source — "
+            "upload them separately")
+        return summary
 
     ledger_path = target / LEDGER_NAME
     already = _already_recorded(ledger_path)
     if not ledger_path.exists():
         _write_header(ledger_path, name,
-                  {i.root for i in items} | {c[1] for c in culled})
+                      {i.root for i in items} | {c[1] for c in culled},
+                      device=next(iter(staged.serials), None)
+                      if "device" in staged.sources else None)
 
     echo(f"{name}: {len(items)} file(s) staged, {len(culled)} culled, "
          f"{len(already)} already recorded -> {target.name}")
@@ -203,6 +253,7 @@ def _upload_one(staging: Path, *, echo: Callable[[str], None]) -> UploadSummary:
                 _append(log, {
                     "rel": item.rel, "root": item.root, "size": item.size,
                     "file": item.flat, "blake3": digest, "outcome": "kept",
+                    **item.extra,
                 })
             progress.advance()
 
@@ -226,16 +277,20 @@ def _upload_one(staging: Path, *, echo: Callable[[str], None]) -> UploadSummary:
                 pool.shutdown(wait=True)
 
         with lock:
-            for rel, root, size in culled:
+            for rel, root, size, extra in culled:
                 if flatten(rel) in already:
                     continue
                 _append(log, {"rel": rel, "root": root, "size": size,
-                              "outcome": "culled"})
+                              "outcome": "culled", **extra})
 
     # Every file was verified as it landed, so the batch is verified exactly
-    # when nothing failed and nothing was skipped by a cancel.
+    # when nothing failed and nothing was skipped by a cancel — and staging is
+    # cleared only when, besides, nothing in it went unaccounted for.
     summary.verified = not summary.cancelled and not summary.failed
-    if summary.verified:
+    if summary.verified and summary.unaccounted:
+        echo(f"{name}: staging kept — {len(summary.unaccounted)} file(s) in it "
+             "were not uploaded")
+    elif summary.verified:
         _clear(staging)
         summary.staging_cleared = True
     return summary
@@ -295,42 +350,107 @@ def _resolve_target(staging: Path, name: str) -> Path:
     return MASTER_DIR / folder
 
 
-def _collect(staging: Path) -> tuple[list[_Item], list[tuple[str, str, int]]]:
+def _collect(staging: Path) -> _Staged:
     """Split staging into files to upload and culled records to note.
 
     A sidecar whose media is gone is a **cull**: the user deleted it deliberately
     before upload, and the record has to travel to master anyway so the file is
     never re-imported (spec/nas-app.md §9).
+
+    A record in neither shape is **not skipped silently**: it is named, and its
+    folder is kept, because a record nobody can read is a file nobody copied.
     """
-    items: list[_Item] = []
-    culled: list[tuple[str, str, int]] = []
+    staged = _Staged(items=[], culled=[], unknown=[], sources=set(),
+                     serials=set())
     used: dict[str, str] = {}
 
     for sidecar in sorted(staging.rglob(f"*{st.SIDECAR_EXT}")):
         data = st.read_sidecar(sidecar)
-        if data is None:
+        described = _described(staging, sidecar, data) if data else None
+        if described is None:
+            staged.unknown.append(sidecar.relative_to(staging).as_posix())
             continue
-        rel = data.get("rel")
-        root = data.get("source_root")
+        source, media, rel, root, extra = described
+        assert data is not None
+        staged.sources.add(source)
+        if source == "device":
+            staged.serials.add(root)
         size = data.get("size")
-        if not isinstance(rel, str) or not isinstance(root, str):
-            continue
 
-        media = staging / Path(rel)
         if not media.is_file():
             # The media is gone but its size is in the sidecar — and it must
             # reach the ledger, because the skip key is (rel, size). A culled
             # entry without a size would never join the manifest, and the file
             # would be re-imported on the next run.
             if isinstance(size, int):
-                culled.append((rel, root, size))
+                staged.culled.append((rel, root, size, extra))
             continue
 
         flat = _unique(flatten(rel), rel, used)
-        items.append(_Item(source=media, rel=rel, root=root,
-                           size=size if isinstance(size, int) else media.stat().st_size,
-                           flat=flat))
-    return items, culled
+        staged.items.append(_Item(
+            source=media, rel=rel, root=root,
+            size=size if isinstance(size, int) else media.stat().st_size,
+            flat=flat, extra=extra))
+    return staged
+
+
+def _described(staging: Path, sidecar: Path, data: dict[str, Any]
+               ) -> tuple[str, Path, str, str, dict[str, Any]] | None:
+    """`(source, media, rel, root, ledger extras)` for one record, or None.
+
+    A folder record says where its file is (`rel`). A device record does not
+    — it says where the file was *on the device* — so its file is the one it
+    sits beside: `<dir>/.manifest/<name>.importinfo` describes `<dir>/<name>`,
+    which is how the importer wrote it (`importer._sidecar_path`).
+    """
+    rel = data.get("rel")
+    root = data.get("source_root")
+    if isinstance(rel, str) and isinstance(root, str):
+        return "folder", staging / Path(rel), rel, root, {}
+    serial = data.get("serial")
+    puid = data.get("puid")
+    if not isinstance(serial, str) or not serial or not isinstance(puid, str):
+        return None
+    if sidecar.parent.name != MANIFEST_DIRNAME:
+        return None
+    media = sidecar.parent.parent / sidecar.name[: -len(st.SIDECAR_EXT)]
+    try:
+        rel = media.relative_to(staging).as_posix()
+    except ValueError:
+        return None
+    extra: dict[str, Any] = {"puid": puid}
+    for key, into in (("device_path", "device_path"),
+                      ("original_filename", "name"),
+                      ("capture_date", "capture_date")):
+        value = data.get(key)
+        if value is not None:
+            extra[into] = str(value)
+    return "device", media, rel, serial, extra
+
+
+def _strays(staging: Path, items: list[_Item]) -> list[str]:
+    """Files in staging that no record accounts for, relative to it.
+
+    Everything under `.manifest/` is bookkeeping, as are this module's own
+    marker and the partial downloads an interrupted import leaves; junk the
+    importers never land (`staging.is_skippable`) is not media either. Any
+    other file is one somebody expects to reach master.
+    """
+    uploading = {i.source for i in items}
+    found: list[str] = []
+    for path in sorted(staging.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(staging)
+        if MANIFEST_DIRNAME in rel.parts[:-1]:
+            continue
+        if rel.as_posix() == TARGET_MARKER or st.is_skippable(path.name):
+            continue
+        if path.name.endswith((IMPORT_TMP_SUFFIX, EXPORT_TMP_SUFFIX)):
+            continue
+        if path not in uploading:
+            found.append(rel.as_posix())
+    return found
 
 
 def _unique(flat: str, rel: str, used: dict[str, str]) -> str:
@@ -448,19 +568,22 @@ def _clear(staging: Path) -> None:
     shutil.rmtree(staging, ignore_errors=True)
 
 
-def _write_header(path: Path, name: str, roots: set[str]) -> None:
+def _write_header(path: Path, name: str, roots: set[str], *,
+                  device: str | None = None) -> None:
     """The ledger's first line: which source produced this master folder.
 
     This is what makes the known-device registry derivable rather than stored,
     and what lets a lookup skip folders belonging to other sources without
-    opening their bodies.
+    opening their bodies. A device's header carries its serial, which is what
+    `ledger.committed_import_ids` finds its folders by.
     """
-    header: dict[str, Any] = {
-        "name": name,
-        "source": "folder",
-        "source_roots": sorted(roots),
-        "uploaded": datetime.now().isoformat(timespec="seconds"),
-    }
+    uploaded = datetime.now().isoformat(timespec="seconds")
+    header: dict[str, Any] = (
+        {"name": name, "device_name": name, "source": "device",
+         "serial": device, "uploaded": uploaded}
+        if device is not None else
+        {"name": name, "source": "folder", "source_roots": sorted(roots),
+         "uploaded": uploaded})
     with path.open("w", encoding="utf-8") as f:
         f.write(json.dumps(header) + "\n")
 

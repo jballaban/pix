@@ -260,3 +260,141 @@ def test_flatten_collisions_are_disambiguated() -> None:
     assert first == "a_b_c.jpg"
     assert second != first
     assert second.endswith(".jpg")
+
+
+# --- device imports, and never clearing what was not uploaded -----------------
+#
+# A GoPro import was deleted whole: its records were in the device importer's
+# shape, upload read them as nothing, counted zero files, found zero failures
+# and cleared the folder.
+
+import yaml  # noqa: E402
+
+
+def _device_file(staging: Path, rel: str, data: bytes, *, puid: str,
+                 serial: str = "C3441324567890") -> Path:
+    """Land one file the way `importer` does: the media at its device path,
+    its YAML record in a `.manifest/` beside it."""
+    media = staging / rel
+    media.parent.mkdir(parents=True, exist_ok=True)
+    media.write_bytes(data)
+    record = media.parent / ".manifest" / (media.name + ".importinfo")
+    record.parent.mkdir(exist_ok=True)
+    record.write_text(yaml.safe_dump({
+        "serial": serial, "friendly": "HERO12 Black", "device_name": "gopro",
+        "imported_at": "20260928", "puid": puid,
+        "device_path": "/" + rel, "original_filename": media.name,
+        "size": len(data), "capture_date": "2026-09-27 14:00:00",
+    }, sort_keys=False), encoding="utf-8")
+    return media
+
+
+def test_a_device_import_uploads(roots: dict[str, Path]) -> None:
+    staging = roots["staging"] / "gopro"
+    _device_file(staging, "DCIM/100GOPRO/GX010001.MP4", b"clip one", puid="o1")
+    _device_file(staging, "DCIM/100GOPRO/GX010002.MP4", b"clip two!", puid="o2")
+
+    [s] = up.run_upload()
+
+    assert (s.copied, s.failed, s.unaccounted) == (2, [], [])
+    assert (s.master_folder / "DCIM_100GOPRO_GX010001.MP4").read_bytes() == \
+        b"clip one"
+    assert s.staging_cleared and not staging.exists()
+
+
+def test_a_device_upload_is_what_the_next_import_skips(
+    roots: dict[str, Path]
+) -> None:
+    """The committed half of the skip check: the header names the serial and
+    every line carries the PUID."""
+    staging = roots["staging"] / "gopro"
+    _device_file(staging, "DCIM/100GOPRO/GX010001.MP4", b"clip one", puid="o1")
+    [s] = up.run_upload()
+
+    header = ledger.read_header(s.master_folder / ".import.jsonl")
+    assert header is not None
+    assert (header.source, header.serial, header.name) == (
+        "device", "C3441324567890", "gopro")
+    [entry] = _entries(s.master_folder)
+    assert entry["puid"] == "o1" and entry["outcome"] == "kept"
+    assert entry["device_path"] == "/DCIM/100GOPRO/GX010001.MP4"
+    assert ledger.committed_import_ids("C3441324567890") == {
+        "C3441324567890:o1"}
+
+
+def test_a_culled_device_file_is_recorded_and_never_fetched_again(
+    roots: dict[str, Path]
+) -> None:
+    staging = roots["staging"] / "gopro"
+    _device_file(staging, "DCIM/100GOPRO/GX010001.MP4", b"keep", puid="o1")
+    _device_file(staging, "DCIM/100GOPRO/GX010002.MP4", b"cull", puid="o2")
+    (staging / "DCIM/100GOPRO/GX010002.MP4").unlink()
+
+    [s] = up.run_upload()
+
+    assert (s.copied, s.culled) == (1, 1)
+    assert ledger.committed_import_ids("C3441324567890") == {
+        "C3441324567890:o1", "C3441324567890:o2"}
+
+
+def test_staging_is_never_cleared_while_it_holds_files_nobody_uploaded(
+    roots: dict[str, Path]
+) -> None:
+    """The deletion itself: nothing failed, because nothing was tried."""
+    staging = roots["staging"] / "gopro"
+    staging.mkdir(parents=True)
+    (staging / "GX010001.MP4").write_bytes(b"no record at all")
+
+    [s] = up.run_upload()
+
+    assert s.copied == 0
+    assert s.unaccounted == ["GX010001.MP4: no import record"]
+    assert not s.staging_cleared
+    assert (staging / "GX010001.MP4").read_bytes() == b"no record at all"
+
+
+def test_a_record_nobody_can_read_keeps_its_folder(
+    roots: dict[str, Path]
+) -> None:
+    staging = roots["staging"] / "odd"
+    media = staging / "x.mp4"
+    media.parent.mkdir(parents=True)
+    media.write_bytes(b"x")
+    record = staging / ".manifest" / "x.mp4.importinfo"
+    record.parent.mkdir()
+    record.write_text("something: else\n", encoding="utf-8")
+
+    [s] = up.run_upload()
+
+    assert not s.staging_cleared and media.is_file()
+    assert any("not understood" in u for u in s.unaccounted)
+    assert any("no import record" in u for u in s.unaccounted)
+
+
+def test_a_partial_download_does_not_hold_staging_back(
+    roots: dict[str, Path]
+) -> None:
+    """What an interrupted import leaves is not media anybody is waiting for."""
+    from pix.markers import IMPORT_TMP_SUFFIX
+
+    staging = roots["staging"] / "gopro"
+    _device_file(staging, "DCIM/100GOPRO/GX010001.MP4", b"clip", puid="o1")
+    (staging / "DCIM/100GOPRO" / ("GX010003.MP4" + IMPORT_TMP_SUFFIX)
+     ).write_bytes(b"part")
+
+    [s] = up.run_upload()
+
+    assert s.unaccounted == [] and s.staging_cleared
+
+
+def test_two_devices_in_one_folder_are_refused(roots: dict[str, Path]) -> None:
+    """One header describes one source; mixing them would lose track of a
+    phone's files for its next import."""
+    staging = roots["staging"] / "mixed"
+    _device_file(staging, "A/one.jpg", b"1", puid="o1", serial="AAA")
+    _device_file(staging, "B/two.jpg", b"2", puid="o2", serial="BBB")
+
+    [s] = up.run_upload()
+
+    assert s.failed and not s.staging_cleared
+    assert (staging / "A/one.jpg").is_file()
