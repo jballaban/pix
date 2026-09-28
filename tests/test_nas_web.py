@@ -520,6 +520,52 @@ def test_stacking_folds_a_file_behind_another(
     assert "within=init_2026%2Fa.jpg" in html, "no way to open the stack"
 
 
+def test_opening_a_stack_keeps_the_view_you_opened_it_from(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """The badge said `/browse?within=…` and nothing else, so opening a stack
+    threw away every filter and the grouping with them: four filters deep in a
+    review pass, click a badge, and the way back out is the undivided library.
+
+    It survived for as long as the way out was the browser's own back button,
+    which restores a page rather than rebuilding one. The moment anything
+    navigated forward instead — which is what agreeing with a suggestion now
+    does — the view the page thought it was in was empty, because this link is
+    where it came from.
+    """
+    _two_files(writable, app_env)
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/a.jpg",
+        "files": [{"folder": "init_2026", "name": "b.jpg"}]})
+
+    html = client.get("/browse?event=Italy%20-%20Sicily&group=event").text
+    at = html.index('class="stack"')
+    href = html[html.index('href="', at) + 6:html.index('"', html.index('href="', at) + 6)]
+
+    assert "within=init_2026%2Fa.jpg" in href, href
+    assert "event=Italy%20-%20Sicily" in href, "the filter went"
+    assert "group=event" in href, "the grouping went"
+    # Escaped where it becomes markup, and only there: built pre-escaped it
+    # produced `&amp;amp;` and a link carrying its second filter as part of
+    # the first one's value.
+    assert "&amp;" in html[at:at + 200] and "&amp;amp;" not in html[at:at + 200]
+
+
+def test_the_page_draws_the_same_badge_the_server_does(
+    client: TestClient
+) -> None:
+    """A stack agreed with from the grid gets its badge rewritten in place
+    rather than fetched, and the two have to say the same thing — a badge
+    written here that dropped the filters would put the curator back at the
+    undivided library from one half of the app and not the other."""
+    js = web._BROWSE_JS
+    at = js.index("function markStack(")
+    body = js[at:js.index("\n}", at)]
+
+    assert "badge.href=url({within:keyOf(c)});" in body, body
+    assert "'/browse?within='" not in js, "a second way of writing the address"
+
+
 def test_a_stack_cannot_hold_two_kinds_of_thing(
     client: TestClient, writable: Path, app_env: dict[str, Path]
 ) -> None:
@@ -798,11 +844,19 @@ def test_agreeing_with_a_guess_leaves_the_stack_it_was_asked_in(
     they agreed with."""
     js = web._BROWSE_JS
 
-    assert "function leaveStack(){ location.href=url({within:null}); }" in js
+    assert "location.href=url({within:null})+'#'+encodeURIComponent(" in js
+    # Standing on the photograph, not at the top of the page. Every other
+    # stack gesture keeps your place by never navigating at all; this one has
+    # to fetch, and a fetched page starts three thousand pixels above a review
+    # pass somebody was part way through.
+    land = js[js.index("let want='';"):]
+    assert "location.hash" in land[:400], land[:400]
+    assert "c.scrollIntoView({block:'center'})" in land[:800], land[:800]
     at = js.index("async function makeTop(")
     body = js[at:js.index("\n}", at)]
     assert "const wasGuess=inGuess(top);" in body, body
-    assert "if(wasGuess&&VIEW.within){ leaveStack(); return; }" in body, body
+    assert ("if(wasGuess&&VIEW.within){ leaveStack(keyOf(top)); return; }"
+            in body), body
     # Rearranging a stack somebody already made is not the same thing: it is
     # one edit among several you may want to go on making, so it stays put
     # under the stack's new name.

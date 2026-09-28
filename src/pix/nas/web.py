@@ -2912,7 +2912,7 @@ def _sections(rows: list[sqlite3.Row], groups: list[str],
     said = "subevent" in groups
     if not groups:
         return _section(_heading([], 0, len(rows)),
-                        "".join(_cell(r, view) for r in rows))
+                        "".join(_cell(r, view, groups=groups) for r in rows))
 
     out: list[str] = []
     for keys, run in groupby(rows, key=lambda r: tuple(
@@ -2922,7 +2922,8 @@ def _sections(rows: list[sqlite3.Row], groups: list[str],
                   for i, (k, g) in enumerate(zip(keys, groups))]
         out.append(_section(
             _heading(labels, len(groups), len(batch)),
-            "".join(_cell(r, view, said=said) for r in batch)))
+            "".join(_cell(r, view, said=said, groups=groups)
+                    for r in batch)))
     return "".join(out)
 
 
@@ -3104,8 +3105,8 @@ def _part_html(row: sqlite3.Row, view: ix.Filters, said: bool) -> str:
 
 
 def _cell(row: sqlite3.Row, view: ix.Filters | None = None, *,
-          said: bool = False) -> str:
-    mark = _stack_badge(row, view or ix.Filters())
+          said: bool = False, groups: Sequence[str] = ()) -> str:
+    mark = _stack_badge(row, view or ix.Filters(), groups)
     tags = _split(row["tags"])
     shared = _split(row["audience"])
     # Newline-joined, matching what the client splits on. A stray control byte
@@ -3151,7 +3152,8 @@ def _cell(row: sqlite3.Row, view: ix.Filters | None = None, *,
     )
 
 
-def _stack_badge(row: sqlite3.Row, view: ix.Filters) -> str:
+def _stack_badge(row: sqlite3.Row, view: ix.Filters,
+                 groups: Sequence[str] = ()) -> str:
     """What a thumbnail says about the stack it is part of.
 
     Two different marks for two different questions. Where the others are out
@@ -3172,6 +3174,10 @@ def _stack_badge(row: sqlite3.Row, view: ix.Filters) -> str:
     here would be the app describing a stack it has not been allowed to make.
     """
     key = f'{row["folder"]}/{row["name"]}'
+    # How the library is being read, which the view does not carry: it is not
+    # a filter, it is the shape of the page, and a stack opened out of a grid
+    # cut by event and day should come back to one.
+    grouped = ",".join(groups) or "none"
     behind = row["behind"] or 0
     guessed = _guessed(row, view)
     if view.within or view.unfold:
@@ -3188,8 +3194,16 @@ def _stack_badge(row: sqlite3.Row, view: ix.Filters) -> str:
     # these together*; a guessed one says *these look alike, and nobody has
     # said yet* — and a curator deciding what to trust needs to see which is
     # which without opening it.
+    # **The whole address, not just the stack.** This was `/browse?within=…`
+    # and nothing else, so opening a stack threw away every filter and the
+    # grouping with them: you were four filters deep in a review pass, clicked
+    # a badge, and came back out to the undivided library. It was survivable
+    # only because the way out was the browser's back button, which restored
+    # the page rather than rebuilding it — and the moment anything navigated
+    # forward instead, the view the page thought it was in was empty, because
+    # this link is where it came from.
     return (f'<a class="stack{" guessed" if guessed else ""}" '
-            f'href="/browse?within={_q(key)}" '
+            f'href="{_h(_browse_url(view, {"within": key, "group": grouped}))}" '
             f'title="{n + 1} photographs '
             f'{"that look alike — nobody has said yet" if guessed else ""}'
             f'{"" if guessed else "stacked here"}">'
@@ -5568,7 +5582,24 @@ function endChoosing(restore){
 // in each of the three this runs in. Going back and then reloading is exactly
 // what somebody had to do by hand, twice, for every suggestion they agreed
 // with.
-function leaveStack(){ location.href=url({within:null}); }
+// **Standing on the photograph, not at the top of the page.** Every other
+// stack gesture keeps your place because none of them navigates — the grid
+// loses a few cells and redraws a badge, and you are still looking at what you
+// were looking at. This one has to fetch, and a fetched page starts at the
+// top, three thousand pixels above a review pass somebody was part way
+// through.
+//
+// So it says which photograph to land on, in the fragment, and the page
+// scrolls to it. The fragment rather than a filter because it is not one:
+// *where you are in a page* is the one thing a `#` has always meant, and a
+// view is still the same view with or without it. A pixel offset would do
+// here — a guess already folds to one cell, so agreeing with it changes no
+// layout — but the photograph is the thing that was actually meant, and it
+// survives a different thumbnail size or a window that changed width on the
+// way.
+function leaveStack(key){
+  location.href=url({within:null})+'#'+encodeURIComponent(key||'');
+}
 
 async function chooseTop(top){
   // Whether this was the app's suggestion rather than somebody's stack, asked
@@ -5596,7 +5627,7 @@ async function chooseTop(top){
   // — there is nothing left in here to look at, and what has changed is out
   // there. Rearranging a stack somebody already made is not that: it is one
   // edit among several you may want to go on making, so it stays put.
-  if(out&&out.done&&wasGuess&&VIEW.within){ leaveStack(); return; }
+  if(out&&out.done&&wasGuess&&VIEW.within){ leaveStack(keyOf(top)); return; }
   // Same rename, if this was done from inside the stack being merged into.
   if(out&&out.done&&VIEW.within&&VIEW.within!==keyOf(top)){
     location.href=url({within:keyOf(top)});
@@ -5626,7 +5657,11 @@ function markStack(c,behind){
     c.appendChild(badge);
   }
   badge.classList.remove('guessed');
-  badge.href='/browse?within='+encodeURIComponent(keyOf(c));
+  // The whole address, the same as the one the server draws: a badge that
+  // said only `?within=` threw away every filter and the grouping with them,
+  // so opening a stack four filters deep in a review pass came back out to
+  // the undivided library.
+  badge.href=url({within:keyOf(c)});
   badge.title=(behind+1)+' photographs stacked here';
   badge.textContent=String(behind+1);
 }
@@ -5688,7 +5723,7 @@ async function makeTop(){
   // Only out of an opened stack, which is the only place this can be reached
   // from: naming a top writes to the rest of the group, so it is offered only
   // where the rest of the group is on the page.
-  if(wasGuess&&VIEW.within){ leaveStack(); return; }
+  if(wasGuess&&VIEW.within){ leaveStack(keyOf(top)); return; }
   // A stack is named by the file that speaks for it, so promoting one renames
   // it. An open stack's address is that name — stay on it and the page asks
   // for a stack whose files have all just gone somewhere else, which is how
@@ -6366,6 +6401,27 @@ document.querySelectorAll('.group').forEach(h=>{
 });
 
 drawChips(); drawSel();
+
+// Landing on one photograph, because something sent you here standing on it.
+// Agreeing with a suggestion is the one gesture that leaves the page it was
+// made on, and it names the file it was made about so that coming back is
+// coming back rather than starting again.
+//
+// Silent about anything it cannot find. A fragment outlives the view it was
+// written for — change a filter, reload a bookmark, and the photograph it
+// names is somewhere else or nowhere — and a page that complained about that
+// would be complaining about an address that is merely old.
+(function(){
+  let want='';
+  try{ want=decodeURIComponent(String(location.hash||'').slice(1)); }
+  catch(e){ return; }
+  if(!want) return;
+  const c=cells.find(x=>keyOf(x)===want);
+  // `center`, because `nearest` on a cell that is already technically in view
+  // does nothing — and the browser's idea of in view includes the strip under
+  // the bar, where the sticky heading is standing.
+  if(c&&c.scrollIntoView) c.scrollIntoView({block:'center'});
+})();
 """
 
 

@@ -1506,6 +1506,50 @@ function arrow(key, opts) {
           grid.dataset.size === 'large', grid.dataset.size);
   }
 
+  // --- landing on one photograph ----------------------------------------------
+  // Agreeing with a suggestion is the one gesture that leaves the page it was
+  // made on, so it names the file it was made about and the grid it lands in
+  // scrolls there. Without it a review pass three thousand pixels down came
+  // back at the top of the page, once per suggestion — which every other
+  // stack gesture avoids by never navigating at all.
+  {
+    // Back to the page's own cells: a block above left the stub answering
+    // `.cell` with two hundred and fifty of its own.
+    document.querySelectorAll = sel => (sel === '.cell' ? cells
+                                      : sel === '.group' ? [heading]
+                                      : sel === '.stage' ? [stage]
+                                      : realQsa(sel));
+    let landed = null;
+    cells.forEach(c => { c.scrollIntoView = () => { landed = c; }; });
+    location.hash = '#' + encodeURIComponent('f/b.jpg');
+    new Function(
+      'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
+      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
+      'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'setTimeout', js,
+    )(document, window, fetch, localStorage, location, confirm,
+      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
+      GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, fn => fn());
+    check('a page told which photograph to land on scrolls to it',
+          landed === cells[1], landed && landed.dataset.name);
+
+    // A fragment outlives the view it was written for: change a filter,
+    // reload a bookmark, and the photograph it names is somewhere else or
+    // nowhere. That is an address that is merely old, not an error.
+    landed = null;
+    location.hash = '#' + encodeURIComponent('f/gone.jpg');
+    new Function(
+      'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
+      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
+      'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'setTimeout', js,
+    )(document, window, fetch, localStorage, location, confirm,
+      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
+      GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, fn => fn());
+    check('and one naming a photograph that is not here says nothing',
+          landed === null, landed && landed.dataset.name);
+    location.hash = '';
+    cells.forEach(c => { delete c.scrollIntoView; });
+  }
+
   // --- paging while a stack is open -------------------------------------------
   // The rest of the grid is hidden while a top is being chosen, not removed —
   // it comes back when you are done. So it is still in `cells`, and paging the

@@ -287,9 +287,16 @@ const viewerOpen = () => document.byId.viewer._classes.has('on');
     // Out of the stack, and asked for afresh rather than gone back to: the
     // page behind is the one that has just stopped being true.
     check('and leaves the stack for the grid it was folded into',
-          location.href === '/browse?group=day', location.href);
+          location.href.split('#')[0] === '/browse?group=day', location.href);
     check('without going back to a copy of it', wentBack === 1,
           String(wentBack));
+    // Standing on the photograph it was made about. A fetched page starts at
+    // the top, and the top is three thousand pixels above a review pass
+    // somebody was part way through — which every other stack gesture keeps,
+    // by never navigating at all.
+    check('and says which photograph to land on',
+          location.href.split('#')[1] === encodeURIComponent('f/lead.jpg'),
+          location.href);
   }
 
   if (failures.length) {
