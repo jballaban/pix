@@ -2914,6 +2914,9 @@ _ACT_WRITES: dict[str, tuple[str, ...]] = {
     # nobody can read as complete.
     "download": (),
     "purge": (),
+    # Opens a page rather than writing anything here; the clips it makes are
+    # written through their own routes, which are an administrator's.
+    "splice": (),
 }
 
 #: What a household member gets.
@@ -2926,7 +2929,7 @@ _ACT_WRITES: dict[str, tuple[str, ...]] = {
 #: file. **Restore** is absent because `/history` is, and the deleted are not
 #: in anybody else's view to find: deleting is theirs, undeleting is not.
 HOUSEHOLD: frozenset[str] = frozenset(_ACT_WRITES) - {"access", "purge",
-                                                      "restore"}
+                                                      "restore", "splice"}
 
 #: The decision fields a household member may write, derived rather than
 #: listed — a second list is a second thing to forget.
@@ -3059,6 +3062,7 @@ def _actions(user: Principal, *, folders: bool = False) -> str:
     {_act("top", "Make top", user=user)}
     {_act("unstack", "Unstack", user=user)}
     {_act("nostack", "Not a stack", user=user)}
+    {_act("splice", "Splice", user=user)}
     {_act("download", "Download", user=user)}
     <span class="sep"></span>
     {_act("delete", "Delete", "danger", user=user)}
@@ -3352,6 +3356,7 @@ def _cell(row: sqlite3.Row, view: ix.Filters | None = None, *,
         f'{_h(row["suggested_under"] or "") if (view or ix.Filters()).folds_guesses else ""}" '
         f'data-ar="{_squareness(row)}" '
         f'data-clip="{_clip_attr(row)}" '
+        f'data-splice="{_h(_splices(row))}" '
         f'data-copy="{"1" if _has_render(row) else ""}" '
         f'data-behind="{row["behind"] or 0}" '
         f'data-proposed="{_guessed(row, view or ix.Filters())}">'
@@ -3374,6 +3379,16 @@ def _clip_attr(row: sqlite3.Row) -> str:
     if "clip_of" not in row.keys() or row["clip_of"] is None:
         return ""
     return f'{float(row["clip_in"] or 0):g},{float(row["clip_out"] or 0):g}'
+
+
+def _splices(row: sqlite3.Row) -> str:
+    """The video *Splice* on this cell opens — its own name, or for a clip
+    its source's — or nothing where there is nothing to cut."""
+    of = row["clip_of"] if "clip_of" in row.keys() else None
+    if of is not None:
+        return str(of)
+    name = str(row["name"])
+    return name if clips.can_splice(name, str(row["kind"])) is None else ""
 
 
 def _clip_badge(row: sqlite3.Row) -> str:
@@ -3661,6 +3676,11 @@ _MARKS: dict[str, str] = {
     "nostack": '<rect x="3.2" y="9" width="11.6" height="11.6" rx="2"/>'
                '<path d="M7 6.2h9a2 2 0 0 1 2 2v9"/>'
                '<path d="M3.6 20.6 20.6 3.6"/>',
+    # Cutting a video into clips: scissors, which is what it is called
+    # everywhere else too.
+    "splice": '<circle cx="6.3" cy="6.8" r="2.7"/>'
+              '<circle cx="6.3" cy="17.2" r="2.7"/>'
+              '<path d="M8.4 8.5 20 17.6"/><path d="M8.4 15.5 20 6.4"/>',
     # Back out of the bin. A circle turned the other way is *undo* everywhere.
     "restore": '<path d="M3.5 12a8.5 8.5 0 1 0 2.5-6"/>'
                '<path d="M3.4 4.3v5.4h5.4"/>',
@@ -3686,7 +3706,7 @@ _ACT_MARKS: dict[str, str] = {
     "access": "audience",
     "stack": "stacks", "top": "top", "unstack": "unstack",
     "nostack": "nostack", "download": "get", "delete": "deleted",
-    "restore": "restore", "purge": "purge",
+    "restore": "restore", "purge": "purge", "splice": "splice",
 }
 
 
@@ -4730,6 +4750,8 @@ function drawSel(){
   // Only where there is a guess to refuse. On a stack somebody made it would
   // be offering to un-decide a decision, which is what Unstack is for.
   show('nostack', live.some(inGuess));
+  // One video at a time: the page it opens is one video's timeline.
+  show('splice', live.length === 1 && !!live[0].dataset.splice);
   // Anything selected can be downloaded, deleted or not: what it is on the
   // disk does not depend on what has been decided about it.
   show('download', live.length + dead > 0);
@@ -6530,10 +6552,22 @@ const ACT_COLUMN={tags:'tag', people:'person', access:'audience',
     if(act==='download'){downloadMenu(b);return;}
     if(act==='restore'){closeMenu();applyToSelection('deleted',false);return;}
     if(act==='purge'){closeMenu();purgeSelection();return;}
+    if(act==='splice'){closeMenu();spliceSelection();return;}
     openMenu(b, act==='date'
       ? {mode:'date'}
       : {column:ACT_COLUMN[act]||act, mode:'set', as:act});};
 });
+
+// A page of its own rather than a menu: a timeline is not a thing a menu can
+// hold. A clip opens its source's, standing on the clip.
+function spliceSelection(){
+  const c=targetsOn('live')[0];
+  if(!c||!c.dataset.splice) return;
+  const own=c.dataset.splice===c.dataset.name;
+  location.href='/splice/'+encodeURIComponent(c.dataset.folder)+'/'
+    +encodeURIComponent(c.dataset.splice)
+    +(own?'':'#'+encodeURIComponent(c.dataset.name));
+}
 
 // The one action with no value to pick, so it asks instead of opening a menu.
 // A confirm rather than a ceremony: this is the soft delete, it writes
@@ -7722,10 +7756,7 @@ def api_clips(folder: str, source: str,
         rows = ix.clips_of(conn, folder, source)
     finally:
         conn.close()
-    return JSONResponse([{
-        "name": r["name"], "start": r["clip_in"], "end": r["clip_out"],
-        "deleted": bool(r["deleted"]), "event": r["event"],
-    } for r in rows])
+    return JSONResponse([_clip_json(r) for r in rows])
 
 
 @app.post("/api/clips/make")
@@ -7880,6 +7911,522 @@ def api_clips_merge(user: Annotated[Principal, Depends(require_admin)],
         conn.close()
     history.record(user.name, f"joined {a['name']} and {b['name']}", undo)
     return JSONResponse({"name": a["name"]})
+
+
+# --- the splice page (spec/clips.md §9) ---------------------------------------
+
+@app.get("/splice/{folder}/{name}", response_class=HTMLResponse)
+def splice(folder: str, name: str,
+           user: Annotated[Principal, Depends(require_admin)]) -> Response:
+    """Cut a video into clips and stills, on a timeline under it.
+
+    **A clip is always cut on its source's timeline**, so asking to splice a
+    clip opens its source, standing on that clip. Nothing else can be done
+    here — tagging a clip happens in the grid like any other file, and each
+    bar links to it.
+
+    The video plays from its render where it has one, and the cuts are made
+    against the master; the two share their timestamps, so a range read off
+    one is the same range in the other.
+    """
+    source = clips.source_of(name)
+    if source is not None and not (MASTER_DIR / folder / name).is_file():
+        return RedirectResponse(
+            f"/splice/{_q(folder)}/{_q(source)}#{_q(name)}",
+            status_code=status.HTTP_303_SEE_OTHER)
+    media = _master_file(folder, name)
+    conn = db()
+    try:
+        row = ix.one(conn, folder, name)
+        cut = ix.clips_of(conn, folder, name) if row is not None else []
+        stacked = bool(row is not None and (
+            row["stacked_under"] or ix.members(conn, f"{folder}/{name}")))
+    finally:
+        conn.close()
+    title = f"Splice — {name}"
+    if row is None:
+        return _page(title, '<p class="empty">Not indexed yet — run '
+                     '<code>pix2 index</code>.</p>', user=user)
+    why = clips.can_splice(name, str(row["kind"]))
+    if why is None and stacked:
+        why = ("this video is in a stack — take it out first. Video "
+               "stacking is still to be designed, and cutting a video out "
+               "from under one is part of that question.")
+    record = ix.record_of(META_DIR, folder, name) or {}
+    raw: object = record.get("exif")
+    exif = cast("dict[str, Any]", raw) if isinstance(raw, dict) else {}
+    codec = str(exif.get("QuickTime:CompressorID") or "").lower()
+    playable = (paths.render_path(media, RENDER_DIR).is_file()
+                or codec in paths.PLAYABLE_CODECS)
+    if why is None and not playable:
+        why = ("waiting for processing — this video will not play in a "
+               "browser until pix2 process has made its playable copy.")
+    if why is not None:
+        return _page(title, f'<p class="empty">{_h(why)}</p>', user=user)
+    try:
+        fps = float(exif.get("QuickTime:VideoFrameRate") or 0) or 30.0
+    except (TypeError, ValueError):
+        fps = 30.0
+    state = {
+        "folder": folder, "source": name,
+        "duration": row["duration"], "fps": fps,
+        "hidden": decisions.HIDDEN in _split(row["audience"]),
+        "hiddenName": decisions.HIDDEN,
+        "clips": [_clip_json(c) for c in cut if not c["deleted"]],
+    }
+    src = f"/media/{_q(folder)}/{_q(name)}"
+    return _page(title, _SPLICE_HTML.replace("{src}", src),
+                 user=user,
+                 script=(f"<style>{_SPLICE_CSS}</style>"
+                         f"<script>const SPLICE={_js(state)};</script>"
+                         f"<script>{_SPLICE_JS}</script>"))
+
+
+def _clip_json(row: sqlite3.Row) -> dict[str, Any]:
+    """One clip as the splice page and the clip listing read it."""
+    return {"name": row["name"], "start": row["clip_in"],
+            "end": row["clip_out"], "deleted": bool(row["deleted"]),
+            "event": row["event"], "date": row["effective_date"]}
+
+
+_SPLICE_HTML: str = """<div class="splice">
+<div class="sstage"><video id="sv" playsinline preload="auto" src="{src}"></video></div>
+<div class="tlwrap" id="tlwrap"><div class="track" id="track">
+<div class="bars" id="bars"></div><div class="ph" id="ph"></div></div></div>
+<div class="sline"><span id="tcur">0:00.00</span><span class="dim">&nbsp;/&nbsp;</span>
+<span class="dim" id="tdur"></span><span class="spacer"></span>
+<button id="zout" aria-label="Zoom out" title="Zoom out">&minus;</button>
+<button id="zin" aria-label="Zoom in" title="Zoom in">+</button></div>
+<div class="sctl">
+<button id="bplay">Play</button>
+<button id="bprev1s" title="Back a second (shift+,)">&minus;1s</button>
+<button id="bprevf" title="Back a frame (,)">&minus;1f</button>
+<button id="bnextf" title="On a frame (.)">+1f</button>
+<button id="bnext1s" title="On a second (shift+.)">+1s</button>
+<span class="gap"></span>
+<button id="bsplit" class="primary" title="Split at the playhead (S)">Split</button>
+<button id="bstill" title="Take this frame as a photograph (P)">Still</button>
+<button id="bkeep" title="Make the uncut stretch here a clip">Make clip</button>
+</div>
+<div class="sctl selbar" id="selbar" hidden>
+<b id="selname"></b><span class="gap"></span>
+<button id="bstart" title="Start the clip at the playhead (I)">Start here</button>
+<button id="bend" title="End the clip at the playhead (O)">End here</button>
+<button id="bjoin" title="Take away the split after this clip">Join next</button>
+<a id="bopen" class="btn" title="This clip in the grid">Open</a>
+<button id="bbin" class="danger" title="Bin this clip (Delete)">Bin</button>
+</div>
+<div class="sctl"><button id="bhide" title="(H)">Hide original</button>
+<span class="dim" id="hidenote"></span></div>
+<p class="dim shelp">Split cuts the clip under the playhead in two — or, where
+nothing is cut yet, the whole stretch. Drag a selected clip's edges to trim
+it. Clips may touch but never overlap. Space plays; the selected clip
+loops.</p>
+</div>"""
+
+
+_SPLICE_CSS: str = """
+.splice { max-width:1100px; margin:0 auto; padding:8px 12px 24px; }
+.sstage { background:#000; border-radius:6px; overflow:hidden;
+          display:flex; justify-content:center; }
+.sstage video { width:100%; max-height:60vh; display:block; background:#000; }
+.tlwrap { margin-top:10px; overflow-x:auto; overflow-y:hidden;
+          border:1px solid var(--line); border-radius:6px;
+          background:var(--panel); touch-action:pan-x; }
+.track { position:relative; height:56px; min-width:100%; cursor:pointer; }
+.bars { position:absolute; inset:0; }
+/* A clip is a bar; the gaps between them are footage no clip holds. */
+.bar { position:absolute; top:10px; bottom:10px; min-width:3px;
+       background:var(--accent-bed); border:1.5px solid var(--accent);
+       border-radius:4px; box-sizing:border-box; }
+.bar.on { background:var(--tint); border-color:var(--fg); }
+/* Handles wide enough to take a finger (44px) though drawn narrow. */
+.bar .h { position:absolute; top:-10px; bottom:-10px; width:44px;
+          touch-action:none; cursor:ew-resize; z-index:3; }
+.bar .h.l { left:-22px; } .bar .h.r { right:-22px; }
+.bar .h::after { content:""; position:absolute; top:12px; bottom:12px;
+                 left:19px; width:6px; border-radius:3px; background:var(--fg); }
+/* A still is a point, so a pin. */
+.pin { position:absolute; top:4px; bottom:4px; width:3px; margin-left:-1.5px;
+       background:var(--top); border-radius:2px; }
+.pin::before { content:""; position:absolute; top:-2px; left:-4px;
+               width:11px; height:11px; border-radius:50%; background:var(--top); }
+.pin.on { background:var(--fg); } .pin.on::before { background:var(--fg); }
+.ph { position:absolute; top:0; bottom:0; width:2px; margin-left:-1px;
+      background:var(--gone); pointer-events:none; z-index:4; }
+.sline { display:flex; align-items:center; gap:6px; margin:6px 2px;
+         font-variant-numeric:tabular-nums; }
+.sline .spacer { flex:1; }
+.sctl { display:flex; flex-wrap:wrap; align-items:center; gap:6px;
+        margin:8px 0; }
+.sctl .gap { width:8px; }
+.sctl button, .sctl .btn, .sline button { min-height:40px; min-width:44px; }
+.sctl .btn { display:inline-flex; align-items:center; padding:0 12px;
+             border:1px solid var(--line); border-radius:6px;
+             color:var(--fg); text-decoration:none; }
+.sctl button.primary { background:var(--accent); color:#0d0f12;
+                       border-color:var(--accent); font-weight:600; }
+.sctl button.danger { color:var(--gone); }
+.selbar { padding:6px 8px; border:1px solid var(--line); border-radius:6px; }
+.selbar[hidden] { display:none; }
+.shelp { font-size:13px; line-height:1.45; }
+"""
+
+
+_SPLICE_JS: str = r"""
+(function(){
+const S=SPLICE;
+const $=id=>document.getElementById(id);
+const v=$('sv'), wrap=$('tlwrap'), track=$('track'), bars=$('bars'),
+      ph=$('ph'), note=$('note');
+let clips=S.clips.slice(), sel=null, zoom=1, dur=S.duration||0, busy=false;
+let hidden=!!S.hidden, dragging=false, shown=null;
+const frame=1/(S.fps||30);
+const ms=t=>Math.round(t*1000)/1000;
+
+function say(text,bad){
+  if(!note) return;
+  note.textContent=text||''; note.hidden=!text;
+  note.classList.toggle('loud',!!bad);
+  clearTimeout(say.t);
+  if(text) say.t=setTimeout(()=>{note.hidden=true;},bad?7000:2500);
+}
+window.addEventListener('error',e=>say('page error: '+e.message,true));
+function fmt(t){
+  t=Math.max(0,t||0);
+  const m=Math.floor(t/60), s=t-m*60;
+  return m+':'+(s<10?'0':'')+s.toFixed(2);
+}
+// The frame actually on screen. `currentTime` is where the browser means to
+// be, which is not reliably a frame boundary; a still has to be the frame you
+// stopped on.
+if(v.requestVideoFrameCallback){
+  const tick=(n,meta)=>{shown=meta.mediaTime; v.requestVideoFrameCallback(tick);};
+  v.requestVideoFrameCallback(tick);
+}
+function here(){
+  return ms(v.paused&&!v.seeking&&shown!=null?shown:(v.currentTime||0));
+}
+const ranges=()=>clips.filter(c=>c.end>c.start).sort((a,b)=>a.start-b.start);
+const stills=()=>clips.filter(c=>c.end===c.start);
+const selected=()=>clips.find(c=>c.name===sel)||null;
+const inside=t=>ranges().find(c=>c.start<t&&t<c.end)||null;
+// The uncut stretch around `t`: from the end of the clip before it to the
+// start of the clip after it, or the video's own ends.
+function gapAt(t){
+  let lo=0, hi=dur;
+  for(const c of ranges()){
+    if(c.end<=t) lo=Math.max(lo,c.end);
+    else if(c.start>=t) hi=Math.min(hi,c.start);
+    else return null;
+  }
+  return [lo,hi];
+}
+const pct=t=>(dur>0?t/dur*100:0)+'%';
+
+async function send(url,body){
+  if(busy){say('still saving the last change');return null;}
+  busy=true;
+  try{
+    const r=await fetch(url,{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const text=await r.text();
+    let json=null; try{json=JSON.parse(text);}catch(e){}
+    if(!r.ok){say((json&&json.detail)||text||('failed: '+r.status),true);
+              return null;}
+    return json||{};
+  }catch(e){say('could not reach the server',true);return null;}
+  finally{busy=false;}
+}
+async function reload(){
+  try{
+    const r=await fetch('/api/clips/'+encodeURIComponent(S.folder)+'/'
+                        +encodeURIComponent(S.source));
+    if(r.ok) clips=(await r.json()).filter(c=>!c.deleted);
+  }catch(e){}
+  if(sel&&!selected()) sel=null;
+  draw();
+}
+
+function draw(){
+  track.style.width=(zoom*100)+'%';
+  bars.innerHTML='';
+  for(const c of ranges()){
+    const b=document.createElement('div');
+    b.className='bar'+(c.name===sel?' on':'');
+    b.style.left=pct(c.start); b.style.width=pct(c.end-c.start);
+    b.title=fmt(c.start)+' – '+fmt(c.end);
+    b.onclick=e=>{e.stopPropagation(); if(!dragging) pick(c.name);};
+    if(c.name===sel) for(const side of ['l','r']){
+      const h=document.createElement('div');
+      h.className='h '+side;
+      h.onpointerdown=e=>drag(e,c,side);
+      h.onclick=e=>e.stopPropagation();
+      b.appendChild(h);
+    }
+    bars.appendChild(b);
+  }
+  for(const c of stills()){
+    const p=document.createElement('div');
+    p.className='pin'+(c.name===sel?' on':'');
+    p.style.left=pct(c.start);
+    p.title='Still at '+fmt(c.start);
+    p.onclick=e=>{e.stopPropagation(); pick(c.name);};
+    bars.appendChild(p);
+  }
+  $('tdur').textContent=fmt(dur);
+  playhead(false); drawSel();
+}
+function playhead(follow){
+  ph.style.left=pct(v.currentTime||0);
+  $('tcur').textContent=fmt(v.currentTime||0);
+  if(!follow) return;
+  // Kept in view, because a zoomed timeline scrolls and a playhead that
+  // walks off the edge leaves you cutting where you cannot see.
+  const x=ph.offsetLeft, w=wrap.clientWidth;
+  if(x<wrap.scrollLeft||x>wrap.scrollLeft+w-8)
+    wrap.scrollLeft=Math.max(0,x-w/2);
+}
+function pick(name){
+  sel=name;
+  const c=selected();
+  if(c){v.pause(); v.currentTime=c.start;}
+  draw();
+}
+function drawSel(){
+  const c=selected();
+  $('selbar').hidden=!c;
+  if(!c) return;
+  const still=c.end===c.start;
+  $('selname').textContent=still?'Still at '+fmt(c.start)
+    :'Clip '+fmt(c.start)+' – '+fmt(c.end);
+  $('bstart').hidden=still; $('bend').hidden=still;
+  $('bjoin').hidden=still||!ranges().some(o=>Math.abs(o.start-c.end)<0.002);
+  const day=(c.date||'').slice(0,10);
+  $('bopen').href='/browse'+(day?'?date='+encodeURIComponent(day):'')
+    +'#'+encodeURIComponent(S.folder+'/'+c.name);
+}
+
+v.addEventListener('loadedmetadata',()=>{
+  if(isFinite(v.duration)&&v.duration>0) dur=v.duration;
+  draw(); fromHash();
+});
+v.addEventListener('timeupdate',()=>{
+  // The selected clip loops, so it can be watched through as often as it
+  // takes to be sure of its ends.
+  const c=selected();
+  if(c&&c.end>c.start&&!v.paused&&v.currentTime>=c.end-0.03)
+    v.currentTime=c.start;
+  playhead(!v.paused);
+});
+v.addEventListener('play',()=>{
+  $('bplay').textContent='Pause';
+  const c=selected();
+  if(c&&c.end>c.start&&(v.currentTime<c.start||v.currentTime>=c.end-0.03))
+    v.currentTime=c.start;
+});
+v.addEventListener('pause',()=>{$('bplay').textContent='Play';});
+v.addEventListener('seeked',()=>playhead(true));
+(function loop(){ if(!v.paused) playhead(true); requestAnimationFrame(loop); })();
+
+function timeAt(x){
+  const r=track.getBoundingClientRect();
+  return Math.min(dur,Math.max(0,(x-r.left)/(r.width||1)*dur));
+}
+track.addEventListener('click',e=>{
+  if(dragging) return;
+  v.pause(); v.currentTime=timeAt(e.clientX);
+  const c=inside(v.currentTime); sel=c?c.name:null; draw();
+});
+
+// Dragging an edge: clamped to the neighbours, because clips may touch but
+// never overlap, and to a frame short of the other edge. The video follows
+// the edge, so you see the frame you are cutting on; the write happens once,
+// when you let go.
+function drag(e,c,side){
+  e.preventDefault(); e.stopPropagation();
+  dragging=true; v.pause();
+  const h=e.currentTarget, bar=h.parentNode;
+  if(h.setPointerCapture) h.setPointerCapture(e.pointerId);
+  const others=ranges().filter(o=>o.name!==c.name);
+  const lo=side==='l'
+    ? Math.max(0,...others.filter(o=>o.end<=c.start+0.0005).map(o=>o.end))
+    : c.start+frame;
+  const hi=side==='r'
+    ? Math.min(dur,...others.filter(o=>o.start>=c.end-0.0005).map(o=>o.start))
+    : c.end-frame;
+  let t=side==='l'?c.start:c.end;
+  const move=ev=>{
+    t=Math.min(hi,Math.max(lo,timeAt(ev.clientX)));
+    const s=side==='l'?t:c.start, en=side==='r'?t:c.end;
+    bar.style.left=pct(s); bar.style.width=pct(en-s);
+    v.currentTime=t;
+  };
+  const up=()=>{
+    h.removeEventListener('pointermove',move);
+    h.removeEventListener('pointerup',up);
+    h.removeEventListener('pointercancel',up);
+    setTimeout(()=>{dragging=false;},0);
+    const s=ms(side==='l'?t:c.start), en=ms(side==='r'?t:c.end);
+    if(s===c.start&&en===c.end){draw();return;}
+    setRange(c,s,en);
+  };
+  h.addEventListener('pointermove',move);
+  h.addEventListener('pointerup',up);
+  h.addEventListener('pointercancel',up);
+}
+
+async function setRange(c,s,en){
+  if(await send('/api/clips/range',
+                {folder:S.folder,name:c.name,start:s,end:en})) say('moved');
+  await reload();
+}
+// One gesture for both cases: inside a clip it cuts that clip in two; in an
+// uncut stretch it makes that stretch two clips — which on a fresh video is
+// the whole of it, so three splits are four clips.
+async function split(){
+  const t=here(), c=inside(t);
+  if(c){
+    if(t-c.start<frame||c.end-t<frame){
+      say('that is the edge of the clip already',true);return;}
+    const out=await send('/api/clips/split',{folder:S.folder,name:c.name,at:t});
+    if(out){sel=out.second; say('split');}
+    await reload(); return;
+  }
+  const g=gapAt(t);
+  if(!g) return;
+  if(t-g[0]<frame||g[1]-t<frame){
+    say('move the playhead inside the stretch to split it',true);return;}
+  const out=await send('/api/clips/make',{folder:S.folder,source:S.source,
+    clips:[{start:ms(g[0]),end:t},{start:t,end:ms(g[1])}]});
+  if(out){sel=out.made[1]; say('split into two clips');}
+  await reload();
+}
+async function keep(){
+  const t=here();
+  if(inside(t)){say('that is already a clip');return;}
+  const g=gapAt(t);
+  if(!g||g[1]-g[0]<frame) return;
+  const out=await send('/api/clips/make',{folder:S.folder,source:S.source,
+    clips:[{start:ms(g[0]),end:ms(g[1])}]});
+  if(out){sel=out.made[0]; say('made a clip — drag its edges to trim it');}
+  await reload();
+}
+async function still(){
+  v.pause();
+  const t=here();
+  const out=await send('/api/clips/make',{folder:S.folder,source:S.source,
+    clips:[{start:t,end:t}]});
+  if(out){sel=out.made[0]; say('took a still at '+fmt(t));}
+  await reload();
+}
+async function setEnd(which){
+  const c=selected();
+  if(!c||c.end===c.start){say('select a clip first');return;}
+  const t=here();
+  await setRange(c,which==='start'?t:c.start,which==='end'?t:c.end);
+}
+async function join(){
+  const c=selected();
+  const next=c&&ranges().find(o=>Math.abs(o.start-c.end)<0.002);
+  if(!next) return;
+  const out=await send('/api/clips/merge',
+                       {folder:S.folder,first:c.name,second:next.name});
+  if(out){sel=out.name; say('joined');}
+  await reload();
+}
+async function bin(){
+  const c=selected();
+  if(!c) return;
+  if(await send('/api/decide',{folder:S.folder,name:c.name,deleted:true})){
+    sel=null; say('binned — it can be restored from the bin');}
+  await reload();
+}
+function drawHide(){
+  $('bhide').textContent=hidden?'Show original':'Hide original';
+  $('hidenote').textContent=hidden
+    ?'The original is out of every view. Its clips are not.':'';
+}
+async function hide(){
+  const body={folder:S.folder,name:S.source};
+  body[hidden?'remove_audience':'add_audience']=[S.hiddenName];
+  if(await send('/api/decide',body)){
+    hidden=!hidden; drawHide();
+    say(hidden?'original hidden':'original back in view');
+  }
+}
+function step(dt){
+  v.pause();
+  v.currentTime=Math.min(dur,Math.max(0,(v.currentTime||0)+dt));
+}
+function toggle(){ if(v.paused) v.play().catch(()=>{}); else v.pause(); }
+// Zoom about a point, so what is under the pointer — or the fingers — stays
+// under it.
+function zoomBy(f,cx){
+  const old=zoom;
+  zoom=Math.min(64,Math.max(1,zoom*f));
+  if(zoom===old) return;
+  const r=wrap.getBoundingClientRect();
+  const x=cx==null?r.width/2:cx-r.left;
+  const frac=(wrap.scrollLeft+x)/(track.offsetWidth||1);
+  track.style.width=(zoom*100)+'%';
+  wrap.scrollLeft=frac*track.offsetWidth-x;
+  playhead(false);
+}
+wrap.addEventListener('wheel',e=>{
+  if(!e.ctrlKey) return;
+  e.preventDefault(); zoomBy(e.deltaY<0?1.25:0.8,e.clientX);
+},{passive:false});
+const touches=new Map(); let pinch=0;
+wrap.addEventListener('pointerdown',e=>{
+  if(e.pointerType==='touch') touches.set(e.pointerId,e.clientX);});
+wrap.addEventListener('pointermove',e=>{
+  if(!touches.has(e.pointerId)) return;
+  touches.set(e.pointerId,e.clientX);
+  if(touches.size!==2) return;
+  const [a,b]=[...touches.values()], d=Math.abs(a-b);
+  if(pinch&&d) zoomBy(d/pinch,(a+b)/2);
+  pinch=d;
+});
+const lift=e=>{touches.delete(e.pointerId); if(touches.size<2) pinch=0;};
+wrap.addEventListener('pointerup',lift);
+wrap.addEventListener('pointercancel',lift);
+
+const on=(id,fn)=>{const b=$(id); if(b) b.onclick=e=>{e.stopPropagation(); fn();};};
+on('bplay',toggle); on('bsplit',split); on('bstill',still); on('bkeep',keep);
+on('bprevf',()=>step(-frame)); on('bnextf',()=>step(frame));
+on('bprev1s',()=>step(-1)); on('bnext1s',()=>step(1));
+on('bstart',()=>setEnd('start')); on('bend',()=>setEnd('end'));
+on('bjoin',join); on('bbin',bin); on('bhide',hide);
+on('zin',()=>zoomBy(2)); on('zout',()=>zoomBy(0.5));
+document.addEventListener('keydown',e=>{
+  const tag=e.target&&e.target.tagName;
+  if(tag==='INPUT'||tag==='TEXTAREA'||e.ctrlKey||e.metaKey||e.altKey) return;
+  const k=e.key;
+  if(k===' ') toggle();
+  else if(k==='s'||k==='S') split();
+  else if(k==='p'||k==='P') still();
+  else if(k===',') step(e.shiftKey?-1:-frame);
+  else if(k==='.') step(e.shiftKey?1:frame);
+  else if(k==='<') step(-1);
+  else if(k==='>') step(1);
+  else if(k==='i'||k==='I') setEnd('start');
+  else if(k==='o'||k==='O') setEnd('end');
+  else if(k==='Delete'||k==='Backspace') bin();
+  else if(k==='h'||k==='H') hide();
+  else if(k==='Escape'){sel=null; draw();}
+  else return;
+  e.preventDefault();
+});
+// Arriving from a clip — *Splice* on a clip opens its source — stands on it.
+function fromHash(){
+  let want='';
+  try{want=decodeURIComponent(String(location.hash||'').slice(1));}catch(e){}
+  if(want&&clips.some(c=>c.name===want)) pick(want);
+}
+drawHide(); draw();
+})();
+"""
 
 
 class DecideBulkBody(BaseModel):

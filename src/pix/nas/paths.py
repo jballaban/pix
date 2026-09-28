@@ -46,3 +46,10 @@ def meta_path(media: Path, root: Path) -> Path:
 def render_path(media: Path, root: Path) -> Path:
     """Where `media`'s playable rendition lives, mirroring master's layout."""
     return root / media.parent.name / (media.name + ".mp4")
+
+
+#: Video codecs that play in a browser as-is; anything else needs a render
+#: (spec/nas-app.md §5). ExifTool reports these as the `CompressorID`. Here
+#: rather than in `derive` because the app asks it too — whether a video can
+#: be spliced is whether the page can play it.
+PLAYABLE_CODECS: frozenset[str] = frozenset({"avc1", "avc3", "h264"})

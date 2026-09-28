@@ -1,8 +1,8 @@
 # Clips — video splitting, and stills from video
 
-**Status: steps 1–2 of [§10](#10-build-order) built** (v0.1.414–415: `hidden`,
-video stacking deferred, the clip model and its API). The splice page, cuts,
-renders and delivery are not. Extends
+**Status: steps 1–3 of [§10](#10-build-order) built** (v0.1.414–416: `hidden`,
+video stacking deferred, the clip model and its API, the splice page). Cuts,
+keyframe snapping, renders, filmstrips and delivery are not. Extends
 [nas-app.md](nas-app.md); where the two disagree, this file is the newer intent
 for clips, and the code remains the source of truth for what exists.
 
@@ -277,6 +277,13 @@ operation log — as every other edit does. Stills are frame-exact through
 
 The page only splices. Tagging a clip happens in the grid; each bar links to
 its clip.
+
+**Split is one gesture for two cases.** Inside a clip it cuts that clip in
+two. In an uncut stretch it makes the stretch two clips — which on a fresh
+video is the whole video, so three splits are four clips. *Make clip* turns
+the uncut stretch under the playhead into one clip, to be trimmed by its
+edges. Keyframe stepping and in-point snapping arrive with the cuts (step 4),
+since both need the keyframe list `ffprobe` reads.
 
 ## 10. Build order
 

@@ -83,8 +83,8 @@ RENDER_WORKERS: int = 2
 _ENCODE_TIMEOUT: float = 3600.0
 
 #: Video codecs that play in a browser as-is. Anything else needs a render.
-#: ExifTool reports these as the `CompressorID`.
-_PLAYABLE_CODECS: frozenset[str] = frozenset({"avc1", "avc3", "h264"})
+#: Defined in `paths`, which the app shares.
+_PLAYABLE_CODECS: frozenset[str] = paths.PLAYABLE_CODECS
 
 #: 360 footage has no meaningful flat rendition — a plain transcode gives
 #: dual-fisheye that nothing displays usefully (spec/nas-app.md §5).

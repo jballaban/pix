@@ -11,6 +11,7 @@ import json
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -396,3 +397,126 @@ def test_a_clip_with_no_source_is_not_indexed(
 def test_the_viewer_plays_a_clip_between_its_ends() -> None:
     js = web._BROWSE_JS
     assert "#t=${clip[0]},${clip[1]}" in js
+
+
+# --- the splice page (spec/clips.md §9) --------------------------------------
+
+def _playable(app_env: dict[str, Path]) -> None:
+    """Make `b.mp4` H.264, which a browser plays as it is."""
+    meta = app_env["share"] / "meta" / "init_2026" / "b.mp4.json"
+    record = json.loads(meta.read_text(encoding="utf-8"))
+    record["exif"]["QuickTime:CompressorID"] = "avc1"
+    record["exif"]["QuickTime:VideoFrameRate"] = 25
+    meta.write_text(json.dumps(record), encoding="utf-8")
+
+
+def test_the_splice_page_shows_the_video_and_its_clips(
+    client: TestClient, video: Path, app_env: dict[str, Path]
+) -> None:
+    _playable(app_env)
+    [clip] = _make(client, (0, 30))
+    html = client.get("/splice/init_2026/b.mp4").text
+    assert 'src="/media/init_2026/b.mp4"' in html
+    state = json.loads(html.split("const SPLICE=", 1)[1].split(";</script>")[0])
+    assert state["fps"] == 25 and state["duration"] == 75
+    assert [c["name"] for c in state["clips"]] == [clip]
+
+
+def test_a_video_that_will_not_play_waits_for_processing(
+    client: TestClient, video: Path
+) -> None:
+    """HEVC with no render: the page could not show what it is cutting."""
+    html = client.get("/splice/init_2026/b.mp4").text
+    assert "waiting for processing" in html
+    assert "const SPLICE=" not in html
+
+
+def test_splicing_a_clip_opens_its_source_on_it(
+    client: TestClient, video: Path
+) -> None:
+    [clip] = _make(client, (0, 30))
+    r = client.get(f"/splice/init_2026/{clip}", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"].startswith("/splice/init_2026/b.mp4#")
+
+
+def test_a_photograph_has_nothing_to_splice(
+    client: TestClient, video: Path
+) -> None:
+    assert "only a video" in client.get("/splice/init_2026/a.jpg").text
+
+
+def test_splicing_is_an_administrators(
+    client: TestClient, video: Path, add_user: Callable[..., None],
+    sign_in: Callable[[str, str], TestClient]
+) -> None:
+    add_user("kid", "pw")
+    kid = sign_in("kid", "pw")
+    assert kid.get("/splice/init_2026/b.mp4").status_code in (401, 403)
+    assert 'data-act="splice"' not in kid.get("/browse").text
+    assert 'data-act="splice"' in client.get("/browse").text
+
+
+def test_the_grid_says_what_splice_would_open(
+    client: TestClient, video: Path
+) -> None:
+    [clip] = _make(client, (0, 30))
+    html = client.get("/browse").text
+    assert 'data-name="b.mp4"' in html
+    cell = html.split(f'data-name="{clip}"', 1)[1].split(">", 1)[0]
+    assert 'data-splice="b.mp4"' in cell
+    photo = html.split('data-name="a.jpg"', 1)[1].split(">", 1)[0]
+    assert 'data-splice=""' in photo
+
+
+def _drive(tmp_path: Path, scenario: str,
+           cut: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    import shutil
+    import subprocess
+
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed")
+    script = tmp_path / "splice.js"
+    script.write_text(web._SPLICE_JS, encoding="utf-8")
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({
+        "folder": "init_2026", "source": "b.mp4", "duration": 75, "fps": 25,
+        "hidden": False, "hiddenName": decisions.HIDDEN, "clips": cut}),
+        encoding="utf-8")
+    harness = Path(__file__).parent / "js" / "splice.js"
+    result = subprocess.run(["node", str(harness), str(script), str(state),
+                             scenario], capture_output=True, text=True,
+                            timeout=60)
+    assert result.stdout.strip().endswith("OK"), result.stdout + result.stderr
+    return [json.loads(line) for line in result.stdout.splitlines()[:-1]]
+
+
+def test_split_on_a_fresh_video_makes_two_clips_of_the_whole(
+    tmp_path: Path
+) -> None:
+    """Three splits are four clips, which is how cutting a video up is
+    thought about."""
+    [sent] = _drive(tmp_path, "split-fresh", [])
+    assert sent["url"] == "/api/clips/make"
+    assert sent["body"]["clips"] == [{"start": 0, "end": 30},
+                                     {"start": 30, "end": 75}]
+
+
+def test_split_inside_a_clip_cuts_that_clip(tmp_path: Path) -> None:
+    [sent] = _drive(tmp_path, "split-inside", [
+        {"name": "b.mp4~aaaa", "start": 0, "end": 30, "deleted": False}])
+    assert sent == {"url": "/api/clips/split",
+                    "body": {"folder": "init_2026", "name": "b.mp4~aaaa",
+                             "at": 10}}
+
+
+def test_a_still_is_taken_at_the_millisecond(tmp_path: Path) -> None:
+    [sent] = _drive(tmp_path, "still", [])
+    assert sent["body"]["clips"] == [{"start": 12.346, "end": 12.346}]
+
+
+def test_hiding_the_original_is_the_hidden_audience(tmp_path: Path) -> None:
+    [sent] = _drive(tmp_path, "hide", [])
+    assert sent == {"url": "/api/decide",
+                    "body": {"folder": "init_2026", "name": "b.mp4",
+                             "add_audience": [decisions.HIDDEN]}}
