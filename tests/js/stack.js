@@ -299,6 +299,82 @@ const viewerOpen = () => document.byId.viewer._classes.has('on');
           location.href);
   }
 
+  // --- the question is asked on the photographs -------------------------------
+  // Every file in an opened guess is a candidate for the only thing the page
+  // is for, so every one of them offers the answer where you are already
+  // looking. It was select-then-press-the-bar: two gestures for a question
+  // with a picture of its answer under the pointer, and the control to do it
+  // in one already existed — summoned by a mode rather than standing.
+  {
+    const choose = c => c.children.find(k => k._classes.has('choose'));
+    const asGuess = () => {
+      cells.forEach(c => { const b = choose(c); if (b) b.remove(); });
+      cells[0].dataset.behind = '0'; cells[0].dataset.proposed = '2';
+      cells[1].dataset.under = ''; cells[1].dataset.proposedUnder = 'f/lead.jpg';
+      cells[2].dataset.under = ''; cells[2].dataset.proposedUnder = 'f/lead.jpg';
+      location.href = '/browse?within=f%2Flead.jpg&group=day';
+    };
+    asGuess();
+    new Function(
+      'document', 'window', 'fetch', 'localStorage', 'location', 'history',
+      'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS',
+      'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT',
+      'setTimeout', js,
+    )(document, window, fetch, localStorage, location, history, confirm,
+      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD,
+      GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, fn => fn());
+
+    check('every photograph in an opened guess offers the answer',
+          cells.every(c => !!choose(c)),
+          cells.map(c => c.dataset.name + ':' + !!choose(c)).join(','));
+    // *Show this one* under the photograph that is already the one shown
+    // reads as a button that would do nothing — which is exactly the press
+    // somebody needs to make, and exactly the one they will not.
+    check('and the one already showing says what it would really do',
+          choose(cells[0]).textContent === 'Stack these',
+          choose(cells[0]).textContent);
+    check('while the others offer to take its place',
+          choose(cells[1]).textContent === 'Show this one',
+          choose(cells[1]).textContent);
+
+    const n = calls.length;
+    choose(cells[0]).click();
+    for (let i = 0; i < 8; i++) await settle();
+    const sent = calls.slice(n).filter(c => c.url.startsWith('/api/decide'));
+    check('one press agrees with it', sent.length === 1, String(sent.length));
+    if (sent.length === 1) {
+      check('putting the others behind the one already showing',
+            JSON.parse(sent[0].body).stacked_under === 'f/lead.jpg',
+            sent[0].body);
+    }
+    check('and leaves for the grid, standing on the photograph',
+          location.href === '/browse?group=day#'
+                            + encodeURIComponent('f/lead.jpg'),
+          location.href);
+
+    // A stack somebody already made is a place you go to look, or to tag, or
+    // to take one out. Re-picking its top is one of the things you might do
+    // there rather than the reason you came, so nothing stands on the
+    // photographs offering it.
+    cells.forEach(c => { const b = choose(c); if (b) b.remove(); });
+    cells[0].dataset.behind = '2'; cells[0].dataset.proposed = '0';
+    cells[1].dataset.under = 'f/lead.jpg'; cells[1].dataset.proposedUnder = '';
+    cells[2].dataset.under = 'f/lead.jpg'; cells[2].dataset.proposedUnder = '';
+    location.href = '/browse?within=f%2Flead.jpg&group=day';
+    new Function(
+      'document', 'window', 'fetch', 'localStorage', 'location', 'history',
+      'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS',
+      'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT',
+      'setTimeout', js,
+    )(document, window, fetch, localStorage, location, history, confirm,
+      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD,
+      GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, fn => fn());
+
+    check('a stack somebody made asks nothing of its photographs',
+          cells.every(c => !choose(c)),
+          cells.map(c => c.dataset.name + ':' + !!choose(c)).join(','));
+  }
+
   if (failures.length) {
     failures.forEach(f => console.log('FAIL ' + f));
     process.exit(1);

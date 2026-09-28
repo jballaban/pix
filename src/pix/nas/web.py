@@ -5211,7 +5211,12 @@ async function stackSelection(){
   cells.forEach(c=>{c.hidden=!keep.has(c);});
   if(grid) grid.dataset.choosing='1';
   choiceBtns=[];
-  cs.forEach(offerChoice);
+  // Not `forEach(offerChoice)`: `forEach` hands its callback the index and the
+  // array as well, so the second argument became the label and the third the
+  // *standing* flag — every candidate's button quietly left off the list
+  // `endChoosing` clears, and a refused press left the chooser's controls
+  // scattered over the grid behind it.
+  cs.forEach(c=>offerChoice(c));
   document.querySelectorAll('.group').forEach(h=>{h.hidden=true;});
   // Nothing is selected while a top is being chosen. The question is *which
   // one of these*, and leaving the files you arrived with ringed while the
@@ -5282,13 +5287,21 @@ async function expand(head){
 // So choosing has a control of its own, on the photograph, appearing when the
 // pointer is over it. There is one of them per candidate and one candidate per
 // click, which is why it can be a button rather than a mode.
-function offerChoice(c){
+function offerChoice(c,word,standing){
+  // Idempotent, because these arrive two ways now: put on every photograph in
+  // an opened guess when the page loads, and put on the candidates when a top
+  // is being chosen. Pressing Stack inside a guess is both at once, and a
+  // second button under the first is two answers to one question.
+  if(c.querySelector('.choose')) return;
   const b=document.createElement('button');
   b.className='choose';
-  b.textContent='Show this one';
+  b.textContent=word||'Show this one';
   b.onclick=e=>{e.stopPropagation();chooseTop(c);};
   c.appendChild(b);
-  choiceBtns.push(b);
+  // A standing one is not part of a session and must not be cleared with it:
+  // `endChoosing` takes away everything it put up, and that list is how it
+  // knows what it put up.
+  if(!standing) choiceBtns.push(b);
 }
 
 // A guess, refused. Remembered against every photograph in it, so the same
@@ -5631,14 +5644,18 @@ function afterStacking(top,wasGuess){
 }
 
 async function chooseTop(top){
+  // Who is being chosen between. The candidates of a chooser session, or —
+  // where the button is standing on the photograph rather than summoned onto
+  // it — whatever is on the page in the same group. There is no session in an
+  // opened guess: the page *is* the question, so it never had to be entered.
+  const pool=choosing||cells.filter(c=>stackKey(c)===stackKey(top));
   // Whether this was the app's suggestion rather than somebody's stack, asked
   // before `endChoosing` takes the candidates away.
-  const wasGuess=(choosing||[]).some(inGuess);
+  const wasGuess=pool.some(inGuess);
   // Anything already behind this one is where it should be; writing it again
   // would be an edit that changes nothing and a line in the log saying so.
   const key=keyOf(top);
-  const family=(choosing||[]).filter(
-    c=>c!==top&&c.dataset.under!==key);
+  const family=pool.filter(c=>c!==top&&c.dataset.under!==key);
   if(!family.length){endChoosing(true);return;}
   const behind=+(top.dataset.behind||0)+family.length;
   // If the one chosen came out of a stack it stays — it is a file that speaks
@@ -6408,6 +6425,34 @@ document.querySelectorAll('.group').forEach(h=>{
 });
 
 drawChips(); drawSel();
+
+// **An opened guess asks its question on the photographs.** Every file in
+// here is a candidate for the only thing this page is for — *are these one
+// photograph, and which of them shows* — so every one of them offers the
+// answer, one press, where you are already looking.
+//
+// It was select-then-press-the-bar, which is two gestures for a question with
+// a picture of its answer under the pointer, and the control to do it in one
+// already existed: it was simply summoned by a mode rather than standing. The
+// reason it is summoned elsewhere is good — a button on every thumbnail in a
+// two-thousand-cell grid is a page about its own controls — and it does not
+// hold here, where there are three or four photographs and one question.
+//
+// **A guess only.** An opened stack somebody already made is a place you go
+// to look, or to tag, or to take one out; re-picking its top is one of the
+// things you might do there rather than the reason you came, and a standing
+// button on every take would be answering a question nobody asked. The bar
+// still has *Make top* for that.
+if(VIEW.within&&cells.some(inGuess)){
+  for(const c of cells){
+    // The one that already shows is agreeing rather than changing: it says so,
+    // because *Show this one* under the photograph that is already the one
+    // shown reads as a button that would do nothing — which is exactly the
+    // press somebody needs to make, and exactly the one they will not.
+    const here=stackKey(c)===keyOf(c);
+    offerChoice(c, here?'Stack these':'Show this one', true);
+  }
+}
 
 // Landing on one photograph, because something sent you here standing on it.
 // Agreeing with a suggestion is the one gesture that leaves the page it was
