@@ -91,11 +91,25 @@ document.querySelectorAll = sel => (sel === '.cell' ? cells
 document.querySelector = sel => document.querySelectorAll(sel)[0] || null;
 
 const calls = [];
+let dropping = [];
+// What `/api/behind` really answers with: the cells of the files in the
+// stack, rendered by the server. On a stack's page they are already on the
+// page — which is the whole bug, and a stub that answered with nothing could
+// not show it.
+const behindCells =
+  ['one.jpg', 'two.jpg'].map(n =>
+    '<div class="cell" data-folder="f" data-name="' + n + '"'
+    + ' data-kind="image" data-audience="" data-event="" data-tags=""'
+    + ' data-date="2026-08-30" data-deleted="" data-under="" data-behind="0">'
+    + '<button class="pick"></button></div>').join('');
 const fetch = async (url, opts) => {
   calls.push({ url, body: opts && opts.body });
+  if (url.startsWith('/api/behind/')) {
+    return { ok: true, json: async () => ({ cells: behindCells }) };
+  }
   return { ok: true,
            json: async () => ({ name: 'lead.jpg', exif: {}, facts: [],
-                                failed: [], dropped: [], total: 3 }) };
+                                failed: [], dropped: dropping, total: 3 }) };
 };
 const stored = {};
 const localStorage = {
@@ -342,6 +356,67 @@ const viewerOpen = () => document.byId.viewer._classes.has('on');
     check('and the one already showing says nothing, having nothing to say',
           !choose(cells[0]),
           cells.map(c => c.dataset.name + ':' + !!choose(c)).join(','));
+  }
+
+  // --- refusing a guess from the page it is on --------------------------------
+  // Nothing is hidden here: the photographs a refusal releases are the ones
+  // already standing on the page. Fetching them anyway put a second copy of
+  // every one of them into the grid — refuse three and watch five arrive —
+  // because that is what refusing does in the folded grid, where they really
+  // are somewhere else.
+  {
+    const actBtn = name => actions.querySelectorAll('[data-act]')
+                                  .find(b => b.dataset.act === name);
+    if (document.byId.selcount.textContent !== '0 selected') tick.click();
+    cells.forEach(c => { const b = c.children.find(k => k._classes.has('choose'));
+                         if (b) b.remove(); });
+    cells[0].dataset.behind = '0'; cells[0].dataset.proposed = '2';
+    cells[1].dataset.under = ''; cells[1].dataset.proposedUnder = 'f/lead.jpg';
+    cells[2].dataset.under = ''; cells[2].dataset.proposedUnder = 'f/lead.jpg';
+
+    const before = grid.querySelectorAll('.cell').length;
+    const n = calls.length;
+    cells[0].querySelector('.pick').click();
+    actBtn('nostack').click();
+    for (let i = 0; i < 8; i++) await settle();
+
+    check('nothing is fetched to put back what is already here',
+          !calls.slice(n).some(c => c.url.startsWith('/api/behind')),
+          calls.slice(n).map(c => c.url).join(','));
+    check('so no photograph arrives twice',
+          grid.querySelectorAll('.cell').length === before,
+          String(grid.querySelectorAll('.cell').length));
+
+    // Said of the photograph the group is drawn as, the answer is about the
+    // group. The server does not follow the members of an opened stack — they
+    // are in front of the curator — so the page names them, or the rest
+    // re-form behind a new leader and are offered again tomorrow.
+    const sent = calls.slice(n).filter(c => c.url.startsWith('/api/decide'));
+    check('refusing the one that speaks refuses the group', sent.length === 1,
+          String(sent.length));
+    if (sent.length === 1) {
+      const body = JSON.parse(sent[0].body);
+      check('naming every photograph in it', body.files.length === 3,
+            sent[0].body);
+      check('and saying so once', body.no_stack === true, sent[0].body);
+    }
+  }
+
+  // --- and once there is nothing left to compare ------------------------------
+  // A stack of one is not a stack, so the page has nothing left to ask about.
+  {
+    const actBtn = name => actions.querySelectorAll('[data-act]')
+                                  .find(b => b.dataset.act === name);
+    if (document.byId.selcount.textContent !== '0 selected') tick.click();
+    dropping = cells.map(c => ({ folder: 'f', name: c.dataset.name }));
+    location.href = '/browse?within=f%2Flead.jpg&group=day';
+    cells[0].querySelector('.pick').click();
+    actBtn('nostack').click();
+    for (let i = 0; i < 8; i++) await settle();
+    dropping = [];
+
+    check('an emptied stack leaves for the grid it came from',
+          location.href.split('#')[0] === '/browse?group=day', location.href);
   }
 
   if (failures.length) {

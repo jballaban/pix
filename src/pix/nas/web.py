@@ -5532,19 +5532,44 @@ function offerChoice(c,word,standing){
 // members of anything the file speaks for. Said of the one that speaks it
 // takes the group with it; said of one standing in it, that one leaves and
 // the rest are still a guess.
+// A stack of one is not a stack, so once a page is down to that there is
+// nothing left in it to ask about. Refusing the whole group empties it,
+// refusing all but one leaves nothing to compare, and taking the top out of a
+// decided stack dissolves it — three ways to the same place, which is out.
+function stillAStack(){
+  if(STACK&&cells.length<2) leaveStack(STACK);
+}
+
 async function notAStack(){
-  const cs=targetsOn('live').filter(inGuess);
+  let cs=targetsOn('live').filter(inGuess);
   if(!cs.length){say('nothing selected that the app guessed at');return;}
+  // **On a stack's page, refusing the one that speaks names the rest.**
+  //
+  // The server deliberately does not follow the members of an opened stack,
+  // on the grounds that they are in front of the curator and following them
+  // would be a second write to a file they can see they picked. They are in
+  // front of them; they were not necessarily *picked*. Said of the photograph
+  // the group is drawn as, the answer is about the group — and left to
+  // itself the rest would re-form behind a new leader and be offered again
+  // tomorrow, which is the one thing refusing a guess is supposed to stop.
+  if(STACK&&cs.some(guessed)) cs=cells.filter(inGuess);
   // Only in the ordinary view. Where the view is *only stacks* or *only
   // suggested*, refusing takes the whole thing out of it — the server says so
   // and the grid drops it — so there is nothing to fan back out into.
   // Only what was hiding something has anything to fan back out.
-  const fan=!VIEW.stacks
+  //
+  // And never on a stack's page, where nothing is hidden: the photographs a
+  // refusal releases are the ones already standing on it, and fetching them
+  // put a second copy of every one of them into the grid — refuse three and
+  // watch five arrive.
+  const fan=(!STACK&&!VIEW.stacks)
     ? new Map(await Promise.all(
         cs.filter(guessed).map(async c=>[c,await behind(c)])))
     : null;
   const out=await applyToSelection('no_stack',true,undefined,cs);
-  if(out&&out.done&&fan) cs.forEach(c=>fanOut(c,fan.get(c)));
+  if(!out||!out.done) return;
+  if(fan) cs.forEach(c=>fanOut(c,fan.get(c)));
+  stillAStack();
 }
 
 // Fetched before the refusal is written: afterwards they are nothing's
@@ -5996,6 +6021,10 @@ async function unstack(){
   const out=await applyToSelection('stacked_under',null,undefined,cs);
   if(!out) return;
   cs.forEach(c=>{c.dataset.under='';});
+  // On a stack's page there is nothing to put back — the photographs are on
+  // it — and nothing to reload: the stack it is a page of has just stopped
+  // existing, and asking for it again is asking for a page that is gone.
+  if(STACK){ stillAStack(); return; }
   // Taking a whole stack apart puts photographs *back* into the grid, and the
   // grid can only ever lose cells on its own — the ones that come back were
   // never sent to it. This is the one gesture that needs the page again.
