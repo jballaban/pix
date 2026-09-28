@@ -90,6 +90,10 @@ const UNREVIEWED = 'new';
 // What separates an event from a sub-event in one name.
 const EVENT_SEP = ' > ';
 const NO_EVENT = '(none)';
+// Which stack's page this is, and the way out of it. Empty on a grid,
+// which is how the script knows it is not on one.
+let STACK = '';
+let BACK = '';
 const PAGE = '/browse';
 const TIERS = [['/thumb/', 400], ['/large/', 1000], ['/preview/', 1600]];
 
@@ -107,11 +111,11 @@ const optionLabels = () => document.byId.menu.querySelectorAll('.opt')
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'history',
       'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS',
-      'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT',
+      'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK',
       'setTimeout', js,
     )(document, window, fetch, localStorage, location, history, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD,
-      GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, fn => fn());
+      GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn());
   } catch (e) {
     console.log('FAIL the script threw on load: ' + e.message);
     process.exit(1);
@@ -164,7 +168,7 @@ const optionLabels = () => document.byId.menu.querySelectorAll('.opt')
     'document', 'window', 'fetch', 'localStorage', 'location', 'history',
     'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS',
     'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE',
-    'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'setTimeout', js,
+    'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout', js,
   )(document, window, fetch, localStorage, location, history, confirm,
     { ...VIEW, date: null, kind: null,
       event: 'Sicily' + EVENT_SEP + NO_EVENT },
@@ -195,7 +199,7 @@ const optionLabels = () => document.byId.menu.querySelectorAll('.opt')
     'document', 'window', 'fetch', 'localStorage', 'location', 'history',
     'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS',
     'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE',
-    'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'setTimeout', js,
+    'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout', js,
   )(document, window, fetch, localStorage, location, history, confirm,
     { ...VIEW, date: null, kind: null,
       event: 'Sicily' + EVENT_SEP + 'Taormina' },

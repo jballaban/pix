@@ -517,7 +517,7 @@ def test_stacking_folds_a_file_behind_another(
     assert "b.jpg" not in html, "a stacked file appeared on its own"
     assert "a.jpg" in html
     assert 'class="stack"' in html, "the top is not badged"
-    assert "within=init_2026%2Fa.jpg" in html, "no way to open the stack"
+    assert "/stack/init_2026/a.jpg" in html, "no way to open the stack"
 
 
 def test_opening_a_stack_keeps_the_view_you_opened_it_from(
@@ -542,13 +542,18 @@ def test_opening_a_stack_keeps_the_view_you_opened_it_from(
     at = html.index('class="stack"')
     href = html[html.index('href="', at) + 6:html.index('"', html.index('href="', at) + 6)]
 
-    assert "within=init_2026%2Fa.jpg" in href, href
-    assert "event=Italy%20-%20Sicily" in href, "the filter went"
-    assert "group=event" in href, "the grouping went"
-    # Escaped where it becomes markup, and only there: built pre-escaped it
-    # produced `&amp;amp;` and a link carrying its second filter as part of
-    # the first one's value.
-    assert "&amp;" in html[at:at + 200] and "&amp;amp;" not in html[at:at + 200]
+    assert href.startswith("/stack/init_2026/a.jpg?back="), href
+    # The whole address it was opened from, carried rather than guessed at:
+    # the browser would do it on the way out and cannot on the way in, and a
+    # stack reached from a bookmark has nothing behind it at all.
+    assert "event%3DItaly%2520-%2520Sicily" in href or \
+        "event%3DItaly%20-%20Sicily" in href, href
+    assert "group%3Devent" in href, "the grouping went"
+    # One parameter, so the whole grid address is percent-encoded inside it
+    # rather than carrying bare `&`s of its own — the same rule the
+    # `&amp;amp;` bug taught, arrived at from the other side: escape once, at
+    # the boundary being crossed.
+    assert "&" not in href, href
 
 
 def test_the_page_draws_the_same_badge_the_server_does(
@@ -646,6 +651,116 @@ def test_an_opened_stack_shows_its_top_first(
 
     assert grid.index('data-name="a.jpg"') < grid.index('data-name="b.jpg"'), \
         "the one the grid outside shows is not the first one in here"
+
+
+def test_a_stack_is_a_page_rather_than_a_filtered_grid(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """The takes of one photograph are not a view of the library, and
+    everything the grid brought with it answered nothing in there: eleven
+    filters over eight frames of one moment, a grouping control for a section
+    that is the whole page, and a *Stack* button offering to stack what is
+    already a stack — on two of them, offering to stack a subset, which is not
+    a thing a stack can be.
+
+    Each of those had to be reasoned about separately every time anything
+    changed, and every stack bug this app has had was one of them leaking."""
+    _two_files(writable, app_env)
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/a.jpg",
+        "files": [{"folder": "init_2026", "name": "b.jpg"}]})
+
+    html = client.get("/stack/init_2026/a.jpg").text
+    bar = html[html.index('<div class="topbar">'):html.index("<main>")]
+
+    assert 'id="chips"' not in bar, "the library's filters, over one moment"
+    assert 'class="whatis"' in bar and "of one photograph" in bar
+    assert 'class="leave"' in bar, "no way out"
+
+    acts = bar[bar.index('id="actions"'):]
+    for gone in ("event", "tags", "people", "date", "access", "stack", "top"):
+        assert f'data-act="{gone}"' not in acts, gone
+    for kept in ("nostack", "unstack", "download", "delete"):
+        assert f'data-act="{kept}"' in acts, kept
+    # And no heading, because the page is the section.
+    assert 'class="group' not in html[html.index("<main>"):]
+
+
+def test_a_guess_says_that_it_is_one(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """Guesses and decisions are the same page — a suggestion is the app's
+    answer to the same question, offered rather than recorded — so the only
+    things that differ are the words and whether *Take out* means anything
+    yet. Undoing a decision is what that is for, and a guess has none."""
+    _burst(app_env, writable, "g1.jpg", "g2.jpg", "g3.jpg")
+    html = client.get("/stack/init_2026/g1.jpg").text
+
+    assert "the app&#x27;s guess" in html or "the app's guess" in html, \
+        html[html.index('class="whatis"'):html.index('class="whatis"') + 200]
+    acts = html[html.index('id="actions"'):html.index("</main>")]
+    assert 'data-act="unstack"' not in acts, "nothing to undo"
+    assert 'data-act="nostack"' in acts
+
+
+def test_the_old_address_of_a_stack_says_where_it_lives_now(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """`?within=` was the address for as long as a stack was a filter, and
+    links to it are in bookmarks and in the operation log. One place to see a
+    stack rather than two that have to agree about it."""
+    _two_files(writable, app_env)
+    r = client.get("/browse?within=init_2026/a.jpg&event=Italy+-+Sicily",
+                   follow_redirects=False)
+
+    assert r.status_code == 307
+    where = r.headers["location"]
+    assert where.startswith("/stack/init_2026/a.jpg?back="), where
+    # Carrying the grid it was asked from, so the way out is the way in
+    # reversed rather than the undivided library.
+    assert "event" in where, where
+
+
+def test_the_way_out_of_a_stack_cannot_be_pointed_elsewhere(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """`back` arrives in a query string, which is a place anybody can type
+    anything, and a link on a page people trust is exactly what you would want
+    to aim somewhere else."""
+    _two_files(writable, app_env)
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/a.jpg",
+        "files": [{"folder": "init_2026", "name": "b.jpg"}]})
+
+    for bad in ("https://example.com/", "//example.com/", "javascript:alert(1)"):
+        html = client.get("/stack/init_2026/a.jpg",
+                          params={"back": bad}).text
+        out = html[html.index('class="leave"'):]
+        assert 'href="/"' in out[:40], (bad, out[:80])
+
+
+def test_the_answer_can_be_given_from_the_photograph_itself(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """Blown up is where the difference between two takes of one moment
+    actually shows — which eyes are open, which one is sharp — and the answer
+    was five gestures away: close the viewer, find the thumbnail you liked
+    among seven that look alike, and hope it was that one."""
+    _two_files(writable, app_env)
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/a.jpg",
+        "files": [{"folder": "init_2026", "name": "b.jpg"}]})
+
+    assert 'id="viewtop"' in client.get("/stack/init_2026/a.jpg").text
+    # Not on the grid, where the viewer is for looking: a button deciding the
+    # shape of a stack has no business over an ordinary photograph.
+    assert 'id="viewtop"' not in client.get("/browse").text
+
+    js = web._BROWSE_JS
+    at = js.index("function drawTop(")
+    body = js[at:js.index("\n}", at)]
+    assert "viewTop.hidden=!c||!STACK||(here&&!guessed(c));" in body, body
+    assert "viewTop.textContent=here?'Stack these':'Show this one';" in body
 
 
 def test_unstacking_puts_a_file_back_on_its_own(
@@ -837,14 +952,24 @@ def test_bringing_a_stack_up_is_part_of_the_same_gesture(
         stacked_under="init_2026/a.jpg"), "it did not go back where it was"
 
 
-def test_the_page_knows_it_is_inside_a_stack(client: TestClient) -> None:
+def test_the_page_knows_it_is_inside_a_stack(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
     """It has to send that back with a write, or the server works out what left
     the view against a different view — and a file taken out of a stack sits
     there until the page is reloaded."""
-    html = client.get("/browse?within=init_2026/a.jpg").text
+    _two_files(writable, app_env)
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/a.jpg",
+        "files": [{"folder": "init_2026", "name": "b.jpg"}]})
+    html = client.get("/stack/init_2026/a.jpg").text
     view = html[html.index("const VIEW="):html.index(",CHIPS")]
 
     assert '"within": "init_2026/a.jpg"' in view, view
+    # And which page it is, which is how it knows the grid's half of the
+    # script has nothing to do here.
+    assert 'STACK="init_2026/a.jpg"' in html, \
+        html[html.index("PAGE="):html.index("PAGE=") + 140]
 
 
 def test_agreeing_with_a_guess_leaves_the_stack_it_was_asked_in(
@@ -863,7 +988,7 @@ def test_agreeing_with_a_guess_leaves_the_stack_it_was_asked_in(
     they agreed with."""
     js = web._BROWSE_JS
 
-    assert "location.href=url({within:null})+'#'+encodeURIComponent(" in js
+    assert "location.href=(BACK||'/')+'#'+encodeURIComponent(" in js
     # Standing on the photograph, not at the top of the page. Every other
     # stack gesture keeps your place by never navigating at all; this one has
     # to fetch, and a fetched page starts three thousand pixels above a review
@@ -879,12 +1004,13 @@ def test_agreeing_with_a_guess_leaves_the_stack_it_was_asked_in(
     # separately.
     at = js.index("function afterStacking(")
     rule = js[at:js.index("\n}", at)]
-    assert "if(!VIEW.within) return;" in rule, rule
+    assert "if(!STACK) return;" in rule, rule
     assert "if(wasGuess) leaveStack(keyOf(top));" in rule, rule
     # Rearranging a stack somebody already made is not a question being
-    # answered: it stays put, under the name the stack now has.
-    assert ("else if(VIEW.within!==keyOf(top)) "
-            "location.href=url({within:keyOf(top)});") in rule, rule
+    # answered: it stays put — at the stack's new address, because a stack is
+    # named by the file that speaks for it and promoting one renames it.
+    assert ("else if(STACK!==keyOf(top)) "
+            "location.href=stackUrl(keyOf(top));") in rule, rule
 
     # And both ways in end there, rather than each deciding for itself.
     for name in ("async function makeTop(", "async function chooseTop("):
@@ -1221,7 +1347,7 @@ def test_promoting_renames_the_stack_so_its_old_address_empties(
         "stacked_under": "init_2026/a.jpg",
         "files": [{"folder": "init_2026", "name": "c.jpg"},
                   {"folder": "init_2026", "name": "d.jpg"}]})
-    assert client.get("/browse?within=init_2026/a.jpg").text.count(
+    assert client.get("/stack/init_2026/a.jpg").text.count(
         "data-name=") == 3
 
     # Promote d.jpg the way `Make top` does.
@@ -1230,9 +1356,11 @@ def test_promoting_renames_the_stack_so_its_old_address_empties(
         "files": [{"folder": "init_2026", "name": "a.jpg"},
                   {"folder": "init_2026", "name": "c.jpg"}]})
 
-    was = client.get("/browse?within=init_2026/a.jpg").text
-    assert was.count("data-name=") == 1, "the old address still holds a stack"
-    now = client.get("/browse?within=init_2026/d.jpg").text
+    # A page, not a filtered grid, so the old address is not an empty view of
+    # the library — it is a stack that is not there.
+    was = client.get("/stack/init_2026/a.jpg")
+    assert was.status_code == 404, "the old address still holds a stack"
+    now = client.get("/stack/init_2026/d.jpg").text
     assert now.count("data-name=") == 3, "the stack is not at its new address"
 
 
@@ -3347,9 +3475,10 @@ def test_the_corner_is_the_way_between_files_and_folders(
 
 def test_a_stack_is_not_carried_up_to_the_folders(client: TestClient) -> None:
     """A folder view of one stack is the stack, so there is nothing coarser to
-    show. Everything else about the view goes up with you."""
-    bar = _corner(client.get("/browse?event=Italy+-+Sicily&within=x%2Fy.jpg"
-                             "&group=day").text)
+    show — and a stack is a page of its own now, which has no corner to go up
+    from at all. What is left to check is that the grid it came from still
+    goes up with everything else about the view intact."""
+    bar = _corner(client.get("/browse?event=Italy+-+Sicily&group=day").text)
 
     assert "within" not in bar, bar
     assert 'href="/?event=Italy+-+Sicily&amp;group=day"' in bar, bar

@@ -173,6 +173,10 @@ const UNREVIEWED = 'new';
 // What separates an event from a sub-event in one name.
 const EVENT_SEP = ' > ';
 const NO_EVENT = '(none)';
+// Which stack's page this is, and the way out of it. Empty on a grid,
+// which is how the script knows it is not on one.
+let STACK = '';
+let BACK = '';
 const PAGE = '/browse';
 // What each derived tier is capped at, longest edge.
 const TIERS = [['/thumb/', 400], ['/large/', 1000],
@@ -201,10 +205,10 @@ function deselect() {
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
       'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'setTimeout', js,
+      'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout', js,
     )(document, window, fetch, localStorage, location, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD,
-      GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, fn => fn());
+      GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn());
   } catch (e) {
     console.log('FAIL the script threw on load: ' + e.message);
     process.exit(1);

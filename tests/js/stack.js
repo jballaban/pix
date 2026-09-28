@@ -42,10 +42,6 @@ const grid = mk('grid');
 const cells = [cell('lead.jpg', { behind: '2' }),
                cell('one.jpg', { under: 'f/lead.jpg' }),
                cell('two.jpg', { under: 'f/lead.jpg' })];
-const badge = new El('a');
-badge.className = 'stack';
-badge.attrs.href = '/browse?within=f%2Flead.jpg';
-cells[0].appendChild(badge);
 section(null, cells, grid);
 
 const actions = mk('actions');
@@ -76,7 +72,9 @@ cancelBtn.id = 'choosecancel';
 document.byId.choosecancel = cancelBtn;
 chooseActs.appendChild(cancelBtn);
 sizeset();
-for (const id of ['menu', 'chips', 'selcount', 'count', 'note', 'viewer',
+// No `chips`: a stack's page has no filter bar, and the script has to run
+// without one.
+for (const id of ['menu', 'selcount', 'count', 'note', 'viewer',
                   'vimg', 'vvid', 'vmeta', 'rail', 'railtoggle', 'viewclose',
                   'working', 'workwhat', 'workbar', 'worktally',
                   'workstop', 'bincount']) mk(id);
@@ -134,13 +132,15 @@ const UNREVIEWED = 'new';
 // What separates an event from a sub-event in one name.
 const EVENT_SEP = ' > ';
 const NO_EVENT = '(none)';
+// Which stack's page this is, and the way out of it. Empty on a grid,
+// which is how the script knows it is not on one.
+let STACK = 'f/lead.jpg';
+let BACK = '/browse?group=day';
 const PAGE = '/browse';
 const TIERS = [['/thumb/', 400], ['/large/', 1000],
                ['/preview/', 1600]];
 
 const settle = () => new Promise(r => setImmediate(r));
-const chips = document.byId.chips;
-const marker = () => chips.children.find(c => c._classes.has('from-op'));
 const viewerOpen = () => document.byId.viewer._classes.has('on');
 
 (async () => {
@@ -148,66 +148,30 @@ const viewerOpen = () => document.byId.viewer._classes.has('on');
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'history',
       'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS',
-      'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT',
+      'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK',
       'setTimeout', js,
     )(document, window, fetch, localStorage, location, history, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD,
-      GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, fn => fn());
+      GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn());
   } catch (e) {
     console.log('FAIL the script threw on load: ' + e.message);
     process.exit(1);
   }
 
-  // --- where you are ----------------------------------------------------------
-  // A filter you cannot see is a library that looks smaller than it is, and an
-  // opened stack is the narrowest filter there is.
-  const m = marker();
-  check('an opened stack says so on the bar', m !== undefined);
-  check('and says what it is', m && m.textContent === 'in a stack',
-        m && m.textContent);
-  check('and how much is in it',
-        m && m.children.some(k => k._classes.has('val')
-                                  && k.textContent === '3'));
+  // --- a page with no filters on it -------------------------------------------
+  // Eleven questions about the library, on a page that is eight frames of one
+  // moment. The stage below has no `#chips` for exactly that reason, and the
+  // script has to be able to run on a page without one — it reached for it
+  // instead of asking for it, which on a page that has none took every
+  // handler down on load.
+  check('the script runs on a page with no filter bar',
+        document.byId.chips === undefined || document.byId.chips === null,
+        'the stage has a chip bar the real page does not');
 
-  const out = m && m.children.find(k => k._classes.has('x'));
-  check('with a way out', out !== undefined);
-  // The stack is dropped and everything else about the view is kept: leaving
-  // one is not the same gesture as clearing the filters you arrived with.
-  check('that drops the stack and keeps the rest',
-        out && out.href === '/browse?group=day', out && out.href);
-
-  // --- the way out ------------------------------------------------------------
-  document.referrer = 'https://pix.ballaban.ca/browse?group=day';
-  out.click();
-  check('leaving goes back the way you came in', wentBack === 1);
-  check('rather than navigating afresh',
-        location.href === '/browse?within=f%2Flead.jpg&group=day',
-        location.href);
-
-  // Arrived by a bookmark, a shared link, or from the operation log: there is
-  // nothing behind this page worth going back to, so nothing is intercepted
-  // and the browser simply follows the link. That it stays a real link is the
-  // point — it is also what makes *open in a new tab* work on it.
-  document.referrer = '';
-  out.click();
-  check('and is left to the browser when you arrived some other way',
-        wentBack === 1, String(wentBack));
-  check('which has somewhere to go', out.href === '/browse?group=day',
-        out.href);
-
-  // --- the badge is a place to go, not a photograph ---------------------------
-  location.href = '/browse?within=f%2Flead.jpg&group=day';
-  badge.click();
-  await settle();
-  // The badge used to do both: the viewer opened over the grid and then the
-  // page left for the stack, so the browser's back button restored a page with
-  // a photograph on it.
-  check('the stack badge does not also open the viewer', !viewerOpen());
-
+  // --- the viewer is still the viewer -----------------------------------------
   cells[1].click();
   await settle();
-  check('but a plain click on a cell still does', viewerOpen());
-
+  check('a plain click on a take opens it', viewerOpen());
   // What a restore from the back/forward cache brings back is the page exactly
   // as it left, open viewer included.
   (listeners.pageshow || []).forEach(fn => fn({ persisted: true }));
@@ -288,7 +252,7 @@ const viewerOpen = () => document.byId.viewer._classes.has('on');
     // page behind is the one that has just stopped being true.
     check('and leaves the stack for the grid it was folded into',
           location.href.split('#')[0] === '/browse?group=day', location.href);
-    check('without going back to a copy of it', wentBack === 1,
+    check('without going back to a copy of it', wentBack === 0,
           String(wentBack));
     // Standing on the photograph it was made about. A fetched page starts at
     // the top, and the top is three thousand pixels above a review pass
@@ -318,11 +282,11 @@ const viewerOpen = () => document.byId.viewer._classes.has('on');
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'history',
       'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS',
-      'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT',
+      'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK',
       'setTimeout', js,
     )(document, window, fetch, localStorage, location, history, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD,
-      GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, fn => fn());
+      GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn());
 
     check('every photograph in an opened guess offers the answer',
           cells.every(c => !!choose(c)),
@@ -352,10 +316,12 @@ const viewerOpen = () => document.byId.viewer._classes.has('on');
                             + encodeURIComponent('f/lead.jpg'),
           location.href);
 
-    // A stack somebody already made is a place you go to look, or to tag, or
-    // to take one out. Re-picking its top is one of the things you might do
-    // there rather than the reason you came, so nothing stands on the
-    // photographs offering it.
+    // A stack somebody already made asks the same question, and the takes
+    // answer it the same way — this is the page for *which of these shows*,
+    // and there is nothing else on the bar that says it. Only the one that
+    // already shows stays quiet: it is the answer already given, and a button
+    // whose whole reply is that it should not have been pressed is worse than
+    // none.
     cells.forEach(c => { const b = choose(c); if (b) b.remove(); });
     cells[0].dataset.behind = '2'; cells[0].dataset.proposed = '0';
     cells[1].dataset.under = 'f/lead.jpg'; cells[1].dataset.proposedUnder = '';
@@ -364,14 +330,17 @@ const viewerOpen = () => document.byId.viewer._classes.has('on');
     new Function(
       'document', 'window', 'fetch', 'localStorage', 'location', 'history',
       'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS',
-      'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT',
+      'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK',
       'setTimeout', js,
     )(document, window, fetch, localStorage, location, history, confirm,
       VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD,
-      GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, fn => fn());
+      GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn());
 
-    check('a stack somebody made asks nothing of its photographs',
-          cells.every(c => !choose(c)),
+    check('the takes of a decided stack offer to take its place',
+          !!choose(cells[1]) && !!choose(cells[2]),
+          cells.map(c => c.dataset.name + ':' + !!choose(c)).join(','));
+    check('and the one already showing says nothing, having nothing to say',
+          !choose(cells[0]),
           cells.map(c => c.dataset.name + ':' + !!choose(c)).join(','));
   }
 

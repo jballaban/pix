@@ -364,6 +364,26 @@ main { padding:16px max(var(--gut),env(safe-area-inset-right)) 20px
    nothing between them and read as one control. Same gap as the row they are
    in, so filters and actions line up. */
 .chips { display:flex; gap:9px; align-items:center; flex-wrap:wrap; }
+/* What a stack's page is, where a grid's filters would be. A page with no
+   address written on it is a page you cannot tell from the one before, and
+   this one has no filters to say it with — so it says it in words. */
+.whatis { display:flex; gap:9px; align-items:baseline; flex-wrap:wrap;
+          min-width:0; }
+.whatis b { font-weight:600; font-variant-numeric:tabular-nums; }
+.whatis .dim { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+/* Nobody has said yet. The amber that means unfinished everywhere else in
+   here, so a suggestion reads as a question wherever it is met. */
+.whatis .asked { font-style:normal; color:var(--top);
+                 background:var(--top-bed); border-radius:999px;
+                 padding:1px 9px; font-size:12px; font-weight:600;
+                 white-space:nowrap; }
+/* The way out, as a link. It was a cross on a chip pretending the stack was a
+   filter; a page is left rather than cleared, and the address it goes to is
+   the grid it was opened from — carried in, because the browser can only
+   answer that on the way back and a stack reached from a bookmark has nothing
+   behind it. */
+.leave { white-space:nowrap; }
+.leave:hover { box-shadow:0 0 0 3px var(--tint); }
 /* The filters you are not using are a list of everything the app can ask,
    which is not a thing to read past on the way to the ones you are. The same
    `+` the grouping heading uses, for the same gesture: one more of these. */
@@ -1147,6 +1167,20 @@ h2.year span { font-size:13px; font-weight:400; }
            opacity:.75; border:1px solid var(--line); border-radius:3px;
            padding:3px 10px; font-size:13px; background:var(--chrome);
            color:var(--fg); }
+/* Answering from the photograph rather than from a memory of it. Blown up is
+   where the difference between two takes of one moment actually shows — which
+   eyes are open, which one is sharp — and the answer was five gestures away:
+   close, find the thumbnail you liked among seven that look alike, and hope
+   it was that one.
+
+   In the accent, because it is the one control in here that decides something
+   rather than fetching or dismissing. */
+#viewtop { position:absolute; top:calc(10px + env(safe-area-inset-top));
+           right:calc(196px + env(safe-area-inset-right)); z-index:2;
+           margin:0; border:1px solid var(--accent); border-radius:3px;
+           padding:3px 10px; font-size:13px; font-weight:600;
+           background:var(--accent); color:#0d0f12; }
+#viewtop[hidden] { display:none; }
 #railtoggle:hover, #viewclose:hover, #viewget:hover { opacity:1; }
 #viewget:hover { border-color:var(--accent); background:var(--chrome);
                  box-shadow:none; }
@@ -1242,6 +1276,9 @@ h2.year span { font-size:13px; font-weight:400; }
      of the word *Details*, which is not a number to rest a layout on once
      everything in the bar is taller and wider. */
   #viewget { right:auto; left:calc(68px + env(safe-area-inset-left)); }
+  /* The one control in here worth a thumb, so it keeps the right-hand side
+     to itself rather than joining the row along the left. */
+  #viewtop { right:calc(12px + env(safe-area-inset-right)); }
 }
 
 /* Anything the page keeps out of sight until the pointer is over it is
@@ -2525,6 +2562,22 @@ def _drill(row: sqlite3.Row, groups: list[str],
     return _browse_url(view, patch)
 
 
+def _stack_url(key: str, back: str = "") -> str:
+    """One stack's page, and the way out of it.
+
+    `back` is the address it was opened from, carried rather than guessed.
+    The browser's own history would do it on the way out and does not on the
+    way in: a stack reached from a bookmark, a shared link or the operation
+    log has nothing behind it, and *leave this stack* still has to mean
+    something. It is also what makes the way out survive a write — going back
+    to a page that has just stopped being true is how somebody ends up
+    reloading by hand.
+    """
+    folder, _, name = key.partition("/")
+    out = f"/stack/{_q(folder)}/{_q(name)}"
+    return out + (f"?back={_q(back)}" if back else "")
+
+
 def _browse_url(view: ix.Filters, patch: dict[str, str | None]) -> str:
     """The grid, at this view plus `patch`. The page's own `url()` in Python."""
     query = {**_view_dict(view), **patch}
@@ -2557,18 +2610,160 @@ def event_grid(event: str) -> RedirectResponse:
     return RedirectResponse(f"/browse?event={_q(event)}", status_code=307)
 
 
+def _safe_back(back: str) -> str:
+    """Where to return to, or the front door.
+
+    Only a path on this app. `back` arrives in a query string, which is a
+    place anybody can type anything, and a bare `href` built from one is how a
+    link on a page people trust sends them somewhere else entirely.
+    """
+    if back.startswith("/") and not back.startswith("//") and ":" not in back:
+        return back
+    return "/"
+
+
+def _stack_actions(user: Principal, decided: bool) -> str:
+    """The bar on a stack's page: four things, and no grid.
+
+    The grid's bar was eleven controls, and inside a stack most of them
+    answered nothing. *Event*, *Tags*, *People*, *Date* and *Access* are
+    statements about a photograph, and the eight in here are one photograph —
+    so they belong outside, on the one that represents it, where they reach
+    all of them at once. *Stack* offered to stack what is already a stack, and
+    on two of them it offered to stack a subset, which is not a thing a stack
+    can be. *Make top* is on the photographs now, where the question is.
+
+    What is left is what there is to say in here. **Not a stack** — of one of
+    them, or of the whole group by saying it of the one that speaks. **Take
+    out**, only where somebody decided: undoing a decision is what it is for,
+    and a guess has none to undo. And the two that are about the file rather
+    than the stack — a bad take is exactly what you notice with all eight side
+    by side, and wanting one of them is exactly why you opened it.
+    """
+    return f"""<div class="row" id="actions">
+  <button id="selall" class="tick" title="Select all" aria-label="Select all"></button>
+  <span class="count" id="selcount" style="margin:0"></span>
+  <span class="grp" data-side="live" hidden>
+    {_act("nostack", "Not a stack", user=user)}
+    {_act("unstack", "Take out", user=user) if decided else ""}
+    {_act("download", "Download", user=user)}
+    <span class="sep"></span>
+    {_act("delete", "Delete", "danger", user=user)}
+  </span>
+  <span class="grp" data-side="gone" hidden>
+    {_act("restore", "Restore", user=user)}
+    {_act("purge", "Purge&hellip;", "danger", user=user)}
+  </span>
+  <span class="grp" data-side="choose" hidden>
+    <b>Click the one to show</b>
+    <button id="choosecancel">Cancel</button>
+  </span>
+</div>"""
+
+
+@app.get("/stack/{folder}/{name}", response_class=HTMLResponse)
+def stack_page(folder: str, name: str,
+               user: Annotated[Principal, Depends(require_user)],
+               back: Annotated[str, Query()] = "") -> HTMLResponse:
+    """The takes of one photograph — a page, not a filtered grid.
+
+    It was `/browse?within=…`, which is the library with one more filter on
+    it, and the takes of one photograph are not a view of the library.
+    Everything the grid brought with it answered nothing in here: eleven
+    filters over eight frames of one moment, a grouping control for a section
+    that is the whole page, a *Stack* button offering to stack what is already
+    a stack. Each of those had to be reasoned about separately every time
+    something changed, and every stack bug this app has had was one of them
+    leaking.
+
+    One question, asked once: **are these one photograph, and which of them
+    shows.** It is asked on the photographs themselves — every take carries
+    the answer — and the bar holds only what is left to say.
+
+    Guesses and decisions are the same page. A suggestion is the app's answer
+    to the same question, offered rather than recorded, and reading it needs
+    the same eight thumbnails side by side; the only difference is which words
+    the page uses about it and whether *Take out* means anything yet.
+    """
+    conn = db()
+    key = f"{folder}/{name}"
+    view = ix.Filters(within=key, viewer=user.scope,
+                      stacks=_stacks(None, user))
+    rows = ix.files(conn, view, limit=PAGE_LIMIT)
+    # Not a stack, or not one this person may see — the same answer either
+    # way, and deliberately: which of the two it is would say whether a
+    # photograph they cannot see exists.
+    if len(rows) < 2:
+        return _page("pix2", '<p class="empty">There is no stack here.</p>',
+                     user=user, status_code=404)
+
+    lead = rows[0]
+    decided = any(r["stacked_under"] for r in rows)
+    guess = not decided
+    where = _safe_back(back)
+    when = _stack_when(lead)
+    return _page("pix2 stack", f"""<div class="grid" id="grid">
+<div class="cells">{"".join(_cell(r, view) for r in rows)}</div></div>
+<div id="viewer">
+  <div class="stage"><img id="vimg">
+  <video id="vvid" controls playsinline></video>
+  <div class="meta" id="vmeta"></div></div>
+  <button id="viewclose" title="Close (Esc)">&times;</button>
+  <button id="railtoggle" title="Details (I)">Details</button>
+  <a id="viewget" class="who-link" download>{_mark("get", 19)}</a>
+  <button id="viewtop" hidden></button>
+  <aside id="rail"></aside>
+</div>
+<div id="menu" hidden></div>
+{_WORKING}""",
+        # What this is, in words, where the filters would have been. A page
+        # with no address on it is a page you cannot tell from the one before.
+        tools=(f'<span class="whatis">'
+               f'<b>{len(rows)}</b> of one photograph'
+               + (f'<i class="asked">the app\'s guess</i>' if guess else "")
+               + (f'<span class="dim">{_h(when)}</span>' if when else "")
+               + f'</span><a class="leave" href="{_h(where)}">'
+                 f'Leave this stack</a>'),
+        right=('<span class="sizerow"><span class="rowlab">Thumbnail size'
+               f'</span>{_sizeset()}</span>'),
+        bar=_sizeset(),
+        rows=_stack_actions(user, decided),
+        script=_view_script(user, view, [], stack=key, back=where),
+        info=f'<span class="line">{len(rows)} files</span>',
+        user=user)
+
+
+def _stack_when(row: sqlite3.Row) -> str:
+    """When the photograph was taken, for the one line that says which it is."""
+    moment = (datestr.parse_pix(str(row["effective_date"]))
+              if row["effective_date"] else None)
+    if moment is None:
+        return ""
+    return f"{moment:%A} {moment.day} {moment:%B %Y}, {moment:%H:%M}"
+
+
 @app.get("/browse", response_class=HTMLResponse)
 def browse(request: Request,
            user: Annotated[Principal, Depends(require_user)],
            view: Annotated[ix.Filters, Depends(filters)],
            group: Annotated[str, Query()] = "day",
            op: Annotated[str | None, Query()] = None,
-           stale: Annotated[str | None, Query()] = None) -> HTMLResponse:
+           stale: Annotated[str | None, Query()] = None) -> Response:
     """The one grid, filtered — select files, then say something about them.
 
     Selecting an event on the landing page is just this page with `?event=`, so
     there is one surface to learn rather than a browser and a separate editor.
     """
+    # A stack has a page of its own. This was its address for as long as it
+    # was a filter, and links to it are in bookmarks and in the operation log
+    # — so it still answers, by saying where the stack lives now. One place to
+    # see a stack rather than two that have to agree.
+    if view.within:
+        return RedirectResponse(
+            _stack_url(view.within, _browse_url(
+                replace(view, within=None),
+                {"group": ",".join(_groupings(group)) or "none"})),
+            status_code=307)
     conn = db()
     groups = _groupings(group)
     rows = ix.files(conn, view, groups=groups, limit=PAGE_LIMIT)
@@ -2625,7 +2820,8 @@ def browse(request: Request,
 
 
 def _view_script(user: Principal, view: ix.Filters, groups: list[str], *,
-                 page: str = "/browse") -> str:
+                 page: str = "/browse", stack: str = "",
+                 back: str = "") -> str:
     """The page script, and what it needs to know about this view.
 
     One script for both pages. The landing page and the grid ask the same two
@@ -2651,6 +2847,10 @@ def _view_script(user: Principal, view: ix.Filters, groups: list[str], *,
         f"EVENT_SEP={_js(decisions.EVENT_SEP)},"
         f"NO_EVENT={_js(ix.NO_EVENT)},"
         f"USUAL={_js(store().usual)},PAGE={_js(page)},"
+        # Which stack's page this is, and the way out of it. Empty everywhere
+        # else, which is how the script knows it is not on one — the grid asks
+        # the same question of a shelf of stacks and answers it in place.
+        f"STACK={_js(stack)},BACK={_js(back)},"
         f"TIERS={_js(_TIERS)},"
         f"GRID_GROUPS={_js(_GRID_GROUPS)},ONE_FIELD={_js(_ONE_FIELD)},"
         f"GROUPING={_js(groups)};</script>"
@@ -3194,16 +3394,17 @@ def _stack_badge(row: sqlite3.Row, view: ix.Filters,
     # these together*; a guessed one says *these look alike, and nobody has
     # said yet* — and a curator deciding what to trust needs to see which is
     # which without opening it.
-    # **The whole address, not just the stack.** This was `/browse?within=…`
-    # and nothing else, so opening a stack threw away every filter and the
-    # grouping with them: you were four filters deep in a review pass, clicked
-    # a badge, and came back out to the undivided library. It was survivable
-    # only because the way out was the browser's back button, which restored
-    # the page rather than rebuilding it — and the moment anything navigated
-    # forward instead, the view the page thought it was in was empty, because
-    # this link is where it came from.
+    # **A page, not a filter.** This was `/browse?within=…` — the grid with one
+    # more thing narrowing it — and the takes of one photograph are not a view
+    # of the library. Everything the grid brings with it was wrong in there:
+    # eleven filters over eight frames of one moment, a grouping control for a
+    # section that is the whole page, and a *Stack* button offering to stack
+    # what is already a stack. See `stack_page`.
+    #
+    # It carries where it was opened from, because the way out has to be the
+    # way in reversed: the grid it came from, filters and grouping and all.
     return (f'<a class="stack{" guessed" if guessed else ""}" '
-            f'href="{_h(_browse_url(view, {"within": key, "group": grouped}))}" '
+            f'href="{_h(_stack_url(key, _browse_url(view, {"group": grouped})))}" '
             f'title="{n + 1} photographs '
             f'{"that look alike — nobody has said yet" if guessed else ""}'
             f'{"" if guessed else "stacked here"}">'
@@ -3751,6 +3952,13 @@ const MARK=(typeof MARKS!=='undefined')?MARKS:{};
 function markOf(col,label){return MARK[col]||esc(label);}
 
 function drawChips(){
+  // A stack's page has no filter bar: eleven questions about the library, on
+  // a page that is eight frames of one moment. The script is one script for
+  // every page and each provides the elements it has — the landing page has
+  // no viewer and none is wired — and this is the one place that reached for
+  // an element instead of asking for it, which on a page without it took
+  // every handler down with it on load.
+  if(!chips) return;
   chips.innerHTML='';
   // **One pass, in one order, whatever is set.** Every filter keeps the same
   // place in the bar whether it is doing something or not.
@@ -4614,11 +4822,37 @@ function load(c){
     vvid.classList.remove('on'); vimg.classList.add('on');
     vimg.src=`/preview/${f}/${n}`;
   }
-  drawGet(c);
+  drawGet(c); drawTop(c);
   vmeta.textContent=`${c.dataset.name} — ${c.dataset.date}`
                    +(c.dataset.tags?' — '+c.dataset.tags.split('\\n').join(', '):'');
   fill(c);
 }
+// Saying *this is the one* about the photograph filling the screen. Only on a
+// stack's page, where that is the question being asked; the grid's viewer is
+// for looking, and a button deciding the shape of a stack has no business
+// appearing over an ordinary photograph.
+const viewTop=document.getElementById('viewtop');
+function drawTop(c){
+  if(!viewTop) return;
+  const here=c&&stackKey(c)===keyOf(c);
+  // Nothing to say on the one that already shows a stack somebody made — it
+  // is the answer already given. Everything to say on a guess, which is what
+  // the different word is for.
+  viewTop.hidden=!c||!STACK||(here&&!guessed(c));
+  viewTop.textContent=here?'Stack these':'Show this one';
+  viewTop.title=here
+    ? 'Keep this one showing, and make them a stack'
+    : 'Make this the one the stack shows';
+}
+if(viewTop) viewTop.onclick=e=>{
+  e.stopPropagation();
+  const c=cells[cur];
+  if(!c) return;
+  // The viewer closes because the page is about to: answering is the thing
+  // this stack was opened to do, and `afterStacking` leaves for the grid.
+  closeViewer();
+  chooseTop(c);
+};
 const rail=document.getElementById('rail');
 const railToggle=document.getElementById('railtoggle');
 // Remembered per browser: whether you want the numbers alongside is a
@@ -5151,7 +5385,10 @@ function inGuess(c){ return guessed(c) || !!c.dataset.proposedUnder; }
 // two have to agree: what it means is *the members are in front of the
 // curator*, which decides both whether a write has to follow them and whether
 // the page has anything left to fetch.
-const OPENED = !!VIEW.within || GROUPING.includes('stack');
+// Whether the members of a stack are on the page rather than folded away.
+// One stack has a page of its own; the shelf is the grid grouped by stack,
+// which opens every one of them in the view at once.
+const OPENED = !!STACK || GROUPING.includes('stack');
 // Whether the rest of this file's stack is on the page with it. Naming a top
 // writes to the others, so the gesture can only be offered where the others
 // are — which is every open view, and is never the folded grid, where not
@@ -5611,7 +5848,20 @@ function endChoosing(restore){
 // survives a different thumbnail size or a window that changed width on the
 // way.
 function leaveStack(key){
-  location.href=url({within:null})+'#'+encodeURIComponent(key||'');
+  // Where it was opened from, carried in rather than guessed at. The browser
+  // would do it on the way out and cannot do it on the way in: a stack
+  // reached from a bookmark, a shared link or the operation log has nothing
+  // behind it. `BACK` is also what survives a write, which `history.back()`
+  // does not — the page behind is the one that has just stopped being true.
+  location.href=(BACK||'/')+'#'+encodeURIComponent(key||'');
+}
+// The same stack under a new name. Promoting renames it — a stack is named by
+// the file that speaks for it — and the way out has to come along.
+function stackUrl(key){
+  const at=key.indexOf('/');
+  return '/stack/'+encodeURIComponent(key.slice(0,at))
+        +'/'+encodeURIComponent(key.slice(at+1))
+        +(BACK?'?back='+encodeURIComponent(BACK):'');
 }
 
 // Where the page goes once one photograph has been made the one that shows.
@@ -5638,9 +5888,9 @@ function leaveStack(key){
 // that went behind the top leave on their own and the badge is redrawn where
 // it stands, and that is the behaviour the other two are measured against.
 function afterStacking(top,wasGuess){
-  if(!VIEW.within) return;
+  if(!STACK) return;
   if(wasGuess) leaveStack(keyOf(top));
-  else if(VIEW.within!==keyOf(top)) location.href=url({within:keyOf(top)});
+  else if(STACK!==keyOf(top)) location.href=stackUrl(keyOf(top));
 }
 
 async function chooseTop(top){
@@ -6443,13 +6693,17 @@ drawChips(); drawSel();
 // things you might do there rather than the reason you came, and a standing
 // button on every take would be answering a question nobody asked. The bar
 // still has *Make top* for that.
-if(VIEW.within&&cells.some(inGuess)){
+if(STACK){
   for(const c of cells){
-    // The one that already shows is agreeing rather than changing: it says so,
-    // because *Show this one* under the photograph that is already the one
-    // shown reads as a button that would do nothing — which is exactly the
-    // press somebody needs to make, and exactly the one they will not.
     const here=stackKey(c)===keyOf(c);
+    // The one that already shows has nothing to say on a stack somebody made
+    // — it is the answer already given, and a button whose whole reply is
+    // that it should not have been pressed is worse than none. On a guess it
+    // has everything to say, and says it in words that are not *Show this
+    // one*: under the photograph that is already the one shown that reads as
+    // a button that would do nothing, which is exactly the press somebody
+    // needs to make and exactly the one they will not.
+    if(here&&!guessed(c)) continue;
     offerChoice(c, here?'Stack these':'Show this one', true);
   }
 }

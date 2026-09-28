@@ -166,6 +166,10 @@ const UNREVIEWED = 'new';
 // What separates an event from a sub-event in one name.
 const EVENT_SEP = ' > ';
 const NO_EVENT = '(none)';
+// Which stack's page this is, and the way out of it. Empty on a grid,
+// which is how the script knows it is not on one.
+let STACK = '';
+let BACK = '';
 const PAGE = '/browse';
 const TIERS = [['/thumb/', 400], ['/large/', 1000], ['/preview/', 1600]];
 
@@ -190,12 +194,12 @@ const settled = async () => { for (let i = 0; i < 12; i++) await settle(); };
 const PARAMS = ['document', 'window', 'fetch', 'localStorage', 'location',
                 'confirm', 'matchMedia', 'navigator', 'VIEW', 'CHIPS', 'FIXED',
                 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD',
-                'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'setTimeout', 'clearTimeout'];
+                'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout', 'clearTimeout'];
 function run() {
   new Function(...PARAMS, js)(
     document, window, fetch, localStorage, location, confirm, matchMedia,
     navigator, VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-    GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, timer, cancelTimer);
+    GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, timer, cancelTimer);
 }
 
 (async () => {
