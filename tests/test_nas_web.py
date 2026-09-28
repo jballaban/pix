@@ -629,6 +629,25 @@ def test_opening_a_stack_shows_what_is_behind_it(
     assert "a.jpg" in html and "b.jpg" in html
 
 
+def test_an_opened_stack_shows_its_top_first(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """The one that speaks leads, whoever said so. `a.jpg` is four minutes
+    older than `b.jpg`, so newest-first puts it second — and it is the
+    photograph the stack is drawn as, which makes it the first thing worth
+    looking at when the stack is opened."""
+    _two_files(writable, app_env)
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/a.jpg",
+        "files": [{"folder": "init_2026", "name": "b.jpg"}]})
+
+    html = client.get("/browse?within=init_2026/a.jpg").text
+    grid = html[html.index('<div class="cells">'):]
+
+    assert grid.index('data-name="a.jpg"') < grid.index('data-name="b.jpg"'), \
+        "the one the grid outside shows is not the first one in here"
+
+
 def test_unstacking_puts_a_file_back_on_its_own(
     client: TestClient, writable: Path,
     app_env: dict[str, Path]

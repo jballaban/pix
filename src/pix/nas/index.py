@@ -1235,18 +1235,42 @@ def files(conn: sqlite3.Connection, filters: Filters | None = None, *,
     cut the grid into nested sections without a second query or a second idea
     of the order.
     """
-    where, bound = _where(filters or Filters())
+    view = filters or Filters()
+    where, bound = _where(view)
     keys = [GROUPINGS[g] for g in groups if GROUPINGS.get(g)]
     params: dict[str, Any] = {**bound, "limit": limit, "offset": offset}
     selected = "".join(f", {key} AS grp{i} " for i, key in enumerate(keys))
     ordered = _ordering(groups)
+    # **With a stack open, the photograph that speaks for it comes first.**
+    #
+    # It is what the stack *is* from outside: the one the badge was drawn on,
+    # the one the grid will go on showing, and the one every other take is
+    # being compared against. Reading down from it is reading the group.
+    # Ordered by date alone it landed wherever its own clock put it, which for
+    # a burst of eight frames a second apart is the middle of them — so the
+    # answer to *which of these is the app showing* was a pill somewhere down
+    # the page rather than the first thing under the heading.
+    #
+    # Deferring to nobody is what being that photograph means, which is why
+    # this needs neither the stack's address nor a second idea of who leads.
+    #
+    # Only where a stack is open — `within` opens one, `unfold` opens every
+    # stack in the view. In an ordinary grid the members are not on screen to
+    # be ordered, and saying it anyway would sort every unstacked file in the
+    # library ahead of every stacked one.
+    lead = ("(files.stacked_under IS NOT NULL "
+            "OR files.suggested_under IS NOT NULL), "
+            if view.within or view.unfold else "")
     return list(conn.execute(
         "SELECT files.*, " + _TAGS_COL + ", " + _PEOPLE_COL + ", " + _AUDIENCE_COL
         + ", " + _BEHIND_COL + ", " + _AHEAD_COL
         + (selected or ", NULL AS grp0 ")
         + "FROM files "
         + (f"WHERE {where} " if where else "")
-        + "ORDER BY " + ordered
+        # After the groupings, which are the structure of the page: a stack
+        # cut by day is two sections, and the one that speaks leads whichever
+        # of them it is in rather than jumping out of its own section.
+        + "ORDER BY " + ordered + lead
         # Undated last either way: they are a work item of their own, not a
         # date that happens to be small — or large.
         + "effective_date IS NULL, effective_date DESC, name "

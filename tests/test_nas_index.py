@@ -1550,6 +1550,58 @@ def test_a_file_already_stacked_is_not_offered(tree: dict[str, Path]) -> None:
     assert ix.suggestions(ix.files(conn, limit=1000)) == []
 
 
+def test_an_opened_stack_leads_with_the_one_that_speaks_for_it(
+    tree: dict[str, Path]
+) -> None:
+    """It is what the stack *is* from outside: the photograph the badge was
+    drawn on, the one the grid will go on showing, and the one every other
+    take is being compared against. Reading down from it is reading the group.
+
+    Ordered by date alone it landed wherever its own clock put it — which for
+    a burst of eight frames a second apart is the middle of them, so *which of
+    these is the app showing* was a pill somewhere down the page rather than
+    the first thing under the heading.
+    """
+    for i in range(4):
+        _shot(tree, f"{i}.jpg", f"2026:08:30 10:00:0{i}")
+    conn = _built(tree)
+
+    head = conn.execute(
+        "SELECT folder || '/' || name AS k FROM files "
+        "WHERE suggested_under IS NULL AND EXISTS ("
+        "  SELECT 1 FROM files m WHERE m.suggested_under ="
+        "    files.folder || '/' || files.name)").fetchone()
+    assert head is not None, "the burst was not guessed at"
+
+    inside = ix.files(conn, ix.Filters(within=head["k"]), limit=100)
+    assert len(inside) == 4, [r["name"] for r in inside]
+    assert f'f/{inside[0]["name"]}' == head["k"], \
+        [r["name"] for r in inside]
+    # And the rest are still newest-first among themselves, which is the order
+    # everything else on the page is in.
+    assert [r["name"] for r in inside[1:]] == \
+        sorted((r["name"] for r in inside[1:]), reverse=True)
+
+
+def test_an_ordinary_grid_is_not_reordered_by_that(
+    tree: dict[str, Path]
+) -> None:
+    """Deferring to nobody is what being the photograph that speaks means, so
+    the rule needs no second idea of who leads — but said of a grid with no
+    stack open it would sort every unstacked file in the library ahead of
+    every stacked one, which is a library reordered by a fact about four of
+    its photographs."""
+    for i in range(4):
+        _shot(tree, f"{i}.jpg", f"2026:08:30 10:00:0{i}")
+    _shot(tree, "late.jpg", "2026:08:30 18:00:00")
+    conn = _built(tree)
+
+    folded = ix.files(conn, ix.Filters(), limit=100)
+
+    assert [r["name"] for r in folded][0] == "late.jpg", \
+        [r["name"] for r in folded]
+
+
 def test_a_deleted_photograph_is_not_guessed_about(
     tree: dict[str, Path]
 ) -> None:
