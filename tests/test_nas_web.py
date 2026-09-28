@@ -852,15 +852,26 @@ def test_agreeing_with_a_guess_leaves_the_stack_it_was_asked_in(
     land = js[js.index("let want='';"):]
     assert "location.hash" in land[:400], land[:400]
     assert "c.scrollIntoView({block:'center'})" in land[:800], land[:800]
-    at = js.index("async function makeTop(")
-    body = js[at:js.index("\n}", at)]
-    assert "const wasGuess=inGuess(top);" in body, body
-    assert ("if(wasGuess&&VIEW.within){ leaveStack(keyOf(top)); return; }"
-            in body), body
-    # Rearranging a stack somebody already made is not the same thing: it is
-    # one edit among several you may want to go on making, so it stays put
-    # under the stack's new name.
-    assert "if(VIEW.within) location.href=url({within:keyOf(top)});" in body
+    # **One rule, in one place.** The chooser and the bar end in the same
+    # write, and each used to carry its own copy of where to go afterwards —
+    # one navigated only when the stack had been renamed, the other whenever
+    # it was open at all. The same rule written twice, already drifting, which
+    # is how two ways into one decision came to need thinking about
+    # separately.
+    at = js.index("function afterStacking(")
+    rule = js[at:js.index("\n}", at)]
+    assert "if(!VIEW.within) return;" in rule, rule
+    assert "if(wasGuess) leaveStack(keyOf(top));" in rule, rule
+    # Rearranging a stack somebody already made is not a question being
+    # answered: it stays put, under the name the stack now has.
+    assert ("else if(VIEW.within!==keyOf(top)) "
+            "location.href=url({within:keyOf(top)});") in rule, rule
+
+    # And both ways in end there, rather than each deciding for itself.
+    for name in ("async function makeTop(", "async function chooseTop("):
+        body = js[js.index(name):js.index("\n}", js.index(name))]
+        assert "afterStacking(top,wasGuess)" in body, name
+        assert "leaveStack(" not in body, f"{name} decides for itself"
 
 
 def test_a_badge_stops_saying_guessed_once_it_has_been_decided(

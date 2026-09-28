@@ -5601,6 +5601,35 @@ function leaveStack(key){
   location.href=url({within:null})+'#'+encodeURIComponent(key||'');
 }
 
+// Where the page goes once one photograph has been made the one that shows.
+//
+// **One rule, because there are two ways in.** The chooser and the bar both
+// end in the same write, and each had its own copy of this — one navigated
+// only when the stack had been renamed, the other whenever it was open at
+// all. The same rule written twice, already drifting, which is how the two
+// gestures came to need thinking about separately when they are one decision.
+//
+// A guess agreed with is the question the opened stack was asking, answered:
+// there is nothing left in here to look at, and what changed is out in the
+// grid it was folded into, which is still drawing it as a suggestion.
+//
+// Rearranging a stack somebody already made is not a question being answered
+// — it is one edit among several you may want to go on making — so it stays,
+// under the name the stack now has. A stack is named by the file that speaks
+// for it, so promoting one renames it, and an open stack's address is that
+// name: stay on the old one and the page asks for a stack whose files have
+// all just gone somewhere else.
+//
+// **Nothing at all outside an opened stack**, which is the ordinary grid —
+// where stacking has always kept your place by not going anywhere. The cells
+// that went behind the top leave on their own and the badge is redrawn where
+// it stands, and that is the behaviour the other two are measured against.
+function afterStacking(top,wasGuess){
+  if(!VIEW.within) return;
+  if(wasGuess) leaveStack(keyOf(top));
+  else if(VIEW.within!==keyOf(top)) location.href=url({within:keyOf(top)});
+}
+
 async function chooseTop(top){
   // Whether this was the app's suggestion rather than somebody's stack, asked
   // before `endChoosing` takes the candidates away.
@@ -5619,19 +5648,12 @@ async function chooseTop(top){
   top.dataset.under='';
   endChoosing();
   const out=await applyToSelection('stacked_under',keyOf(top),undefined,family);
-  // The files that went behind it leave the grid on their own — they stopped
-  // matching the moment they were stacked — but the one left standing has to
-  // start saying how many it now speaks for.
-  if(out&&out.done) markStack(top,behind);
-  // A guess agreed with is the question the opened stack was asking, answered
-  // — there is nothing left in here to look at, and what has changed is out
-  // there. Rearranging a stack somebody already made is not that: it is one
-  // edit among several you may want to go on making, so it stays put.
-  if(out&&out.done&&wasGuess&&VIEW.within){ leaveStack(keyOf(top)); return; }
-  // Same rename, if this was done from inside the stack being merged into.
-  if(out&&out.done&&VIEW.within&&VIEW.within!==keyOf(top)){
-    location.href=url({within:keyOf(top)});
-    return;
+  if(out&&out.done){
+    // The files that went behind it leave the grid on their own — they
+    // stopped matching the moment they were stacked — but the one left
+    // standing has to start saying how many it now speaks for.
+    markStack(top,behind);
+    afterStacking(top,wasGuess);
   }
   // And the selection is spent. It used to survive, holding the file that had
   // just become a top — so the next things ticked were stacked *with it*, and
@@ -5710,25 +5732,10 @@ async function makeTop(){
   // deferring to one of them whoever asks for it.
   const out=await applyToSelection('stacked_under',keyOf(top),undefined,family);
   if(!out||!out.done) return;
-  // A guess agreed with is the question the opened stack was asking, answered.
-  // Nothing in here has anything left to say — and what has changed is out
-  // there, in the grid this was folded into, which is still drawing it as a
-  // suggestion. Staying put left the answer invisible until somebody went back
-  // by hand and then reloaded, because going back alone is a cached page of
-  // the very thing that has just stopped being true.
-  //
-  // Whichever of them was named, because both answers are the same answer:
-  // *these are one photograph, and this is the one that shows*.
-  //
-  // Only out of an opened stack, which is the only place this can be reached
-  // from: naming a top writes to the rest of the group, so it is offered only
-  // where the rest of the group is on the page.
-  if(wasGuess&&VIEW.within){ leaveStack(keyOf(top)); return; }
-  // A stack is named by the file that speaks for it, so promoting one renames
-  // it. An open stack's address is that name — stay on it and the page asks
-  // for a stack whose files have all just gone somewhere else, which is how
-  // this left you looking at one photograph with no way back but the browser.
-  if(VIEW.within) location.href=url({within:keyOf(top)});
+  // The same write the chooser makes, so the same rule about where to go
+  // afterwards. Whichever photograph was named, because both answers are the
+  // same answer: *these are one photograph, and this is the one that shows*.
+  afterStacking(top,wasGuess);
 }
 
 async function unstack(){
