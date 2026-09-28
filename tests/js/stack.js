@@ -213,6 +213,44 @@ const viewerOpen = () => document.byId.viewer._classes.has('on');
   (listeners.pageshow || []).forEach(fn => fn({ persisted: true }));
   check('and a page restored by going back has it closed', !viewerOpen());
 
+  // --- answering from inside an open stack ------------------------------------
+  // The members are on the page: that is what being inside one means. The bar
+  // has always offered Stack on a single top, and pressing it asked the server
+  // for the files it was already looking at — which put a second copy of every
+  // one of them in the grid, the same photograph offered twice as the one to
+  // show. The handler then refused the press anyway, for having only one thing
+  // selected.
+  {
+    (listeners.pageshow || []).forEach(fn => fn({ persisted: true }));
+    const was = calls.length;
+    const before = grid.querySelectorAll('.cell').length;
+    const actBtn = name => actions.querySelectorAll('[data-act]')
+                                  .find(b => b.dataset.act === name);
+    cells[0].querySelector('.pick').click();
+    check('the photograph a stack is drawn as is enough to press Stack with',
+          actBtn('stack').hidden === false);
+
+    actBtn('stack').click();
+    await settle(); await settle();
+    check('nothing is fetched for files already on the page',
+          !calls.slice(was).some(c => c.url.startsWith('/api/behind')),
+          calls.slice(was).map(c => c.url).join(','));
+    check('so no photograph is offered twice',
+          grid.querySelectorAll('.cell').length === before,
+          String(grid.querySelectorAll('.cell').length));
+    // Every one of them is a candidate, the one that already shows included
+    // — which is how a suggestion is agreed with rather than rearranged.
+    const offered = c => c.children.some(k => k._classes.has('choose'));
+    check('and each of them offers itself as the one to show',
+          cells.every(offered),
+          cells.map(c => c.dataset.name + ':' + offered(c)).join(','));
+
+    cancelBtn.click();
+    await settle();
+    check('and changing your mind puts them all back',
+          cells.every(c => c.hidden === false));
+  }
+
   if (failures.length) {
     failures.forEach(f => console.log('FAIL ' + f));
     process.exit(1);

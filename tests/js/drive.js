@@ -671,7 +671,12 @@ function arrow(key, opts) {
   // Taking one out of a stack is offered only for files that are in one.
   {
     deselect();
+    // As the server draws an opened stack: the member *and* the file it
+    // defers to, which says how many it speaks for. A member on screen
+    // without its top is not a view this app has — and Make top writes to
+    // the rest of the stack, so it is offered where the rest of it is.
     cells[0].dataset.under = 'f/b.jpg';
+    cells[1].dataset.behind = '1';
     cells[0].querySelector('.pick').click();
     check('a stacked file can be taken out', actBtn('unstack').hidden === false);
     check('and can be made the one that shows',
@@ -688,6 +693,73 @@ function arrow(key, opts) {
             sent[0].body);
     }
     cells[0].dataset.under = '';
+    cells[1].dataset.behind = '0';
+    deselect();
+  }
+
+  // Agreeing with a suggestion, which is the answer that was missing. You
+  // could open a guess, look at it, see which photograph it had picked to
+  // show — and then refuse the whole thing in one click or promote some other
+  // photograph, but not simply say yes. The two answers a guess takes were
+  // not the same shape and only one of them was there.
+  {
+    deselect();
+    cells.forEach(c => { c.dataset.under = ''; c.dataset.behind = '0';
+                         c.dataset.proposed = '0';
+                         c.dataset.proposedUnder = ''; });
+    // a.jpg speaks for the guess; b.jpg is one of the photographs in it.
+    cells[0].dataset.proposed = '1';
+    cells[1].dataset.proposedUnder = 'f/a.jpg';
+    cells[0].querySelector('.pick').click();
+
+    check('the one a guess is drawn on can be agreed with',
+          actBtn('top').hidden === false,
+          'nothing on the bar accepts the suggestion');
+
+    const n = calls.length;
+    actBtn('top').click();
+    for (let i = 0; i < 8; i++) await settle();
+    const sent = calls.slice(n).filter(c => c.url.startsWith('/api/decide'));
+    check('agreeing writes once', sent.length === 1, String(sent.length));
+    if (sent.length === 1) {
+      const body = JSON.parse(sent[0].body);
+      // The same write promoting makes, aimed at the top the guess already
+      // had: what turns a guess into a stack is somebody saying which one
+      // shows, and here that is the one it was showing.
+      check('pointing the others at the one already showing',
+            body.stacked_under === 'f/a.jpg', sent[0].body);
+      check('and never at itself, which would hide the whole stack',
+            !body.files.some(f => f.name === 'a.jpg'), sent[0].body);
+      check('the photograph in it goes behind it',
+            body.files.some(f => f.name === 'b.jpg'), sent[0].body);
+    }
+    cells.forEach(c => { c.dataset.under = ''; c.dataset.behind = '0';
+                         c.dataset.proposed = '0';
+                         c.dataset.proposedUnder = ''; });
+    deselect();
+  }
+
+  // A stack somebody has already made is not agreed with twice: saying *this
+  // one shows* of the one that shows is nothing to do, and a button whose
+  // whole answer is that it should not have been pressed is worse than none.
+  {
+    deselect();
+    cells.forEach(c => { c.dataset.under = ''; c.dataset.behind = '0';
+                         c.dataset.proposed = '0';
+                         c.dataset.proposedUnder = ''; });
+    cells[0].dataset.behind = '1';
+    cells[1].dataset.under = 'f/a.jpg';
+    cells[0].querySelector('.pick').click();
+
+    const n = calls.length;
+    actBtn('top').click();
+    for (let i = 0; i < 4; i++) await settle();
+    check('the top of a decided stack writes nothing',
+          calls.slice(n).filter(c => c.url.startsWith('/api/decide')).length
+            === 0);
+    check('and says why', /already shows/.test(document.byId.note.textContent),
+          document.byId.note.textContent);
+    cells.forEach(c => { c.dataset.under = ''; c.dataset.behind = '0'; });
     deselect();
   }
 

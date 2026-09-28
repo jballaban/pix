@@ -4471,10 +4471,14 @@ function drawSel(){
   // they answer it themselves: two or more to make a stack, one that is in one
   // to promote, anything already stacked to take out.
   show('stack', live.length > 1 || live.some(tops));
-  // Only for a file that is behind something. Offered on the one already
-  // showing, it could do nothing but say so — a button whose whole answer is
-  // that it should not have been there.
-  show('top', live.length === 1 && inStack(live[0]));
+  // Only where the rest of the stack is on the page, because that is what
+  // this writes to. It used to ask whether the file was *behind* something,
+  // which was two answers wrong at once: it was offered in the folded grid,
+  // where there is nothing on screen to write to and pressing it said so; and
+  // it was withheld from the photograph a guess is drawn on, which is the one
+  // the question *shall this be the top* most needs asking of — saying yes to
+  // it is how a suggestion is accepted.
+  show('top', live.length === 1 && familyOn(live[0]));
   // Not for a guess: there is nothing to take apart yet, and undoing
   // something nobody did would be a button whose whole answer is that it
   // should not have been there. Refusing is what a guess answers to.
@@ -5128,6 +5132,20 @@ function guessed(c){ return +(c.dataset.proposed||0) > 0; }
 // askable of the one the shelf is drawn on — so opening a guess and pointing
 // at the photograph that does not fit left nothing to press.
 function inGuess(c){ return guessed(c) || !!c.dataset.proposedUnder; }
+// Whether the stack this file belongs to is already open on the page — inside
+// `?within=…`, or grouped by stack. The server reads it the same way, and the
+// two have to agree: what it means is *the members are in front of the
+// curator*, which decides both whether a write has to follow them and whether
+// the page has anything left to fetch.
+const OPENED = !!VIEW.within || GROUPING.includes('stack');
+// Whether the rest of this file's stack is on the page with it. Naming a top
+// writes to the others, so the gesture can only be offered where the others
+// are — which is every open view, and is never the folded grid, where not
+// having them on screen is the whole point of a stack.
+function familyOn(c){
+  const key=stackKey(c);
+  return !!key&&cells.some(o=>o!==c&&stackKey(o)===key);
+}
 
 // Stacking asks which one to show, rather than taking the first ticked and
 // hoping. The rule was invisible: nothing on screen said that the order you
@@ -5159,7 +5177,15 @@ const MIXED='a stack is one shot — photographs and video cannot be stacked '
 
 async function stackSelection(){
   const cs=targetsOn('live');
-  if(cs.length<2){say('select the ones to stack');return;}
+  // One is enough when that one is a stack, or a guess at one: the question
+  // is *which of these shows*, and the photograph a group is drawn as is how
+  // you point at the group. The bar has offered this on a single top for as
+  // long as `tops` has been in the rule that shows it, and the handler asked
+  // for two and said so — a button whose whole answer was that it should not
+  // have been pressed, standing on exactly the suggestion somebody was trying
+  // to accept.
+  if(!cs.length||(cs.length<2&&!tops(cs[0]))){
+    say('select the ones to stack');return;}
   if(mixed(cs)){say(MIXED,true);return;}
   choosing=cs; fetched=[]; opened=[]; wasPicked=cs.slice();
   // Where you were, because it is about to be taken from you. Hiding the rest
@@ -5178,7 +5204,19 @@ async function stackSelection(){
   // ones fetched out of a stack are not says they are two kinds of candidate.
   // They are not: any of them can be the one that shows.
   say(''); clearPicks();
-  for(const head of cs.filter(c=>tops(c))) await expand(head);
+  // An open stack brings its members with it rather than fetching them: they
+  // are on the page already, and `/api/behind` answers about the stack rather
+  // than about the view, so asking put a second copy of every one of them
+  // into the grid — the same photograph offered twice as the one to show.
+  if(OPENED){
+    const keys=new Set(cs.map(stackKey).filter(Boolean));
+    for(const c of cells){
+      if(keep.has(c)||!keys.has(stackKey(c))) continue;
+      c.hidden=false; choosing.push(c); offerChoice(c);
+    }
+  } else {
+    for(const head of cs.filter(c=>tops(c))) await expand(head);
+  }
 }
 
 async function expand(head){
@@ -5582,7 +5620,17 @@ async function makeTop(){
   const top=cs[0];
   const key=stackKey(top);
   if(!key){say('that one is not in a stack');return;}
-  if(key===keyOf(top)){say('that one already shows');return;}
+  // Saying *this one shows* of the file that already shows is nothing to do
+  // — unless nobody has said it yet.
+  //
+  // A guess is not a decision. Naming its top is what turns it into one, and
+  // for the photograph the guess is already drawn on, agreeing is the only
+  // thing left to say about it. Refused, there was no gesture for *yes, this
+  // is a stack* at all: you could open a suggestion, look at it, see which
+  // one it had picked to show — and then refuse it in one click or promote
+  // some other photograph, but not simply agree. The two answers a guess
+  // takes were not the same shape, and only one of them was there.
+  if(key===keyOf(top)&&!guessed(top)){say('that one already shows');return;}
   // Everything else in this stack, the old top included: it stops speaking and
   // starts deferring, which is the same write as any other member. They are on
   // screen because promoting happens inside an opened stack.
@@ -5601,6 +5649,11 @@ async function makeTop(){
   // it. An open stack's address is that name — stay on it and the page asks
   // for a stack whose files have all just gone somewhere else, which is how
   // this left you looking at one photograph with no way back but the browser.
+  //
+  // The same address when a guess was simply agreed to, and it is still worth
+  // asking for: every mark in here says *guessed* — the pill on the top, the
+  // colour of the badge outside — and they are now wrong about a stack
+  // somebody has decided on.
   if(VIEW.within) location.href=url({within:keyOf(top)});
 }
 
