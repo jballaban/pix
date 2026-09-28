@@ -395,7 +395,7 @@ class Filters:
     #: screen in a listing of the deleted.
     NAMES: ClassVar[tuple[str, ...]] = ("event", "tag", "person", "date",
                                        "audience", "kind", "band", "source",
-                                       "camera", "stacks", "deleted", "within")
+                                       "camera", "stacks", "deleted")
 
 
 @dataclass(frozen=True)

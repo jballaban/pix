@@ -295,7 +295,7 @@ const viewerOpen = () => document.byId.viewer._classes.has('on');
     // reads as a button that would do nothing — which is exactly the press
     // somebody needs to make, and exactly the one they will not.
     check('and the one already showing says what it would really do',
-          choose(cells[0]).textContent === 'Stack these',
+          choose(cells[0]).textContent === 'Confirm top',
           choose(cells[0]).textContent);
     check('while the others offer to take its place',
           choose(cells[1]).textContent === 'Show this one',

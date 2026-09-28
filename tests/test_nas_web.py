@@ -567,7 +567,7 @@ def test_the_page_draws_the_same_badge_the_server_does(
     at = js.index("function markStack(")
     body = js[at:js.index("\n}", at)]
 
-    assert "badge.href=url({within:keyOf(c)});" in body, body
+    assert "badge.href=stackUrl(keyOf(c));" in body, body
     assert "'/browse?within='" not in js, "a second way of writing the address"
 
 
@@ -721,6 +721,61 @@ def test_the_old_address_of_a_stack_says_where_it_lives_now(
     assert "event" in where, where
 
 
+def test_a_stack_is_no_longer_somewhere_the_library_can_be_narrowed_to(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """A filter narrows the library, and the narrowed library is still the
+    library: the same page, the same controls, one fewer thing on it. The
+    takes of one photograph are not that — they are a question about a
+    photograph — and asking it through the grid is what put eleven filters
+    over eight frames of one moment.
+
+    Out of `NAMES`, which is what a chip is drawn from and what the page
+    rebuilds its own address out of. What is left is the query the stack page
+    runs, and the one thing a write has to say about where it was made."""
+    assert "within" not in ix.Filters.NAMES
+    assert "within" not in [name for name, _ in web._CHIPS]
+
+    _two_files(writable, app_env)
+    client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/a.jpg",
+        "files": [{"folder": "init_2026", "name": "b.jpg"}]})
+
+    # Asked of the grid, it is a forwarding address rather than a filter.
+    r = client.get("/browse?within=init_2026/a.jpg", follow_redirects=False)
+    assert r.status_code == 307, r.status_code
+    # And nothing on the grid can put one back.
+    grid = client.get("/browse").text
+    assert "within" not in grid[grid.index("const VIEW="):grid.index(",CHIPS")]
+
+
+def test_a_write_still_says_which_stack_it_was_made_in(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """The one thing about *where* a write was made that changes what it does.
+    Refusing a guess writes `no_stack` to the photograph that speaks for it
+    and the server carries that to the rest of the group — unless they are
+    already in front of the curator, which on a stack's page they are, and
+    following them again would be a second write to a file somebody can see
+    they picked."""
+    _burst(app_env, writable, "g1.jpg", "g2.jpg", "g3.jpg")
+
+    folded = client.post("/api/decide/bulk", json={
+        "no_stack": True,
+        "files": [{"folder": "init_2026", "name": "g1.jpg"}]})
+    assert folded.status_code == 200, folded.text
+    reached = history.recent()[0]
+    assert len(reached.files) == 3, [f.name for f in reached.files]
+
+    _burst(app_env, writable, "h1.jpg", "h2.jpg", "h3.jpg", at="13:00:0")
+    opened = client.post("/api/decide/bulk?within=init_2026/h1.jpg", json={
+        "no_stack": True,
+        "files": [{"folder": "init_2026", "name": "h1.jpg"}]})
+    assert opened.status_code == 200, opened.text
+    named = history.recent()[0]
+    assert len(named.files) == 1, [f.name for f in named.files]
+
+
 def test_the_way_out_of_a_stack_cannot_be_pointed_elsewhere(
     client: TestClient, writable: Path, app_env: dict[str, Path]
 ) -> None:
@@ -760,7 +815,7 @@ def test_the_answer_can_be_given_from_the_photograph_itself(
     at = js.index("function drawTop(")
     body = js[at:js.index("\n}", at)]
     assert "viewTop.hidden=!c||!STACK||(here&&!guessed(c));" in body, body
-    assert "viewTop.textContent=here?'Stack these':'Show this one';" in body
+    assert "viewTop.textContent=here?'Confirm top':'Show this one';" in body
 
 
 def test_unstacking_puts_a_file_back_on_its_own(
@@ -965,11 +1020,19 @@ def test_the_page_knows_it_is_inside_a_stack(
     html = client.get("/stack/init_2026/a.jpg").text
     view = html[html.index("const VIEW="):html.index(",CHIPS")]
 
-    assert '"within": "init_2026/a.jpg"' in view, view
-    # And which page it is, which is how it knows the grid's half of the
-    # script has nothing to do here.
+    # Not through the filters. `within` is out of `Filters.NAMES`, so the view
+    # the page rebuilds its own address from cannot contain one — a stack is
+    # not somewhere the library can be narrowed to.
+    assert "within" not in view, view
     assert 'STACK="init_2026/a.jpg"' in html, \
         html[html.index("PAGE="):html.index("PAGE=") + 140]
+
+    # It is said on the write instead, which is the one place it changes
+    # anything: with the members in front of the curator a cascade must not
+    # follow them again.
+    js = web._BROWSE_JS
+    at = js.index("await fetch('/api/decide/bulk?'")
+    assert "if(STACK) p.set('within',STACK);" in js[at - 400:at], js[at - 400:at]
 
 
 def test_agreeing_with_a_guess_leaves_the_stack_it_was_asked_in(

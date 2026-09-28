@@ -2748,7 +2748,8 @@ def browse(request: Request,
            view: Annotated[ix.Filters, Depends(filters)],
            group: Annotated[str, Query()] = "day",
            op: Annotated[str | None, Query()] = None,
-           stale: Annotated[str | None, Query()] = None) -> Response:
+           stale: Annotated[str | None, Query()] = None,
+           within: Annotated[str, Query()] = "") -> Response:
     """The one grid, filtered — select files, then say something about them.
 
     Selecting an event on the landing page is just this page with `?event=`, so
@@ -2758,11 +2759,15 @@ def browse(request: Request,
     # was a filter, and links to it are in bookmarks and in the operation log
     # — so it still answers, by saying where the stack lives now. One place to
     # see a stack rather than two that have to agree.
-    if view.within:
+    #
+    # Read straight off the query rather than out of the view, because the
+    # view no longer carries one: `within` is out of `Filters.NAMES`, so no
+    # chip asks it and nothing here can be narrowed by it. This is a
+    # forwarding address and nothing else.
+    if within:
         return RedirectResponse(
-            _stack_url(view.within, _browse_url(
-                replace(view, within=None),
-                {"group": ",".join(_groupings(group)) or "none"})),
+            _stack_url(within, _browse_url(
+                view, {"group": ",".join(_groupings(group)) or "none"})),
             status_code=307)
     conn = db()
     groups = _groupings(group)
@@ -4021,34 +4026,6 @@ function drawChips(){
   // and be dismissable for the same reason the chips are, because a filter
   // you cannot see is a library that looks smaller than it is. Until this,
   // the only way out of a stack was the browser's own back button.
-  if(VIEW.within){
-    const back=url({within:null});
-    const s=document.createElement('span');
-    s.className='chip on from-op';
-    s.textContent='in a stack';
-    const n=document.createElement('span');
-    n.className='val';
-    n.textContent=String(cells.length);
-    s.appendChild(n);
-    const out=document.createElement('a');
-    out.className='x';
-    out.href=back;
-    out.title='Leave this stack';
-    out.textContent='×';
-    out.onclick=e=>{
-      e.stopPropagation();
-      // Back out the way you came in, when that is how you got here: the same
-      // address reached afresh is the same photographs at the top of the
-      // page, and the top of the page is not where you were standing. A path
-      // match rather than a parsed URL because a referrer from somewhere else
-      // costs nothing here — the link below is where it lands instead.
-      if(document.referrer&&document.referrer.endsWith(back)){
-        e.preventDefault(); history.back();
-      }
-    };
-    s.appendChild(out);
-    chips.appendChild(s);
-  }
 }
 
 // Which question to ask, and then what to answer — two steps, because the
@@ -4839,7 +4816,7 @@ function drawTop(c){
   // is the answer already given. Everything to say on a guess, which is what
   // the different word is for.
   viewTop.hidden=!c||!STACK||(here&&!guessed(c));
-  viewTop.textContent=here?'Stack these':'Show this one';
+  viewTop.textContent=here?'Confirm top':'Show this one';
   viewTop.title=here
     ? 'Keep this one showing, and make them a stack'
     : 'Make this the one the stack shows';
@@ -5858,10 +5835,14 @@ function leaveStack(key){
 // The same stack under a new name. Promoting renames it — a stack is named by
 // the file that speaks for it — and the way out has to come along.
 function stackUrl(key){
+  // Where it is being opened from: the grid this page is, or — on a stack's
+  // page already, which is where promoting one lands — the grid that one came
+  // from. The way out has to survive being handed along.
+  const back=BACK||url({});
   const at=key.indexOf('/');
   return '/stack/'+encodeURIComponent(key.slice(0,at))
         +'/'+encodeURIComponent(key.slice(at+1))
-        +(BACK?'?back='+encodeURIComponent(BACK):'');
+        +(back?'?back='+encodeURIComponent(back):'');
 }
 
 // Where the page goes once one photograph has been made the one that shows.
@@ -5950,7 +5931,7 @@ function markStack(c,behind){
   // said only `?within=` threw away every filter and the grouping with them,
   // so opening a stack four filters deep in a review pass came back out to
   // the undivided library.
-  badge.href=url({within:keyOf(c)});
+  badge.href=stackUrl(keyOf(c));
   badge.title=(behind+1)+' photographs stacked here';
   badge.textContent=String(behind+1);
 }
@@ -6392,6 +6373,12 @@ async function send(cs,body,label,sharedBatch){
       // view; it owns the matching rules, and a second copy here would drift.
       const p=new URLSearchParams();
       for(const [k,v] of Object.entries(VIEW)) if(v) p.set(k,v);
+      // Which stack this was decided in. Not one of the filters, and the one
+      // thing about *where* a write was made that changes what it does: with
+      // the members in front of the curator a cascade must not follow them
+      // again, and what left the view is measured against the stack rather
+      // than against the library.
+      if(STACK) p.set('within',STACK);
       const r=await fetch('/api/decide/bulk?'+p,{method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({...body, batch,
@@ -6490,6 +6477,7 @@ async function purgeSelection(){
       const chunk=cs.slice(s0,s0+CHUNK);
       const p=new URLSearchParams();
       for(const [k,v] of Object.entries(VIEW)) if(v) p.set(k,v);
+      if(STACK) p.set('within',STACK);
       const r=await fetch('/api/purge?'+p,{method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({batch,
@@ -6698,13 +6686,17 @@ if(STACK){
     const here=stackKey(c)===keyOf(c);
     // The one that already shows has nothing to say on a stack somebody made
     // — it is the answer already given, and a button whose whole reply is
-    // that it should not have been pressed is worse than none. On a guess it
-    // has everything to say, and says it in words that are not *Show this
-    // one*: under the photograph that is already the one shown that reads as
-    // a button that would do nothing, which is exactly the press somebody
-    // needs to make and exactly the one they will not.
+    // that it should not have been pressed is worse than none.
+    //
+    // On a guess it has everything to say, and says it in words that are not
+    // *Show this one*: under the photograph that is already the one shown
+    // that reads as a button that would do nothing, which is exactly the
+    // press somebody needs to make and exactly the one they will not. Nor
+    // *Stack these*, which was the first try and reads as making a second
+    // stack inside the one you are standing in — the thing it does is agree,
+    // and what it agrees to is the top.
     if(here&&!guessed(c)) continue;
-    offerChoice(c, here?'Stack these':'Show this one', true);
+    offerChoice(c, here?'Confirm top':'Show this one', true);
   }
 }
 
