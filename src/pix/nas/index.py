@@ -1130,8 +1130,8 @@ def _where(filters: Filters) -> tuple[str, dict[str, Any]]:
 def _always(filters: Filters) -> list[str]:
     """What is in the library at all, whatever is being asked about it.
 
-    Two states take a file out of the ordinary view and neither is a filter:
-    deleted, and stacked behind another. They are not optional, not banded, and
+    Three states take a file out of the ordinary view and none is a filter:
+    deleted, hidden, and stacked behind another. They are not optional, not banded, and
     not something a question can decline to apply — so they are not in
     `_clauses` with the filters, and every query has to carry them.
 
@@ -1147,6 +1147,14 @@ def _always(filters: Filters) -> list[str]:
         out.append("files.deleted = 1")
     elif filters.deleted != "with":
         out.append("files.deleted = 0")
+    # Hidden is the third (spec/clips.md §3), and it binds the administrator
+    # too — that is the whole difference between it and sharing with nobody.
+    # Asking for it by name is the way back, as the bin is for the deleted —
+    # and only for an administrator. A viewer's scope already excludes a file
+    # whose one audience is `hidden`, but a sidecar written by something else
+    # can say hidden *and* shared, and hidden has to win that too.
+    if filters.audience != decisions.HIDDEN or filters.viewer is not None:
+        out.append(_NOT_HIDDEN)
     # A file stacked behind another does not appear on its own — that is what
     # stacking is. Opening one stack is the exception, and says which.
     #
@@ -1161,6 +1169,15 @@ def _always(filters: Filters) -> list[str]:
         if filters.folds_guesses:
             out.append("files.suggested_under IS NULL")
     return out
+
+
+#: A lookup on `file_audience`'s primary key, so it costs a seek per row. The
+#: name is inlined rather than bound: it is a constant of the code, and every
+#: caller of `_always` would otherwise have to remember to bind it.
+_NOT_HIDDEN: str = (
+    "NOT EXISTS (SELECT 1 FROM file_audience fh "
+    "WHERE fh.folder = files.folder AND fh.name = files.name "
+    f"AND fh.who = '{decisions.HIDDEN}')")
 
 
 def _bind(clauses: dict[str, tuple[str, dict[str, Any]]]) -> dict[str, Any]:
@@ -1331,8 +1348,14 @@ def suggestions(rows: Sequence[sqlite3.Row]) -> list[list[sqlite3.Row]]:
 
     Singletons are not returned: there is nothing to review about a photograph
     that resembles none of its neighbours.
+
+    **Never video**, for now (spec/clips.md §4). Whether a clip can stand in
+    for another at all is a question nobody has answered yet, and a guess
+    folds by default — so proposing one would hide footage on the strength
+    of a rule that does not exist.
     """
     groups: dict[str, list[sqlite3.Row]] = {}
+    rows = [r for r in rows if r["kind"] != "video"]
 
     by_camera: dict[str, list[sqlite3.Row]] = {}
     for row in rows:
@@ -1429,7 +1452,26 @@ def resuggest(conn: sqlite3.Connection) -> int:
     # Never the deleted: they are not in the library any viewer sees, and a
     # suggestion is an offer to curate what is there.
     rows = conn.execute("SELECT * FROM files WHERE deleted = 0").fetchall()
-    return _store(conn, suggestions(rows))
+    return _store(conn, suggestions(_unhidden(conn, rows)))
+
+
+def _unhidden(conn: sqlite3.Connection,
+              rows: Sequence[sqlite3.Row]) -> list[sqlite3.Row]:
+    """`rows` without the hidden ones.
+
+    Out of guessing for the same reason as the deleted: a guess folds what is
+    on screen behind its lead, and a hidden lead would take visible files out
+    of the grid with nothing left there to open. One read of the hidden set
+    rather than a clause per caller, because both callers hand over rows they
+    already fetched for other reasons.
+    """
+    hidden = {(str(r[0]), str(r[1])) for r in conn.execute(
+        "SELECT folder, name FROM file_audience WHERE who = ?",
+        (decisions.HIDDEN,))}
+    if not hidden:
+        return list(rows)
+    return [r for r in rows
+            if (str(r["folder"]), str(r["name"])) not in hidden]
 
 
 def _store(conn: sqlite3.Connection,
@@ -1491,7 +1533,8 @@ def _regroup(conn: sqlite3.Connection, folder: str, name: str,
     conn.executemany(
         "UPDATE files SET suggested_under = NULL WHERE folder = ? AND name = ?",
         [(r["folder"], r["name"]) for r in rows.values()])
-    _store(conn, suggestions([r for r in rows.values() if not r["deleted"]]))
+    _store(conn, suggestions(
+        _unhidden(conn, [r for r in rows.values() if not r["deleted"]])))
 
 
 def _around(conn: sqlite3.Connection, folder: str, name: str,

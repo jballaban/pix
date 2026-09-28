@@ -2849,6 +2849,7 @@ def _view_script(user: Principal, view: ix.Filters, groups: list[str], *,
         # spelled again here: the page draws a chip that sets it, and two
         # copies of a sentinel are two chances to disagree about what it is.
         f"UNREVIEWED={_js(ix.UNREVIEWED)},"
+        f"HIDDEN={_js(decisions.HIDDEN)},HIDDEN_LABEL={_js(_HIDDEN_LABEL)},"
         f"EVENT_SEP={_js(decisions.EVENT_SEP)},"
         f"NO_EVENT={_js(ix.NO_EVENT)},"
         f"USUAL={_js(store().usual)},PAGE={_js(page)},"
@@ -3502,7 +3503,7 @@ def _chips(user: Principal) -> tuple[tuple[str, str], ...]:
 def _group_names() -> list[str]:
     """The groups, so the access menu can put them before the individuals."""
     book = store()
-    return sorted(set(book.groups) - {accounts.ADMIN})
+    return sorted(set(book.groups) - accounts.RESERVED)
 
 
 def _audience_names() -> list[str]:
@@ -3519,8 +3520,8 @@ def _audience_names() -> list[str]:
     dressed as a decision.
     """
     book = store()
-    groups = sorted(set(book.groups) - {accounts.ADMIN})
-    people = sorted(set(book.users) - {accounts.ADMIN} - set(groups))
+    groups = sorted(set(book.groups) - accounts.RESERVED)
+    people = sorted(set(book.users) - accounts.RESERVED - set(groups))
     return [*groups, *people]
 
 
@@ -3765,8 +3766,14 @@ def _same_field(a: str, b: str) -> bool:
 #: Offered *in addition* to whatever already exists. Audience names are free
 #: text, but "nobody yet" is a state rather than a name, and it is the single
 #: most useful thing to filter on — it is the pile of work.
+#: What `hidden` is called wherever it is offered. Said as what it does rather
+#: than as a name, because it is the one value in the access menu that is not
+#: somebody: it takes the file out of every view, the curator's own included.
+_HIDDEN_LABEL: str = "Hidden — out of every view"
+
 _EXTRA: dict[str, tuple[tuple[str, str], ...]] = {
-    "audience": ((ix.UNREVIEWED, "Nobody — not shared yet"),),
+    "audience": ((ix.UNREVIEWED, "Nobody — not shared yet"),
+                 (decisions.HIDDEN, _HIDDEN_LABEL)),
 }
 
 _BROWSE_JS = """
@@ -4197,7 +4204,13 @@ async function openMenu(anchorEl,ctx){
     // there. They differ, and the difference matters: a grant left behind by
     // a renamed or deleted account names nobody, and seeding the remove list
     // from the account list would make it unremovable.
-    const seed=ctx.column==='audience' ? USERS.map(u=>[u,u]) : [];
+    //
+    // Hiding is offered with the grants rather than as a button of its own:
+    // it answers the same question — who may see this — with *nobody, me
+    // included*. Only when acting, because the filter has it in `extra`.
+    const seed=ctx.column!=='audience' ? []
+      : [...(ctx.mode==='filter'?[]:[[HIDDEN,HIDDEN_LABEL]]),
+         ...USERS.map(u=>[u,u])];
     const have=new Set(opts.map(o=>o.value));
     opts=[...extra,...seed].filter(e=>!have.has(e[0]))
       .map(e=>({value:e[0],label:e[1],n:null,scope:'all'}))
@@ -4669,7 +4682,11 @@ function drawSel(){
   // The stack actions ask a narrower question than *is anything selected*, so
   // they answer it themselves: two or more to make a stack, one that is in one
   // to promote, anything already stacked to take out.
-  show('stack', live.length > 1 || live.some(tops));
+  //
+  // Never on video (spec/clips.md §4) — absent rather than refused, the rule
+  // above: *not for these files*.
+  const stackable=!hasVideo(live);
+  show('stack', stackable && (live.length > 1 || live.some(tops)));
   // Only where the rest of the stack is on the page, because that is what
   // this writes to. It used to ask whether the file was *behind* something,
   // which was two answers wrong at once: it was offered in the folded grid,
@@ -4677,7 +4694,7 @@ function drawSel(){
   // it was withheld from the photograph a guess is drawn on, which is the one
   // the question *shall this be the top* most needs asking of — saying yes to
   // it is how a suggestion is accepted.
-  show('top', live.length === 1 && familyOn(live[0]));
+  show('top', stackable && live.length === 1 && familyOn(live[0]));
   // Not for a guess: there is nothing to take apart yet, and undoing
   // something nobody did would be a button whose whole answer is that it
   // should not have been there. Refusing is what a guess answers to.
@@ -5402,6 +5419,12 @@ function mixed(cs){
 }
 const MIXED='a stack is one shot — photographs and video cannot be stacked '
            +'together';
+// Video does not stack at all, for now (spec/clips.md §4): the server refuses
+// it, and the bar does not offer it.
+function hasVideo(cs){
+  return cs.some(c=>c.dataset.kind==='video');
+}
+const NO_VIDEO='video cannot be stacked yet';
 
 async function stackSelection(){
   const cs=targetsOn('live');
@@ -5415,6 +5438,7 @@ async function stackSelection(){
   if(!cs.length||(cs.length<2&&!tops(cs[0]))){
     say('select the ones to stack');return;}
   if(mixed(cs)){say(MIXED,true);return;}
+  if(hasVideo(cs)){say(NO_VIDEO,true);return;}
   choosing=cs; fetched=[]; opened=[]; wasPicked=cs.slice();
   // Where you were, because it is about to be taken from you. Hiding the rest
   // of the grid collapses the page to a few rows, and a browser will not hold
@@ -6000,6 +6024,7 @@ async function makeTop(){
   // write has no top to be the same kind as — but it cannot be rearranged
   // into another one.
   if(mixed([top,...family])){say(MIXED,true);return;}
+  if(hasVideo([top,...family])){say(NO_VIDEO,true);return;}
   // One write. The other half — taking the new top out of what it was behind —
   // is the server's, because a file everything defers to cannot be left
   // deferring to one of them whoever asks for it.
@@ -6211,6 +6236,12 @@ async function applyToSelection(act,value,add,only,batch){
 function paint(c,field,value,add){
   const set=new Set(c.dataset[field]?c.dataset[field].split('\\n'):[]);
   add?set.add(value):set.delete(value);
+  // Hidden stands alone, as the server keeps it (`decisions._exclusive`):
+  // hiding clears the grants, and granting anything clears the hiding.
+  if(field==='audience'&&add){
+    if(value===HIDDEN){set.clear();set.add(HIDDEN);}
+    else set.delete(HIDDEN);
+  }
   c.dataset[field]=[...set].sort().join('\\n');
   repaint(c,field);
 }
@@ -6937,7 +6968,14 @@ _KIND_WORDS: dict[str, str] = {
 
 def _one_kind(conn: sqlite3.Connection | None, change: _Change,
               targets: Sequence[Target]) -> None:
-    """Refuse a stack that would mix photographs with video.
+    """Refuse a stack that would mix photographs with video — or hold video
+    at all.
+
+    **Video does not stack yet** (spec/clips.md §4). Whether one clip can
+    speak for another is a question with no answer so far, and a stack is a
+    fold: nothing should be taken out of the grid on a rule nobody has made.
+    Stacks of video made before this are left alone and can still be taken
+    apart — that write names no top, and returns before any of this.
 
     A stack says *these are the same shot, and this one speaks for the rest*.
     A photograph and a clip are not the same shot whatever else they share —
@@ -6968,6 +7006,11 @@ def _one_kind(conn: sqlite3.Connection | None, change: _Change,
         "  ON json_each.value = files.folder || char(10) || files.name "
         "GROUP BY files.kind", {"keys": json.dumps(keys)}).fetchall()
     if len(rows) < 2:
+        if rows and rows[0]["kind"] == "video":
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "video cannot be stacked yet — whether one clip can speak "
+                "for another has not been decided")
         return
     counts = " and ".join(
         f'{r["n"]} {_KIND_WORDS.get(str(r["kind"]), str(r["kind"]))}'
@@ -8526,6 +8569,9 @@ async def accounts_save(request: Request,
     who = accounts.canonical(name)
     if not who:
         return _back("a name is required")
+    if who == decisions.HIDDEN:
+        return _back(f"{who} is reserved — it is how a file is kept out of "
+                     "every view")
 
     existing = book.users.get(who)
     if existing is None and not password:
@@ -8537,7 +8583,8 @@ async def accounts_save(request: Request,
     # at all and must not clear them, while an empty box on the people form is
     # how you take somebody out of every group.
     kept = (tuple(sorted({accounts.canonical(g)
-                          for g in form["groups"].split(",") if g.strip()}))
+                          for g in form["groups"].split(",") if g.strip()}
+                         - accounts.RESERVED))
             if "groups" in form else (existing.groups if existing else ()))
     book.users[who] = accounts.Account(who, hashed, kept)
     # A group used here should exist without having to be declared twice.
@@ -8593,7 +8640,7 @@ async def accounts_groups(
     raw = (await _form(request)).get("groups", "")
     book = store()
     book.groups = sorted({accounts.canonical(g) for g in raw.split(",")
-                          if g.strip()})
+                          if g.strip()} - accounts.RESERVED)
     accounts.save(book)
     return _back("saved groups")
 

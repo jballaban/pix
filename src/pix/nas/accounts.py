@@ -52,10 +52,17 @@ from typing import Any, cast
 from pix.markers import SIDECAR_TMP_SUFFIX
 from pix.nas import auth
 from pix.nas.const import ACCOUNTS_FILE
+from pix.nas.decisions import HIDDEN
 
 #: The built-in administrator. Hard-coded so it cannot be removed or renamed,
 #: and excluded from every audience: an admin sees everything already.
 ADMIN: str = "admin"
+
+#: Names no account or group may take. `admin` for the reason above; `hidden`
+#: because it is the audience that takes a file out of every view
+#: (spec/clips.md §3) — a login called that would be granted exactly the files
+#: nobody is meant to see.
+RESERVED: frozenset[str] = frozenset({ADMIN, HIDDEN})
 
 
 def canonical(name: str) -> str:
@@ -136,7 +143,7 @@ class Store:
     def audiences(self) -> list[str]:
         """Everything that can be shared with — people and groups, never
         the administrator, which sees everything already."""
-        return sorted({*self.users, *self.groups} - {ADMIN})
+        return sorted({*self.users, *self.groups} - RESERVED)
 
 
 def load(path: Path | None = None) -> Store:

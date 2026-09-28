@@ -564,3 +564,32 @@ def test_the_whole_name_is_what_goes_to_other_tools(tmp_path: Path) -> None:
 
     raw = decisions.sidecar_path(media).read_text(encoding="utf-8")
     assert "Sicily &gt; Taormina" in raw or "Sicily > Taormina" in raw
+
+
+# --- hidden (spec/clips.md §3) -------------------------------------------------
+
+def test_hiding_clears_every_grant(media: Path) -> None:
+    """Not kept underneath, waiting to leak back the moment the hiding is
+    taken off by hand."""
+    decisions.change(media, add_audience=["family", "kid"])
+    _, now = decisions.change(media, add_audience=[decisions.HIDDEN])
+    assert now.audience == (decisions.HIDDEN,)
+
+
+def test_sharing_a_hidden_file_shows_it(media: Path) -> None:
+    decisions.change(media, add_audience=[decisions.HIDDEN])
+    _, now = decisions.change(media, add_audience=["family"])
+    assert now.audience == ("family",)
+
+
+def test_asking_for_hidden_and_a_share_at_once_hides(media: Path) -> None:
+    """Hidden-and-shared is a contradiction; the safe side of it wins."""
+    _, now = decisions.change(media, audience=["family", decisions.HIDDEN])
+    assert now.audience == (decisions.HIDDEN,)
+
+
+def test_unhiding_leaves_nothing_behind(media: Path) -> None:
+    decisions.change(media, add_audience=[decisions.HIDDEN])
+    _, now = decisions.change(media, remove_audience=[decisions.HIDDEN])
+    assert now.audience == ()
+    assert decisions.read(media) is None

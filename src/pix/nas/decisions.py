@@ -58,6 +58,14 @@ like any other name — as the note above already says. A photograph shared
 with `private` has an audience, so it counts as decided, and nobody can see
 it. The model had the answer; only this paragraph did not.
 
+**`hidden` is the one audience that is not a name** (spec/clips.md §3). It is
+*keep this, and show it to nobody — the administrator included*, which
+`private` cannot say: an administrator sees everything, so a file shared with
+nobody is still in the curator's own grid. Hiding is about that grid. So it is
+reserved, never an account or a group, and **exclusive** — hidden-and-shared
+is a contradiction, and whichever side was asked for last wins, the same way
+a later click wins everywhere else.
+
 ### Serialization
 
 XMP packet, RDF attribute form, in the `pix` namespace already registered for
@@ -150,6 +158,12 @@ def join_event(head: str | None, leaf: str | None) -> str | None:
     if not head:
         return None
     return f"{head}{EVENT_SEP}{leaf}" if leaf else head
+
+
+#: The reserved audience that takes a file out of every view (spec/clips.md
+#: §3). Kept here, beside the decision it is a value of; the index and the
+#: accounts both import it rather than spelling it again.
+HIDDEN: str = "hidden"
 
 
 class Unset:
@@ -395,9 +409,11 @@ def change(media: Path, *,
         tags=_merge(current.tags, tags, add_tags, remove_tags),
         people=_merge(current.people, people, add_people, remove_people,
                       norm=normalize_people, same=str.casefold),
-        audience=_merge(current.audience, audience,
-                        add_audience, remove_audience,
-                        norm=normalize_names),
+        audience=_exclusive(
+            _merge(current.audience, audience, add_audience, remove_audience,
+                   norm=normalize_names),
+            () if isinstance(audience, Unset) else (audience or ()),
+            add_audience),
         deleted=current.deleted if isinstance(deleted, Unset) else deleted,
         stacked_under=(current.stacked_under
                        if isinstance(stacked_under, Unset) else stacked_under),
@@ -442,6 +458,25 @@ def _merge(current: tuple[str, ...], replace: Sequence[str] | None | Unset,
         dropped = {same(v) for v in norm(remove)}
         kept = norm([v for v in [*kept, *norm(add)] if same(v) not in dropped])
     return kept
+
+
+def _exclusive(merged: tuple[str, ...], replaced: Sequence[str],
+               added: Sequence[str]) -> tuple[str, ...]:
+    """Hold `hidden` apart from every other audience.
+
+    Whichever side this edit asked for wins. Hiding a file that is shared
+    with `family` hides it — the share is not kept underneath, waiting to
+    leak back the moment the hiding is undone by hand. Sharing a hidden file
+    shows it. Only the names *this* edit sent count as asked for: a file
+    already hidden and already, somehow, shared (a sidecar written by
+    something else) is resolved in favour of hiding, the safe direction.
+    """
+    if HIDDEN not in merged or len(merged) == 1:
+        return merged
+    asked = set(normalize_names([*replaced, *added]))
+    if HIDDEN in asked or not asked:
+        return (HIDDEN,)
+    return tuple(v for v in merged if v != HIDDEN)
 
 
 # --- serialization -----------------------------------------------------------

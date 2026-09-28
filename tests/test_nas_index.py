@@ -1633,3 +1633,73 @@ def test_no_photograph_is_in_two_suggestions(tree: dict[str, Path]) -> None:
     got = ix.suggestions(_rows(tree))
     seen = [r["name"] for g in got for r in g]
     assert len(seen) == len(set(seen)), seen
+
+
+# --- hidden, and video out of stacking (spec/clips.md §3, §4) -----------------
+
+def test_two_clips_of_the_same_moment_are_not_a_suggestion(
+    tree: dict[str, Path]
+) -> None:
+    """Video does not stack yet. A guess folds by default, so proposing one
+    would take footage out of the grid on a rule nobody has made."""
+    _shot(tree, "a.mp4", "2026:08:30 10:00:00")
+    _shot(tree, "b.mp4", "2026:08:30 10:00:01")
+
+    assert ix.suggestions(_rows(tree)) == []
+
+
+def _hide(tree: dict[str, Path], name: str) -> None:
+    (tree["master"] / "f").mkdir(parents=True, exist_ok=True)
+    decisions.write(tree["master"] / "f" / name,
+                    Decision(audience=(decisions.HIDDEN,)))
+
+
+def test_a_hidden_photograph_is_not_guessed_into_a_stack(
+    tree: dict[str, Path]
+) -> None:
+    """A guess folds the rest behind its lead, and a hidden lead would take
+    visible photographs out of the grid with nothing there to open."""
+    _shot(tree, "a.jpg", "2026:08:30 10:00:00")
+    _shot(tree, "b.jpg", "2026:08:30 10:00:01")
+    _hide(tree, "a.jpg")
+
+    conn = _built(tree)
+    assert conn.execute(
+        "SELECT COUNT(*) FROM files WHERE suggested_under IS NOT NULL"
+    ).fetchone()[0] == 0
+
+
+def test_hidden_is_out_of_every_view_until_asked_for(
+    tree: dict[str, Path]
+) -> None:
+    """The difference from sharing with nobody: the administrator does not
+    see it either — and asking for it by name is the way back."""
+    _shot(tree, "a.jpg", "2026:08:30 10:00:00")
+    _shot(tree, "b.jpg", "2026:08:31 10:00:00")
+    _hide(tree, "a.jpg")
+    conn = _built(tree)
+
+    def names(f: ix.Filters) -> list[str]:
+        return sorted(str(r["name"]) for r in ix.files(conn, f, limit=100))
+
+    assert names(ix.Filters()) == ["b.jpg"]
+    assert names(ix.Filters(audience=decisions.HIDDEN)) == ["a.jpg"]
+    assert ix.count(conn, ix.Filters()) == 1
+    # Decided: a hidden file is not waiting for anybody.
+    assert names(ix.Filters(audience=ix.UNREVIEWED)) == ["b.jpg"]
+
+
+def test_hidden_wins_over_a_share_for_a_viewer(tree: dict[str, Path]) -> None:
+    """The app never writes hidden-and-shared, but a sidecar written by
+    something else can say it — and a viewer asking for `hidden` by name must
+    not be how they find out what it covers."""
+    _shot(tree, "a.jpg", "2026:08:30 10:00:00")
+    (tree["master"] / "f").mkdir(parents=True, exist_ok=True)
+    decisions.write(tree["master"] / "f" / "a.jpg",
+                    Decision(audience=(decisions.HIDDEN, "family")))
+    conn = _built(tree)
+
+    for audience in (None, decisions.HIDDEN):
+        seen = ix.files(conn, ix.Filters(viewer=frozenset({"family"}),
+                                         audience=audience), limit=100)
+        assert not seen, audience

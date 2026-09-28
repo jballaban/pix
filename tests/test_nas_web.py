@@ -6232,3 +6232,73 @@ def test_a_household_member_may_name_one_but_not_smuggle_a_share(
     assert kid.post("/api/decide", json={
         "folder": "init_2026", "name": "a.jpg", "add_audience": ["kid"]
     }).status_code == 403
+
+
+# --- hidden, and video out of stacking (spec/clips.md §3, §4) -----------------
+
+def test_hiding_takes_a_file_out_of_the_curators_own_grid(
+    client: TestClient, writable: Path
+) -> None:
+    """What `hidden` adds over sharing with nobody: the administrator does not
+    see it either, until they ask for it by name."""
+    r = client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg",
+        "add_audience": [decisions.HIDDEN]})
+    assert r.status_code == 200, r.text
+    assert decisions.read(writable / "a.jpg") == Decision(
+        audience=(decisions.HIDDEN,))
+
+    assert "a.jpg" not in client.get("/browse?event=Italy%20-%20Sicily").text
+    assert "a.jpg" in client.get(
+        "/browse?event=Italy%20-%20Sicily&audience=hidden").text
+
+
+def test_hiding_is_offered_in_the_access_menu(client: TestClient) -> None:
+    html = client.get("/browse").text
+    assert f"HIDDEN={json.dumps(decisions.HIDDEN)}" in html
+    assert "out of every view" in html
+
+
+def test_nobody_can_be_called_hidden(client: TestClient) -> None:
+    """A login called that would be granted exactly the files nobody is
+    meant to see."""
+    client.post("/accounts/save", data={"name": "Hidden", "password": "pw"})
+    client.post("/accounts/save", data={"name": "kid", "password": "pw",
+                                        "groups": "family,hidden"})
+    client.post("/accounts/groups", data={"groups": "family,hidden"})
+
+    book = accounts.load()
+    assert decisions.HIDDEN not in book.users
+    assert decisions.HIDDEN not in book.groups
+    assert book.users["kid"].groups == ("family",)
+
+
+def test_video_cannot_be_stacked_yet(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """Whether one clip can speak for another has not been decided, and a
+    stack is a fold — nothing should leave the grid on a rule nobody made."""
+    share = app_env["share"]
+    for name in ("b.mp4", "c.mp4"):
+        (writable / name).write_bytes(b"fake")
+    (share / "meta" / "init_2026" / "c.mp4.json").write_text(json.dumps({
+        "file": "c.mp4", "folder": "init_2026", "size": 20, "mtime_ns": 1,
+        "exif": {"QuickTime:Duration": "10 s",
+                 "XMP:EventAuto": "Italy - Sicily"},
+    }), encoding="utf-8")
+    ix.build(app_env["db"], meta_dir=share / "meta",
+             master_dir=share / "master")
+
+    r = client.post("/api/decide/bulk", json={
+        "stacked_under": "init_2026/b.mp4",
+        "files": [{"folder": "init_2026", "name": "c.mp4"}]})
+
+    assert r.status_code == 400, r.text
+    assert "video cannot be stacked" in r.text, r.text
+    assert decisions.read(writable / "c.mp4") is None, "written anyway"
+
+
+def test_the_bar_does_not_offer_to_stack_video() -> None:
+    js = web._BROWSE_JS
+    assert "show('stack', stackable &&" in js
+    assert "show('top', stackable &&" in js
