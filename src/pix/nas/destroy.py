@@ -30,6 +30,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+from pix.nas import cut
 from pix.nas import decisions
 from pix.nas.const import (
     LARGE_DIR, META_DIR, PREVIEW_DIR, RENDER_DIR, THUMB_DIR,
@@ -107,5 +108,8 @@ def destroy(media: Path, *, conn: sqlite3.Connection | None = None,
             sidecar = True
         else:
             derived += 1
+    # A clip's cuts, whatever ranges they were made for (spec/clips.md §6).
+    # Their names carry the range, so they are found by prefix, not by path.
+    derived += cut.sweep(RENDER_DIR / media.parent.name, media.name, keep=None)
     return Removed(master=master, sidecar=sidecar, derived=derived,
                    indexed=indexed)

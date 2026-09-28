@@ -520,3 +520,208 @@ def test_hiding_the_original_is_the_hidden_audience(tmp_path: Path) -> None:
     assert sent == {"url": "/api/decide",
                     "body": {"folder": "init_2026", "name": "b.mp4",
                              "add_audience": [decisions.HIDDEN]}}
+
+
+# --- cuts (spec/clips.md §6) ---------------------------------------------------
+
+from pix.nas import cut  # noqa: E402
+from pix.nas import paths  # noqa: E402
+
+
+def test_nothing_but_a_copy_is_ever_run() -> None:
+    """The app's first media tool must not be how encoding reaches the Atom."""
+    cut.copy_only(["ffmpeg", "-i", "a", "-c", "copy", "b"])
+    for bad in (["-c:v", "libx264"], ["-vf", "scale=2"], ["-c", "aac"]):
+        with pytest.raises(cut.CutError):
+            cut.copy_only(["ffmpeg", "-i", "a", *bad, "b"])
+
+
+def test_the_command_is_a_copy_from_the_start(tmp_path: Path) -> None:
+    args = cut.command("ffmpeg", tmp_path / "f" / "b.mp4", 1.0, 3.5,
+                       tmp_path / "b.mp4~aaaa@1-3.5.cut.mp4", created=None)
+    assert args[args.index("-c") + 1] == "copy"
+    assert args.index("-ss") < args.index("-i"), "must seek by keyframe"
+    assert "pix:ClipId=aaaa" in args and "pix:ClipRange=1-3.5" in args
+
+
+def test_a_cut_is_named_by_its_range(tmp_path: Path) -> None:
+    """So one made for a range that has since moved is stale by its name."""
+    media = tmp_path / "f" / "b.mp4~aaaa"
+    a = paths.cut_path(media, tmp_path / "render", 1.0, 3.5)
+    assert a.name == "b.mp4~aaaa@1-3.5.cut.mp4"
+    assert a != paths.cut_path(media, tmp_path / "render", 1.0, 3.6)
+
+
+def test_a_start_snaps_to_the_nearest_keyframe_it_may_use() -> None:
+    keys = (0.0, 1.0, 2.0, 3.0)
+    assert cut.snap(1.4, keys) == 1.0
+    assert cut.snap(1.6, keys) == 2.0
+    # Never back over the clip before it.
+    assert cut.snap(1.4, keys, lo=1.2) == 2.0
+    assert cut.snap(1.4, keys, lo=3.5) is None
+
+
+def test_two_touching_ranges_stay_touching_when_they_snap() -> None:
+    got = web._snapped((0.0, 1.0, 2.0, 3.0), [(0, 1.4), (1.4, 4)], [])
+    assert got == [(0.0, 1.0), (1.0, 4)]
+
+
+def test_a_snapped_start_never_overlaps_a_sibling() -> None:
+    got = web._snapped((0.0, 1.0, 2.0, 3.0), [(1.3, 4)], [(0, 1.3)])
+    assert got == [(2.0, 4)]
+
+
+@pytest.fixture
+def real(app_env: dict[str, Path], writable: Path,
+         monkeypatch: pytest.MonkeyPatch) -> Path:
+    """`b.mp4` as a real four-second H.264 video, a keyframe every second,
+    indexed — and cuts made before a request returns."""
+    import shutil
+    import subprocess
+
+    if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
+        pytest.skip("ffmpeg is not installed")
+    out = writable / "b.mp4"
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-y",
+         "-f", "lavfi", "-i", "testsrc=size=160x90:rate=25",
+         "-f", "lavfi", "-i", "sine=frequency=440",
+         "-t", "4", "-c:v", "libx264", "-g", "25", "-keyint_min", "25",
+         "-sc_threshold", "0", "-pix_fmt", "yuv420p", "-c:a", "aac",
+         "-shortest", str(out)], check=True, timeout=60)
+    share = app_env["share"]
+    (share / "meta" / "init_2026" / "b.mp4.json").write_text(json.dumps({
+        "file": "b.mp4", "folder": "init_2026", "size": out.stat().st_size,
+        "mtime_ns": 1,
+        "exif": {"QuickTime:Duration": "4 s",
+                 "QuickTime:CompressorID": "avc1",
+                 "QuickTime:VideoFrameRate": 25,
+                 "QuickTime:CreateDate": "2026:08:30 19:00:00",
+                 "EXIF:DateTimeOriginal": "2026:08:30 15:00:00",
+                 "XMP:EventAuto": "Italy - Sicily"},
+    }), encoding="utf-8")
+    _rebuild(app_env)
+    monkeypatch.setattr(web._CUTS, "immediate", True)
+    return writable
+
+
+def _cuts(name: str) -> list[Path]:
+    folder = web.RENDER_DIR / "init_2026"
+    return sorted(folder.glob(f"{name}@*.cut.mp4")) if folder.is_dir() else []
+
+
+def test_the_keyframes_are_read_without_decoding(real: Path) -> None:
+    assert cut.keyframes(real / "b.mp4") == (0.0, 1.0, 2.0, 3.0)
+
+
+def test_a_clip_is_cut_from_a_keyframe_and_a_viewer_can_then_see_it(
+    client: TestClient, real: Path, app_env: dict[str, Path],
+    add_user: Callable[..., None], sign_in: Callable[[str, str], TestClient]
+) -> None:
+    [clip] = _make(client, (1.3, 3.2))
+
+    got = decisions.read(real / clip)
+    assert got is not None and (got.clip_in, got.clip_out) == (1.0, 3.2)
+    [made] = _cuts(clip)
+    assert made.name == clip + "@1-3.2.cut.mp4"
+    assert _have(app_env, clip)["size"] == made.stat().st_size
+
+    client.post("/api/decide", json={"folder": "init_2026", "name": clip,
+                                     "add_audience": ["kid"]})
+    add_user("kid", "pw")
+    kid = sign_in("kid", "pw")
+    assert clip in kid.get("/browse").text
+    assert kid.get(f"/media/init_2026/{clip}").content == made.read_bytes()
+    r = kid.get(f"/download/init_2026/{clip}?original=1")
+    assert r.content == made.read_bytes()
+    assert clip + ".mp4" in r.headers["content-disposition"]
+
+
+def test_a_cut_says_what_it_is(real: Path, client: TestClient) -> None:
+    import subprocess
+
+    [clip] = _make(client, (1, 3))
+    [made] = _cuts(clip)
+    tags = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format_tags",
+         "-of", "json", str(made)], capture_output=True, text=True,
+        check=True).stdout
+    found = json.loads(tags)["format"]["tags"]
+    assert found["pix:ClipId"] == clips.id_of(clip)
+    assert found["pix:ClipRange"] == "1-3"
+    assert found["creation_time"].startswith("2026-08-30T19:00:01")
+
+
+def test_moving_a_clip_replaces_its_cut(real: Path, client: TestClient) -> None:
+    [clip] = _make(client, (1, 3))
+    client.post("/api/clips/range", json={
+        "folder": "init_2026", "name": clip, "start": 2, "end": 3.5})
+    assert [p.name for p in _cuts(clip)] == [clip + "@2-3.5.cut.mp4"]
+
+
+def test_splitting_on_a_keyframe(real: Path, client: TestClient) -> None:
+    [clip] = _make(client, (0, 4))
+    r = client.post("/api/clips/split", json={
+        "folder": "init_2026", "name": clip, "at": 2.2})
+    assert r.status_code == 200, r.text
+    assert r.json()["at"] == 2.0
+    assert len(_cuts(clip)) == 1 and len(_cuts(r.json()["second"])) == 1
+
+
+def test_binning_the_source_can_keep_its_clips_as_files(
+    real: Path, client: TestClient, app_env: dict[str, Path]
+) -> None:
+    [clip] = _make(client, (1, 3))
+    client.post("/api/decide", json={"folder": "init_2026", "name": clip,
+                                     "add_people": ["Mum"]})
+    r = client.post("/api/clips/free", json={"folder": "init_2026",
+                                             "source": "b.mp4"})
+    assert r.status_code == 200, r.text
+    [own] = r.json()["freed"]
+    assert own == clip + ".mp4"
+
+    assert (real / own).is_file()
+    assert decisions.read(real / own) == Decision(event="Italy - Sicily",
+                                                   people=("Mum",))
+    assert not decisions.sidecar_path(real / clip).exists()
+    assert _row(app_env, clip) is None
+    assert decisions.read(real / "b.mp4") == Decision(deleted=True)
+    row = _have(app_env, own)
+    assert row["kind"] == "video" and row["clip_of"] is None
+    assert row["effective_date"] == "2026-08-30-15:00:01"
+    record = json.loads((app_env["share"] / "meta" / "init_2026" /
+                         (own + ".json")).read_text(encoding="utf-8"))
+    assert record["placeholder"] is True
+    # Its old source's picture stands in until `process` makes its own.
+    assert client.get(f"/thumb/init_2026/{own}").status_code == 200
+
+
+def test_clips_are_not_kept_as_files_before_they_are_cut(
+    client: TestClient, video: Path
+) -> None:
+    _make(client, (0, 30))
+    r = client.post("/api/clips/free", json={"folder": "init_2026",
+                                             "source": "b.mp4"})
+    assert r.status_code == 409 and "being cut" in r.text, r.text
+
+
+def test_purging_a_clip_removes_its_cut(
+    real: Path, client: TestClient
+) -> None:
+    [clip] = _make(client, (1, 3))
+    client.post("/api/decide", json={"folder": "init_2026", "name": clip,
+                                     "deleted": True})
+    r = client.post("/api/purge", json={"files": [
+        {"folder": "init_2026", "name": clip}]})
+    assert r.json()["purged"] == 1, r.text
+    assert _cuts(clip) == []
+
+
+def test_process_replaces_a_placeholder_record(tmp_path: Path) -> None:
+    from pix.nas import derive
+
+    path = tmp_path / "x.mp4.json"
+    path.write_text(json.dumps({"placeholder": True}), encoding="utf-8")
+    assert derive._placeholder(path)  # pyright: ignore[reportPrivateUsage]
+    path.write_text(json.dumps({"file": "x.mp4"}), encoding="utf-8")
+    assert not derive._placeholder(path)  # pyright: ignore[reportPrivateUsage]

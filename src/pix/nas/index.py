@@ -44,7 +44,8 @@ from typing import Any, Callable, ClassVar, Iterator, Sequence, cast
 from pix import datestr
 from pix.nas import clips
 from pix.nas import decisions
-from pix.nas.const import LEDGER_NAME, MASTER_DIR, META_DIR
+from pix.nas import paths
+from pix.nas.const import LEDGER_NAME, MASTER_DIR, META_DIR, RENDER_DIR
 from pix.nas.decisions import Decision
 
 #: Bumped whenever the shape changes. A mismatch drops and rebuilds rather than
@@ -555,6 +556,7 @@ def build(db_path: Path, *, echo: Callable[[str], None] = lambda _: None,
             conn.execute("DELETE FROM file_audience")
             for folder, decided, source in _folders(meta_root, master_root):
                 sources: dict[str, dict[str, Any]] = {}
+                codecs: dict[str, str | None] = {}
                 for record in _records(meta_root / folder):
                     row = _row(folder, record, decided, source)
                     if row is None:
@@ -563,6 +565,8 @@ def build(db_path: Path, *, echo: Callable[[str], None] = lambda _: None,
                     conn.execute(_INSERT, row)
                     name = str(row["name"])
                     sources[name] = row
+                    if row["kind"] == "video":
+                        codecs[name] = codec_of(record)
                     decision = decided.get(name)
                     if decision is not None:
                         _write_multi(conn, folder, name, decision)
@@ -585,8 +589,10 @@ def build(db_path: Path, *, echo: Callable[[str], None] = lambda _: None,
                         # is no footage behind it.
                         stats.skipped.append(f"{folder}/{name}: no source")
                         continue
+                    size = clip_size(master_root / folder / name, decision,
+                                     codecs.get(of))
                     conn.execute(_INSERT, _clip_row(folder, name, sources[of],
-                                                    decision))
+                                                    decision, size))
                     _write_multi(conn, folder, name, decision)
                     tags_seen.update(decision.tags)
                     stats.files += 1
@@ -659,13 +665,16 @@ def refresh(conn: sqlite3.Connection, folder: str, name: str, *,
 
     of = clips.source_of(name)
     if of is not None and record is None:
+        source_record = _record(meta_root / folder / f"{of}.json")
         if commit:
             with conn:
                 done = _refresh_clip(conn, folder, name, of,
-                                     master_root / folder / name, decision)
+                                     master_root / folder / name, decision,
+                                     codec_of(source_record))
         else:
             done = _refresh_clip(conn, folder, name, of,
-                                 master_root / folder / name, decision)
+                                 master_root / folder / name, decision,
+                                 codec_of(source_record))
         if done is not None:
             return done
     if record is None:
@@ -712,8 +721,8 @@ def refresh(conn: sqlite3.Connection, folder: str, name: str, *,
 
 def _refresh_clip(conn: sqlite3.Connection, folder: str, name: str,
                   source: str, media: Path,
-                  decision: Decision | None | decisions.Unset
-                  ) -> bool | None:
+                  decision: Decision | None | decisions.Unset,
+                  codec: str | None = None) -> bool | None:
     """Rewrite a clip's row — or remove it, or say it is not a clip at all.
 
     The one place a refresh adds or removes a row, and deliberately: a clip's
@@ -739,7 +748,9 @@ def _refresh_clip(conn: sqlite3.Connection, folder: str, name: str,
         return False
     was = (str(existing["suggested_under"])
            if existing is not None and existing["suggested_under"] else None)
-    _rewrite(conn, folder, name, _clip_row(folder, name, source_row, decision),
+    _rewrite(conn, folder, name,
+             _clip_row(folder, name, source_row, decision,
+                       clip_size(media, decision, codec)),
              decision, was)
     return True
 
@@ -931,8 +942,43 @@ def _row(folder: str, record: dict[str, Any],
     }
 
 
+def clip_size(media: Path, decision: Decision, codec: str | None) -> int | None:
+    """The size of the file a viewer would be given for this clip, or None
+    while it has none (spec/clips.md §7).
+
+    That is the playback render where there is one, and otherwise the cut —
+    but the cut only where the source's codec plays in a browser, because an
+    HEVC cut is a lossless piece of an HEVC video and no more playable than
+    it was. A still's file is its JPG, which `process` makes.
+
+    Stored as the row's size, which is what a clip's row lacked: a fact about
+    its bytes. A viewer's listing asks for clips that have one.
+    """
+    if decision.clip_in is None or decision.clip_out is None:
+        return None
+    candidates = [paths.render_path(media, RENDER_DIR)]
+    if (decision.clip_in != decision.clip_out
+            and (codec or "").lower() in paths.PLAYABLE_CODECS):
+        candidates.append(paths.cut_path(media, RENDER_DIR, decision.clip_in,
+                                         decision.clip_out))
+    for candidate in candidates:
+        try:
+            return candidate.stat().st_size
+        except OSError:
+            continue
+    return None
+
+
+def codec_of(record: dict[str, Any] | None) -> str | None:
+    """A video's codec as ExifTool read it, from its meta record."""
+    raw: object = (record or {}).get("exif")
+    exif = cast("dict[str, Any]", raw) if isinstance(raw, dict) else {}
+    value = exif.get("QuickTime:CompressorID")
+    return str(value).lower() if value else None
+
+
 def _clip_row(folder: str, name: str, source: sqlite3.Row | dict[str, Any],
-              decision: Decision) -> dict[str, Any]:
+              decision: Decision, size: int | None = None) -> dict[str, Any]:
     """A clip's row, made from its source's row and its own sidecar.
 
     A clip has no probed facts of its own — no meta record, because it has no
@@ -953,7 +999,7 @@ def _clip_row(folder: str, name: str, source: sqlite3.Row | dict[str, Any],
         "folder": folder,
         "name": name,
         "source": source["source"],
-        "size": None,
+        "size": size,
         "mtime_ns": None,
         "kind": kind,
         "capture_date": capture,
@@ -1314,12 +1360,12 @@ def _always(filters: Filters) -> list[str]:
     # can say hidden *and* shared, and hidden has to win that too.
     if filters.audience != decisions.HIDDEN or filters.viewer is not None:
         out.append(_NOT_HIDDEN)
-    # A clip reaches a viewer only once it has files of its own
-    # (spec/clips.md §7). Until then it can only play as its source clamped
-    # to a range, which would hand the viewer all of the source. No clip has
-    # files yet, so for a viewer there are none.
+    # A clip reaches a viewer only once it has a file of its own
+    # (spec/clips.md §7) — which is what its size records. Until then it can
+    # only play as its source clamped to a range, and that would hand the
+    # viewer all of the source.
     if filters.viewer is not None:
-        out.append("files.clip_of IS NULL")
+        out.append("(files.clip_of IS NULL OR files.size IS NOT NULL)")
     # A file stacked behind another does not appear on its own — that is what
     # stacking is. Opening one stack is the exception, and says which.
     #
@@ -1445,7 +1491,7 @@ def files(conn: sqlite3.Connection, filters: Filters | None = None, *,
             if view.within or view.unfold else "")
     return list(conn.execute(
         "SELECT files.*, " + _TAGS_COL + ", " + _PEOPLE_COL + ", " + _AUDIENCE_COL
-        + ", " + _BEHIND_COL + ", " + _AHEAD_COL
+        + ", " + _BEHIND_COL + ", " + _AHEAD_COL + ", " + _CLIPS_COL
         + (selected or ", NULL AS grp0 ")
         + "FROM files "
         + (f"WHERE {where} " if where else "")
@@ -1470,6 +1516,13 @@ _BEHIND_COL: str = (
 #: How many files the app *thinks* defer to this one. Beside `behind` rather
 #: than merged into it, because the grid says which of the two it is: a number
 #: nobody has confirmed is drawn differently from one somebody decided.
+#: How many living clips were cut from this file. Read per row for the same
+#: reason as `behind`: binning a source with clips has a question to ask
+#: first (spec/clips.md §5), and the page has to know before it asks.
+_CLIPS_COL: str = (
+    "(SELECT COUNT(*) FROM files c WHERE c.folder = files.folder "
+    " AND c.clip_of = files.name AND c.deleted = 0) AS clips")
+
 _AHEAD_COL: str = (
     "(SELECT COUNT(*) FROM files g "
     " WHERE g.suggested_under = files.folder || '/' || files.name) AS proposed")

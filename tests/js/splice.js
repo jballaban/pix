@@ -52,7 +52,9 @@ function fetch(url, opts) {
       : url.endsWith('/merge') ? { name: body.first } : {};
     return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(JSON.stringify(reply)) });
   }
-  return Promise.resolve({ ok: true, json: () => Promise.resolve(SPLICE.clips) });
+  const answer = url.startsWith('/api/keyframes/') ? { keys: SPLICE.keys || null }
+    : SPLICE.clips;
+  return Promise.resolve({ ok: true, json: () => Promise.resolve(answer) });
 }
 const window = { addEventListener() {} };
 const settle = () => new Promise(r => setImmediate(r));
@@ -80,4 +82,6 @@ const settle = () => new Promise(r => setImmediate(r));
   await settle(); await settle();
   sent.forEach(s => console.log(JSON.stringify(s)));
   console.log('OK');
+  // The page polls while a clip is being cut; that timer would keep node up.
+  process.exit(0);
 })().catch(e => { console.log('FAIL ' + e.stack); process.exit(1); });

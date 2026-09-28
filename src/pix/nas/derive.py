@@ -211,6 +211,16 @@ def master_files() -> Iterator[Path]:
             yield path
 
 
+def _placeholder(path: Path) -> bool:
+    """Whether a meta record is one the app wrote rather than a probe."""
+    try:
+        record: object = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(record, dict) and bool(
+        cast("dict[str, Any]", record).get("placeholder"))
+
+
 def meta_path(media: Path) -> Path:
     """Where `media`'s probed-facts JSON lives, against *this* module's tier."""
     return paths.meta_path(media, META_DIR)
@@ -473,6 +483,11 @@ def _derive_one(media: Path, summary: ProcessSummary, lock: threading.Lock,
                 exif: "_ExifPool", state: dict[str, int]) -> None:
     """Make whatever `media` is missing."""
     want_thumb, want_large, want_preview, want_meta = needs_work(media)
+    # A record the app wrote for a clip it made into a file (spec/clips.md
+    # §5) is a placeholder: what the clip's row knew, standing in until this
+    # probes the file itself. Only asked of a file already here for work —
+    # it has no thumbnail of its own — so it costs one small read.
+    want_meta = want_meta or _placeholder(meta_path(media))
     # A video can be complete on every image tier and still need a render — the
     # codec question an extension cannot answer. Leaving this out of the early
     # return dismissed all 421 HEVC clips as "already done".

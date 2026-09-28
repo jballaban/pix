@@ -1,8 +1,9 @@
 # Clips — video splitting, and stills from video
 
-**Status: steps 1–3 of [§10](#10-build-order) built** (v0.1.414–416: `hidden`,
-video stacking deferred, the clip model and its API, the splice page). Cuts,
-keyframe snapping, renders, filmstrips and delivery are not. Extends
+**Status: steps 1–4 of [§10](#10-build-order) built** (v0.1.414–417: `hidden`,
+video stacking deferred, the clip model and its API, the splice page, NAS
+cuts with keyframe snapping, and keeping clips as files when a source is
+binned). Desktop renders, stills' files, filmstrips and delivery are not. Extends
 [nas-app.md](nas-app.md); where the two disagree, this file is the newer intent
 for clips, and the code remains the source of truth for what exists.
 
@@ -155,6 +156,13 @@ Binning C while it has clips that are not binned offers two choices:
   re-links nothing. It is offered only once every clip has its files —
   so until cuts exist (step 4) the refusal is all there is.
 
+The new file is named for the clip (`IMG_C.MOV~k3fa.mp4`), and the app
+writes it a **placeholder meta record** from what the clip's row knew, so it
+stays in the grid rather than vanishing until the desktop runs; its old
+source's pictures stand in meanwhile. `process` replaces the placeholder
+rather than trusting it. Only the binning goes into History: the new files are
+real files, and removing one is an ordinary delete.
+
 A materialised clip is a pix-made file in master — the same compromise as
 [seeding](nas-app.md#14-seeding-the-existing-library), the best copy that
 still exists — and because the cut is a stream copy it is the source's own
@@ -193,24 +201,35 @@ encodes, so the Atom's missing AVX is irrelevant. The app image gains static
 into encoding on the Atom. `ffprobe` reads keyframe positions from the file's
 index for the timeline.
 
-**The cut is stamped as it is written**, by ffmpeg — the clip's effective
-date as `creation_time`, `pix:ClipId`, and its range. This departs from
+**The cut is stamped as it is written**, by ffmpeg — `pix:ClipId`, its range
+as `pix:ClipRange`, `pix:SourceFile`, and `creation_time` as the source's own
+QuickTime clock plus where the clip starts. This departs from
 [§5](nas-app.md#5-renders)'s *renders carry no pix metadata*, deliberately: a
 cut copies C's container metadata and would otherwise claim C's start time.
+**A date override is not baked into the cut** — it is a piece of the source
+as recorded, and overrides are applied to what is delivered (§7), as for any
+file. So correcting C's date moves its clips' rows, and never re-cuts them.
 Stills are stamped with exiftool on the desktop.
+
+**A cut is named by its range** — `IMG_C.MOV~k3fa@12.5-40.cut.mp4` in the
+render tier — so one made for a range that has since moved is stale by name
+alone, with no stamp to read and nothing left pointing at it after a crash.
+A clip's row records the size of the file a viewer would be given (its
+playback render, or its cut where the source's codec plays in a browser), and
+that size is what lets a viewer see it.
 
 ### Staleness is keyed on the range
 
 | Change | cut | desktop files |
 |---|---|---|
 | range (drag, split, merge) | re-cut at once | deleted at once; `process` remakes |
-| C's date | re-cut (the stamp moves) | — |
+| C's date | untouched — the override is applied on delivery | — |
 | tags, people, audience, event | untouched | untouched |
 
 Not on timestamps: a sidecar changes with every tag, and *sidecar newer than
-render* would re-encode a clip every time someone is tagged in it. Each file
-carries the range it was cut from; a mismatch with the sidecar is stale, and
-an index build finds any left behind by a crash.
+render* would re-encode a clip every time someone is tagged in it. A cut's
+name carries the range it was cut from, so a mismatch is stale on sight; the
+app, starting, schedules any living clip whose cut is missing.
 
 Stale files are deleted rather than left until replaced: an old render shows
 footage no longer in the clip. The re-cut is debounced a few seconds after the

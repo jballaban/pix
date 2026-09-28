@@ -11,12 +11,23 @@
 # edit loop during development. Optional, not required.
 #
 # Deliberately slim: the app never decodes anything, because `process` already
-# made everything it displays. No Pillow, no ffmpeg, no exiftool — which is what
-# keeps it viable on the RS820+'s no-AVX Atom.
+# made everything it displays. No Pillow, no exiftool — which is what keeps it
+# viable on the RS820+'s no-AVX Atom.
+#
+# **ffmpeg and ffprobe, for copying only** (spec/clips.md §6). A clip's file is
+# a lossless stream copy of its source between two keyframes: nothing is
+# decoded or encoded, so the Atom's missing AVX does not matter, and
+# `pix.nas.cut` refuses any command that is not a copy. Static builds copied
+# in from their own image — two binaries, rather than the few hundred MB of
+# libraries Debian's package would bring.
 #
 # Build from the repo root, so `src/` is in context:
 #     docker build -f deploy/Dockerfile -t pix2-app:latest .
+FROM mwader/static-ffmpeg:7.1 AS ffmpeg
+
 FROM python:3.12-slim
+
+COPY --from=ffmpeg /ffmpeg /ffprobe /usr/local/bin/
 
 # uvicorn's standard extra pulls uvloop/httptools, which matter more here than
 # usual: the Atom has little headroom, and the app is I/O-bound on SMB reads.

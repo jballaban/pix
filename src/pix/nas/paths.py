@@ -53,3 +53,25 @@ def render_path(media: Path, root: Path) -> Path:
 #: rather than in `derive` because the app asks it too — whether a video can
 #: be spliced is whether the page can play it.
 PLAYABLE_CODECS: frozenset[str] = frozenset({"avc1", "avc3", "h264"})
+
+
+def seconds(value: float) -> str:
+    """A time as a name carries it: milliseconds, no trailing zeros."""
+    return f"{value:.3f}".rstrip("0").rstrip(".")
+
+
+def cut_path(media: Path, root: Path, clip_in: float, clip_out: float) -> Path:
+    """Where a clip's lossless cut lives (spec/clips.md §6).
+
+    **The range is in the name**, so a cut made from a range that has since
+    moved is stale by its name alone — no probing, no stamp to read, and a
+    crash between moving a range and removing the old cut leaves a file that
+    simply is not the one anything asks for.
+    """
+    return root / media.parent.name / (
+        f"{media.name}@{seconds(clip_in)}-{seconds(clip_out)}.cut.mp4")
+
+
+def cut_prefix(media: Path) -> str:
+    """What every cut of this clip's name starts with, whatever its range."""
+    return f"{media.name}@"

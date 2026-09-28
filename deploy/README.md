@@ -3,8 +3,9 @@
 See [`spec/nas-app.md` §8](../spec/nas-app.md) for why it is shaped this way.
 The short version: the app reads the index and serves the **derived** tiers, and
 never decodes anything — `process` already made everything it displays. That is
-what keeps it viable on the RS820+'s no-AVX Atom, and why the image needs neither
-Pillow nor ffmpeg.
+what keeps it viable on the RS820+'s no-AVX Atom, and why the image needs no
+Pillow. It does carry `ffmpeg`, for one job that decodes nothing: cutting a
+clip out of its video by copying the stream ([clips.md](../spec/clips.md) §6).
 
 **The image is self-contained.** Import it, create the container, start it. The
 source mount below is what makes later deployments cheap, not what makes the
@@ -21,7 +22,9 @@ docker build -f deploy/Dockerfile -t pix2-app:latest .
 docker save pix2-app:latest -o pix2-app.tar
 ```
 
-~60 MB. Needed once, and again only when the Python dependencies change —
+~170 MB, most of it the static `ffmpeg` and `ffprobe` that cut clips
+(copying only — see the Dockerfile). Needed once, and again only when the
+Python dependencies or those two binaries change —
 [Shipping a change](#shipping-a-change) explains why code changes do not.
 
 ## 2. Import it
@@ -144,7 +147,7 @@ in the footer is the only thing that tells them apart. Check it before you
 restart, not after you are confused.
 
 **Rebuild the image only when the Python dependencies change** — when `fastapi`
-or `uvicorn` themselves move. Then it is build, save, import, and *recreate* the
+or `uvicorn` themselves move, or the static `ffmpeg` it carries. Then it is build, save, import, and *recreate* the
 container: Container Manager can edit a container's ports and volumes but not
 its image, so pointing it at a new one means deleting it and creating it again.
 That costs nothing, since the index, `users.json`, the operations log and the

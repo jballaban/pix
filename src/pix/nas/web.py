@@ -19,12 +19,15 @@ the request of anyone holding the URL.
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import sqlite3
 import zipfile
 import threading
 import time
+from collections.abc import AsyncGenerator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import nullcontext
+from contextlib import asynccontextmanager, nullcontext
 from urllib.parse import parse_qs, quote
 from dataclasses import dataclass, field, replace
 from itertools import groupby
@@ -46,6 +49,7 @@ from pix import datestr
 from pix.nas import accounts
 from pix.nas import auth
 from pix.nas import clips
+from pix.nas import cut
 from pix.nas import decisions
 from pix.nas import paths
 from pix.nas import destroy as destroy_mod
@@ -60,7 +64,16 @@ from pix.nas.decisions import Decision, Unset
 #: Re-exported so the CLI and tests have one name for it.
 DB_PATH: Path = INDEX_DB
 
-app: FastAPI = FastAPI(title="pix2", docs_url=None, redoc_url=None)
+@asynccontextmanager
+async def _lifespan(_: FastAPI) -> AsyncGenerator[None]:
+    """Pick up cuts a restart interrupted, then serve."""
+    threading.Thread(target=_resume_cuts, name="pix-resume-cuts",
+                     daemon=True).start()
+    yield
+
+
+app: FastAPI = FastAPI(title="pix2", docs_url=None, redoc_url=None,
+                       lifespan=_lifespan)
 
 
 @app.exception_handler(status.HTTP_401_UNAUTHORIZED)
@@ -880,6 +893,15 @@ h3.group[data-state="some"] .grppick { background:var(--top);
 /* Cut from a video (spec/clips.md). Top-left, the one corner nothing else
    holds — the select circle comes up over it on hover, which is when it is
    wanted instead. */
+dialog.choice { background:var(--panel); color:var(--fg);
+                border:1px solid var(--line); border-radius:8px;
+                max-width:min(440px, calc(100vw - 32px)); padding:16px; }
+dialog.choice::backdrop { background:#0009; }
+dialog.choice .choices { display:flex; flex-wrap:wrap; gap:8px;
+                         justify-content:flex-end; }
+dialog.choice button { min-height:40px; }
+dialog.choice button.primary { background:var(--accent); color:#0d0f12;
+                               border-color:var(--accent); font-weight:600; }
 .clip-mark { position:absolute; left:5px; top:5px; z-index:1;
              background:#000b; color:var(--fg); font-size:10px;
              font-weight:700; letter-spacing:.05em; text-transform:uppercase;
@@ -3357,6 +3379,7 @@ def _cell(row: sqlite3.Row, view: ix.Filters | None = None, *,
         f'data-ar="{_squareness(row)}" '
         f'data-clip="{_clip_attr(row)}" '
         f'data-splice="{_h(_splices(row))}" '
+        f'data-clips="{row["clips"] if "clips" in row.keys() else 0}" '
         f'data-copy="{"1" if _has_render(row) else ""}" '
         f'data-behind="{row["behind"] or 0}" '
         f'data-proposed="{_guessed(row, view or ix.Filters())}">'
@@ -3378,6 +3401,10 @@ def _clip_attr(row: sqlite3.Row) -> str:
     nothing for a file that is not a clip."""
     if "clip_of" not in row.keys() or row["clip_of"] is None:
         return ""
+    # With a file of its own it plays as itself, from its first frame — a
+    # range applied to that would seek past what it is.
+    if row["size"] is not None:
+        return ""
     return f'{float(row["clip_in"] or 0):g},{float(row["clip_out"] or 0):g}'
 
 
@@ -3393,7 +3420,7 @@ def _splices(row: sqlite3.Row) -> str:
 
 def _clip_badge(row: sqlite3.Row) -> str:
     """Says that this was cut from a video, and which kind of cut."""
-    if not _clip_attr(row):
+    if "clip_of" not in row.keys() or row["clip_of"] is None:
         return ""
     still = row["clip_in"] == row["clip_out"]
     word = "Still" if still else "Clip"
@@ -6578,12 +6605,74 @@ function spliceSelection(){
 // they should be told; that it is recoverable, and by whom, is how the app
 // keeps its promise rather than a caveat on it. Answering "are you sure?" with
 // "well, sort of" invites a yes that was never really given.
-function deleteSelection(){
+async function deleteSelection(){
   const cs=targetsOn('live');
   if(!cs.length){say('nothing selected');return;}
-  const what=cs.length===1?'this file':`these ${cs.length.toLocaleString()} files`;
+  // A video with clips cannot simply go: a clip is its source's bytes plus a
+  // range (spec/clips.md §5). Unless every one of its clips is going too, the
+  // question is what to do instead.
+  const blocked=cs.filter(c=>{
+    const n=+(c.dataset.clips||0);
+    if(!n) return false;
+    const going=cs.filter(o=>o!==c&&o.dataset.folder===c.dataset.folder
+                             &&o.dataset.splice===c.dataset.name).length;
+    return going<n;
+  });
+  let rest=cs;
+  if(blocked.length){
+    const choice=await clipsChoice(blocked);
+    if(!choice) return;
+    if(choice==='hide'){
+      await applyToSelection('access',HIDDEN,true,blocked);
+    }else{
+      for(const c of blocked){
+        const r=await fetch('/api/clips/free',{method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({folder:c.dataset.folder,
+                               source:c.dataset.name})});
+        if(!r.ok){
+          let why=''; try{why=(await r.json()).detail;}catch(e){}
+          say(why||'could not keep the clips',true); return;
+        }
+      }
+      location.reload(); return;
+    }
+    rest=cs.filter(c=>!blocked.includes(c));
+    if(!rest.length) return;
+  }
+  const what=rest.length===1?'this file':`these ${rest.length.toLocaleString()} files`;
   if(!confirm(`Are you sure you want to delete ${what}?`)) return;
-  applyToSelection('deleted',true);
+  applyToSelection('deleted',true,undefined,rest);
+}
+
+// Three answers, so not `confirm`: hide it (nothing is lost, and it is the
+// usual intent), bin it and keep its clips as files of their own, or leave it.
+function clipsChoice(blocked){
+  return new Promise(done=>{
+    const d=document.createElement('dialog');
+    d.className='choice';
+    const one=blocked.length===1;
+    const n=blocked.reduce((t,c)=>t+(+(c.dataset.clips||0)),0);
+    const p=document.createElement('p');
+    p.textContent=(one?blocked[0].dataset.name+' has ':'These videos have ')
+      +n+' clip'+(n===1?'':'s')+' cut from '+(one?'it':'them')
+      +'. A clip is a piece of its video, and cannot outlive it.';
+    d.appendChild(p);
+    const row=document.createElement('div'); row.className='choices';
+    const add=(word,value,cls)=>{
+      const b=document.createElement('button'); b.textContent=word;
+      if(cls) b.className=cls;
+      b.onclick=()=>{d.close(); d.remove(); done(value);};
+      row.appendChild(b);
+    };
+    add(one?'Hide it instead':'Hide them instead','hide','primary');
+    add('Bin '+(one?'it':'them')+', keep the clips as files','free');
+    add('Cancel',null);
+    d.appendChild(row);
+    d.oncancel=()=>{d.remove(); done(null);};
+    document.body.appendChild(d);
+    if(d.showModal) d.showModal(); else d.setAttribute('open','');
+  });
 }
 
 // The end of a file, so the question names the thing that cannot be taken
@@ -6928,6 +7017,11 @@ def media(folder: str, name: str,
     # refused a viewer, who would otherwise be handed all of the source.
     source = clips.source_of(name)
     if source is not None and not (MASTER_DIR / folder / name).is_file():
+        own = _clip_file(folder, name, playable=True)
+        if own is not None:
+            return FileResponse(own, media_type="video/mp4",
+                                headers={"Cache-Control": "private, max-age=3600",
+                                         "Accept-Ranges": "bytes"})
         name = source
     # Prefer the render: for an HEVC master it is the only playable copy, and
     # where both exist they are the same footage.
@@ -6959,6 +7053,15 @@ def _serve(root: Path, folder: str, name: str) -> FileResponse:
     source = clips.source_of(name)
     if not target.is_file() and source is not None:
         target = (root / folder / (source + ".jpg")).resolve()
+    elif not target.is_file():
+        # A clip made into a file of its own stands in with its old source's
+        # pictures until `process` makes its own (`_stand_in`).
+        record = ix.record_of(META_DIR, folder, name) or {}
+        stand_in = record.get("stand_in")
+        if isinstance(stand_in, str) and stand_in:
+            target = (root / folder / (stand_in + ".jpg")).resolve()
+            if root.resolve() not in target.parents:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, "bad path")
     if not target.is_file():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "not derived yet")
     return FileResponse(target, media_type="image/jpeg",
@@ -6978,11 +7081,14 @@ def _to_send(folder: str, name: str, original: bool) -> tuple[Path, str]:
     """
     media = _master_file(folder, name)
     if not media.is_file():
-        # A clip, whose file is the lossless cut the NAS has not made yet
-        # (spec/clips.md §6). Its source is not a stand-in: downloading a clip
-        # and receiving the whole video would be the wrong file.
-        raise HTTPException(status.HTTP_404_NOT_FOUND,
-                            "this clip has not been cut yet")
+        # A clip: *original* is its lossless cut, and the playable copy is its
+        # render where it has one (spec/clips.md §7). Never its source —
+        # downloading a clip and receiving the whole video is the wrong file.
+        own = _clip_file(folder, name, playable=not original)
+        if own is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND,
+                                "this clip has not been cut yet")
+        return own, f"{name}.mp4"
     if not original:
         render = paths.render_path(media, RENDER_DIR)
         if render.is_file():
@@ -7791,8 +7897,9 @@ def api_clips_make(user: Annotated[Principal, Depends(require_admin)],
         siblings = _siblings(conn, body.folder, body.source)
         base = clips.inherited(decisions.read(media), row["event"])
         writes: list[tuple[str, str, _Change, bool]] = []
-        for asked in body.clips:
-            start, end = _ms(asked.start), _ms(asked.end)
+        for start, end in _snapped(_keys(body.folder, body.source),
+                                   [(_ms(a.start), _ms(a.end))
+                                    for a in body.clips], siblings):
             _check(start, end, siblings=siblings, duration=row["duration"])
             siblings.append((start, end))
             clip_id = clips.new_id(taken)
@@ -7805,7 +7912,44 @@ def api_clips_make(user: Annotated[Principal, Depends(require_admin)],
     n = len(undo)
     history.record(user.name, f"cut {n} clip{'s' if n != 1 else ''} from "
                    f"{body.source}", undo)
+    for b in undo:
+        _recut(body.folder, b.name)
     return JSONResponse({"made": [b.name for b in undo]})
+
+
+def _snapped(keys: tuple[float, ...] | None,
+             asked: list[tuple[float, float]],
+             siblings: list[tuple[float, float]]
+             ) -> list[tuple[float, float]]:
+    """The ranges one request asked for, each start on a keyframe.
+
+    A start never snaps back over the clip before it — an existing sibling,
+    or an earlier range in this request. Two ranges asked for touching stay
+    touching: the first ends wherever the second's start landed, which is
+    what makes Split one cut rather than two that nearly meet.
+    """
+    if not keys:
+        return asked
+    out: list[tuple[float, float]] = []
+    for start, end in asked:
+        if start == end:
+            out.append((start, end))
+            continue
+        lo = max([e for s0, e in siblings if s0 != e and e <= start + 0.0005]
+                 + [0.0])
+        for (a0, b0), (a1, _) in zip(asked, out):
+            if a0 == b0:
+                continue
+            if abs(b0 - start) < 0.0005:
+                lo = max(lo, a1 + 0.001)
+            elif b0 <= start:
+                lo = max(lo, b0)
+        out.append((_snap_start(keys, start, end, lo), end))
+    for i, (a0, b0) in enumerate(asked):
+        for j, (c0, _) in enumerate(asked):
+            if i != j and a0 != b0 and abs(b0 - c0) < 0.0005:
+                out[i] = (out[i][0], out[j][0])
+    return out
 
 
 @app.post("/api/clips/range")
@@ -7822,9 +7966,14 @@ def api_clips_range(user: Annotated[Principal, Depends(require_admin)],
                 status.HTTP_409_CONFLICT,
                 "a still stays a still and a clip stays a clip")
         source = ix.one(conn, body.folder, str(row["clip_of"]))
-        _check(start, end,
-               siblings=_siblings(conn, body.folder, str(row["clip_of"]),
-                                  besides=[body.name]),
+        siblings = _siblings(conn, body.folder, str(row["clip_of"]),
+                             besides=[body.name])
+        if start != float(row["clip_in"]):
+            lo = max([e for s0, e in siblings
+                      if s0 != e and e <= start + 0.0005] + [0.0])
+            start = _snap_start(_keys(body.folder, str(row["clip_of"])),
+                                start, end, lo)
+        _check(start, end, siblings=siblings,
                duration=source["duration"] if source else None)
         undo = _write_clips(conn, [(body.folder, body.name,
                                     _Change(clip_in=start, clip_out=end),
@@ -7832,6 +7981,7 @@ def api_clips_range(user: Annotated[Principal, Depends(require_admin)],
     finally:
         conn.close()
     history.record(user.name, f"moved the ends of {body.name}", undo)
+    _recut(body.folder, body.name)
     return JSONResponse({"name": body.name, "start": start, "end": end})
 
 
@@ -7857,6 +8007,15 @@ def api_clips_split(user: Annotated[Principal, Depends(require_admin)],
                 status.HTTP_409_CONFLICT,
                 f"{at:g}s is not inside the clip ({start:g}s–{end:g}s)")
         source = str(row["clip_of"])
+        keys = _keys(body.folder, source)
+        if keys:
+            # The second half starts here, so here has to be a keyframe.
+            snapped = cut.snap(at, keys, lo=start + 0.001, hi=end)
+            if snapped is None:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    "there is no keyframe inside this clip to split it on")
+            at = snapped
         was = decisions.read(_master_file(body.folder, body.name)) or Decision()
         taken = {clips.id_of(str(c["name"]))
                  for c in ix.clips_of(conn, body.folder, source)}
@@ -7867,7 +8026,9 @@ def api_clips_split(user: Annotated[Principal, Depends(require_admin)],
     finally:
         conn.close()
     history.record(user.name, f"split {body.name}", undo)
-    return JSONResponse({"first": body.name, "second": second})
+    _recut(body.folder, body.name)
+    _recut(body.folder, second)
+    return JSONResponse({"first": body.name, "second": second, "at": at})
 
 
 @app.post("/api/clips/merge")
@@ -7910,7 +8071,120 @@ def api_clips_merge(user: Annotated[Principal, Depends(require_admin)],
     finally:
         conn.close()
     history.record(user.name, f"joined {a['name']} and {b['name']}", undo)
+    _recut(body.folder, str(a["name"]))
+    _recut(body.folder, str(b["name"]))
     return JSONResponse({"name": a["name"]})
+
+
+class FreeBody(BaseModel):
+    folder: str
+    source: str
+
+
+@app.post("/api/clips/free")
+def api_clips_free(user: Annotated[Principal, Depends(require_admin)],
+                   body: Annotated[FreeBody, Body()]) -> JSONResponse:
+    """Bin a source and keep its clips, each as a file of its own
+    (spec/clips.md §5).
+
+    Each clip's cut is copied into master beside the source as an ordinary
+    video with its decisions, and stops being a clip. A copy, not an encode —
+    the cut is the source's own samples — so the NAS does it. Then the source
+    is binned, which is the one part of this History can take back: the new
+    files are real files now, and removing them is an ordinary delete.
+
+    Offered only once every clip has its cut; stills have no file until the
+    desktop makes one, so a source with stills waits for that.
+    """
+    media = _master_file(body.folder, body.source)
+    conn = _clip_conn()
+    freed: list[str] = []
+    try:
+        live = [c for c in ix.clips_of(conn, body.folder, body.source)
+                if not c["deleted"]]
+        if not live:
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                f"{body.source} has no clips")
+        if any(c["clip_in"] == c["clip_out"] for c in live):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "its stills have no files yet — pix2 process makes them. "
+                "Hide the video instead for now.")
+        made: list[tuple[sqlite3.Row, Path]] = []
+        for c in live:
+            file = paths.cut_path(MASTER_DIR / body.folder / str(c["name"]),
+                                  RENDER_DIR, float(c["clip_in"]),
+                                  float(c["clip_out"]))
+            if not file.is_file():
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    "its clips are still being cut — try again in a moment")
+            made.append((c, file))
+        record = ix.record_of(META_DIR, body.folder, body.source) or {}
+        for c, file in made:
+            name = str(c["name"])
+            clip = MASTER_DIR / body.folder / name
+            own = MASTER_DIR / body.folder / f"{name}.mp4"
+            if own.exists():
+                raise HTTPException(status.HTTP_409_CONFLICT,
+                                    f"{own.name} is already in master")
+            with _write_lock:
+                tmp = own.with_name(own.name + ".tmp")
+                shutil.copyfile(file, tmp)
+                os.replace(tmp, own)
+                was = decisions.read(clip) or Decision()
+                decisions.write(own, Decision(
+                    event=was.event, date_override=was.date_override,
+                    tags=was.tags, people=was.people, audience=was.audience))
+                _stand_in(body.folder, own, c, record, body.source)
+                destroy_mod.destroy(clip, conn=conn, folder=body.folder,
+                                    name=name)
+            ix.refresh(conn, body.folder, own.name, meta_dir=META_DIR,
+                       master_dir=MASTER_DIR)
+            freed.append(own.name)
+        binned = _Change(deleted=True)
+        was, decision, _ = _decide(body.folder, body.source, binned,
+                                   conn=conn)
+        undo = [history.Before(body.folder, body.source, was,
+                               did=_did(binned, _recorded(binned), decision))]
+    finally:
+        conn.close()
+    del media
+    n = len(freed)
+    history.record(user.name, f"binned {body.source}, keeping its {n} "
+                   f"clip{'s' if n != 1 else ''} as files of their own", undo)
+    return JSONResponse({"freed": freed})
+
+
+def _stand_in(folder: str, own: Path, clip: sqlite3.Row,
+              source_record: dict[str, Any], source: str) -> None:
+    """A meta record for a clip made into a file, until `process` probes it.
+
+    The index sees only what the meta tier describes, and `process` runs on
+    the desktop — so without this the clips would leave the grid the moment
+    they became real. What it says is what the clip's row already knew,
+    marked as a placeholder so `process` replaces it rather than trusting it,
+    and naming the source whose pictures stand in meanwhile.
+    """
+    raw: object = source_record.get("exif")
+    had = cast("dict[str, Any]", raw) if isinstance(raw, dict) else {}
+    keep = ("CompressorID", "VideoFrameRate", "ImageWidth", "ImageHeight",
+            "Model", "Make", "Rotation")
+    exif: dict[str, Any] = {k: v for k, v in had.items()
+                            if k.split(":")[-1] in keep}
+    if clip["capture_date"]:
+        exif["EXIF:DateTimeOriginal"] = clip["capture_date"]
+    exif["QuickTime:Duration"] = (
+        f'{float(clip["clip_out"]) - float(clip["clip_in"]):.2f} s')
+    st = own.stat()
+    record = {"file": own.name, "folder": folder, "size": st.st_size,
+              "mtime_ns": st.st_mtime_ns, "exif": exif,
+              "placeholder": True, "stand_in": source}
+    path = paths.meta_path(own, META_DIR)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(record), encoding="utf-8")
+    os.replace(tmp, path)
 
 
 # --- the splice page (spec/clips.md §9) ---------------------------------------
@@ -7984,14 +8258,163 @@ def splice(folder: str, name: str,
 
 def _clip_json(row: sqlite3.Row) -> dict[str, Any]:
     """One clip as the splice page and the clip listing read it."""
-    return {"name": row["name"], "start": row["clip_in"],
-            "end": row["clip_out"], "deleted": bool(row["deleted"]),
-            "event": row["event"], "date": row["effective_date"]}
+    start, end = row["clip_in"], row["clip_out"]
+    made = (start != end and start is not None and end is not None
+            and paths.cut_path(MASTER_DIR / str(row["folder"]) / str(row["name"]),
+                               RENDER_DIR, float(start), float(end)).is_file())
+    return {"name": row["name"], "start": start, "end": end,
+            "deleted": bool(row["deleted"]), "event": row["event"],
+            "date": row["effective_date"], "cut": bool(made)}
+
+
+def _clip_file(folder: str, name: str, *, playable: bool) -> Path | None:
+    """A clip's own file: its playback render first where `playable` is
+    asked for, then its cut — or None while it has neither."""
+    media = MASTER_DIR / folder / name
+    decision = decisions.read(media)
+    if decision is None or not decision.is_clip or decision.is_still:
+        return None
+    assert decision.clip_in is not None and decision.clip_out is not None
+    render = paths.render_path(media, RENDER_DIR)
+    cut_file = paths.cut_path(media, RENDER_DIR, decision.clip_in,
+                              decision.clip_out)
+    for candidate in ((render, cut_file) if playable else (cut_file,)):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _first_frame(record: dict[str, Any] | None, offset: float) -> str | None:
+    """When a clip's first frame was taken, as a container stamps it.
+
+    The source's own QuickTime clock, which is UTC, plus where the clip
+    starts. A date override is not applied here — the cut is a piece of the
+    source as recorded, and the override is baked into what is delivered
+    (spec/clips.md §7), like any file's.
+    """
+    raw: object = (record or {}).get("exif")
+    exif = cast("dict[str, Any]", raw) if isinstance(raw, dict) else {}
+    value = exif.get("QuickTime:CreateDate")
+    moment = datestr.parse_exiftool(str(value)) if value else None
+    if moment is None:
+        return None
+    from datetime import timedelta
+
+    return (moment + timedelta(seconds=offset)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _cut_one(folder: str, name: str) -> None:
+    """Make one clip's cut, if it has none for its current range, then bring
+    its row up to date — which is what lets a viewer see it."""
+    media = MASTER_DIR / folder / name
+    source_name = clips.source_of(name)
+    if source_name is None:
+        return
+    decision = decisions.read(media)
+    if decision is None or not decision.is_clip:
+        cut.sweep(RENDER_DIR / folder, name, keep=None)
+        return
+    if decision.is_still:
+        return
+    assert decision.clip_in is not None and decision.clip_out is not None
+    source = MASTER_DIR / folder / source_name
+    if not source.is_file():
+        return
+    dest = paths.cut_path(media, RENDER_DIR, decision.clip_in,
+                          decision.clip_out)
+    if not dest.is_file():
+        record = ix.record_of(META_DIR, folder, source_name)
+        cut.make(source, decision.clip_in, decision.clip_out, dest,
+                 created=_first_frame(record, decision.clip_in))
+    cut.sweep(dest.parent, name, keep=dest)
+    if DB_PATH.is_file():
+        conn = ix.open_rw(DB_PATH)
+        try:
+            ix.refresh(conn, folder, name, meta_dir=META_DIR,
+                       master_dir=MASTER_DIR)
+        finally:
+            conn.close()
+
+
+#: The clips waiting to be cut. One worker, a few seconds behind the last
+#: change to each (spec/clips.md §6).
+_CUTS: cut.Queue = cut.Queue(_cut_one)
+
+
+def _recut(folder: str, name: str) -> None:
+    """A clip's range has changed, or it was just made: what it had is stale.
+
+    The desktop's files for it — thumbnail, preview, playback render — go at
+    once, because they show footage that is no longer the clip (§6); the cut
+    is replaced by the worker, which keeps the old one only until the new one
+    lands. Neither is needed for a curator, who watches the source.
+    """
+    media = MASTER_DIR / folder / name
+    for stale in (paths.render_path(media, RENDER_DIR),
+                  paths.derived_path(media, THUMB_DIR),
+                  paths.derived_path(media, LARGE_DIR),
+                  paths.derived_path(media, PREVIEW_DIR)):
+        try:
+            stale.unlink(missing_ok=True)
+        except OSError:
+            continue
+    _CUTS.schedule(folder, name)
+
+
+def _resume_cuts() -> None:
+    """Schedule every living clip that has no cut for its range — the ones a
+    restart interrupted, and any made while ffmpeg was missing."""
+    if cut.ffmpeg() is None or not DB_PATH.is_file():
+        return
+    try:
+        conn = ix.open_ro(DB_PATH)
+    except Exception:                            # noqa: BLE001
+        return
+    try:
+        rows = conn.execute(
+            "SELECT folder, name, clip_in, clip_out FROM files "
+            "WHERE clip_of IS NOT NULL AND deleted = 0 "
+            "AND clip_in < clip_out").fetchall()
+    except sqlite3.Error:
+        rows = []
+    finally:
+        conn.close()
+    for row in rows:
+        media = MASTER_DIR / str(row["folder"]) / str(row["name"])
+        if not paths.cut_path(media, RENDER_DIR, float(row["clip_in"]),
+                              float(row["clip_out"])).is_file():
+            _CUTS.schedule(str(row["folder"]), str(row["name"]))
+
+
+def _keys(folder: str, source: str) -> tuple[float, ...] | None:
+    return cut.keyframes(MASTER_DIR / folder / source)
+
+
+def _snap_start(keys: tuple[float, ...] | None, start: float, end: float,
+                lo: float) -> float:
+    """A clip's start moved onto a keyframe, since a cut cannot begin
+    between them (spec/clips.md §6). Unsnapped where the keyframes are not
+    known, and for a still, which is decoded rather than cut."""
+    if not keys or start == end:
+        return start
+    snapped = cut.snap(start, keys, lo=lo, hi=end)
+    return start if snapped is None else snapped
+
+
+@app.get("/api/keyframes/{folder}/{name}")
+def api_keyframes(folder: str, name: str,
+                  user: Annotated[Principal, Depends(require_admin)]
+                  ) -> JSONResponse:
+    """Where a video can be cut from — `null` when that is not known."""
+    media = _master_file(folder, name)
+    keys = cut.keyframes(media)
+    return JSONResponse({"keys": list(keys) if keys is not None else None})
 
 
 _SPLICE_HTML: str = """<div class="splice">
 <div class="sstage"><video id="sv" playsinline preload="auto" src="{src}"></video></div>
 <div class="tlwrap" id="tlwrap"><div class="track" id="track">
+<div class="keys" id="keys"></div>
 <div class="bars" id="bars"></div><div class="ph" id="ph"></div></div></div>
 <div class="sline"><span id="tcur">0:00.00</span><span class="dim">&nbsp;/&nbsp;</span>
 <span class="dim" id="tdur"></span><span class="spacer"></span>
@@ -7999,10 +8422,12 @@ _SPLICE_HTML: str = """<div class="splice">
 <button id="zin" aria-label="Zoom in" title="Zoom in">+</button></div>
 <div class="sctl">
 <button id="bplay">Play</button>
-<button id="bprev1s" title="Back a second (shift+,)">&minus;1s</button>
+<button id="bprevk" title="Back to the last keyframe (shift+,)">&lsaquo;K</button>
+<button id="bprev1s" title="Back a second">&minus;1s</button>
 <button id="bprevf" title="Back a frame (,)">&minus;1f</button>
 <button id="bnextf" title="On a frame (.)">+1f</button>
-<button id="bnext1s" title="On a second (shift+.)">+1s</button>
+<button id="bnext1s" title="On a second">+1s</button>
+<button id="bnextk" title="On to the next keyframe (shift+.)">K&rsaquo;</button>
 <span class="gap"></span>
 <button id="bsplit" class="primary" title="Split at the playhead (S)">Split</button>
 <button id="bstill" title="Take this frame as a photograph (P)">Still</button>
@@ -8020,7 +8445,9 @@ _SPLICE_HTML: str = """<div class="splice">
 <span class="dim" id="hidenote"></span></div>
 <p class="dim shelp">Split cuts the clip under the playhead in two — or, where
 nothing is cut yet, the whole stretch. Drag a selected clip's edges to trim
-it. Clips may touch but never overlap. Space plays; the selected clip
+it. A clip starts on a keyframe (the faint ticks), because that is where a
+lossless cut can begin; it ends on any frame. Clips may touch but never
+overlap. A dashed clip is still being cut. Space plays; the selected clip
 loops.</p>
 </div>"""
 
@@ -8040,6 +8467,11 @@ _SPLICE_CSS: str = """
        background:var(--accent-bed); border:1.5px solid var(--accent);
        border-radius:4px; box-sizing:border-box; }
 .bar.on { background:var(--tint); border-color:var(--fg); }
+/* No file of its own yet: the NAS is still cutting it. */
+.bar.uncut { border-style:dashed; }
+.keys { position:absolute; inset:0; pointer-events:none; }
+.keys i { position:absolute; bottom:0; width:1px; height:9px;
+          background:var(--dim); opacity:.55; }
 /* Handles wide enough to take a finger (44px) though drawn narrow. */
 .bar .h { position:absolute; top:-10px; bottom:-10px; width:44px;
           touch-action:none; cursor:ew-resize; z-index:3; }
@@ -8080,7 +8512,7 @@ const $=id=>document.getElementById(id);
 const v=$('sv'), wrap=$('tlwrap'), track=$('track'), bars=$('bars'),
       ph=$('ph'), note=$('note');
 let clips=S.clips.slice(), sel=null, zoom=1, dur=S.duration||0, busy=false;
-let hidden=!!S.hidden, dragging=false, shown=null;
+let hidden=!!S.hidden, dragging=false, shown=null, keys=null;
 const frame=1/(S.fps||30);
 const ms=t=>Math.round(t*1000)/1000;
 
@@ -8153,7 +8585,7 @@ function draw(){
   bars.innerHTML='';
   for(const c of ranges()){
     const b=document.createElement('div');
-    b.className='bar'+(c.name===sel?' on':'');
+    b.className='bar'+(c.name===sel?' on':'')+(c.cut===false?' uncut':'');
     b.style.left=pct(c.start); b.style.width=pct(c.end-c.start);
     b.title=fmt(c.start)+' – '+fmt(c.end);
     b.onclick=e=>{e.stopPropagation(); if(!dragging) pick(c.name);};
@@ -8175,8 +8607,40 @@ function draw(){
     bars.appendChild(p);
   }
   $('tdur').textContent=fmt(dur);
-  playhead(false); drawSel();
+  drawKeys(); playhead(false); drawSel();
 }
+function drawKeys(){
+  const box=$('keys');
+  box.innerHTML='';
+  if(!keys||!dur) return;
+  for(const k of keys){
+    const i=document.createElement('i'); i.style.left=pct(k); box.appendChild(i);
+  }
+}
+// Where a start can land: the keyframe nearest `t` between `lo` and `hi`,
+// which is the rule the server applies too — so what is drawn while dragging
+// is what gets stored.
+function snapStart(t,lo,hi){
+  if(!keys||!keys.length) return t;
+  let best=null;
+  for(const k of keys){
+    if(k<lo-0.0005||k>=hi-0.0005) continue;
+    if(best===null||Math.abs(k-t)<Math.abs(best-t)) best=k;
+  }
+  return best===null?t:best;
+}
+function toKey(dir){
+  if(!keys||!keys.length){step(dir*1);return;}
+  const t=v.currentTime||0;
+  const next=dir>0?keys.find(k=>k>t+0.002)
+                  :[...keys].reverse().find(k=>k<t-0.002);
+  if(next!==undefined){v.pause(); v.currentTime=next;}
+}
+fetch('/api/keyframes/'+encodeURIComponent(S.folder)+'/'
+      +encodeURIComponent(S.source))
+  .then(r=>r.ok?r.json():null)
+  .then(j=>{ if(j&&Array.isArray(j.keys)){keys=j.keys; draw();} })
+  .catch(()=>{});
 function playhead(follow){
   ph.style.left=pct(v.currentTime||0);
   $('tcur').textContent=fmt(v.currentTime||0);
@@ -8258,6 +8722,7 @@ function drag(e,c,side){
   let t=side==='l'?c.start:c.end;
   const move=ev=>{
     t=Math.min(hi,Math.max(lo,timeAt(ev.clientX)));
+    if(side==='l') t=snapStart(t,lo,c.end);
     const s=side==='l'?t:c.start, en=side==='r'?t:c.end;
     bar.style.left=pct(s); bar.style.width=pct(en-s);
     v.currentTime=t;
@@ -8396,6 +8861,7 @@ const on=(id,fn)=>{const b=$(id); if(b) b.onclick=e=>{e.stopPropagation(); fn();
 on('bplay',toggle); on('bsplit',split); on('bstill',still); on('bkeep',keep);
 on('bprevf',()=>step(-frame)); on('bnextf',()=>step(frame));
 on('bprev1s',()=>step(-1)); on('bnext1s',()=>step(1));
+on('bprevk',()=>toKey(-1)); on('bnextk',()=>toKey(1));
 on('bstart',()=>setEnd('start')); on('bend',()=>setEnd('end'));
 on('bjoin',join); on('bbin',bin); on('bhide',hide);
 on('zin',()=>zoomBy(2)); on('zout',()=>zoomBy(0.5));
@@ -8406,10 +8872,10 @@ document.addEventListener('keydown',e=>{
   if(k===' ') toggle();
   else if(k==='s'||k==='S') split();
   else if(k==='p'||k==='P') still();
-  else if(k===',') step(e.shiftKey?-1:-frame);
-  else if(k==='.') step(e.shiftKey?1:frame);
-  else if(k==='<') step(-1);
-  else if(k==='>') step(1);
+  else if(k===','&&!e.shiftKey) step(-frame);
+  else if(k==='.'&&!e.shiftKey) step(frame);
+  else if(k==='<'||k===',') toKey(-1);
+  else if(k==='>'||k==='.') toKey(1);
   else if(k==='i'||k==='I') setEnd('start');
   else if(k==='o'||k==='O') setEnd('end');
   else if(k==='Delete'||k==='Backspace') bin();
@@ -8424,6 +8890,9 @@ function fromHash(){
   try{want=decodeURIComponent(String(location.hash||'').slice(1));}catch(e){}
   if(want&&clips.some(c=>c.name===want)) pick(want);
 }
+// Poll while anything is still being cut, so a dashed clip turns solid on
+// its own rather than on the next thing somebody happens to press.
+setInterval(()=>{ if(!busy&&clips.some(c=>c.cut===false&&c.end>c.start)) reload(); },4000);
 drawHide(); draw();
 })();
 """
@@ -9783,6 +10252,9 @@ async def history_revert(
                                    meta_dir=META_DIR, master_dir=MASTER_DIR)
                     except sqlite3.Error:
                         pass
+            if clips.source_of(item.name) is not None and (
+                    "clip_in" in putting_back or "clip_out" in putting_back):
+                _recut(item.folder, item.name)
             restored += 1
     finally:
         if conn is not None:
