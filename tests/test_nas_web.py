@@ -782,6 +782,52 @@ def test_the_page_knows_it_is_inside_a_stack(client: TestClient) -> None:
     assert '"within": "init_2026/a.jpg"' in view, view
 
 
+def test_agreeing_with_a_guess_leaves_the_stack_it_was_asked_in(
+    client: TestClient
+) -> None:
+    """Agreeing is the question an opened suggestion was there to ask,
+    answered. Nothing in there has anything left to say, and what changed is
+    out in the grid it was folded into — which is still drawing it as a guess.
+
+    Asked for afresh rather than gone back to. Going back is right for a stack
+    you were only looking at, because the same address reached again is the
+    same photographs at the top of the page rather than where you were
+    standing; it is wrong the moment something has been written, because the
+    page behind is the one that has just stopped being true. Going back and
+    then reloading is what somebody had to do by hand for every suggestion
+    they agreed with."""
+    js = web._BROWSE_JS
+
+    assert "function leaveStack(){ location.href=url({within:null}); }" in js
+    at = js.index("async function makeTop(")
+    body = js[at:js.index("\n}", at)]
+    assert "const wasGuess=inGuess(top);" in body, body
+    assert "if(wasGuess&&VIEW.within){ leaveStack(); return; }" in body, body
+    # Rearranging a stack somebody already made is not the same thing: it is
+    # one edit among several you may want to go on making, so it stays put
+    # under the stack's new name.
+    assert "if(VIEW.within) location.href=url({within:keyOf(top)});" in body
+
+
+def test_a_badge_stops_saying_guessed_once_it_has_been_decided(
+    client: TestClient
+) -> None:
+    """The badge keeps its element and its place in the corner when a guess is
+    agreed with from the grid, so without being told it keeps the amber that
+    means *these look alike and nobody has said yet* over a number somebody
+    has just decided — and the bar goes on offering to refuse a suggestion
+    that is now a stack."""
+    js = web._BROWSE_JS
+    at = js.index("function markStack(")
+    body = js[at:js.index("\n}", at)]
+
+    assert "c.dataset.proposed='0';" in body, body
+    assert "badge.classList.remove('guessed');" in body, body
+    # Which is the class the server draws it with, so the two agree about the
+    # one word that distinguishes them.
+    assert '.stack.guessed { border-color:var(--top);' in web._STYLE
+
+
 def test_unstacking_takes_a_file_out_of_the_open_stack(
     client: TestClient, writable: Path, app_env: dict[str, Path]
 ) -> None:

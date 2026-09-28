@@ -5556,7 +5556,24 @@ function endChoosing(restore){
   drawSel();
 }
 
+// Out of the opened stack and back to the grid it was folded into, asked for
+// afresh.
+//
+// **Not `history.back()`**, which is how you leave a stack you were only
+// looking at — and is right there, because the same address reached again is
+// the same photographs at the top of the page rather than where you were
+// standing. It is wrong the moment something has been written: the page behind
+// is the one that has just stopped being true, and whether a browser hands
+// back a live copy or the one it cached is a question with a different answer
+// in each of the three this runs in. Going back and then reloading is exactly
+// what somebody had to do by hand, twice, for every suggestion they agreed
+// with.
+function leaveStack(){ location.href=url({within:null}); }
+
 async function chooseTop(top){
+  // Whether this was the app's suggestion rather than somebody's stack, asked
+  // before `endChoosing` takes the candidates away.
+  const wasGuess=(choosing||[]).some(inGuess);
   // Anything already behind this one is where it should be; writing it again
   // would be an edit that changes nothing and a line in the log saying so.
   const key=keyOf(top);
@@ -5575,6 +5592,11 @@ async function chooseTop(top){
   // matching the moment they were stacked — but the one left standing has to
   // start saying how many it now speaks for.
   if(out&&out.done) markStack(top,behind);
+  // A guess agreed with is the question the opened stack was asking, answered
+  // — there is nothing left in here to look at, and what has changed is out
+  // there. Rearranging a stack somebody already made is not that: it is one
+  // edit among several you may want to go on making, so it stays put.
+  if(out&&out.done&&wasGuess&&VIEW.within){ leaveStack(); return; }
   // Same rename, if this was done from inside the stack being merged into.
   if(out&&out.done&&VIEW.within&&VIEW.within!==keyOf(top)){
     location.href=url({within:keyOf(top)});
@@ -5592,12 +5614,18 @@ async function chooseTop(top){
 // redraw a badge.
 function markStack(c,behind){
   c.dataset.behind=String(behind);
+  // Not a guess any more. The badge keeps its element and its place in the
+  // corner, so without saying so it keeps the amber that means *these look
+  // alike and nobody has said yet* over a number somebody has just decided —
+  // and the bar goes on offering to refuse a suggestion that is now a stack.
+  c.dataset.proposed='0';
   let badge=c.querySelector('.stack');
   if(!badge){
     badge=document.createElement('a');
     badge.className='stack';
     c.appendChild(badge);
   }
+  badge.classList.remove('guessed');
   badge.href='/browse?within='+encodeURIComponent(keyOf(c));
   badge.title=(behind+1)+' photographs stacked here';
   badge.textContent=String(behind+1);
@@ -5620,6 +5648,8 @@ async function makeTop(){
   const top=cs[0];
   const key=stackKey(top);
   if(!key){say('that one is not in a stack');return;}
+  // Asked before the write, which is the one that stops it being true.
+  const wasGuess=inGuess(top);
   // Saying *this one shows* of the file that already shows is nothing to do
   // — unless nobody has said it yet.
   //
@@ -5645,15 +5675,24 @@ async function makeTop(){
   // deferring to one of them whoever asks for it.
   const out=await applyToSelection('stacked_under',keyOf(top),undefined,family);
   if(!out||!out.done) return;
+  // A guess agreed with is the question the opened stack was asking, answered.
+  // Nothing in here has anything left to say — and what has changed is out
+  // there, in the grid this was folded into, which is still drawing it as a
+  // suggestion. Staying put left the answer invisible until somebody went back
+  // by hand and then reloaded, because going back alone is a cached page of
+  // the very thing that has just stopped being true.
+  //
+  // Whichever of them was named, because both answers are the same answer:
+  // *these are one photograph, and this is the one that shows*.
+  //
+  // Only out of an opened stack, which is the only place this can be reached
+  // from: naming a top writes to the rest of the group, so it is offered only
+  // where the rest of the group is on the page.
+  if(wasGuess&&VIEW.within){ leaveStack(); return; }
   // A stack is named by the file that speaks for it, so promoting one renames
   // it. An open stack's address is that name — stay on it and the page asks
   // for a stack whose files have all just gone somewhere else, which is how
   // this left you looking at one photograph with no way back but the browser.
-  //
-  // The same address when a guess was simply agreed to, and it is still worth
-  // asking for: every mark in here says *guessed* — the pill on the top, the
-  // colour of the badge outside — and they are now wrong about a stack
-  // somebody has decided on.
   if(VIEW.within) location.href=url({within:keyOf(top)});
 }
 

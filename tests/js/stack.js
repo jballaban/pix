@@ -251,6 +251,47 @@ const viewerOpen = () => document.byId.viewer._classes.has('on');
           cells.every(c => c.hidden === false));
   }
 
+  // --- and agreeing leaves, because the answer is out there -------------------
+  // Agreeing with a suggestion is the question this page was opened to ask,
+  // answered. What changed is in the grid it was folded into, which is still
+  // drawing it as a guess — so staying put left the answer invisible until
+  // somebody went back by hand and then reloaded, because going back alone is
+  // a cached copy of the very page that has just stopped being true.
+  {
+    const actBtn = name => actions.querySelectorAll('[data-act]')
+                                  .find(b => b.dataset.act === name);
+    // Cancelling put back what had been ticked before it, which is what
+    // cancelling means — so this starts by clearing it.
+    if (document.byId.selcount.textContent !== '0 selected') tick.click();
+    // The same three files, as a guess rather than as a stack.
+    cells[0].dataset.behind = '0';
+    cells[0].dataset.proposed = '2';
+    cells[1].dataset.under = ''; cells[1].dataset.proposedUnder = 'f/lead.jpg';
+    cells[2].dataset.under = ''; cells[2].dataset.proposedUnder = 'f/lead.jpg';
+    location.href = '/browse?within=f%2Flead.jpg&group=day';
+
+    const n = calls.length;
+    cells[0].querySelector('.pick').click();
+    check('the one a guess is drawn on can be agreed with',
+          actBtn('top').hidden === false);
+    actBtn('top').click();
+    for (let i = 0; i < 8; i++) await settle();
+
+    const sent = calls.slice(n).filter(c => c.url.startsWith('/api/decide'));
+    check('agreeing writes once', sent.length === 1, String(sent.length));
+    if (sent.length === 1) {
+      check('putting the others behind the one already showing',
+            JSON.parse(sent[0].body).stacked_under === 'f/lead.jpg',
+            sent[0].body);
+    }
+    // Out of the stack, and asked for afresh rather than gone back to: the
+    // page behind is the one that has just stopped being true.
+    check('and leaves the stack for the grid it was folded into',
+          location.href === '/browse?group=day', location.href);
+    check('without going back to a copy of it', wentBack === 1,
+          String(wentBack));
+  }
+
   if (failures.length) {
     failures.forEach(f => console.log('FAIL ' + f));
     process.exit(1);
