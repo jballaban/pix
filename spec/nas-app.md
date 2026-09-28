@@ -1507,6 +1507,10 @@ quietly decide them:
   library. The gesture can only ever be *remove the poorer when the better one is
   present*, never *remove derivatives*.
 
+A **clip** — a stretch or frame cut from a video in the app — is not a
+derivative in this sense and never falls under its rule; see
+[clips.md](clips.md).
+
 ### What this does not change
 
 Stacks keep their definition, their flatness and their controls. The `band`
@@ -1610,7 +1614,8 @@ and a curator deciding what to trust has to see which is which.
 - **Ad-hoc `pix export` CLI surface.** The desktop one-off case
   ([§7](#7-distributions)) needs inline filter and template arguments; new CLI
   surface, unspecified.
-- **Non-destructive edits — deferred, noted for posterity.** Cropping a photo or
+- **Non-destructive edits — deferred, noted for posterity.** *(Video splitting
+  and stills from video are now designed as **clips** — [clips.md](clips.md).)* Cropping a photo or
   trimming a video keeps the original untouched and saves the result separately.
   This needs no new concepts: **parameters in the sidecar** (crop rect, trim
   points, rotation — they are human decisions like any other), **result in the
