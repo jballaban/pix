@@ -27,7 +27,12 @@ class _FakeSession:
         _FakeSession.created += 1
         self.closed = False
 
-    def read_metadata(self, media: Path) -> dict[str, object] | None:
+    #: `(file name, fast)` for every read, so a test can ask how it was read.
+    reads: list[tuple[str, bool]] = []
+
+    def read_metadata(self, media: Path, *,
+                      fast: bool = True) -> dict[str, object] | None:
+        _FakeSession.reads.append((media.name, fast))
         if not self._script:
             return {"SourceFile": str(media)}
         outcome = self._script.pop(0)
@@ -237,3 +242,37 @@ def test_noting_a_render_before_there_is_metadata_is_not_an_error(
     derive._note_render(media)
 
     assert not derive.meta_path(media).exists(), "invented a record"
+
+
+def test_a_video_is_read_to_its_end(tmp_path: Path) -> None:
+    """`-fast2` stops at the footage, and a camera writes the metadata after
+    it — every GoPro clip came in with no date, no length and no camera."""
+    pool = _pool([])
+    _FakeSession.reads = []
+    pool.read(tmp_path / "GX010001.MP4")
+    pool.read(tmp_path / "a.jpg")
+    assert _FakeSession.reads == [("GX010001.MP4", False), ("a.jpg", True)]
+
+
+def test_a_clip_whose_metadata_comes_last_still_has_a_length(
+    tmp_path: Path
+) -> None:
+    """For real: ffmpeg without `+faststart` writes the `moov` after the
+    `mdat`, which is how cameras write it."""
+    import shutil
+    import subprocess
+
+    if shutil.which("ffmpeg") is None or shutil.which("exiftool") is None:
+        pytest.skip("ffmpeg or exiftool is not installed")
+    clip = tmp_path / "late.mp4"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                    "testsrc=size=64x36:rate=10", "-t", "3", "-c:v",
+                    "libx264", "-pix_fmt", "yuv420p", str(clip)],
+                   check=True, timeout=60)
+    pool = derive._ExifPool()
+    try:
+        record = pool.read(clip)
+    finally:
+        pool.close()
+    assert record is not None
+    assert "QuickTime:Duration" in record, sorted(record)

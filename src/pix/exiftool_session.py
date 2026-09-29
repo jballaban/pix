@@ -253,11 +253,19 @@ class ExifToolSession:
         args.append(str(dest))
         self.execute(*args)
 
-    def read_metadata(self, file: Path) -> dict[str, object] | None:
+    def read_metadata(self, file: Path, *,
+                      fast: bool = True) -> dict[str, object] | None:
         """Read `file`'s metadata via the live session; return the raw dict.
 
         Same flags as the bulk-read path (`-j -G:0 -fast2`) so the result
         is shape-compatible with the rest of the metadata pipeline.
+
+        **`fast=False` for video.** `-fast2` stops a QuickTime file at its
+        first `mdat`, which is right only when the `moov` comes first. Cameras
+        write it last — a GoPro's sits after 1.4 GB of footage — and then
+        `-fast2` returns a file with no date, no duration and no camera. Read
+        in full it is a seek to the end, not a read of the middle: 0.2s over
+        SMB for a 1.4 GB clip.
         Returns None on parse failure or missing SourceFile — caller
         should treat that as "couldn't refresh, will rebuild next run".
 
@@ -265,7 +273,8 @@ class ExifToolSession:
         the persistent cache immediately, instead of forcing the next
         migrate to re-read it.
         """
-        stdout = self.execute("-j", "-G:0", "-fast2", str(file))
+        flags = ("-j", "-G:0", "-fast2") if fast else ("-j", "-G:0")
+        stdout = self.execute(*flags, str(file))
         stripped = stdout.strip()
         if not stripped:
             return None

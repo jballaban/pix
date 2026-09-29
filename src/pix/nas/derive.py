@@ -148,7 +148,10 @@ class _ExifPool:
         with self._lock:
             for last_attempt in (False, True):
                 try:
-                    return self._ensure().read_metadata(media)
+                    # Video in full: its `moov` is often after the footage,
+                    # where `-fast2` never looks (`read_metadata`).
+                    return self._ensure().read_metadata(
+                        media, fast=media.suffix.lower() not in _VIDEO_EXTS)
                 except ExifToolTimeout:
                     # execute() already killed it. This file is genuinely slow;
                     # skip it rather than spending the timeout again.
