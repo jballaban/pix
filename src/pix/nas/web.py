@@ -2575,8 +2575,14 @@ def _drill(row: sqlite3.Row, groups: list[str],
             return None
         if key is None:
             # A year nobody knows is genuinely *undated*; a day nobody knows
-            # is a file dated to its month, which is a different thing.
-            if name != "year":
+            # is a file dated to its month, which is a different thing —
+            # unless nothing in the section has a date at all, and then it is
+            # undated too and opens as exactly that. The Event page is cut by
+            # month, so without this its folder of undated files was the one
+            # folder on the page that would not open.
+            wholly = ("dated" in row.keys() and row["dated"] == 0)
+            if name != "year" and not (
+                    name in ("day", "month") and wholly):
                 return None
             patch["date"] = ix.UNDATED
             continue

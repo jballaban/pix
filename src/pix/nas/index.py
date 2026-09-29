@@ -1872,6 +1872,12 @@ def sections(conn: sqlite3.Connection, filters: Filters | None = None, *,
         "   WHERE fa.folder = files.folder AND fa.name = files.name) "
         " THEN 1 ELSE 0 END) AS unreviewed, "
         " SUM(CASE WHEN files.kind = 'video' THEN 1 ELSE 0 END) AS videos, "
+        # How many have any date at all. A section with no month is either
+        # files dated only to their year or files with no date, and only the
+        # second has a filter that opens exactly it — so the page has to know
+        # which it is looking at.
+        " SUM(CASE WHEN files.effective_date IS NOT NULL THEN 1 ELSE 0 END)"
+        "   AS dated, "
         f" MIN({known}) AS first_seen, MAX({known}) AS last_seen "
         "FROM files "
         + (f"WHERE {where} " if where else "")

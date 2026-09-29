@@ -2108,15 +2108,30 @@ def test_a_folder_keeps_the_filters_already_set(client: TestClient) -> None:
 
 
 def test_a_folder_that_cannot_be_said_as_a_filter_does_not_pretend(
-    client: TestClient
+    client: TestClient, writable: Path
 ) -> None:
     """*No day* means dated less precisely than a day, and the date filter
     answers `undated` or a prefix with nothing in between. Sending it to the
     month would open a folder holding more than the one that was clicked."""
+    (writable / "b.mp4").write_bytes(b"fake")
+    r = client.post("/api/decide", json={
+        "folder": "init_2026", "name": "b.mp4",
+        "date_override": "2026-*-*-*:*:*"})
+    assert r.status_code == 200, r.text
     html = client.get("/?group=day").text
 
     assert 'class="tile dead"' in html, "offered a door to somewhere else"
     assert "No day" in html
+
+
+def test_the_event_pages_undated_folder_opens(client: TestClient) -> None:
+    """The Event page is cut by month, and a file with no date has no month —
+    so its folder was the one on the page that would not open, pills and all.
+    Nothing in it has a date, so *undated* is exactly what it holds."""
+    html = client.get("/?group=month,event").text
+
+    assert 'class="tile dead"' not in html
+    assert "date=%28undated%29" in html or "date=(undated)" in html, html[:0]
 
 
 def test_an_undated_folder_is_reachable(client: TestClient) -> None:
