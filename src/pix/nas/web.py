@@ -2557,15 +2557,40 @@ _DRILL: dict[str, str] = {
 }
 
 
+def _imprecise(row: sqlite3.Row, name: str) -> str | None:
+    """The date filter holding exactly a section with no `name` key, or None.
+
+    Read off how precisely the section's files are dated: all undated is
+    `undated`; all dated to one year, or one month, and no finer is
+    `2025-*` or `2025-08-*`. A mix of the two has no filter.
+    """
+    if "pmin" not in row.keys():
+        # A section without the reading: only a year nobody knows can still
+        # be answered, because that is undated by definition.
+        return ix.UNDATED if name == "year" else None
+    low, high = row["pmin"], row["pmax"]
+    if low is None or low != high:
+        return None
+    width = int(low)
+    if width == datestr.NOTHING:
+        return ix.UNDATED
+    first, last = str(row["elo"] or ""), str(row["ehi"] or "")
+    if width not in (datestr.YEAR, datestr.MONTH) or not first \
+            or first[:width] != last[:width]:
+        return None
+    return f"{first[:width]}-*"
+
+
 def _drill(row: sqlite3.Row, groups: list[str],
            view: ix.Filters) -> str | None:
     """Where one folder leads: this view, plus what the folder is.
 
-    `None` where the section cannot be said as a filter. Only two can't —
-    *no day* and *no month*, which mean *dated less precisely than that*, and
-    the date filter answers `undated` or a prefix and nothing in between.
-    Sending those to the year would open a folder with more in it than the one
-    that was clicked, which is worse than a folder that does not open.
+    `None` where the section cannot be said as a filter. *No day* and *no
+    month* mean *dated less precisely than that*, and they open as the one
+    date filter that says so (`_imprecise`) — or, where their files are dated
+    to different widths, not at all. Sending those to the year would open a
+    folder with more in it than the one that was clicked, which is worse than
+    a folder that does not open.
     """
     patch: dict[str, str | None] = {}
     for i, name in enumerate(groups):
@@ -2574,17 +2599,16 @@ def _drill(row: sqlite3.Row, groups: list[str],
         if column is None:
             return None
         if key is None:
-            # A year nobody knows is genuinely *undated*; a day nobody knows
-            # is a file dated to its month, which is a different thing —
-            # unless nothing in the section has a date at all, and then it is
-            # undated too and opens as exactly that. The Event page is cut by
-            # month, so without this its folder of undated files was the one
-            # folder on the page that would not open.
-            wholly = ("dated" in row.keys() and row["dated"] == 0)
-            if name != "year" and not (
-                    name in ("day", "month") and wholly):
+            # No year, no month or no day: the files are dated less
+            # precisely than this level cuts. That is one filter when they
+            # are all dated alike — `undated`, or `2025-*` for the year and
+            # no month — and otherwise none, because a folder that opened
+            # onto more than it counted would be worse than one that does
+            # not open.
+            exact = _imprecise(row, name)
+            if exact is None:
                 return None
-            patch["date"] = ix.UNDATED
+            patch["date"] = exact
             continue
         patch[column] = str(key)
         # A folder of an event *itself*, made beside one folder per part of
@@ -4182,6 +4206,12 @@ function wider(col,v){
 }
 
 function labelFor(col,v){
+  // Dated to that and no finer: the chip says what is missing, the way the
+  // folder that set it did.
+  if(col==='date'&&String(v).endsWith('-*')){
+    const known=String(v).slice(0,-2);
+    return known+(known.length===4?', no month':', no day');
+  }
   // *Sicily* is the trip and *Sicily, no sub-event* is the part of it nobody
   // has divided up yet — two different sets of files, and a chip that showed
   // the same word for both would be the bar disagreeing with the folder that

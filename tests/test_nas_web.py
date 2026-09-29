@@ -2107,21 +2107,70 @@ def test_a_folder_keeps_the_filters_already_set(client: TestClient) -> None:
     assert "event=Italy%20-%20Sicily" in html
 
 
-def test_a_folder_that_cannot_be_said_as_a_filter_does_not_pretend(
-    client: TestClient, writable: Path
-) -> None:
-    """*No day* means dated less precisely than a day, and the date filter
-    answers `undated` or a prefix with nothing in between. Sending it to the
-    month would open a folder holding more than the one that was clicked."""
-    (writable / "b.mp4").write_bytes(b"fake")
+def _undated_clip(app_env: dict[str, Path], writable: Path,
+                  name: str) -> None:
+    """Another video with no date of its own, in master and in the index."""
+    (writable / name).write_bytes(b"fake")
+    share = app_env["share"]
+    (share / "meta" / "init_2026" / f"{name}.json").write_text(json.dumps({
+        "file": name, "folder": "init_2026", "size": 20, "mtime_ns": 1,
+        "exif": {"QuickTime:Duration": "5 s",
+                 "XMP:EventAuto": "Italy - Sicily"}}), encoding="utf-8")
+    ix.build(app_env["db"], meta_dir=share / "meta",
+             master_dir=share / "master")
+
+
+def _dated(client: TestClient, name: str, override: str) -> None:
     r = client.post("/api/decide", json={
-        "folder": "init_2026", "name": "b.mp4",
-        "date_override": "2026-*-*-*:*:*"})
+        "folder": "init_2026", "name": name, "date_override": override})
     assert r.status_code == 200, r.text
+
+
+def test_a_folder_that_cannot_be_said_as_a_filter_does_not_pretend(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """*No day* holding one file dated to the year and one to the month is
+    two sets of files, and no one filter opens exactly both. Sending it to
+    the year would open a folder holding more than the one that was
+    clicked."""
+    (writable / "b.mp4").write_bytes(b"fake")
+    _undated_clip(app_env, writable, "c.mp4")
+    _dated(client, "b.mp4", "2026-*-*-*:*:*")
+    _dated(client, "c.mp4", "2026-08-*-*:*:*")
     html = client.get("/?group=day").text
 
     assert 'class="tile dead"' in html, "offered a door to somewhere else"
     assert "No day" in html
+
+
+def test_a_folder_dated_only_to_its_year_opens_as_exactly_that(
+    client: TestClient, writable: Path
+) -> None:
+    """*No month* under 2026 is the files dated to 2026 and no finer — a set
+    of its own, which neither `2026` nor `undated` is."""
+    (writable / "b.mp4").write_bytes(b"fake")
+    _dated(client, "b.mp4", "2026-*-*-*:*:*")
+    html = client.get("/?date=2026&group=month,event").text
+
+    assert 'class="tile dead"' not in html
+    assert "date=2026-%2A" in html or "date=2026-*" in html, html[:0]
+    names = [f["name"] for f in client.get("/api/files?date=2026-*").json()]
+    assert names == ["b.mp4"], "a file dated to the day is not dated to 2026"
+
+
+def test_a_month_known_and_no_day_is_its_own_filter(
+    client: TestClient, writable: Path
+) -> None:
+    (writable / "b.mp4").write_bytes(b"fake")
+    _dated(client, "b.mp4", "2026-08-*-*:*:*")
+    names = [f["name"] for f in client.get("/api/files?date=2026-08-*").json()]
+    assert names == ["b.mp4"]
+    assert client.get("/api/files?date=2026-*").json() == []
+
+
+def test_the_chip_says_what_is_missing() -> None:
+    js = web._BROWSE_JS
+    assert "', no month'" in js and "', no day'" in js
 
 
 def test_the_event_pages_undated_folder_opens(client: TestClient) -> None:

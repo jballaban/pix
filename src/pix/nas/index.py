@@ -1156,6 +1156,15 @@ def _duration(exif: dict[str, Any]) -> float | None:
 #: `2026`, `2026-08`, `2026-08-30` — and nothing else.
 _DATE_PREFIX = re.compile(r"^\d{4}(-\d{2}(-\d{2})?)?$")
 
+#: `2025-*` and `2025-08-*`: dated to that and **no finer** — the year known
+#: and the month not, the month known and the day not. The `*` is the one the
+#: date override already uses for *not known*, in the slot that is not.
+#:
+#: A filter of its own because it is a set of files of its own: a folder of
+#: *No month* under 2025 holds files dated only to 2025, and neither `2025`
+#: (everything that year) nor `undated` (no year at all) opens exactly it.
+_DATE_ONLY = re.compile(r"^\d{4}(-\d{2})?-\*$")
+
 
 def date_prefix(value: str | None) -> str | None:
     """A date filter value, or None if it is not one.
@@ -1170,7 +1179,7 @@ def date_prefix(value: str | None) -> str | None:
     if value is None:
         return None
     value = value.strip()
-    if value == UNDATED or _DATE_PREFIX.match(value):
+    if value == UNDATED or _DATE_PREFIX.match(value) or _DATE_ONLY.match(value):
         return value
     return None
 
@@ -1241,6 +1250,16 @@ def _clauses(filters: Filters) -> dict[str, tuple[str, dict[str, Any]]]:
         # known to be from August is not undated, and answering a day filter
         # with it would be the same invention grouping used to make.
         out["date"] = ("files.effective_date IS NULL", {})
+    elif filters.date is not None and filters.date.endswith("-*"):
+        # Known to exactly this width and no further. `precision` is the
+        # width that is true, so it is compared for equality: a file known to
+        # the day is in 2025, but it is not *dated only to 2025*.
+        known = filters.date[:-2]
+        width = len(known)
+        out["date"] = (
+            f"(files.precision = {width} "
+            f"AND substr(files.effective_date, 1, {width}) = :f_date)",
+            {"f_date": known})
     elif filters.date is not None:
         # Matched by prefix, at whatever width the value was given in, so one
         # clause answers year, month and day — and only where the date is known
@@ -1872,12 +1891,13 @@ def sections(conn: sqlite3.Connection, filters: Filters | None = None, *,
         "   WHERE fa.folder = files.folder AND fa.name = files.name) "
         " THEN 1 ELSE 0 END) AS unreviewed, "
         " SUM(CASE WHEN files.kind = 'video' THEN 1 ELSE 0 END) AS videos, "
-        # How many have any date at all. A section with no month is either
-        # files dated only to their year or files with no date, and only the
-        # second has a filter that opens exactly it — so the page has to know
-        # which it is looking at.
-        " SUM(CASE WHEN files.effective_date IS NOT NULL THEN 1 ELSE 0 END)"
-        "   AS dated, "
+        # How precisely its files are dated, and the dates at either end. A
+        # section with no month or no day is files dated less precisely than
+        # that — to the year, the month, or not at all — and the page opens it
+        # only when they are all dated alike, because only then is there one
+        # filter that holds exactly them.
+        " MIN(files.precision) AS pmin, MAX(files.precision) AS pmax, "
+        " MIN(files.effective_date) AS elo, MAX(files.effective_date) AS ehi, "
         f" MIN({known}) AS first_seen, MAX({known}) AS last_seen "
         "FROM files "
         + (f"WHERE {where} " if where else "")
@@ -2028,6 +2048,10 @@ def _date_level(current: str | None) -> tuple[int, str | None]:
     """
     if current is None or current == UNDATED:
         return 4, None
+    # *2025, no month* offers what *2025* does: the way on from a folder of
+    # files nobody could place in a month is to the months there are.
+    if current.endswith("-*"):
+        current = current[:-2]
     if len(current) == 4:
         return 7, current
     if len(current) == 7:
