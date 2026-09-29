@@ -20,6 +20,7 @@ from typing import Any, cast
 
 import yaml
 
+from pix import importer
 from pix.importer import sanitize_component
 from pix.ingest import MANIFEST_DIRNAME
 from pix.markers import IMPORT_TMP_SUFFIX
@@ -28,9 +29,9 @@ from pix.markers import IMPORT_TMP_SUFFIX
 #: the two staging areas are structurally the same thing.
 SIDECAR_EXT: str = ".importinfo"
 
-#: Non-media companions a folder import never lands. `.aae` is Apple's
-#: edit-instruction sidecar, meaningless without Photos.
-SKIP_EXTENSIONS: frozenset[str] = frozenset({".aae"})
+#: Non-media companions a folder import never lands — the same list the device
+#: importer keeps, read from there so the two cannot come to disagree.
+SKIP_EXTENSIONS: frozenset[str] = importer.SKIP_EXTENSIONS
 
 
 def is_bare_dotfile(name: str) -> bool:

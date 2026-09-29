@@ -46,8 +46,17 @@ from pix.root import local_dir
 
 # Non-media companions import never lands (everything else, incl. unknown
 # extensions, lands faithfully). Two rules: this explicit extension denylist
-# (`.aae` = Apple edit sidecars) plus bare dotfiles (`_is_bare_dotfile`).
-_SKIP_EXTENSIONS: frozenset[str] = frozenset({".aae"})
+# plus bare dotfiles (`_is_bare_dotfile`).
+#
+# **The one list, for both importers** — `pix.nas.staging` reads it from here
+# rather than keeping its own, because two copies of a rule about what counts
+# as media are two chances to disagree about it.
+#
+# - `.aae` — Apple's edit-instruction sidecar, meaningless without Photos.
+# - `.url` — a Windows internet shortcut. GoPros put one on their own storage
+#   (`Get_started_with_GoPro.url`), and it reached master that way.
+SKIP_EXTENSIONS: frozenset[str] = frozenset({".aae", ".url"})
+_SKIP_EXTENSIONS: frozenset[str] = SKIP_EXTENSIONS
 
 # Per-object attempt cap before FAILED (size mismatch, read-back failure, or two
 # device reads that never agree). Run-state only — a later run re-attempts.
@@ -198,7 +207,7 @@ def _is_bare_dotfile(name: str) -> bool:
 
 def _is_skippable_companion(obj: wpd.WpdObject) -> bool:
     """True for non-media files import never lands: the explicit extension
-    denylist (`.aae`) or a bare dotfile (see `_is_bare_dotfile`)."""
+    denylist (`SKIP_EXTENSIONS`) or a bare dotfile (see `_is_bare_dotfile`)."""
     name = obj.filename
     return _is_bare_dotfile(name) or Path(name).suffix.lower() in _SKIP_EXTENSIONS
 

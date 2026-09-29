@@ -84,6 +84,22 @@ def test_aae_is_skippable() -> None:
     assert not importer._is_skippable_companion(_obj(orig="clip.MOV"))
 
 
+def test_a_shortcut_is_skippable() -> None:
+    """GoPros keep `Get_started_with_GoPro.url` on their own storage, and it
+    reached master as the one file nothing could make a thumbnail of."""
+    assert importer._is_skippable_companion(
+        _obj(orig="Get_started_with_GoPro.url"))
+
+
+def test_both_importers_skip_the_same_things() -> None:
+    """One list, so a device import and a folder import cannot disagree
+    about what counts as media."""
+    from pix.nas import staging
+
+    assert staging.SKIP_EXTENSIONS is importer.SKIP_EXTENSIONS
+    assert staging.is_skippable("Get_started_with_GoPro.URL")
+
+
 def test_bare_dotfiles_are_skippable() -> None:
     """Device/OS metadata dotfiles (leading dot, no extension) never land —
     they'd otherwise abort migrate as unknown extensions."""
