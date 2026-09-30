@@ -8578,6 +8578,7 @@ _SPLICE_HTML: str = """<div class="splice">
 <button id="zin" aria-label="Zoom in" title="Zoom in">+</button></div>
 <div class="sctl">
 <button id="bplay">Play</button>
+<span class="rates" id="rates" role="group" aria-label="Speed"></span>
 <button id="bprevk" title="Back to the last keyframe (shift+,)">&lsaquo;K</button>
 <button id="bprevf" title="Back a frame (,)">&minus;1f</button>
 <button id="bnextf" title="On a frame (.)">+1f</button>
@@ -8697,6 +8698,13 @@ _SPLICE_CSS: str = """
 .sctl button.mark { color:var(--top); border-color:var(--top); }
 /* The picture scrubs: dragging across it runs through the video. */
 .sstage video { touch-action:none; cursor:ew-resize; }
+/* Speed: one control of four, the current one lit. */
+.rates { display:inline-flex; }
+.rates button { min-width:44px; border-radius:0; margin-left:-1px; }
+.rates button:first-child { border-radius:6px 0 0 6px; margin-left:0; }
+.rates button:last-child { border-radius:0 6px 6px 0; }
+.rates button.on { background:var(--accent); color:#0d0f12;
+                   border-color:var(--accent); font-weight:600; }
 """
 
 
@@ -9121,6 +9129,40 @@ function step(dt){
 }
 function toggle(){ if(v.paused) v.play().catch(()=>{}); else v.pause(); }
 
+// Playback speed. Slower to find the moment a clip should start, faster to
+// get through footage nothing will be cut from. Remembered on this device,
+// because somebody working through a card of GoPro clips wants the same
+// speed on the next one — and only here, since it is how this person reads,
+// not a fact about the video.
+const RATES=[0.5,1,1.5,2];
+let rate=1;
+try{ const kept=parseFloat(localStorage.getItem('pix.splice.rate')||'');
+     if(RATES.includes(kept)) rate=kept; }catch(e){}
+function setRate(r){
+  rate=r; v.playbackRate=r;
+  try{ localStorage.setItem('pix.splice.rate',String(r)); }catch(e){}
+  const box=$('rates');
+  if(box) [...box.children].forEach(b=>b.classList.toggle('on',+b.dataset.rate===r));
+}
+(function(){
+  const box=$('rates');
+  if(!box) return;
+  for(const r of RATES){
+    const b=document.createElement('button');
+    b.textContent=r+'×'; b.dataset.rate=String(r);
+    b.title='Play at '+r+'× ([ and ] to change)';
+    b.onclick=e=>{e.stopPropagation(); setRate(r);};
+    box.appendChild(b);
+  }
+  setRate(rate);
+})();
+// A browser sets the rate back to 1 when a new source loads.
+v.addEventListener('loadedmetadata',()=>{ v.playbackRate=rate; });
+function nudgeRate(dir){
+  const i=RATES.indexOf(rate), j=Math.min(RATES.length-1,Math.max(0,i+dir));
+  setRate(RATES[j]); say('speed '+RATES[j]+'×');
+}
+
 // The picture scrubs. Dragging across it runs through the video — its whole
 // width is the whole video — and a tap without a drag plays or pauses.
 v.addEventListener('pointerdown',e=>{
@@ -9190,6 +9232,8 @@ document.addEventListener('keydown',e=>{
   const k=e.key;
   if(k===' ') toggle();
   else if(k==='m'||k==='M') place(here());
+  else if(k==='[') nudgeRate(-1);
+  else if(k===']') nudgeRate(1);
   else if(k==='p'||k==='P') still();
   else if(k===','&&!e.shiftKey) step(-frame);
   else if(k==='.'&&!e.shiftKey) step(frame);

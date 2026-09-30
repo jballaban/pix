@@ -813,3 +813,9 @@ def test_the_splice_page_draws_the_filmstrip(
     state = json.loads(html.split("const SPLICE=", 1)[1].split(";</script>")[0])
     assert state["strip"] == {"n": 15, "w": 160, "h": 90,
                               "url": "/strip/init_2026/b.mp4"}
+
+
+def test_the_splice_page_offers_four_speeds() -> None:
+    js = web._SPLICE_JS
+    assert "const RATES=[0.5,1,1.5,2];" in js
+    assert "v.playbackRate=r" in js
