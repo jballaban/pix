@@ -3586,18 +3586,33 @@ def test_the_corner_is_the_way_between_files_and_folders(
 ) -> None:
     """The same library at two zooms, and the corner is how you change which.
 
-    It carries the view across, because a zoom that dropped the filters would
-    be a different library rather than the same one seen closer — and it says
+    It carries the filters across, because a zoom that dropped them would be
+    a different library rather than the same one seen closer — and it says
     what it will do, since the mark under the pointer is a picture of the page
     rather than of the destination.
+
+    **Not the grouping.** Each page reads best its own way, and opening a
+    folder already leaves the folders' grouping behind for the grid's. The
+    corner carrying the grid's *by day* back up lost a hand-built year ›
+    month › event on every round trip.
     """
     grid = _corner(client.get("/browse?event=Italy+-+Sicily&group=day").text)
-    assert 'href="/?event=Italy+-+Sicily&amp;group=day"' in grid, grid
+    assert 'href="/?event=Italy+-+Sicily&amp;group=month%2Cevent"' in grid, grid
     assert "Show the folders" in grid, grid
 
-    folders = _corner(client.get("/?event=Italy+-+Sicily&group=event").text)
-    assert 'href="/browse?event=Italy+-+Sicily&amp;group=event"' in folders
+    folders = _corner(client.get(
+        "/?event=Italy+-+Sicily&group=year,month,event").text)
+    assert 'href="/browse?event=Italy+-+Sicily"' in folders, folders
     assert "Show the files" in folders, folders
+
+
+def test_an_unfiltered_grid_zooms_out_to_the_whole_library(
+    client: TestClient
+) -> None:
+    """Not to this year of it: an address with nothing in it is sent to the
+    current year, so the corner names the default grouping outright."""
+    grid = _corner(client.get("/browse").text)
+    assert 'href="/?group=month%2Cevent"' in grid, grid
 
 
 def test_a_stack_is_not_carried_up_to_the_folders(client: TestClient) -> None:
@@ -3608,7 +3623,7 @@ def test_a_stack_is_not_carried_up_to_the_folders(client: TestClient) -> None:
     bar = _corner(client.get("/browse?event=Italy+-+Sicily&group=day").text)
 
     assert "within" not in bar, bar
-    assert 'href="/?event=Italy+-+Sicily&amp;group=day"' in bar, bar
+    assert 'href="/?event=Italy+-+Sicily&amp;group=month%2Cevent"' in bar, bar
 
 
 def test_the_sign_in_page_still_carries_the_logo(

@@ -1564,6 +1564,31 @@ _FAVICON = "data:image/svg+xml," + quote(
     'stroke-linecap="round" stroke-linejoin="round"/></svg>', safe="")
 
 
+def _zoom(page: str, query: str) -> str:
+    """The other view of this library: the same filters, its own grouping.
+
+    **Filters cross; the grouping does not.** Opening a folder already works
+    this way — the folder's values are added to the filters and the grid cuts
+    them its own way, by day — and the corner going back has to match it: it
+    carried the grid's *by day* up to the folders, and a reading of the
+    library that had been built up by hand was lost on every round trip. A
+    grouping is how a page is read, and each page reads best its own way.
+
+    `within` is left behind too. A folder view of one stack is the stack, so
+    there is nothing coarser to say about it, and leaving a stack is its own
+    gesture on the bar.
+
+    The folders page is named its default grouping outright, because an
+    address with nothing in it is sent to this year — and an unfiltered grid
+    zoomed out is the whole library, not this year of it.
+    """
+    kept = [part for part in query.split("&")
+            if part and not part.startswith(("group=", "within="))]
+    if page == "/":
+        kept.append(f"group={_q(HOME_GROUPING)}")
+    return page + ("?" + "&".join(kept) if kept else "")
+
+
 def _brand(zoom: str) -> str:
     """The corner: on the two library pages a control, everywhere else the logo.
 
@@ -2285,10 +2310,9 @@ def home(request: Request,
             else '<div class="grid folders" id="grid">'
                  + _shelves(rows, groups, view, user, whole, spread)
                  + "</div>")
-    # The same query against the other page: the corner is a zoom control, and
+    # The same filters against the other page: the corner is a zoom control, and
     # a zoom that dropped the filters would be a different library rather than
-    # the same one seen closer.
-    q = request.url.query
+    # the same one seen closer. The grouping is left behind (`_zoom`).
     return _page("pix2",
                  # The shared menu, which every filter and the grouping open
                  # into. Left out, the script threw looking for it the moment
@@ -2306,7 +2330,7 @@ def home(request: Request,
                  # that has not moved since yesterday.
                  info=head,
                  script=_view_script(user, view, groups, page="/"),
-                 zoom="/browse" + (f"?{q}" if q else ""),
+                 zoom=_zoom("/browse", request.url.query),
                  user=user)
 
 
@@ -2869,9 +2893,7 @@ def browse(request: Request,
         # stack is the stack, so the only thing the coarser view can say about
         # `within` is nothing — and leaving a stack is its own gesture, on the
         # bar, rather than a side effect of changing how you are reading.
-        zoom="/" + (lambda q: f"?{q}" if q else "")(
-            "&".join(x for x in request.url.query.split("&")
-                     if x and not x.startswith("within="))),
+        zoom=_zoom("/", request.url.query),
         script=_view_script(user, view, groups),
         # No instructions. A standing sentence about clicking and holding is
         # read once, on the first visit, and then occupies a fixed strip at the
