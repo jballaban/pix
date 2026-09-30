@@ -5075,8 +5075,11 @@ async function fill(c){
   let d=details.get(key);
   if(!d){
     try{
+      // With the view, so where a clip came from can be answered inside it.
+      const p=new URLSearchParams();
+      for(const [k,v] of Object.entries(VIEW)) if(v) p.set(k,v);
       const r=await fetch(`/api/file/${encodeURIComponent(c.dataset.folder)}`
-                         +`/${encodeURIComponent(c.dataset.name)}`);
+                         +`/${encodeURIComponent(c.dataset.name)}?`+p);
       if(!r.ok) throw new Error(await r.text());
       d=await r.json(); details.set(key,d);
     }catch(e){rail.innerHTML='<p class="dim">no details</p>';return;}
@@ -5135,8 +5138,14 @@ function railHtml(d){
 
   // Where a clip came from — only there for someone who may see it.
   const cl=d.clip;
+  // Into the source's own preview: here if it is on this page, in this view
+  // if it is in it, and only otherwise on a page of its own day.
+  const from=cl?(cl.in_view
+    ? location.pathname+location.search+'#open:'+encodeURIComponent(cl.key)
+    : cl.open):'';
   const clipHtml=cl?`<div class="rail-h">${cl.start===cl.end?'Still':'Clip'}</div>`
-    + kv([['Cut from',`<a href="${esc(cl.open)}">${esc(cl.source)}</a>`,null,true],
+    + kv([['Cut from',`<a class="to-source" data-key="${esc(cl.key)}" `
+                      +`href="${esc(from)}">${esc(cl.source)}</a>`,null,true],
           [cl.start===cl.end?'At':'Range',
            cl.start===cl.end?secs(cl.start):secs(cl.start)+' – '+secs(cl.end)],
           ...(cl.splice?[['Clips',`<a href="${esc(cl.splice)}">edit on its timeline</a>`,
@@ -5197,7 +5206,17 @@ function closeViewer(){ viewer.classList.remove('on'); vvid.pause(); }
 if(viewer) viewer.addEventListener('click',e=>{
   if(e.target===viewer||e.target===stage||e.target===vmeta) closeViewer();
 });
-if(rail) rail.addEventListener('click',e=>e.stopPropagation());
+if(rail) rail.addEventListener('click',e=>{
+  e.stopPropagation();
+  // A clip's source, when it is on this page already, is one step of the
+  // viewer away rather than a page load.
+  const a=e.target&&e.target.closest?e.target.closest('a.to-source'):null;
+  if(!a) return;
+  const n=cells.findIndex(x=>keyOf(x)===a.dataset.key);
+  if(n<0) return;
+  e.preventDefault();
+  setCur(n,true);
+});
 // A page restored from the back/forward cache comes back exactly as it left,
 // an open viewer included. Leaving a grid with one open is ordinary, and
 // arriving back at that grid to find a photograph over it reads as the app
@@ -6999,17 +7018,27 @@ if(STACK){
 // written for — change a filter, reload a bookmark, and the photograph it
 // names is somewhere else or nowhere — and a page that complained about that
 // would be complaining about an address that is merely old.
-(function(){
+function land(){
   let want='';
   try{ want=decodeURIComponent(String(location.hash||'').slice(1)); }
   catch(e){ return; }
   if(!want) return;
-  const c=cells.find(x=>keyOf(x)===want);
+  // `open:` asks for its preview as well — which is where a clip's *cut
+  // from* leads, since the point of following it is to look at the source.
+  const open=want.startsWith('open:');
+  if(open) want=want.slice(5);
+  const n=cells.findIndex(x=>keyOf(x)===want);
+  const c=n<0?null:cells[n];
   // `center`, because `nearest` on a cell that is already technically in view
   // does nothing — and the browser's idea of in view includes the strip under
   // the bar, where the sticky heading is standing.
   if(c&&c.scrollIntoView) c.scrollIntoView({block:'center'});
-})();
+  if(c&&open&&viewer) openViewer(n);
+}
+land();
+// A link that changes nothing but the part after `#` does not load a page,
+// so arriving that way has to be heard as well.
+window.addEventListener('hashchange',land);
 """
 
 
@@ -7567,7 +7596,8 @@ _INHERITED: tuple[tuple[str, str], ...] = (
 
 @app.get("/api/file/{folder}/{name}")
 def api_file(folder: str, name: str,
-             user: Annotated[Principal, Depends(require_user)]) -> JSONResponse:
+             user: Annotated[Principal, Depends(require_user)],
+             view: Annotated[ix.Filters, Depends(filters)]) -> JSONResponse:
     """Everything known about one file, with fact and judgement kept apart.
 
     The rail's whole job is that separation. `capture_date` is what the camera
@@ -7621,13 +7651,20 @@ def api_file(folder: str, name: str,
         "facts": facts,
         "exif": {k: str(v) for k, v in sorted(exif.items())},
         "has_render": (RENDER_DIR / folder / (name + ".mp4")).is_file(),
-        "clip": _clip_from(user, row),
+        "clip": _clip_from(user, row, view),
     })
 
 
-def _clip_from(user: Principal, row: sqlite3.Row) -> dict[str, Any] | None:
+def _clip_from(user: Principal, row: sqlite3.Row,
+               view: ix.Filters | None = None) -> dict[str, Any] | None:
     """Where a clip was cut from, for someone who may see that — and nothing
-    at all for anyone else, to whom a clip is simply a video."""
+    at all for anyone else, to whom a clip is simply a video.
+
+    `in_view` says whether the source is in the view the clip was opened
+    from, so the page can go to it without leaving that view — the filters
+    somebody built up are not the link's to throw away. Only when the source
+    is not in it does `open` fall back to the source's own day.
+    """
     source = row["clip_of"] if "clip_of" in row.keys() else None
     if source is None:
         return None
@@ -7637,6 +7674,9 @@ def _clip_from(user: Principal, row: sqlite3.Row) -> dict[str, Any] | None:
     conn = db()
     try:
         parent = ix.one(conn, folder, str(source))
+        in_view = view is not None and bool(ix.matching(
+            conn, replace(view, within=None, chosen=None, unfold=True),
+            [(folder, str(source))]))
     finally:
         conn.close()
     day = str(parent["effective_date"] or "")[:10] if parent else ""
@@ -7647,9 +7687,13 @@ def _clip_from(user: Principal, row: sqlite3.Row) -> dict[str, Any] | None:
         query.append(f"audience={_q(decisions.HIDDEN)}")
     return {
         "source": source,
+        "key": f"{folder}/{source}",
         "start": row["clip_in"], "end": row["clip_out"],
+        "in_view": in_view,
+        # `#open:` lands on the file with its preview open, where a bare
+        # `#` only scrolls to it.
         "open": ("/browse" + ("?" + "&".join(query) if query else "")
-                 + "#" + _q(f"{folder}/{source}")),
+                 + "#open:" + _q(f"{folder}/{source}")),
         "splice": (f"/splice/{_q(folder)}/{_q(str(source))}#{_q(str(row['name']))}"
                    if user.is_admin else None),
     }
@@ -8689,7 +8733,10 @@ _SPLICE_CSS: str = """
 .bar { position:absolute; top:10px; bottom:10px; min-width:3px;
        background:var(--accent-bed); border:1.5px solid var(--accent);
        border-radius:4px; box-sizing:border-box; }
-.bar.on { background:var(--tint); border-color:var(--fg); }
+/* The one selected: filled, and outlined twice, so it reads at a glance
+   among clips that differ from it only in where they stand. */
+.bar.on { background:#6aa3ff66; border:2px solid var(--fg);
+          box-shadow:0 0 0 2px var(--accent); z-index:1; }
 /* No file of its own yet: the NAS is still cutting it. */
 .bar.uncut { border-style:dashed; }
 .keys { position:absolute; inset:0; pointer-events:none; }

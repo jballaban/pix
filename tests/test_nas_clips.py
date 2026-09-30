@@ -860,7 +860,7 @@ def test_a_viewer_who_may_see_the_source_sees_where_the_clip_came_from(
     assert 'class="clip-mark"' in kid.get("/browse").text
     got = kid.get(f"/api/file/init_2026/{clip}").json()["clip"]
     assert got["source"] == "b.mp4" and got["splice"] is None
-    assert got["open"].endswith("#init_2026%2Fb.mp4")
+    assert got["open"].endswith("#open:init_2026%2Fb.mp4")
     assert kid.get(f"/thumb/init_2026/{clip}").status_code == 200
 
 
@@ -893,3 +893,23 @@ def test_process_gives_a_clip_pictures_of_its_own(
     assert summary.thumbs == 1, summary.failed
     assert (web.THUMB_DIR / "init_2026" / (clip + ".jpg")).is_file()
     assert real / clip not in derive.pending_files()
+
+
+
+def test_cut_from_stays_in_the_view_it_was_opened_from(
+    client: TestClient, real: Path
+) -> None:
+    """The filters somebody built up are not the link's to throw away: where
+    the source is in the view, the page goes to it there."""
+    [clip] = _make(client, (1, 3))
+    inside = client.get(f"/api/file/init_2026/{clip}?kind=video").json()["clip"]
+    assert inside["in_view"] is True
+    outside = client.get(f"/api/file/init_2026/{clip}?kind=image").json()["clip"]
+    assert outside["in_view"] is False
+    assert "#open:" in outside["open"]
+
+
+def test_a_link_can_open_the_preview_it_lands_on() -> None:
+    js = web._BROWSE_JS
+    assert "want.startsWith('open:')" in js
+    assert "window.addEventListener('hashchange',land)" in js
