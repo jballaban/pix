@@ -329,10 +329,10 @@ cut; an end may be any frame. Clicking a clip picks it — it loops when played
 | place a marker | **Marker**, or click the strip over the timeline | `M` |
 | move a marker | drag its knob | — |
 | take one away | click its knob | — |
-| take a still | **Still** | `P` |
+| take a still | **Take photo** | `P` |
 | move the playhead | click the timeline; **drag across the picture**; tap it to play | space, `,` `.` a frame, shift for a keyframe |
 | a clip | click it: Open, Bin | `Delete` bins it |
-| hide the original | **Hide original** | `H` |
+| hide the original | **Hide original** (lit amber while hidden) | `H` |
 
 Stills are frame-exact through `requestVideoFrameCallback`; `currentTime` is
 not.

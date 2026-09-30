@@ -8771,23 +8771,24 @@ _SPLICE_HTML: str = """<div class="splice">
 <div class="keys" id="keys"></div>
 <div class="bars" id="bars"></div><div class="ph" id="ph"></div></div></div>
 <div class="sline"><span id="tcur">0:00.00</span><span class="dim">&nbsp;/&nbsp;</span>
-<span class="dim" id="tdur"></span><span class="spacer"></span>
-<button id="zout" aria-label="Zoom out" title="Zoom out">&minus;</button>
-<button id="zin" aria-label="Zoom in" title="Zoom in">+</button></div>
-<div class="sctl">
+<span class="dim" id="tdur"></span></div>
+<div class="sctl sbar">
+<div class="sgrp">
 <button id="bplay">Play</button>
 <span class="rates" id="rates" role="group" aria-label="Speed"></span>
 <button id="bprevk" title="Back to the last keyframe (shift+,)">&lsaquo;K</button>
 <button id="bprevf" title="Back a frame (,)">&minus;1f</button>
 <button id="bnextf" title="On a frame (.)">+1f</button>
 <button id="bnextk" title="On to the next keyframe (shift+.)">K&rsaquo;</button>
-</div>
-<div class="sctl">
 <button id="bmark" class="primary" title="Place a marker at the playhead (M)">Marker</button>
-<button id="bstill" title="Take this frame as a photograph (P)">Still</button>
-<span class="gap"></span>
+</div>
+<span class="spacer"></span>
+<div class="sgrp">
 <button id="bhide" title="(H)">Hide original</button>
-<span class="dim" id="hidenote"></span>
+<button id="bstill" title="Take this frame as a photograph (P)">Take photo</button>
+<button id="zout" aria-label="Zoom out" title="Zoom out">&minus;</button>
+<button id="zin" aria-label="Zoom in" title="Zoom in">+</button>
+</div>
 </div>
 <div class="sctl selbar" id="selbar" hidden>
 <b id="selname"></b><span class="gap"></span>
@@ -8849,6 +8850,11 @@ _SPLICE_CSS: str = """
 .sctl { display:flex; flex-wrap:wrap; align-items:center; gap:6px;
         margin:8px 0; }
 .sctl .gap { width:8px; }
+/* One row: playing and marking on the left, the rest to the right. On a
+   phone the right-hand group wraps under, and still keeps to the right. */
+.sbar .sgrp { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+.sbar .spacer { flex:1; }
+.sbar > .sgrp:last-child { justify-content:flex-end; margin-left:auto; }
 .sctl button, .sctl .btn, .sline button { min-height:40px; min-width:44px; }
 .sctl .btn { display:inline-flex; align-items:center; padding:0 12px;
              border:1px solid var(--line); border-radius:6px;
@@ -8856,6 +8862,7 @@ _SPLICE_CSS: str = """
 .sctl button.primary { background:var(--accent); color:#0d0f12;
                        border-color:var(--accent); font-weight:600; }
 .sctl button.danger { color:var(--gone); }
+.sctl button#bhide.on { border-color:var(--top); color:var(--top); }
 .selbar { padding:6px 8px; border:1px solid var(--line); border-radius:6px; }
 .selbar[hidden] { display:none; }
 .shelp { font-size:13px; line-height:1.45; }
@@ -9312,9 +9319,12 @@ async function bin(){
   await reload();
 }
 function drawHide(){
-  $('bhide').textContent=hidden?'Show original':'Hide original';
-  $('hidenote').textContent=hidden
-    ?'The original is out of every view. Its clips are not.':'';
+  const b=$('bhide');
+  b.textContent=hidden?'Show original':'Hide original';
+  b.classList.toggle('on',hidden);
+  b.title=(hidden
+    ?'The original is out of every view; its clips are not. Show it again'
+    :'Take the original out of every view, leaving its clips')+' (H)';
 }
 async function hide(){
   const body={folder:S.folder,name:S.source};
