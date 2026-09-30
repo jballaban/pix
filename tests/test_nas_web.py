@@ -6381,3 +6381,12 @@ def test_the_bar_does_not_offer_to_stack_video() -> None:
     js = web._BROWSE_JS
     assert "show('stack', stackable &&" in js
     assert "show('top', stackable &&" in js
+
+
+def test_a_page_put_back_by_the_browser_is_loaded_again(
+    client: TestClient
+) -> None:
+    """Back is not allowed to show the grid as it was left: clips cut on the
+    splice page were missing from it until it was reloaded by hand."""
+    html = client.get("/browse").text
+    assert "if (e.persisted) location.reload();" in html

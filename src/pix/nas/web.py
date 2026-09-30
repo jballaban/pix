@@ -1905,7 +1905,15 @@ def _page(title: str, body: str, *, tools: str = "", rows: str = "",
   // teaches you to stop believing the rest of them.
   if (history.length <= 1) back.disabled = true;
   back.onclick = function () {{ history.back(); }};
-}})();</script>
+}})();
+// **Back shows the page as it is now, not as it was left.** Browsers keep
+// the page behind you whole and put it back untouched — the grid you left
+// before cutting clips came back without them until reloaded. `no-store`
+// does not stop that everywhere (Safari, and Chrome on some pages, keep
+// such pages anyway), so a page put back that way asks again instead.
+window.addEventListener('pageshow', function (e) {{
+  if (e.persisted) location.reload();
+}});</script>
 <script>{_BAR_JS}</script>
 <script>{_MENU_JS}</script>
 <script>{_INSTALL_JS}</script>
