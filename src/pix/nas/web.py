@@ -3439,7 +3439,7 @@ def _cell(row: sqlite3.Row, view: ix.Filters | None = None, *,
         f'<button class="pick" aria-label="select"></button>'
         + (f'<span class="badge">{_dur(row["duration"])}</span>'
            if row["kind"] == "video" else "")
-        + _clip_badge(row)
+        + _clip_badge(row, view or ix.Filters())
         + mark
         + _people_html(_split(row["people"]), view or ix.Filters())
         + _access_html(shared) + _chips_html("tags", tags)
@@ -3470,9 +3470,14 @@ def _splices(row: sqlite3.Row) -> str:
     return name if clips.can_splice(name, str(row["kind"])) is None else ""
 
 
-def _clip_badge(row: sqlite3.Row) -> str:
-    """Says that this was cut from a video, and which kind of cut."""
+def _clip_badge(row: sqlite3.Row, view: ix.Filters) -> str:
+    """Says that this was cut from a video, and which kind of cut — to
+    someone who may see that video, and to nobody else (`ix._source_seen`).
+    To anyone else a clip is simply a video."""
     if "clip_of" not in row.keys() or row["clip_of"] is None:
+        return ""
+    if view.viewer is not None and not (
+            "source_seen" in row.keys() and row["source_seen"]):
         return ""
     still = row["clip_in"] == row["clip_out"]
     word = "Still" if still else "Clip"
@@ -5128,7 +5133,16 @@ function railHtml(d){
   const all=Object.entries(d.exif||{})
     .map(([k,v])=>`<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('');
 
-  return `<div class="rail-h">Decisions</div>`
+  // Where a clip came from — only there for someone who may see it.
+  const cl=d.clip;
+  const clipHtml=cl?`<div class="rail-h">${cl.start===cl.end?'Still':'Clip'}</div>`
+    + kv([['Cut from',`<a href="${esc(cl.open)}">${esc(cl.source)}</a>`,null,true],
+          [cl.start===cl.end?'At':'Range',
+           cl.start===cl.end?secs(cl.start):secs(cl.start)+' – '+secs(cl.end)],
+          ...(cl.splice?[['Clips',`<a href="${esc(cl.splice)}">edit on its timeline</a>`,
+                          null,true]]:[])])
+    :'';
+  return clipHtml + `<div class="rail-h">Decisions</div>`
     + kv([['Status',d.tier||'undecided',d.tier?null:'was'],
           ...eventRow])
     + (tags?`<div style="margin-top:6px">${tags}</div>`
@@ -7005,7 +7019,7 @@ if(STACK){
 def thumb(folder: str, name: str,
           user: Annotated[Principal, Depends(require_user)]) -> FileResponse:
     _allowed(user, folder, name)
-    return _serve(THUMB_DIR, folder, name)
+    return _serve(THUMB_DIR, folder, name, user)
 
 
 @app.get("/strip/{folder}/{name}")
@@ -7013,7 +7027,7 @@ def strip(folder: str, name: str,
           user: Annotated[Principal, Depends(require_user)]) -> FileResponse:
     """A video's filmstrip, for the splice page's timeline."""
     _allowed(user, folder, name)
-    return _serve(STRIP_DIR, folder, name)
+    return _serve(STRIP_DIR, folder, name, user)
 
 
 @app.get("/large/{folder}/{name}")
@@ -7023,14 +7037,14 @@ def large(folder: str, name: str,
     stretches to 460px wants 920 device pixels, which `thumb` has not got and
     `preview` has four times too many of."""
     _allowed(user, folder, name)
-    return _serve(LARGE_DIR, folder, name)
+    return _serve(LARGE_DIR, folder, name, user)
 
 
 @app.get("/preview/{folder}/{name}")
 def preview(folder: str, name: str,
             user: Annotated[Principal, Depends(require_user)]) -> FileResponse:
     _allowed(user, folder, name)
-    return _serve(PREVIEW_DIR, folder, name)
+    return _serve(PREVIEW_DIR, folder, name, user)
 
 
 def _allowed(user: Principal, folder: str, name: str) -> None:
@@ -7104,34 +7118,56 @@ def media(folder: str, name: str,
                                          "Accept-Ranges": "bytes"})
 
 
-def _serve(root: Path, folder: str, name: str) -> FileResponse:
+def _serve(root: Path, folder: str, name: str,
+           user: Principal | None = None) -> FileResponse:
     """Serve a derived image, refusing anything that escapes its tier.
 
     The path components come from a URL, so they are untrusted: `..` in either
     would otherwise read arbitrary files off the share.
+
+    **A stand-in picture only for someone who may see what it is of.** A clip
+    has no pictures of its own until `process` makes them, and a clip made
+    into a file of its own none until `process` probes it — so each shows its
+    source's meanwhile. That source is footage the clip was cut *out of*, and
+    sharing a clip is not sharing it: to anybody who may not see the source,
+    a picture of it is a frame they were never given. They get nothing until
+    the clip's own pictures exist.
     """
     target = (root / folder / (name + ".jpg")).resolve()
     if root.resolve() not in target.parents:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "bad path")
-    # A clip has no derived images until `process` makes them (spec/clips.md
-    # §6), so it shows its source's meanwhile. Only a curator reaches this:
-    # a viewer is not shown a clip until it has files of its own.
-    source = clips.source_of(name)
-    if not target.is_file() and source is not None:
-        target = (root / folder / (source + ".jpg")).resolve()
-    elif not target.is_file():
-        # A clip made into a file of its own stands in with its old source's
-        # pictures until `process` makes its own (`_stand_in`).
-        record = ix.record_of(META_DIR, folder, name) or {}
-        stand_in = record.get("stand_in")
-        if isinstance(stand_in, str) and stand_in:
-            target = (root / folder / (stand_in + ".jpg")).resolve()
-            if root.resolve() not in target.parents:
-                raise HTTPException(status.HTTP_400_BAD_REQUEST, "bad path")
+    stand_in: str | None = None
+    if not target.is_file():
+        stand_in = clips.source_of(name)
+        if stand_in is None:
+            record = ix.record_of(META_DIR, folder, name) or {}
+            raw = record.get("stand_in")
+            stand_in = raw if isinstance(raw, str) and raw else None
+    if stand_in is not None:
+        if not _may_see(user, folder, stand_in):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "not derived yet")
+        target = (root / folder / (stand_in + ".jpg")).resolve()
+        if root.resolve() not in target.parents:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "bad path")
     if not target.is_file():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "not derived yet")
+    # A stand-in is not kept: the clip's own picture replaces it, and a day
+    # of cache would go on showing the source's after it had.
+    cache = "no-store" if stand_in is not None else "public, max-age=86400"
     return FileResponse(target, media_type="image/jpeg",
-                        headers={"Cache-Control": "public, max-age=86400"})
+                        headers={"Cache-Control": cache})
+
+
+def _may_see(user: Principal | None, folder: str, name: str) -> bool:
+    """Whether this person may see one file — an administrator may, and a
+    caller with nobody in particular in mind is one."""
+    if user is None or user.scope is None:
+        return True
+    conn = db()
+    try:
+        return ix.sees(conn, user.scope, folder, name)
+    finally:
+        conn.close()
 
 
 def _to_send(folder: str, name: str, original: bool) -> tuple[Path, str]:
@@ -7585,7 +7621,38 @@ def api_file(folder: str, name: str,
         "facts": facts,
         "exif": {k: str(v) for k, v in sorted(exif.items())},
         "has_render": (RENDER_DIR / folder / (name + ".mp4")).is_file(),
+        "clip": _clip_from(user, row),
     })
+
+
+def _clip_from(user: Principal, row: sqlite3.Row) -> dict[str, Any] | None:
+    """Where a clip was cut from, for someone who may see that — and nothing
+    at all for anyone else, to whom a clip is simply a video."""
+    source = row["clip_of"] if "clip_of" in row.keys() else None
+    if source is None:
+        return None
+    folder = str(row["folder"])
+    if not _may_see(user, folder, str(source)):
+        return None
+    conn = db()
+    try:
+        parent = ix.one(conn, folder, str(source))
+    finally:
+        conn.close()
+    day = str(parent["effective_date"] or "")[:10] if parent else ""
+    query = [f"date={_q(day)}"] if len(day) == 10 else []
+    # A hidden source is out of the administrator's own grid too, so the way
+    # to it asks for hidden files by name.
+    if parent is not None and decisions.HIDDEN in _split(parent["audience"]):
+        query.append(f"audience={_q(decisions.HIDDEN)}")
+    return {
+        "source": source,
+        "start": row["clip_in"], "end": row["clip_out"],
+        "open": ("/browse" + ("?" + "&".join(query) if query else "")
+                 + "#" + _q(f"{folder}/{source}")),
+        "splice": (f"/splice/{_q(folder)}/{_q(str(source))}#{_q(str(row['name']))}"
+                   if user.is_admin else None),
+    }
 
 
 def _split(value: object) -> list[str]:

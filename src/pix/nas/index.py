@@ -1410,6 +1410,45 @@ _NOT_HIDDEN: str = (
     f"AND fh.who = '{decisions.HIDDEN}')")
 
 
+def _source_seen(filters: Filters) -> tuple[str, dict[str, Any]]:
+    """Whether the viewer may see the source a clip was cut from, as SQL.
+
+    **A clip shows its source only to someone who may see the source**
+    (spec/clips.md §7). To anyone else a clip is a video like any other: a
+    badge saying *cut from something*, a link to it, or a picture taken from
+    it would tell them there is more footage than they were given, and show
+    them some of it.
+
+    An administrator sees everything. A viewer, only a source shared with
+    them, living, and not hidden — the same three things `_always` and
+    `_scope` ask of anything they list.
+    """
+    if filters.viewer is None:
+        return "1", {}
+    if not filters.viewer:
+        return "0", {}
+    names = {f"seen{i}": who for i, who in enumerate(sorted(filters.viewer))}
+    holes = ",".join(f":{k}" for k in names)
+    return ("EXISTS (SELECT 1 FROM files s "
+            "WHERE s.folder = files.folder AND s.name = files.clip_of "
+            "AND s.deleted = 0 "
+            "AND NOT EXISTS (SELECT 1 FROM file_audience sh "
+            "  WHERE sh.folder = s.folder AND sh.name = s.name "
+            f"  AND sh.who = '{decisions.HIDDEN}') "
+            "AND EXISTS (SELECT 1 FROM file_audience sv "
+            "  WHERE sv.folder = s.folder AND sv.name = s.name "
+            f"  AND sv.who IN ({holes})))", dict(names))
+
+
+def sees(conn: sqlite3.Connection, viewer: frozenset[str] | None,
+         folder: str, name: str) -> bool:
+    """Whether this viewer may see this one file. An administrator may."""
+    if viewer is None:
+        return True
+    return bool(matching(conn, Filters(viewer=viewer, unfold=True),
+                         [(folder, name)]))
+
+
 def _bind(clauses: dict[str, tuple[str, dict[str, Any]]]) -> dict[str, Any]:
     params: dict[str, Any] = {}
     for _, bound in clauses.values():
@@ -1487,6 +1526,9 @@ def files(conn: sqlite3.Connection, filters: Filters | None = None, *,
     keys = [GROUPINGS[g] for g in groups if GROUPINGS.get(g)]
     params: dict[str, Any] = {**bound, "limit": limit, "offset": offset}
     selected = "".join(f", {key} AS grp{i} " for i, key in enumerate(keys))
+    seen, seen_params = _source_seen(view)
+    params.update(seen_params)
+    selected += f", {seen} AS source_seen "
     ordered = _ordering(groups)
     # **With a stack open, the photograph that speaks for it comes first.**
     #

@@ -244,6 +244,16 @@ HTTP range cannot be limited to a stretch of time. Curators preview that way,
 since they may see C anyway; for viewers an unready clip is a file that does
 not exist yet. Sharing a clip never shares C.
 
+**A clip shows its source only to someone who may see the source** — an
+administrator, or a viewer the source is shared with. To anyone else a clip
+is simply a video: no *Clip* badge, no *cut from* link in its details, and no
+picture of the source standing in for its own. Each of those would say there
+is more footage than they were given, and the picture would show them some
+of it. So a clip's own pictures are made by `process` from a frame inside
+the clip — a tenth of the way in, or a still's own frame — and until they
+exist such a viewer sees none. For someone who may see the source, the
+details link to it, and for the administrator to its timeline as well.
+
 | Consumer | whole video | clip |
 |---|---|---|
 | download, *original* | master | cut |

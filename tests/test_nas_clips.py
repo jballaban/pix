@@ -819,3 +819,77 @@ def test_the_splice_page_offers_four_speeds() -> None:
     js = web._SPLICE_JS
     assert "const RATES=[0.5,1,1.5,2];" in js
     assert "v.playbackRate=r" in js
+
+
+# --- a clip shows its source only to someone who may see it (§7) ------------
+
+def _shared_clip(client: TestClient, add_user: Callable[..., None],
+                 sign_in: Callable[[str, str], TestClient],
+                 *, source_too: bool) -> tuple[str, TestClient]:
+    [clip] = _make(client, (1, 3))
+    names = [clip, "b.mp4"] if source_too else [clip]
+    client.post("/api/decide/bulk", json={"add_audience": ["kid"], "files": [
+        {"folder": "init_2026", "name": n} for n in names]})
+    add_user("kid", "pw")
+    return clip, sign_in("kid", "pw")
+
+
+def test_a_viewer_given_only_the_clip_learns_nothing_of_its_source(
+    client: TestClient, real: Path, add_user: Callable[..., None],
+    sign_in: Callable[[str, str], TestClient]
+) -> None:
+    """Not a badge saying it was cut from something, not a link to it, and
+    not a picture of it: each would say there is more footage than they were
+    given, and the picture would show them some of it."""
+    clip, kid = _shared_clip(client, add_user, sign_in, source_too=False)
+
+    html = kid.get("/browse").text
+    assert clip in html, "the clip itself is theirs to see"
+    assert 'class="clip-mark"' not in html
+    assert kid.get(f"/api/file/init_2026/{clip}").json()["clip"] is None
+    # No picture of its own yet, and not the source's instead.
+    assert kid.get(f"/thumb/init_2026/{clip}").status_code == 404
+
+
+def test_a_viewer_who_may_see_the_source_sees_where_the_clip_came_from(
+    client: TestClient, real: Path, add_user: Callable[..., None],
+    sign_in: Callable[[str, str], TestClient]
+) -> None:
+    clip, kid = _shared_clip(client, add_user, sign_in, source_too=True)
+
+    assert 'class="clip-mark"' in kid.get("/browse").text
+    got = kid.get(f"/api/file/init_2026/{clip}").json()["clip"]
+    assert got["source"] == "b.mp4" and got["splice"] is None
+    assert got["open"].endswith("#init_2026%2Fb.mp4")
+    assert kid.get(f"/thumb/init_2026/{clip}").status_code == 200
+
+
+def test_the_curator_can_go_from_a_clip_to_its_timeline(
+    client: TestClient, real: Path
+) -> None:
+    [clip] = _make(client, (1, 3))
+    got = client.get(f"/api/file/init_2026/{clip}").json()["clip"]
+    assert got["splice"].startswith("/splice/init_2026/b.mp4#")
+    assert (got["start"], got["end"]) == (1.0, 3.0)
+
+
+def test_process_gives_a_clip_pictures_of_its_own(
+    client: TestClient, real: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """From a frame inside the clip, so a viewer given only the clip gets a
+    picture, and one they are entitled to."""
+    from pix.nas import derive
+
+    [clip] = _make(client, (1, 3))
+    monkeypatch.setattr(derive, "MASTER_DIR", web.MASTER_DIR)
+    monkeypatch.setattr(derive, "THUMB_DIR", web.THUMB_DIR)
+    monkeypatch.setattr(derive, "LARGE_DIR", web.LARGE_DIR)
+    monkeypatch.setattr(derive, "PREVIEW_DIR", web.PREVIEW_DIR)
+
+    assert real / clip in derive.pending_files()
+    summary = derive.ProcessSummary()
+    derive._derive_one(real / clip, summary, derive.threading.Lock(),  # pyright: ignore[reportPrivateUsage]
+                       derive._ExifPool(), {"cancelling": 0})  # pyright: ignore[reportPrivateUsage]
+    assert summary.thumbs == 1, summary.failed
+    assert (web.THUMB_DIR / "init_2026" / (clip + ".jpg")).is_file()
+    assert real / clip not in derive.pending_files()

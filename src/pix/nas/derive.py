@@ -51,6 +51,8 @@ from pix.exiftool_session import ExifToolSession, ExifToolTimeout
 from pix.duration import format_duration_compact
 from pix.markers import EXPORT_TMP_SUFFIX
 from pix.progress import LiveProgress
+from pix.nas import clips
+from pix.nas import decisions
 from pix.nas import identity
 from pix.nas import ledger
 from pix.nas.const import (
@@ -416,11 +418,27 @@ def pending_files(echo: Callable[[str], None] = lambda _: None) -> list[Path]:
             renders = _names_in(RENDER_DIR / folder.name)
             strips = _names_in(STRIP_DIR / folder.name)
 
+            present = {e.name for e in listing if e.is_file()}
             for entry in listing:
                 if not entry.is_file():
                     continue
                 name = entry.name
-                if name == LEDGER_NAME or name.lower().endswith(".xmp"):
+                if name.lower().endswith(".xmp"):
+                    # A clip's sidecar is the one master entry a clip has, so
+                    # it is how the scan finds clips wanting pictures of their
+                    # own (spec/clips.md §7) — without which a viewer sees
+                    # none, rather than a frame of footage they were not
+                    # given.
+                    clip = name[: -len(".xmp")]
+                    of = clips.source_of(clip)
+                    if of is not None and of in present and (
+                            clip + ".jpg" not in thumbs
+                            or clip + ".jpg" not in larges
+                            or clip + ".jpg" not in previews):
+                        pending.append(folder / clip)
+                        scanned["found"] += 1
+                    continue
+                if name == LEDGER_NAME:
                     continue
                 derived = name + ".jpg"
                 want = (derived not in thumbs or derived not in larges
@@ -577,6 +595,9 @@ def _status(summary: ProcessSummary, total: int, started: float,
 def _derive_one(media: Path, summary: ProcessSummary, lock: threading.Lock,
                 exif: "_ExifPool", state: dict[str, int]) -> None:
     """Make whatever `media` is missing."""
+    if clips.source_of(media.name) is not None and not media.is_file():
+        _derive_clip(media, summary, lock)
+        return
     want_thumb, want_large, want_preview, want_meta = needs_work(media)
     # A record the app wrote for a clip it made into a file (spec/clips.md
     # §5) is a placeholder: what the clip's row knew, standing in until this
@@ -677,6 +698,51 @@ def _derive_one(media: Path, summary: ProcessSummary, lock: threading.Lock,
     except Exception as e:                    # noqa: BLE001 - one bad file must
         with lock:                            # not stop 62k others
             summary.failed.append(f"{media.name}: {type(e).__name__}: {e}")
+
+
+def _derive_clip(clip: Path, summary: ProcessSummary,
+                 lock: threading.Lock) -> None:
+    """A clip's own pictures, from a frame inside it.
+
+    Until these exist a clip shows its source's pictures, and only to someone
+    who may see the source — so for everyone else, this is the difference
+    between no picture and one they are entitled to. The frame is a tenth of
+    the way in, for the reason poster frames are; a still's is its own frame.
+
+    Nothing else: a clip has no meta record (its facts are its source's), no
+    render yet, and no filmstrip — it is edited on its source's timeline.
+    """
+    decision = decisions.read(clip)
+    source_name = clips.source_of(clip.name)
+    if (decision is None or not decision.is_clip or source_name is None
+            or decision.clip_in is None or decision.clip_out is None):
+        return
+    source = clip.parent / source_name
+    at = decision.clip_in + FRAME_AT * (decision.clip_out - decision.clip_in)
+    want_thumb, want_large, want_preview, _ = needs_work(clip)
+    temp = _poster_frame(source, at=at)
+    if temp is None:
+        with lock:
+            summary.unsupported += 1
+        return
+    try:
+        if want_thumb:
+            _resize(temp, derived_path(clip, THUMB_DIR), THUMB_PX)
+            with lock:
+                summary.thumbs += 1
+        if want_large:
+            _resize(temp, derived_path(clip, LARGE_DIR), LARGE_PX)
+            with lock:
+                summary.larges += 1
+        if want_preview:
+            _resize(temp, derived_path(clip, PREVIEW_DIR), PREVIEW_PX)
+            with lock:
+                summary.previews += 1
+    except Exception as e:                    # noqa: BLE001
+        with lock:
+            summary.failed.append(f"{clip.name}: {type(e).__name__}: {e}")
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 def _write_meta(media: Path, exif: "_ExifPool") -> bool:
@@ -905,10 +971,11 @@ def _probed_hdr(media: Path) -> bool:
     return any(w in proc.stdout.lower() for w in _HDR)
 
 
-def _poster_frame(media: Path) -> Path | None:
+def _poster_frame(media: Path, *, at: float | None = None) -> Path | None:
     """Extract a representative frame to a temp JPEG, or None if we cannot.
 
-    Seeks to `FRAME_AT` of the duration. `-ss` before `-i` makes it a keyframe
+    Seeks to `FRAME_AT` of the duration, or to `at` seconds where that is
+    given — a clip's frame is inside the clip, not inside its source. `-ss` before `-i` makes it a keyframe
     seek, which costs a fraction of decoding up to that point — the difference
     between minutes and milliseconds on a long clip.
     """
@@ -916,12 +983,19 @@ def _poster_frame(media: Path) -> Path | None:
     if ffmpeg is None:
         return None
 
-    duration = _duration(media)
-    offset = max(duration * FRAME_AT, 0.0) if duration else 0.0
+    if at is not None:
+        offset = max(at, 0.0)
+    else:
+        duration = _duration(media)
+        offset = max(duration * FRAME_AT, 0.0) if duration else 0.0
     # Named with the master folder as well as the file: two folders can hold the
     # same flattened name, and a shared temp would have one worker deleting what
     # another is reading.
     stem = f"{media.parent.name}_{media.name}"
+    if at is not None:
+        # Several clips of one video are several frames of one file, made at
+        # once by different workers.
+        stem += f"@{at:.3f}"
     tmp = _scratch() / (stem + ".poster" + EXPORT_TMP_SUFFIX + ".jpg")
     tmp.parent.mkdir(parents=True, exist_ok=True)
 
