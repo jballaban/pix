@@ -282,32 +282,45 @@ faint keyframe ticks where an in-point can snap, the filmstrip, the playhead.
 The selected clip loops. Long videos zoom — pinch, or ctrl+wheel — and scroll
 with the playhead kept in view. Layout follows size and input, never platform.
 
-**Mark, then Split.** A clip is marked with **In** and **Out** — I and O, or
-the buttons, or a drag across the timeline — as many times as there are
-clips, and **Split** makes every marked clip in one write. Marks are drafts:
-dashed and amber on the timeline, each with a × to take it back, and leaving
-the page with any asks first. A mark's start snaps to a keyframe as it is
-made, so what is drawn is what gets cut; a mark may touch a clip or another
-mark but never overlap one.
+**Markers make the clips.** A marker is placed with **Marker** (M) at the
+playhead, or by clicking the strip along the top of the timeline:
 
-This replaced a first version in which every gesture wrote at once and Split
-cut whatever was under the playhead. That is how an editor works on a clip
-already made, not how anybody expects to cut a video up: the natural gesture
-is to walk through it marking where things start and end, and then to cut.
+- **In uncut footage** the first marker starts a clip and the next ends it,
+  whichever way round they were placed, and the clip is made the moment it
+  has both. A lone start is the one thing on the page not yet saved — half a
+  clip is not a clip — and leaving with one asks first.
+- **Inside a clip** a marker cuts it in two: one marker, the end of the first
+  and the start of the second. Where two clips touch they share it — a *cut*,
+  drawn as a diamond; a clip's other ends are circles.
+- **Dragging a marker** moves it: a clip's end trims it, a cut moves the
+  boundary between both clips in one edit.
+- **Clicking a marker takes it away.** The clip on its far side grows to the
+  next marker, and where that marker belongs to another clip the two become
+  one — so taking away a cut joins its clips, and taking away the end of a
+  clip with a neighbour joins them across the stretch between.
 
-A clip already made is edited from its own bar once clicked: its edges
-drag, **Start here** / **End here** move them to the playhead, **Cut here**
-splits it in two, **Join next** takes away a split, and **Bin** removes it.
-Those still write immediately, like every other edit.
+**A marker belongs to its clip.** Nothing pairs markers by counting them:
+with alternating in/out, taking one away would re-pair every marker after it
+and put each clip's tags on somebody else's footage. Tied to their clips,
+every gesture is one of the edits §2 already defines — trim, cut, join, make
+— and each keeps its decisions where they were. **Every change saves as it is
+made** and is in History, since there is nothing left to batch: an earlier
+version marked In/Out drafts and made them with one Split, and one before it
+split whatever was under the playhead; both read as an editor's controls
+rather than as cutting a video up.
+
+A start snaps to a keyframe as it is placed, so what is drawn is what gets
+cut; an end may be any frame. Clicking a clip picks it — it loops when played
+— for **Open** and **Bin**.
 
 | | mouse / touch | keyboard |
 |---|---|---|
-| mark a clip | **In**, **Out**, or drag across the timeline | `I`, `O` |
-| make the marked clips | **Split** | `S` |
-| forget the marks | **Clear marks** | `Esc` |
+| place a marker | **Marker**, or click the strip over the timeline | `M` |
+| move a marker | drag its knob | — |
+| take one away | click its knob | — |
 | take a still | **Still** | `P` |
-| move | click the timeline; **drag across the picture** to run through the video; tap it to play | space, `,` `.` a frame, shift for a keyframe |
-| a made clip | click it: drag its edges, Start/End here, Cut here, Join next, Bin | `Delete` bins it |
+| move the playhead | click the timeline; **drag across the picture**; tap it to play | space, `,` `.` a frame, shift for a keyframe |
+| a clip | click it: Open, Bin | `Delete` bins it |
 | hide the original | **Hide original** | `H` |
 
 Stills are frame-exact through `requestVideoFrameCallback`; `currentTime` is

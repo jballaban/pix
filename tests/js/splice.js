@@ -22,6 +22,8 @@ function element(id) {
     addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
     removeEventListener() {},
     appendChild(child) { this.children.push(child); return child; },
+    querySelectorAll() { return []; },
+    remove() {},
     getBoundingClientRect() { return { left: 0, width: 1000 }; },
     fire(type, ev) { (listeners[type] || []).forEach(fn => fn(ev || {})); },
   };
@@ -67,24 +69,28 @@ const settle = () => new Promise(r => setImmediate(r));
   const key = k => (document.listeners.keydown || []).forEach(fn =>
     fn({ key: k, target: { tagName: 'BODY' }, preventDefault() {} }));
 
-  if (scenario === 'split-nothing') {
-    video.currentTime = 30;
-    click('bsplit');
-  } else if (scenario === 'marks') {
-    // Two clips marked with the keys, one of them with the buttons, then one
-    // Split for both.
-    video.currentTime = 10; key('i');
-    video.currentTime = 20; key('o');
-    video.currentTime = 30; click('bin');
-    video.currentTime = 40; click('bout');
-    key('s');
-  } else if (scenario === 'out-first') {
-    video.currentTime = 20; key('o');
-    key('s');
-  } else if (scenario === 'overlap') {
-    video.currentTime = 5; key('i');
-    video.currentTime = 25; key('o');
-    key('s');
+  // The knob of the last-drawn marker of `kind`, pressed and let go without
+  // moving — which takes it away.
+  const knobOf = kind => {
+    const found = els.track.children.filter(c => c.className === 'mk ' + kind);
+    return found[found.length - 1].children[0];
+  };
+  const tap = knob => {
+    knob.onpointerdown({ preventDefault() {}, stopPropagation() {},
+                         currentTarget: knob, clientX: 100, pointerId: 1 });
+    knob.fire('pointerup');
+  };
+  if (scenario === 'place-two') {
+    video.currentTime = 10; key('m');
+    video.currentTime = 20; key('m');
+  } else if (scenario === 'place-inside') {
+    video.currentTime = 10; click('bmark');
+  } else if (scenario === 'remove-cut') {
+    tap(knobOf('cut'));
+  } else if (scenario === 'remove-out') {
+    tap(knobOf('out'));
+  } else if (scenario === 'remove-in') {
+    tap(knobOf('in'));
   } else if (scenario === 'still') {
     video.currentTime = 12.3456;
     key('p');

@@ -8110,10 +8110,21 @@ def api_clips_merge(user: Annotated[Principal, Depends(require_admin)],
         if a["deleted"] or b["deleted"]:
             raise HTTPException(status.HTTP_409_CONFLICT,
                                 "one of those clips is binned")
-        if (a["clip_in"] == a["clip_out"] or b["clip_in"] == b["clip_out"]
-                or abs(float(a["clip_out"]) - float(b["clip_in"])) > 0.001):
+        if a["clip_in"] == a["clip_out"] or b["clip_in"] == b["clip_out"]:
             raise HTTPException(status.HTTP_409_CONFLICT,
-                                "only two clips that meet can be joined")
+                                "a still cannot be joined to anything")
+        # Neighbours, not only clips that meet: taking away the marker at the
+        # end of a clip makes it grow to the next one, and the stretch nobody
+        # had cut between them comes with it. What may not be absorbed is
+        # another clip — joining across one would swallow it.
+        between = [c for c in ix.clips_of(conn, body.folder, str(a["clip_of"]))
+                   if not c["deleted"] and c["clip_in"] != c["clip_out"]
+                   and c["name"] not in (a["name"], b["name"])
+                   and float(c["clip_in"]) < float(b["clip_in"])
+                   and float(c["clip_out"]) > float(a["clip_out"])]
+        if float(a["clip_out"]) > float(b["clip_in"]) + 0.001 or between:
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                "only neighbouring clips can be joined")
         first = _master_file(body.folder, str(a["name"]))
         second = _master_file(body.folder, str(b["name"]))
         content = clips.merged(
@@ -8132,6 +8143,63 @@ def api_clips_merge(user: Annotated[Principal, Depends(require_admin)],
     _recut(body.folder, str(a["name"]))
     _recut(body.folder, str(b["name"]))
     return JSONResponse({"name": a["name"]})
+
+
+class ClipBoundaryBody(BaseModel):
+    folder: str
+    first: str
+    second: str
+    at: float
+
+
+@app.post("/api/clips/boundary")
+def api_clips_boundary(user: Annotated[Principal, Depends(require_admin)],
+                       body: Annotated[ClipBoundaryBody, Body()]
+                       ) -> JSONResponse:
+    """Move the marker two touching clips share: the end of one and the start
+    of the next, together, as one edit.
+
+    Two range writes would leave the clips overlapping or apart between them,
+    and would be two lines in History for one gesture. The marker is a start,
+    so it lands on a keyframe.
+    """
+    at = _ms(body.at)
+    conn = _clip_conn()
+    try:
+        a = _clip_row(conn, body.folder, body.first)
+        b = _clip_row(conn, body.folder, body.second)
+        if float(a["clip_in"]) > float(b["clip_in"]):
+            a, b = b, a
+        if (a["clip_of"] != b["clip_of"]
+                or abs(float(a["clip_out"]) - float(b["clip_in"])) > 0.001):
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                "those clips do not share a marker")
+        lo, hi = float(a["clip_in"]), float(b["clip_out"])
+        keys = _keys(body.folder, str(a["clip_of"]))
+        if keys:
+            snapped = cut.snap(at, keys, lo=lo + 0.001, hi=hi)
+            if snapped is None:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    "there is no keyframe between them to move it to")
+            at = snapped
+        if not lo < at < hi:
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                "a marker cannot move past its clips' ends")
+        # Shrink before growing, so the two never overlap on the way.
+        order = [(str(b["name"]), _Change(clip_in=at, clip_out=float(b["clip_out"]))),
+                 (str(a["name"]), _Change(clip_in=lo, clip_out=at))]
+        if at < float(a["clip_out"]):
+            order.reverse()
+        undo = _write_clips(conn, [(body.folder, n, c, False)
+                                   for n, c in order])
+    finally:
+        conn.close()
+    history.record(user.name, f"moved the cut between {a['name']} and "
+                   f"{b['name']}", undo)
+    _recut(body.folder, str(a["name"]))
+    _recut(body.folder, str(b["name"]))
+    return JSONResponse({"at": at})
 
 
 class FreeBody(BaseModel):
@@ -8472,6 +8540,7 @@ def api_keyframes(folder: str, name: str,
 _SPLICE_HTML: str = """<div class="splice">
 <div class="sstage" id="stage"><video id="sv" playsinline preload="auto" src="{src}"></video></div>
 <div class="tlwrap" id="tlwrap"><div class="track" id="track">
+<div class="lane" id="lane" title="Click to place a marker"></div>
 <div class="keys" id="keys"></div>
 <div class="bars" id="bars"></div><div class="ph" id="ph"></div></div></div>
 <div class="sline"><span id="tcur">0:00.00</span><span class="dim">&nbsp;/&nbsp;</span>
@@ -8481,38 +8550,31 @@ _SPLICE_HTML: str = """<div class="splice">
 <div class="sctl">
 <button id="bplay">Play</button>
 <button id="bprevk" title="Back to the last keyframe (shift+,)">&lsaquo;K</button>
-<button id="bprev1s" title="Back a second">&minus;1s</button>
 <button id="bprevf" title="Back a frame (,)">&minus;1f</button>
 <button id="bnextf" title="On a frame (.)">+1f</button>
-<button id="bnext1s" title="On a second">+1s</button>
 <button id="bnextk" title="On to the next keyframe (shift+.)">K&rsaquo;</button>
 </div>
 <div class="sctl">
-<button id="bin" class="mark" title="Start a clip here (I)">In</button>
-<button id="bout" class="mark" title="End it here (O)">Out</button>
-<button id="bsplit" class="primary" title="Make every marked clip (S)">Split</button>
-<button id="bclear" title="Forget the marks (Esc)" hidden>Clear marks</button>
-<span class="gap"></span>
+<button id="bmark" class="primary" title="Place a marker at the playhead (M)">Marker</button>
 <button id="bstill" title="Take this frame as a photograph (P)">Still</button>
+<span class="gap"></span>
+<button id="bhide" title="(H)">Hide original</button>
+<span class="dim" id="hidenote"></span>
 </div>
 <div class="sctl selbar" id="selbar" hidden>
 <b id="selname"></b><span class="gap"></span>
-<button id="bstart" title="Start the clip at the playhead">Start here</button>
-<button id="bend" title="End the clip at the playhead">End here</button>
-<button id="bcut" title="Cut this clip in two at the playhead">Cut here</button>
-<button id="bjoin" title="Take away the split after this clip">Join next</button>
 <a id="bopen" class="btn" title="This clip in the grid">Open</a>
 <button id="bbin" class="danger" title="Bin this clip (Delete)">Bin</button>
 </div>
-<div class="sctl"><button id="bhide" title="(H)">Hide original</button>
-<span class="dim" id="hidenote"></span></div>
-<p class="dim shelp">Mark each clip with <b>In</b> and <b>Out</b> (I and O),
-or drag across the timeline — as many as you like — then <b>Split</b> makes
-them all. Drag across the picture to run through the video; tap it to play.
-A clip starts on a keyframe (the faint ticks), because that is where a
-lossless cut can begin; it ends on any frame. Clips may touch but never
-overlap. Click a clip to trim it by its edges, cut it in two, or join it to
-the next. A dashed clip is still being cut.</p>
+<p class="dim shelp"><b>Markers make the clips.</b> Place one with
+<b>Marker</b> (M), or click the strip along the top of the timeline. In
+uncut footage the first marker starts a clip and the next one ends it; a
+marker inside a clip cuts it in two. Drag a marker to move it. Click a marker
+to take it away: the clip grows to the next marker, and joins the clip there
+if there is one. Every change saves as you make it, and History can undo it.
+Dragging across the picture runs through the video; a tap plays. A clip
+starts on a keyframe (the faint ticks), where a lossless cut can begin.
+A dashed clip is still being cut.</p>
 </div>"""
 
 
@@ -8566,6 +8628,26 @@ _SPLICE_CSS: str = """
 .selbar { padding:6px 8px; border:1px solid var(--line); border-radius:6px; }
 .selbar[hidden] { display:none; }
 .shelp { font-size:13px; line-height:1.45; }
+/* The strip markers live in: click it to place one. */
+.track { height:74px; }
+.lane { position:absolute; left:0; right:0; top:0; height:22px;
+        border-bottom:1px solid var(--line); cursor:copy; z-index:2; }
+.track .bars { top:22px; }
+.track .keys { top:22px; }
+/* A marker: a line through the clips and a knob to take hold of. A cut —
+   the marker two touching clips share — is a diamond; an end is a circle. */
+.mk { position:absolute; top:0; bottom:0; width:0; z-index:6; }
+.mk::before { content:""; position:absolute; top:18px; bottom:4px; left:-1px;
+              width:2px; background:var(--top); pointer-events:none; }
+.mk .knob { position:absolute; top:0; left:-11px; width:22px; height:22px;
+            cursor:grab; touch-action:none; }
+.mk .knob::after { content:""; position:absolute; left:5px; top:5px;
+                   width:12px; height:12px; border-radius:50%;
+                   background:var(--top); }
+.mk.cut .knob::after { border-radius:2px; transform:rotate(45deg); }
+.mk.pending::before { background:none; border-left:2px dashed var(--top); }
+.mk.pending .knob::after { background:var(--panel);
+                           border:2px solid var(--top); box-sizing:border-box; }
 /* Marked and not yet made: amber and dashed, with a way to take it back. */
 .mark-range { position:absolute; top:10px; bottom:10px; min-width:3px;
               background:var(--top-bed); border:1.5px dashed var(--top);
@@ -8587,15 +8669,16 @@ _SPLICE_JS: str = r"""
 const S=SPLICE;
 const $=id=>document.getElementById(id);
 const v=$('sv'), wrap=$('tlwrap'), track=$('track'), bars=$('bars'),
-      ph=$('ph'), note=$('note');
+      lane=$('lane'), ph=$('ph'), note=$('note');
 let clips=S.clips.slice(), sel=null, zoom=1, dur=S.duration||0, busy=false;
 let hidden=!!S.hidden, dragging=false, shown=null, keys=null;
-// Marked and not yet made. `marks` are finished ranges; `markIn` is a start
-// still waiting for its end. Nothing is written until Split, so marking is
-// free to be tried and taken back.
-let marks=[], markIn=null;
+// A marker placed in uncut footage, waiting for the one that ends its clip.
+// The only thing on this page that is not saved the moment it is made,
+// because half a clip is not a clip.
+let pending=null;
 const frame=1/(S.fps||30);
 const ms=t=>Math.round(t*1000)/1000;
+const near=(a,b)=>Math.abs(a-b)<Math.max(frame*2,0.05);
 
 function say(text,bad){
   if(!note) return;
@@ -8623,16 +8706,34 @@ function here(){
 const ranges=()=>clips.filter(c=>c.end>c.start).sort((a,b)=>a.start-b.start);
 const stills=()=>clips.filter(c=>c.end===c.start);
 const selected=()=>clips.find(c=>c.name===sel)||null;
-const inside=t=>ranges().find(c=>c.start<t&&t<c.end)||null;
-// Every stretch already spoken for — made clips and marked ones — which a new
-// mark may touch but not overlap.
-const taken=()=>[...ranges().map(c=>[c.start,c.end]),
-                 ...marks.map(m=>[m.start,m.end])];
-const overlaps=(a,b)=>taken().some(([s,e])=>a<e-0.0005&&s<b-0.0005);
-// The end of whatever is taken before `t`, which a start may not snap past.
-const floorAt=t=>Math.max(0,...taken().filter(([,e])=>e<=t+0.0005).map(([,e])=>e));
-const ceilAt=t=>Math.min(dur,...taken().filter(([s])=>s>=t-0.0005).map(([s])=>s));
+const inside=t=>ranges().find(c=>c.start<t-0.0005&&t<c.end-0.0005)||null;
 const pct=t=>(dur>0?t/dur*100:0)+'%';
+
+// The markers, read off the clips. **A marker belongs to its clip** — its
+// start or its end — and where two clips touch they share one, which is a
+// cut. Nothing pairs markers by counting them, so taking one away never
+// re-pairs the rest and moves a clip's tags onto somebody else's footage.
+function markers(){
+  const out=[], rs=ranges();
+  rs.forEach((c,i)=>{
+    const prev=rs[i-1];
+    if(prev&&Math.abs(prev.end-c.start)<0.002)
+      out[out.length-1]={t:c.start,kind:'cut',left:prev,right:c};
+    else out.push({t:c.start,kind:'in',right:c});
+    out.push({t:c.end,kind:'out',left:c});
+  });
+  return out;
+}
+// The uncut stretch around `t`: from the clip before it to the clip after.
+function gapAt(t){
+  let lo=0, hi=dur;
+  for(const c of ranges()){
+    if(c.end<=t+0.0005) lo=Math.max(lo,c.end);
+    else if(c.start>=t-0.0005) hi=Math.min(hi,c.start);
+    else return null;
+  }
+  return [lo,hi];
+}
 
 async function send(url,body){
   if(busy){say('still saving the last change');return null;}
@@ -8661,6 +8762,7 @@ async function reload(){
 function draw(){
   track.style.width=(zoom*100)+'%';
   bars.innerHTML='';
+  track.querySelectorAll('.mk').forEach(x=>x.remove());
   for(const c of ranges()){
     const b=document.createElement('div');
     b.className='bar'+(c.name===sel?' on':'')+(c.cut===false?' uncut':'');
@@ -8668,32 +8770,7 @@ function draw(){
     b.title=fmt(c.start)+' – '+fmt(c.end);
     b.onpointerdown=e=>e.stopPropagation();
     b.onclick=e=>{e.stopPropagation(); if(!dragging) pick(c.name);};
-    if(c.name===sel) for(const side of ['l','r']){
-      const h=document.createElement('div');
-      h.className='h '+side;
-      h.onpointerdown=e=>drag(e,c,side);
-      h.onclick=e=>e.stopPropagation();
-      b.appendChild(h);
-    }
     bars.appendChild(b);
-  }
-  marks.forEach((m,i)=>{
-    const b=document.createElement('div');
-    b.className='mark-range';
-    b.style.left=pct(m.start); b.style.width=pct(m.end-m.start);
-    b.title='Marked: '+fmt(m.start)+' – '+fmt(m.end)+' — Split makes it';
-    b.onpointerdown=e=>e.stopPropagation();
-    b.onclick=e=>{e.stopPropagation(); v.pause(); v.currentTime=m.start;};
-    const x=document.createElement('span');
-    x.className='x'; x.textContent='×'; x.title='Forget this mark';
-    x.onclick=e=>{e.stopPropagation(); marks.splice(i,1); draw();};
-    b.appendChild(x);
-    bars.appendChild(b);
-  });
-  if(markIn!==null){
-    const l=document.createElement('div');
-    l.className='mark-in'; l.style.left=pct(markIn);
-    bars.appendChild(l);
   }
   for(const c of stills()){
     const p=document.createElement('div');
@@ -8704,11 +8781,24 @@ function draw(){
     p.onclick=e=>{e.stopPropagation(); pick(c.name);};
     bars.appendChild(p);
   }
+  for(const m of markers()) track.appendChild(marker(m));
+  if(pending!==null) track.appendChild(marker({t:pending,kind:'pending'}));
   $('tdur').textContent=fmt(dur);
-  const n=marks.length;
-  $('bsplit').textContent=n?'Split into '+n+' clip'+(n===1?'':'s'):'Split';
-  $('bclear').hidden=!(n||markIn!==null);
   drawKeys(); playhead(false); drawSel();
+}
+function marker(m){
+  const el=document.createElement('div');
+  el.className='mk '+m.kind;
+  el.style.left=pct(m.t);
+  const knob=document.createElement('div');
+  knob.className='knob';
+  knob.title=(m.kind==='cut'?'Cut':m.kind==='in'?'Start':m.kind==='out'?'End'
+              :'Start, waiting for an end')+' at '+fmt(m.t)
+             +' — drag to move, click to take away';
+  knob.onpointerdown=e=>grab(e,m,el);
+  knob.onclick=e=>e.stopPropagation();
+  el.appendChild(knob);
+  return el;
 }
 function drawKeys(){
   const box=$('keys');
@@ -8762,11 +8852,8 @@ function drawSel(){
   const c=selected();
   $('selbar').hidden=!c;
   if(!c) return;
-  const still=c.end===c.start;
-  $('selname').textContent=still?'Still at '+fmt(c.start)
+  $('selname').textContent=c.end===c.start?'Still at '+fmt(c.start)
     :'Clip '+fmt(c.start)+' – '+fmt(c.end);
-  $('bstart').hidden=still; $('bend').hidden=still; $('bcut').hidden=still;
-  $('bjoin').hidden=still||!ranges().some(o=>Math.abs(o.start-c.end)<0.002);
   const day=(c.date||'').slice(0,10);
   $('bopen').href='/browse'+(day?'?date='+encodeURIComponent(day):'')
     +'#'+encodeURIComponent(S.folder+'/'+c.name);
@@ -8798,169 +8885,151 @@ function timeAt(x){
   const r=track.getBoundingClientRect();
   return Math.min(dur,Math.max(0,(x-r.left)/(r.width||1)*dur));
 }
-
-// The timeline: a click moves the playhead; a drag across it marks a clip.
-// The two are told apart by distance, so a click that wobbles a pixel is
-// still a click.
-track.addEventListener('pointerdown',e=>{
-  if(e.pointerType==='touch'&&touches.size>0) return;   // a pinch, not a mark
-  if(e.button!==undefined&&e.button!==0) return;
-  const x0=e.clientX, t0=timeAt(x0);
-  let marking=false, lo=0, hi=dur, start=t0, end=t0;
-  const draft=document.createElement('div');
-  draft.className='mark-range';
-  const move=ev=>{
-    if(!marking&&Math.abs(ev.clientX-x0)<6) return;
-    if(!marking){
-      if(inside(t0)||overlaps(t0,t0+0.001)){ return; }
-      marking=true; dragging=true; v.pause();
-      lo=floorAt(t0); hi=ceilAt(t0);
-      bars.appendChild(draft);
-    }
-    const t=Math.min(hi,Math.max(lo,timeAt(ev.clientX)));
-    start=snapStart(Math.min(t0,t),lo,Math.max(t0,t));
-    end=Math.max(t0,t);
-    draft.style.left=pct(start); draft.style.width=pct(end-start);
-    v.currentTime=t;
-  };
-  const up=ev=>{
-    track.removeEventListener('pointermove',move);
-    track.removeEventListener('pointerup',up);
-    track.removeEventListener('pointercancel',up);
-    if(!marking){
-      v.pause(); v.currentTime=timeAt(ev.clientX);
-      const c=inside(v.currentTime); sel=c?c.name:null; draw();
-      return;
-    }
-    setTimeout(()=>{dragging=false;},0);
-    draft.remove();
-    addMark(ms(start),ms(end));
-  };
-  track.addEventListener('pointermove',move);
-  track.addEventListener('pointerup',up);
-  track.addEventListener('pointercancel',up);
+// The clips below the strip: a click moves the playhead and picks the clip
+// there.
+bars.addEventListener('click',e=>{
+  if(dragging) return;
+  v.pause(); v.currentTime=timeAt(e.clientX);
+  const c=inside(v.currentTime); sel=c?c.name:null; draw();
+});
+track.addEventListener('click',e=>{
+  if(dragging||e.target!==track) return;
+  v.pause(); v.currentTime=timeAt(e.clientX); sel=null; draw();
+});
+// The strip: a click places a marker there.
+lane.addEventListener('click',e=>{
+  if(dragging) return;
+  const t=ms(timeAt(e.clientX));
+  v.pause(); v.currentTime=t;
+  place(t);
 });
 
-// Marking with the keys or the buttons: In where a clip starts, Out where it
-// ends, as many times as there are clips in the video.
-function markStart(){
-  const t=here();
-  if(inside(t)){say('that is inside a clip already',true);return;}
-  if(overlaps(t,t+0.001)){say('that is inside a marked clip',true);return;}
-  markIn=ms(snapStart(t,floorAt(t),ceilAt(t)));
-  sel=null; draw();
-  say('in at '+fmt(markIn)+' — now mark where it ends (O)');
-}
-function markEnd(){
-  if(markIn===null){say('mark where the clip starts first (I)',true);return;}
-  addMark(markIn,here());
-}
-function addMark(start,end){
-  if(end-start<frame){say('a clip needs an end after its start',true);return;}
-  if(overlaps(start,end)){say('that would overlap another clip',true);return;}
-  marks.push({start,end});
-  marks.sort((a,b)=>a.start-b.start);
-  markIn=null; draw();
-  const n=marks.length;
-  say(n+' clip'+(n===1?'':'s')+' marked — Split makes '+(n===1?'it':'them'));
-}
-function clearMarks(){ marks=[]; markIn=null; draw(); }
-// Split makes every marked clip, in one write. Marks are the whole of what
-// it does: a clip already made is cut in two with *Cut here* on its bar.
-async function split(){
-  if(!marks.length){
-    say(markIn!==null?'mark where the clip ends first (O)'
-      :'mark a clip with In and Out (I, O), or drag across the timeline',true);
+// **Placing a marker.** Inside a clip it cuts the clip in two. In uncut
+// footage the first one starts a clip and the next one ends it — whichever
+// way round they were placed — and the clip is made the moment it has both.
+async function place(t){
+  t=ms(t);
+  if(markers().some(m=>near(m.t,t))||(pending!==null&&near(pending,t))){
+    say('there is a marker here already — click it to take it away');
     return;
   }
+  const c=inside(t);
+  if(c){
+    const out=await send('/api/clips/split',{folder:S.folder,name:c.name,at:t});
+    if(out) say('cut in two');
+    await reload(); return;
+  }
+  const g=gapAt(t);
+  if(!g) return;
+  if(pending===null||pending<g[0]-0.0005||pending>g[1]+0.0005){
+    // A clip's start, so it lands on a keyframe inside this stretch.
+    pending=ms(snapStart(t,g[0],g[1]));
+    draw();
+    say('start at '+fmt(pending)+' — place another marker to end the clip');
+    return;
+  }
+  const lo=Math.min(pending,t), hi=Math.max(pending,t);
+  const start=ms(snapStart(lo,g[0],hi));
+  if(hi-start<frame){say('a clip needs an end after its start',true);return;}
   const out=await send('/api/clips/make',{folder:S.folder,source:S.source,
-    clips:marks.map(m=>({start:m.start,end:m.end}))});
-  if(out){
-    const n=out.made.length;
-    marks=[]; markIn=null;
-    say('made '+n+' clip'+(n===1?'':'s'));
+    clips:[{start,end:hi}]});
+  if(out){pending=null; say('made a clip');}
+  await reload();
+}
+// **Taking a marker away.** The clip on its far side grows to the next
+// marker — and where that marker belongs to another clip, the two become
+// one. A cut taken away joins the clips either side of it.
+async function unplace(m){
+  if(m.kind==='pending'){pending=null; draw(); return;}
+  const rs=ranges();
+  let out=null;
+  if(m.kind==='cut'){
+    out=await send('/api/clips/merge',
+                   {folder:S.folder,first:m.left.name,second:m.right.name});
+    if(out) say('joined');
+  }else if(m.kind==='in'){
+    const i=rs.indexOf(m.right), prev=rs[i-1];
+    out=prev
+      ? await send('/api/clips/merge',
+                   {folder:S.folder,first:prev.name,second:m.right.name})
+      : await send('/api/clips/range',{folder:S.folder,name:m.right.name,
+                                       start:0,end:m.right.end});
+    if(out) say(prev?'joined':'the clip now starts at the beginning');
+  }else{
+    const i=rs.indexOf(m.left), next=rs[i+1];
+    out=next
+      ? await send('/api/clips/merge',
+                   {folder:S.folder,first:m.left.name,second:next.name})
+      : await send('/api/clips/range',{folder:S.folder,name:m.left.name,
+                                       start:m.left.start,end:ms(dur)});
+    if(out) say(next?'joined':'the clip now runs to the end');
   }
   await reload();
 }
-// Leaving with marks nobody has made would lose them silently.
-window.addEventListener('beforeunload',e=>{
-  if(marks.length||markIn!==null){e.preventDefault(); e.returnValue='';}
-});
-
-// Dragging an edge: clamped to the neighbours, because clips may touch but
-// never overlap, and to a frame short of the other edge. The video follows
-// the edge, so you see the frame you are cutting on; the write happens once,
-// when you let go.
-function drag(e,c,side){
+// **Moving a marker**, or — if it never moved — taking it away. The video
+// follows the marker, so you see the frame you are putting it on.
+function grab(e,m,el){
   e.preventDefault(); e.stopPropagation();
-  dragging=true; v.pause();
-  const h=e.currentTarget, bar=h.parentNode;
-  if(h.setPointerCapture) h.setPointerCapture(e.pointerId);
-  const others=[...ranges().filter(o=>o.name!==c.name).map(o=>[o.start,o.end]),
-                ...marks.map(m=>[m.start,m.end])];
-  const lo=side==='l'
-    ? Math.max(0,...others.filter(([,en])=>en<=c.start+0.0005).map(([,en])=>en))
-    : c.start+frame;
-  const hi=side==='r'
-    ? Math.min(dur,...others.filter(([st])=>st>=c.end-0.0005).map(([st])=>st))
-    : c.end-frame;
-  let t=side==='l'?c.start:c.end;
+  const knob=e.currentTarget, x0=e.clientX;
+  if(knob.setPointerCapture) knob.setPointerCapture(e.pointerId);
+  const rs=ranges();
+  let lo=0, hi=dur, isStart=false;
+  if(m.kind==='cut'){
+    lo=m.left.start+frame; hi=m.right.end-frame; isStart=true;
+  }else if(m.kind==='in'){
+    const i=rs.indexOf(m.right);
+    lo=i>0?rs[i-1].end:0; hi=m.right.end-frame; isStart=true;
+  }else if(m.kind==='out'){
+    const i=rs.indexOf(m.left);
+    lo=m.left.start+frame; hi=i<rs.length-1?rs[i+1].start:dur;
+  }else{
+    const g=gapAt(m.t)||[0,dur]; lo=g[0]; hi=g[1]; isStart=true;
+  }
+  let moved=false, t=m.t;
   const move=ev=>{
+    if(!moved&&Math.abs(ev.clientX-x0)<6) return;
+    if(!moved){moved=true; dragging=true; v.pause();}
     t=Math.min(hi,Math.max(lo,timeAt(ev.clientX)));
-    if(side==='l') t=snapStart(t,lo,c.end);
-    const s=side==='l'?t:c.start, en=side==='r'?t:c.end;
-    bar.style.left=pct(s); bar.style.width=pct(en-s);
+    if(isStart) t=snapStart(t,lo,hi);
+    el.style.left=pct(t);
     v.currentTime=t;
   };
-  const up=()=>{
-    h.removeEventListener('pointermove',move);
-    h.removeEventListener('pointerup',up);
-    h.removeEventListener('pointercancel',up);
+  const up=async()=>{
+    knob.removeEventListener('pointermove',move);
+    knob.removeEventListener('pointerup',up);
+    knob.removeEventListener('pointercancel',up);
     setTimeout(()=>{dragging=false;},0);
-    const s=ms(side==='l'?t:c.start), en=ms(side==='r'?t:c.end);
-    if(s===c.start&&en===c.end){draw();return;}
-    setRange(c,s,en);
+    if(!moved){ await unplace(m); return; }
+    t=ms(t);
+    if(near(t,m.t)){draw(); return;}
+    let out=null;
+    if(m.kind==='cut')
+      out=await send('/api/clips/boundary',{folder:S.folder,
+        first:m.left.name,second:m.right.name,at:t});
+    else if(m.kind==='in')
+      out=await send('/api/clips/range',{folder:S.folder,name:m.right.name,
+                                         start:t,end:m.right.end});
+    else if(m.kind==='out')
+      out=await send('/api/clips/range',{folder:S.folder,name:m.left.name,
+                                         start:m.left.start,end:t});
+    else{pending=t; draw(); return;}
+    if(out) say('moved');
+    await reload();
   };
-  h.addEventListener('pointermove',move);
-  h.addEventListener('pointerup',up);
-  h.addEventListener('pointercancel',up);
+  knob.addEventListener('pointermove',move);
+  knob.addEventListener('pointerup',up);
+  knob.addEventListener('pointercancel',up);
 }
+window.addEventListener('beforeunload',e=>{
+  if(pending!==null){e.preventDefault(); e.returnValue='';}
+});
 
-async function setRange(c,s,en){
-  if(await send('/api/clips/range',
-                {folder:S.folder,name:c.name,start:s,end:en})) say('moved');
-  await reload();
-}
-async function cutHere(){
-  const c=selected(), t=here();
-  if(!c||c.end===c.start) return;
-  if(t-c.start<frame||c.end-t<frame){
-    say('move the playhead inside the clip to cut it',true);return;}
-  const out=await send('/api/clips/split',{folder:S.folder,name:c.name,at:t});
-  if(out){sel=out.second; say('cut in two');}
-  await reload();
-}
 async function still(){
   v.pause();
   const t=here();
   const out=await send('/api/clips/make',{folder:S.folder,source:S.source,
     clips:[{start:t,end:t}]});
   if(out){say('took a still at '+fmt(t));}
-  await reload();
-}
-async function setEnd(which){
-  const c=selected();
-  if(!c||c.end===c.start){say('select a clip first');return;}
-  const t=here();
-  await setRange(c,which==='start'?t:c.start,which==='end'?t:c.end);
-}
-async function join(){
-  const c=selected();
-  const next=c&&ranges().find(o=>Math.abs(o.start-c.end)<0.002);
-  if(!next) return;
-  const out=await send('/api/clips/merge',
-                       {folder:S.folder,first:c.name,second:next.name});
-  if(out){sel=out.name; say('joined');}
   await reload();
 }
 async function bin(){
@@ -8990,13 +9059,13 @@ function step(dt){
 function toggle(){ if(v.paused) v.play().catch(()=>{}); else v.pause(); }
 
 // The picture scrubs. Dragging across it runs through the video — its whole
-// width is the whole video, so a long one moves fast and a short one fine —
-// and a tap without a drag plays or pauses.
+// width is the whole video — and a tap without a drag plays or pauses.
 v.addEventListener('pointerdown',e=>{
   if(e.button!==undefined&&e.button!==0) return;
   const x0=e.clientX, t0=v.currentTime||0;
   const width=(v.getBoundingClientRect().width)||1;
-  let moved=false, was=!v.paused;
+  let moved=false;
+  const was=!v.paused;
   if(v.setPointerCapture) v.setPointerCapture(e.pointerId);
   const move=ev=>{
     if(!moved&&Math.abs(ev.clientX-x0)<6) return;
@@ -9047,22 +9116,17 @@ wrap.addEventListener('pointerup',lift);
 wrap.addEventListener('pointercancel',lift);
 
 const on=(id,fn)=>{const b=$(id); if(b) b.onclick=e=>{e.stopPropagation(); fn();};};
-on('bplay',toggle); on('bsplit',split); on('bstill',still);
-on('bin',markStart); on('bout',markEnd); on('bclear',clearMarks);
+on('bplay',toggle); on('bmark',()=>place(here())); on('bstill',still);
 on('bprevf',()=>step(-frame)); on('bnextf',()=>step(frame));
-on('bprev1s',()=>step(-1)); on('bnext1s',()=>step(1));
 on('bprevk',()=>toKey(-1)); on('bnextk',()=>toKey(1));
-on('bstart',()=>setEnd('start')); on('bend',()=>setEnd('end'));
-on('bcut',cutHere); on('bjoin',join); on('bbin',bin); on('bhide',hide);
+on('bbin',bin); on('bhide',hide);
 on('zin',()=>zoomBy(2)); on('zout',()=>zoomBy(0.5));
 document.addEventListener('keydown',e=>{
   const tag=e.target&&e.target.tagName;
   if(tag==='INPUT'||tag==='TEXTAREA'||e.ctrlKey||e.metaKey||e.altKey) return;
   const k=e.key;
   if(k===' ') toggle();
-  else if(k==='i'||k==='I') markStart();
-  else if(k==='o'||k==='O') markEnd();
-  else if(k==='s'||k==='S') split();
+  else if(k==='m'||k==='M') place(here());
   else if(k==='p'||k==='P') still();
   else if(k===','&&!e.shiftKey) step(-frame);
   else if(k==='.'&&!e.shiftKey) step(frame);
@@ -9070,9 +9134,7 @@ document.addEventListener('keydown',e=>{
   else if(k==='>'||k==='.') toKey(1);
   else if(k==='Delete'||k==='Backspace') bin();
   else if(k==='h'||k==='H') hide();
-  else if(k==='Escape'){
-    if(markIn!==null||marks.length) clearMarks(); else {sel=null; draw();}
-  }
+  else if(k==='Escape'){ pending=null; sel=null; draw(); }
   else return;
   e.preventDefault();
 });

@@ -491,27 +491,51 @@ def _drive(tmp_path: Path, scenario: str,
     return [json.loads(line) for line in result.stdout.splitlines()[:-1]]
 
 
-def test_marked_clips_are_all_made_by_one_split(tmp_path: Path) -> None:
-    """In and Out, as many times as there are clips, then Split makes them
-    all — by the keys or the buttons."""
-    [sent] = _drive(tmp_path, "marks", [])
+def _clip(name: str, start: float, end: float) -> dict[str, Any]:
+    return {"name": name, "start": start, "end": end, "deleted": False}
+
+
+def test_two_markers_in_uncut_footage_make_a_clip(tmp_path: Path) -> None:
+    """The first starts it and the next ends it; the clip is made the moment
+    it has both."""
+    [sent] = _drive(tmp_path, "place-two", [])
     assert sent["url"] == "/api/clips/make"
-    assert sent["body"]["clips"] == [{"start": 10, "end": 20},
-                                     {"start": 30, "end": 40}]
+    assert sent["body"]["clips"] == [{"start": 10, "end": 20}]
 
 
-def test_split_with_nothing_marked_writes_nothing(tmp_path: Path) -> None:
-    assert _drive(tmp_path, "split-nothing", []) == []
+def test_a_marker_inside_a_clip_cuts_it(tmp_path: Path) -> None:
+    [sent] = _drive(tmp_path, "place-inside", [_clip("b.mp4~aaaa", 0, 30)])
+    assert sent == {"url": "/api/clips/split",
+                    "body": {"folder": "init_2026", "name": "b.mp4~aaaa",
+                             "at": 10}}
 
 
-def test_an_out_needs_an_in(tmp_path: Path) -> None:
-    assert _drive(tmp_path, "out-first", []) == []
+def test_taking_away_a_cut_joins_its_clips(tmp_path: Path) -> None:
+    [sent] = _drive(tmp_path, "remove-cut", [
+        _clip("b.mp4~aaaa", 0, 10), _clip("b.mp4~bbbb", 10, 20)])
+    assert sent["url"] == "/api/clips/merge"
+    assert (sent["body"]["first"], sent["body"]["second"]) == (
+        "b.mp4~aaaa", "b.mp4~bbbb")
 
 
-def test_a_mark_over_a_clip_is_refused(tmp_path: Path) -> None:
-    """Clips may touch but never overlap, and a mark is a clip-to-be."""
-    assert _drive(tmp_path, "overlap", [
-        {"name": "b.mp4~aaaa", "start": 20, "end": 30, "deleted": False}]) == []
+def test_taking_away_an_end_with_nothing_after_runs_to_the_end(
+    tmp_path: Path
+) -> None:
+    [sent] = _drive(tmp_path, "remove-out", [_clip("b.mp4~aaaa", 0, 10)])
+    assert sent == {"url": "/api/clips/range",
+                    "body": {"folder": "init_2026", "name": "b.mp4~aaaa",
+                             "start": 0, "end": 75}}
+
+
+def test_taking_away_a_start_joins_the_clip_before(tmp_path: Path) -> None:
+    """Markers belong to their clips, so taking one away never re-pairs the
+    rest: the clip grows to the next marker, and joins the clip it belongs
+    to."""
+    [sent] = _drive(tmp_path, "remove-in", [
+        _clip("b.mp4~aaaa", 0, 10), _clip("b.mp4~bbbb", 20, 30)])
+    assert sent["url"] == "/api/clips/merge"
+    assert (sent["body"]["first"], sent["body"]["second"]) == (
+        "b.mp4~aaaa", "b.mp4~bbbb")
 
 
 def test_a_still_is_taken_at_the_millisecond(tmp_path: Path) -> None:
@@ -737,3 +761,39 @@ def test_a_clip_to_the_real_end_is_not_refused_for_rounding() -> None:
     clips.check(300, 344.3, siblings=[], duration=344)
     with pytest.raises(clips.ClipError):
         clips.check(300, 346, siblings=[], duration=344)
+
+
+
+def test_neighbours_join_across_the_stretch_between(
+    client: TestClient, video: Path
+) -> None:
+    """Taking away the marker at the end of a clip grows it to the next one,
+    and the uncut stretch between them comes with it."""
+    a, b = _make(client, (0, 10), (20, 30))
+    r = client.post("/api/clips/merge", json={
+        "folder": "init_2026", "first": a, "second": b})
+    assert r.status_code == 200, r.text
+    got = decisions.read(video / a)
+    assert got is not None and (got.clip_in, got.clip_out) == (0.0, 30.0)
+
+
+def test_a_join_never_swallows_a_clip_between(
+    client: TestClient, video: Path
+) -> None:
+    a, _, c = _make(client, (0, 10), (12, 15), (20, 30))
+    r = client.post("/api/clips/merge", json={
+        "folder": "init_2026", "first": a, "second": c})
+    assert r.status_code == 409, r.text
+
+
+def test_a_cut_moves_both_clips_at_once(
+    client: TestClient, video: Path
+) -> None:
+    a, b = _make(client, (0, 10), (10, 20))
+    r = client.post("/api/clips/boundary", json={
+        "folder": "init_2026", "first": a, "second": b, "at": 14})
+    assert r.status_code == 200, r.text
+    first, second = decisions.read(video / a), decisions.read(video / b)
+    assert first is not None and second is not None
+    assert (first.clip_out, second.clip_in) == (14.0, 14.0)
+    assert history.recent(1)[0].summary.startswith("moved the cut")
