@@ -282,27 +282,40 @@ faint keyframe ticks where an in-point can snap, the filmstrip, the playhead.
 The selected clip loops. Long videos zoom — pinch, or ctrl+wheel — and scroll
 with the playhead kept in view. Layout follows size and input, never platform.
 
-| | touch | keyboard |
-|---|---|---|
-| split at playhead | **Split** | `S` |
-| take a still | **Still** | `P` |
-| step | ±frame, ±keyframe | `,` `.` (shift: keyframe) |
-| trim | edge handles, 44px targets | `I` / `O` |
-| bin clip / hide original | selection bar | `Delete` / `H` |
+**Mark, then Split.** A clip is marked with **In** and **Out** — I and O, or
+the buttons, or a drag across the timeline — as many times as there are
+clips, and **Split** makes every marked clip in one write. Marks are drafts:
+dashed and amber on the timeline, each with a × to take it back, and leaving
+the page with any asks first. A mark's start snaps to a keyframe as it is
+made, so what is drawn is what gets cut; a mark may touch a clip or another
+mark but never overlap one.
 
-Every gesture writes immediately — sidecar first, then the index, then the
-operation log — as every other edit does. Stills are frame-exact through
-`requestVideoFrameCallback`; `currentTime` is not.
+This replaced a first version in which every gesture wrote at once and Split
+cut whatever was under the playhead. That is how an editor works on a clip
+already made, not how anybody expects to cut a video up: the natural gesture
+is to walk through it marking where things start and end, and then to cut.
+
+A clip already made is edited from its own bar once clicked: its edges
+drag, **Start here** / **End here** move them to the playhead, **Cut here**
+splits it in two, **Join next** takes away a split, and **Bin** removes it.
+Those still write immediately, like every other edit.
+
+| | mouse / touch | keyboard |
+|---|---|---|
+| mark a clip | **In**, **Out**, or drag across the timeline | `I`, `O` |
+| make the marked clips | **Split** | `S` |
+| forget the marks | **Clear marks** | `Esc` |
+| take a still | **Still** | `P` |
+| move | click the timeline; **drag across the picture** to run through the video; tap it to play | space, `,` `.` a frame, shift for a keyframe |
+| a made clip | click it: drag its edges, Start/End here, Cut here, Join next, Bin | `Delete` bins it |
+| hide the original | **Hide original** | `H` |
+
+Stills are frame-exact through `requestVideoFrameCallback`; `currentTime` is
+not.
 
 The page only splices. Tagging a clip happens in the grid; each bar links to
-its clip.
-
-**Split is one gesture for two cases.** Inside a clip it cuts that clip in
-two. In an uncut stretch it makes the stretch two clips — which on a fresh
-video is the whole video, so three splits are four clips. *Make clip* turns
-the uncut stretch under the playhead into one clip, to be trimmed by its
-edges. Keyframe stepping and in-point snapping arrive with the cuts (step 4),
-since both need the keyframe list `ffprobe` reads.
+its clip. Keyframes are read from the master's packet flags (`ffprobe`), so
+ticks appear once the NAS has read them.
 
 ## 10. Build order
 

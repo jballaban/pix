@@ -109,7 +109,12 @@ def check(clip_in: float, clip_out: float, *,
     """
     if not 0 <= clip_in <= clip_out:
         raise ClipError("a clip runs forwards from zero")
-    if duration is not None and clip_out > duration + 0.001:
+    # A second's grace, because the duration on record is ExifTool's, and it
+    # writes anything over half a minute as `0:05:44` — whole seconds. The
+    # page measures the real end (344.3s), and a clip that ran to it was
+    # refused for running off a video that is in fact that long. A cut asked
+    # to run past the real end simply stops there.
+    if duration is not None and clip_out > duration + 1.0:
         raise ClipError(f"the video is only {duration:g}s long")
     if clip_in == clip_out:
         return

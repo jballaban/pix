@@ -67,11 +67,23 @@ const settle = () => new Promise(r => setImmediate(r));
   const key = k => (document.listeners.keydown || []).forEach(fn =>
     fn({ key: k, target: { tagName: 'BODY' }, preventDefault() {} }));
 
-  if (scenario === 'split-fresh') {
+  if (scenario === 'split-nothing') {
     video.currentTime = 30;
     click('bsplit');
-  } else if (scenario === 'split-inside') {
-    video.currentTime = 10;
+  } else if (scenario === 'marks') {
+    // Two clips marked with the keys, one of them with the buttons, then one
+    // Split for both.
+    video.currentTime = 10; key('i');
+    video.currentTime = 20; key('o');
+    video.currentTime = 30; click('bin');
+    video.currentTime = 40; click('bout');
+    key('s');
+  } else if (scenario === 'out-first') {
+    video.currentTime = 20; key('o');
+    key('s');
+  } else if (scenario === 'overlap') {
+    video.currentTime = 5; key('i');
+    video.currentTime = 25; key('o');
     key('s');
   } else if (scenario === 'still') {
     video.currentTime = 12.3456;

@@ -491,23 +491,27 @@ def _drive(tmp_path: Path, scenario: str,
     return [json.loads(line) for line in result.stdout.splitlines()[:-1]]
 
 
-def test_split_on_a_fresh_video_makes_two_clips_of_the_whole(
-    tmp_path: Path
-) -> None:
-    """Three splits are four clips, which is how cutting a video up is
-    thought about."""
-    [sent] = _drive(tmp_path, "split-fresh", [])
+def test_marked_clips_are_all_made_by_one_split(tmp_path: Path) -> None:
+    """In and Out, as many times as there are clips, then Split makes them
+    all — by the keys or the buttons."""
+    [sent] = _drive(tmp_path, "marks", [])
     assert sent["url"] == "/api/clips/make"
-    assert sent["body"]["clips"] == [{"start": 0, "end": 30},
-                                     {"start": 30, "end": 75}]
+    assert sent["body"]["clips"] == [{"start": 10, "end": 20},
+                                     {"start": 30, "end": 40}]
 
 
-def test_split_inside_a_clip_cuts_that_clip(tmp_path: Path) -> None:
-    [sent] = _drive(tmp_path, "split-inside", [
-        {"name": "b.mp4~aaaa", "start": 0, "end": 30, "deleted": False}])
-    assert sent == {"url": "/api/clips/split",
-                    "body": {"folder": "init_2026", "name": "b.mp4~aaaa",
-                             "at": 10}}
+def test_split_with_nothing_marked_writes_nothing(tmp_path: Path) -> None:
+    assert _drive(tmp_path, "split-nothing", []) == []
+
+
+def test_an_out_needs_an_in(tmp_path: Path) -> None:
+    assert _drive(tmp_path, "out-first", []) == []
+
+
+def test_a_mark_over_a_clip_is_refused(tmp_path: Path) -> None:
+    """Clips may touch but never overlap, and a mark is a clip-to-be."""
+    assert _drive(tmp_path, "overlap", [
+        {"name": "b.mp4~aaaa", "start": 20, "end": 30, "deleted": False}]) == []
 
 
 def test_a_still_is_taken_at_the_millisecond(tmp_path: Path) -> None:
@@ -725,3 +729,11 @@ def test_process_replaces_a_placeholder_record(tmp_path: Path) -> None:
     assert derive._placeholder(path)  # pyright: ignore[reportPrivateUsage]
     path.write_text(json.dumps({"file": "x.mp4"}), encoding="utf-8")
     assert not derive._placeholder(path)  # pyright: ignore[reportPrivateUsage]
+
+
+def test_a_clip_to_the_real_end_is_not_refused_for_rounding() -> None:
+    """ExifTool writes a long duration in whole seconds, so the page's end
+    of the video is a fraction past the one on record."""
+    clips.check(300, 344.3, siblings=[], duration=344)
+    with pytest.raises(clips.ClipError):
+        clips.check(300, 346, siblings=[], duration=344)
