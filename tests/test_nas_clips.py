@@ -797,3 +797,19 @@ def test_a_cut_moves_both_clips_at_once(
     assert first is not None and second is not None
     assert (first.clip_out, second.clip_in) == (14.0, 14.0)
     assert history.recent(1)[0].summary.startswith("moved the cut")
+
+
+
+def test_the_splice_page_draws_the_filmstrip(
+    client: TestClient, video: Path, app_env: dict[str, Path]
+) -> None:
+    from pix.nas import paths as tier_paths
+
+    _playable(app_env)
+    info = tier_paths.strip_info_path(video / "b.mp4", web.STRIP_DIR)
+    info.parent.mkdir(parents=True, exist_ok=True)
+    info.write_text(json.dumps({"n": 15, "w": 160, "h": 90}), encoding="utf-8")
+    html = client.get("/splice/init_2026/b.mp4").text
+    state = json.loads(html.split("const SPLICE=", 1)[1].split(";</script>")[0])
+    assert state["strip"] == {"n": 15, "w": 160, "h": 90,
+                              "url": "/strip/init_2026/b.mp4"}

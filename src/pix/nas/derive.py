@@ -55,7 +55,7 @@ from pix.nas import identity
 from pix.nas import ledger
 from pix.nas.const import (
     LARGE_DIR, LEDGER_NAME, MASTER_DIR, META_DIR, PREVIEW_DIR, RENDER_DIR,
-    THUMB_DIR,
+    STRIP_DIR, THUMB_DIR,
 )
 
 # Sizes and layout live in `paths`, which the app imports without this module's
@@ -191,6 +191,7 @@ class ProcessSummary:
     previews: int = 0
     metas: int = 0
     renders: int = 0
+    strips: int = 0
     skipped: int = 0            # already had both
     unsupported: int = 0        # nothing we know how to render a frame from
     cancelled: bool = False
@@ -198,7 +199,8 @@ class ProcessSummary:
 
     @property
     def made(self) -> int:
-        return self.thumbs + self.previews + self.metas + self.renders
+        return (self.thumbs + self.previews + self.metas + self.renders
+                + self.strips)
 
 
 def master_files() -> Iterator[Path]:
@@ -260,6 +262,90 @@ def wants_render(media: Path) -> bool:
     if render_path(media).is_file():
         return False
     return needs_render(media, video_codec(media))
+
+
+#: A filmstrip's frames: this tall, one per `STRIP_EVERY` seconds, between
+#: `STRIP_MIN` and `STRIP_MAX` of them. Enough that a long clip can be read
+#: along its timeline, few enough that making one is a handful of keyframe
+#: seeks rather than a decode of the whole file — each frame is its own seek,
+#: which over SMB costs a GOP, not the footage before it.
+STRIP_PX: int = 90
+STRIP_EVERY: float = 5.0
+STRIP_MIN: int = 4
+STRIP_MAX: int = 40
+
+
+def wants_strip(media: Path) -> bool:
+    """Whether `media` is a video that should have a filmstrip and has none."""
+    ext = media.suffix.lower()
+    if ext not in _VIDEO_EXTS or ext in _NO_RENDER_EXTS:
+        return False
+    return not paths.strip_path(media, STRIP_DIR).is_file()
+
+
+def make_strip(media: Path) -> bool:
+    """A row of frames from `media`, evenly across it, for the splice page.
+
+    Each frame is its own `-ss` before `-i` — a keyframe seek, so a frame
+    costs what it takes to reach the nearest keyframe and decode one picture
+    — and they are laid side by side in one JPEG with a small JSON beside it
+    saying how many there are. The page shows as many as fit.
+    """
+    ffmpeg = shutil.which("ffmpeg") or shutil.which("ffmpeg.exe")
+    duration = _duration(media)
+    if ffmpeg is None or not duration or duration <= 0:
+        return False
+    import math
+
+    n = max(STRIP_MIN, min(STRIP_MAX, math.ceil(duration / STRIP_EVERY)))
+    times = [round((i + 0.5) * duration / n, 3) for i in range(n)]
+    hdr = is_hdr(media)
+    frames: list[Image.Image] = []
+    stem = f"{media.parent.name}_{media.name}"
+    try:
+        for i, when in enumerate(times):
+            tmp = _scratch() / f"{stem}.strip{i}{EXPORT_TMP_SUFFIX}.jpg"
+            tmp.parent.mkdir(parents=True, exist_ok=True)
+            scale = f"scale=-2:{STRIP_PX}"
+            head = [ffmpeg, "-v", "error", "-ss", f"{when:.3f}", "-i", str(media)]
+            tail = ["-frames:v", "1", "-q:v", "4", "-y", str(tmp)]
+            tries = ([[*head, "-vf", f"{_TONEMAP},{scale}", *tail],
+                      [*head, "-vf", scale, *tail]]
+                     if hdr else [[*head, "-vf", scale, *tail]])
+            for cmd in tries:
+                try:
+                    done = subprocess.run(cmd, capture_output=True, text=True,
+                                          timeout=_FFMPEG_TIMEOUT)
+                except (OSError, subprocess.TimeoutExpired):
+                    continue
+                if done.returncode == 0 and tmp.is_file():
+                    break
+            if not tmp.is_file():
+                return False
+            with Image.open(tmp) as im:
+                frames.append(im.convert("RGB").copy())
+            tmp.unlink(missing_ok=True)
+        width, height = frames[0].size
+        sprite = Image.new("RGB", (width * n, height))
+        for i, frame in enumerate(frames):
+            if frame.size != (width, height):
+                frame = frame.resize((width, height))
+            sprite.paste(frame, (i * width, 0))
+        dest = paths.strip_path(media, STRIP_DIR)
+        info = paths.strip_info_path(media, STRIP_DIR)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        part = dest.with_name(dest.name + EXPORT_TMP_SUFFIX)
+        sprite.save(part, "JPEG", quality=70)
+        os.replace(part, dest)
+        info_part = info.with_name(info.name + EXPORT_TMP_SUFFIX)
+        info_part.write_text(json.dumps(
+            {"n": n, "w": width, "h": height, "times": times}),
+            encoding="utf-8")
+        os.replace(info_part, info)
+        return True
+    finally:
+        for frame in frames:
+            frame.close()
 
 
 def needs_work(media: Path) -> tuple[bool, bool, bool, bool]:
@@ -328,6 +414,7 @@ def pending_files(echo: Callable[[str], None] = lambda _: None) -> list[Path]:
                 continue
 
             renders = _names_in(RENDER_DIR / folder.name)
+            strips = _names_in(STRIP_DIR / folder.name)
 
             for entry in listing:
                 if not entry.is_file():
@@ -343,6 +430,11 @@ def pending_files(echo: Callable[[str], None] = lambda _: None) -> list[Path]:
                 # render — the codec question the extension cannot answer.
                 if not want and name + ".mp4" not in renders:
                     want = wants_render(folder / name)
+                # And a filmstrip, which only a video has.
+                if (not want and derived not in strips
+                        and Path(name).suffix.lower() in _VIDEO_EXTS
+                        and Path(name).suffix.lower() not in _NO_RENDER_EXTS):
+                    want = True
                 if want:
                     pending.append(folder / name)
                     scanned["found"] += 1
@@ -471,7 +563,7 @@ def _status(summary: ProcessSummary, total: int, started: float,
 
     body = (f"{done}/{total}  {summary.thumbs} thumb, "
             f"{summary.previews} preview, {summary.metas} meta, "
-            f"{summary.renders} render")
+            f"{summary.renders} render, {summary.strips} strip")
     if summary.failed:
         body += f", {len(summary.failed)} failed"
     if done and rate > 0:
@@ -495,8 +587,9 @@ def _derive_one(media: Path, summary: ProcessSummary, lock: threading.Lock,
     # codec question an extension cannot answer. Leaving this out of the early
     # return dismissed all 421 HEVC clips as "already done".
     want_render = wants_render(media)
+    want_strip = wants_strip(media)
     if not (want_thumb or want_large or want_preview or want_meta
-            or want_render):
+            or want_render or want_strip):
         with lock:
             summary.skipped += 1
         return
@@ -517,6 +610,17 @@ def _derive_one(media: Path, summary: ProcessSummary, lock: threading.Lock,
                 with lock:
                     summary.failed.append(
                         f"{media.name}: meta: {type(e).__name__}: {e}")
+
+    if want_strip and not state["cancelling"]:
+        try:
+            if make_strip(media):
+                with lock:
+                    summary.strips += 1
+        except Exception as e:                # noqa: BLE001
+            if not state["cancelling"]:
+                with lock:
+                    summary.failed.append(
+                        f"{media.name}: strip: {type(e).__name__}: {e}")
 
     # A render is the expensive item, so it goes after the cheap ones: a
     # cancelled run still leaves the thumbnails and metadata it managed.

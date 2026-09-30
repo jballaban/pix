@@ -132,3 +132,68 @@ def test_real_partials_are_still_counted(tiers: dict[str, Path]) -> None:
 
     assert derive.sweep_partials() == 1
     assert not stale.exists()
+
+
+# --- filmstrips (spec/clips.md §9) --------------------------------------------
+
+def _video(path: Path, seconds: int = 12) -> None:
+    import shutil
+    import subprocess
+
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg is not installed")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+                    "testsrc=size=160x90:rate=10", "-t", str(seconds),
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", str(path)],
+                   check=True, timeout=60)
+
+
+def test_a_video_gets_a_filmstrip(tmp_path: Path,
+                                  monkeypatch: pytest.MonkeyPatch) -> None:
+    """Frames evenly across it, side by side in one picture, with what the
+    page needs to find each of them."""
+    import json
+
+    from pix.nas import paths
+
+    monkeypatch.setattr(derive, "STRIP_DIR", tmp_path / "strip")
+    clip = tmp_path / "master" / "f" / "a.mp4"
+    _video(clip)
+
+    assert derive.wants_strip(clip)
+    assert derive.make_strip(clip)
+    info = json.loads(paths.strip_info_path(clip, tmp_path / "strip")
+                      .read_text(encoding="utf-8"))
+    assert info["n"] == 4 and info["h"] == derive.STRIP_PX
+    with Image.open(paths.strip_path(clip, tmp_path / "strip")) as sprite:
+        assert sprite.size == (info["w"] * 4, derive.STRIP_PX)
+    assert not derive.wants_strip(clip)
+
+
+def test_a_photograph_has_no_filmstrip(tmp_path: Path) -> None:
+    assert not derive.wants_strip(tmp_path / "a.jpg")
+    assert not derive.wants_strip(tmp_path / "a.insv")
+
+
+def test_a_video_with_no_filmstrip_is_work_to_do(
+    tiers: dict[str, Path], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Everything else made already — the scan still has to find it, or no
+    video processed before filmstrips existed would ever get one."""
+    monkeypatch.setattr(derive, "STRIP_DIR", tmp_path / "nas" / "strip")
+    folder = tiers["master"] / "legacy_2026"
+    folder.mkdir(parents=True)
+    (folder / "a.mp4").write_bytes(b"fake")
+    for tier in ("thumb", "preview"):
+        (tiers[tier] / "legacy_2026").mkdir(parents=True)
+        (tiers[tier] / "legacy_2026" / "a.mp4.jpg").write_bytes(b"x")
+    (tiers["meta"] / "legacy_2026").mkdir(parents=True)
+    (tiers["meta"] / "legacy_2026" / "a.mp4.json").write_text("{}")
+    large = tmp_path / "nas" / "large" / "legacy_2026"
+    large.mkdir(parents=True)
+    (large / "a.mp4.jpg").write_bytes(b"x")
+    monkeypatch.setattr(derive, "LARGE_DIR", tmp_path / "nas" / "large")
+    monkeypatch.setattr(derive, "wants_render", lambda media: False)
+
+    assert [p.name for p in derive.pending_files()] == ["a.mp4"]

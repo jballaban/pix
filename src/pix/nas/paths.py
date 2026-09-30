@@ -55,6 +55,16 @@ def render_path(media: Path, root: Path) -> Path:
 PLAYABLE_CODECS: frozenset[str] = frozenset({"avc1", "avc3", "h264"})
 
 
+def strip_path(media: Path, root: Path) -> Path:
+    """Where `media`'s filmstrip sprite lives: its frames side by side."""
+    return root / media.parent.name / (media.name + ".jpg")
+
+
+def strip_info_path(media: Path, root: Path) -> Path:
+    """What the sprite holds — how many frames, how big, from when."""
+    return root / media.parent.name / (media.name + ".json")
+
+
 def seconds(value: float) -> str:
     """A time as a name carries it: milliseconds, no trailing zeros."""
     return f"{value:.3f}".rstrip("0").rstrip(".")

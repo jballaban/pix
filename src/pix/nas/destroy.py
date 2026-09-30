@@ -33,9 +33,11 @@ from pathlib import Path
 from pix.nas import cut
 from pix.nas import decisions
 from pix.nas.const import (
-    LARGE_DIR, META_DIR, PREVIEW_DIR, RENDER_DIR, THUMB_DIR,
+    LARGE_DIR, META_DIR, PREVIEW_DIR, RENDER_DIR, STRIP_DIR, THUMB_DIR,
 )
-from pix.nas.paths import derived_path, meta_path, render_path
+from pix.nas.paths import (
+    derived_path, meta_path, render_path, strip_info_path, strip_path,
+)
 
 
 @dataclass(frozen=True)
@@ -63,6 +65,8 @@ def targets(media: Path) -> tuple[Path, ...]:
             derived_path(media, LARGE_DIR),
             derived_path(media, PREVIEW_DIR),
             render_path(media, RENDER_DIR),
+            strip_path(media, STRIP_DIR),
+            strip_info_path(media, STRIP_DIR),
             meta_path(media, META_DIR),
             decisions.sidecar_path(media),
             media)

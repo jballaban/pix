@@ -63,6 +63,10 @@ THUMB_DIR: Path = MASTER_SHARE / "thumb"
 #: covers; four times the pixels anybody was going to look at.
 LARGE_DIR: Path = MASTER_SHARE / "large"
 PREVIEW_DIR: Path = MASTER_SHARE / "preview"
+#: One filmstrip per video — a row of small frames for the splice page's
+#: timeline, so a long clip can be read along it (spec/clips.md §9). Made on
+#: the desktop like every other picture, because making one decodes.
+STRIP_DIR: Path = MASTER_SHARE / "strip"
 
 #: Probed facts, one JSON per master file. Derived like the rest — but it is what
 #: makes the app's index cheap to rebuild: reading these is minutes where

@@ -57,7 +57,7 @@ from pix.nas import history
 from pix.nas import index as ix
 from pix.nas.const import (
     INDEX_DB, LARGE_DIR, MASTER_DIR, META_DIR, PREVIEW_DIR, RENDER_DIR,
-    THUMB_DIR,
+    STRIP_DIR, THUMB_DIR,
 )
 from pix.nas.decisions import Decision, Unset
 
@@ -7008,6 +7008,14 @@ def thumb(folder: str, name: str,
     return _serve(THUMB_DIR, folder, name)
 
 
+@app.get("/strip/{folder}/{name}")
+def strip(folder: str, name: str,
+          user: Annotated[Principal, Depends(require_user)]) -> FileResponse:
+    """A video's filmstrip, for the splice page's timeline."""
+    _allowed(user, folder, name)
+    return _serve(STRIP_DIR, folder, name)
+
+
 @app.get("/large/{folder}/{name}")
 def large(folder: str, name: str,
           user: Annotated[Principal, Depends(require_user)]) -> FileResponse:
@@ -8373,6 +8381,7 @@ def splice(folder: str, name: str,
         "hidden": decisions.HIDDEN in _split(row["audience"]),
         "hiddenName": decisions.HIDDEN,
         "clips": [_clip_json(c) for c in cut if not c["deleted"]],
+        "strip": _strip_of(media, folder, name),
     }
     src = f"/media/{_q(folder)}/{_q(name)}"
     return _page(title, _SPLICE_HTML.replace("{src}", src),
@@ -8380,6 +8389,25 @@ def splice(folder: str, name: str,
                  script=(f"<style>{_SPLICE_CSS}</style>"
                          f"<script>const SPLICE={_js(state)};</script>"
                          f"<script>{_SPLICE_JS}</script>"))
+
+
+def _strip_of(media: Path, folder: str, name: str) -> dict[str, Any] | None:
+    """The filmstrip `process` made for this video, as the page draws it —
+    or None, and the timeline is plain until there is one."""
+    try:
+        raw: object = json.loads(paths.strip_info_path(media, STRIP_DIR)
+                                 .read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    info = cast("dict[str, Any]", raw)
+    try:
+        n, w, h = int(info["n"]), int(info["w"]), int(info["h"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return {"n": n, "w": w, "h": h,
+            "url": f"/strip/{_q(folder)}/{_q(name)}"}
 
 
 def _clip_json(row: sqlite3.Row) -> dict[str, Any]:
@@ -8541,6 +8569,7 @@ _SPLICE_HTML: str = """<div class="splice">
 <div class="sstage" id="stage"><video id="sv" playsinline preload="auto" src="{src}"></video></div>
 <div class="tlwrap" id="tlwrap"><div class="track" id="track">
 <div class="lane" id="lane" title="Click to place a marker"></div>
+<div class="strip" id="strip"></div>
 <div class="keys" id="keys"></div>
 <div class="bars" id="bars"></div><div class="ph" id="ph"></div></div></div>
 <div class="sline"><span id="tcur">0:00.00</span><span class="dim">&nbsp;/&nbsp;</span>
@@ -8634,6 +8663,13 @@ _SPLICE_CSS: str = """
         border-bottom:1px solid var(--line); cursor:copy; z-index:2; }
 .track .bars { top:22px; }
 .track .keys { top:22px; }
+/* The filmstrip, under the clips: as many frames as fit at a readable width,
+   more of them the further in you zoom. */
+.strip { position:absolute; left:0; right:0; top:22px; bottom:0;
+         overflow:hidden; pointer-events:none; opacity:.55; }
+.strip > i { position:absolute; top:0; bottom:0; overflow:hidden; }
+.strip > i > b { position:absolute; top:0; bottom:0;
+                 background-repeat:no-repeat; }
 /* A marker: a line through the clips and a knob to take hold of. A cut —
    the marker two touching clips share — is a diamond; an end is a circle. */
 .mk { position:absolute; top:0; bottom:0; width:0; z-index:6; }
@@ -8781,6 +8817,7 @@ function draw(){
     p.onclick=e=>{e.stopPropagation(); pick(c.name);};
     bars.appendChild(p);
   }
+  drawStrip();
   for(const m of markers()) track.appendChild(marker(m));
   if(pending!==null) track.appendChild(marker({t:pending,kind:'pending'}));
   $('tdur').textContent=fmt(dur);
@@ -8800,6 +8837,32 @@ function marker(m){
   el.appendChild(knob);
   return el;
 }
+// As many of the strip's frames as fit at a readable width — at least 64px,
+// or a frame's own width if that is wider — spread evenly, so a long clip is
+// a row of moments you can read along. Zooming in makes room for more.
+function drawStrip(){
+  const box=$('strip'), st=S.strip;
+  if(!box) return;
+  box.innerHTML='';
+  if(!st||!st.n||!st.h) return;
+  const W=track.offsetWidth||0, H=box.offsetHeight||52;
+  const fw=H*st.w/st.h;
+  if(!W||!fw) return;
+  const k=Math.max(1,Math.min(st.n,Math.floor(W/Math.max(fw,64))));
+  const tw=W/k;
+  for(let j=0;j<k;j++){
+    const idx=Math.min(st.n-1,Math.floor((j+0.5)*st.n/k));
+    const tile=document.createElement('i');
+    tile.style.left=(j*tw)+'px'; tile.style.width=tw+'px';
+    const img=document.createElement('b');
+    img.style.left=((tw-fw)/2)+'px'; img.style.width=fw+'px';
+    img.style.backgroundImage='url("'+st.url+'")';
+    img.style.backgroundSize=(st.n*fw)+'px '+H+'px';
+    img.style.backgroundPosition=(-idx*fw)+'px 0';
+    tile.appendChild(img); box.appendChild(tile);
+  }
+}
+window.addEventListener('resize',()=>drawStrip());
 function drawKeys(){
   const box=$('keys');
   box.innerHTML='';
@@ -9094,7 +9157,7 @@ function zoomBy(f,cx){
   const frac=(wrap.scrollLeft+x)/(track.offsetWidth||1);
   track.style.width=(zoom*100)+'%';
   wrap.scrollLeft=frac*track.offsetWidth-x;
-  playhead(false);
+  drawStrip(); playhead(false);
 }
 wrap.addEventListener('wheel',e=>{
   if(!e.ctrlKey) return;

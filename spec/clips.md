@@ -1,9 +1,10 @@
 # Clips — video splitting, and stills from video
 
-**Status: steps 1–4 of [§10](#10-build-order) built** (v0.1.414–417: `hidden`,
-video stacking deferred, the clip model and its API, the splice page, NAS
-cuts with keyframe snapping, and keeping clips as files when a source is
-binned). Desktop renders, stills' files, filmstrips and delivery are not. Extends
+**Status: steps 1–4 of [§10](#10-build-order) built, and the filmstrip from
+step 5** (v0.1.414–426: `hidden`, video stacking deferred, the clip model and
+its API, the marker-driven splice page, NAS cuts with keyframe snapping,
+keeping clips as files when a source is binned). Desktop playback renders and
+stills' files for clips, and delivery, are not. Extends
 [nas-app.md](nas-app.md); where the two disagree, this file is the newer intent
 for clips, and the code remains the source of truth for what exists.
 
@@ -181,7 +182,7 @@ sidecars orphaned, and they are swept like any orphaned `.xmp`.
 | **cut** | lossless stream copy (`-c copy`) of C's own samples into `.mp4`, source codec | **the NAS**, seconds after the splice | download (*original*), distributions, materialising |
 | **playback render** | H.264, only when the source codec will not play in a browser | desktop `process` | playing in the app |
 | **thumb / preview** | as for any video | desktop | grid, preview |
-| **filmstrip** | one sprite of keyframes per video | desktop | the splice page |
+| **filmstrip** | one sprite per video: up to 40 frames, 90px tall, evenly across it, each its own keyframe seek; a JSON beside it says how many | desktop `process`, into the `strip` tier | the splice page's timeline, which shows as many as fit at 64px or wider — more as it zooms |
 | **still** | JPG, q95+, 4:4:4, full resolution, orientation applied, HDR tone-mapped | desktop, from the **master** | everything a photo is for |
 
 **One video format and one photo format in the library, however an item was

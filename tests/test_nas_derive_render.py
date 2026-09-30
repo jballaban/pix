@@ -151,6 +151,9 @@ def test_scan_finds_a_clip_needing_only_a_render(
         d = tiers["master"].parent / tier / "init_2026"
         d.mkdir(parents=True, exist_ok=True)
         (d / "a.mp4.jpg").write_bytes(b"x")
+    # And its filmstrip, without which a video is not finished either.
+    (derive.STRIP_DIR / "init_2026").mkdir(parents=True, exist_ok=True)
+    (derive.STRIP_DIR / "init_2026" / "a.mp4.jpg").write_bytes(b"x")
 
     assert [p.name for p in derive.pending_files()] == ["a.mp4"]
 
@@ -161,6 +164,9 @@ def test_scan_leaves_a_finished_h264_clip_alone(tiers: dict[str, Path]) -> None:
         d = tiers["master"].parent / tier / "init_2026"
         d.mkdir(parents=True, exist_ok=True)
         (d / "a.mp4.jpg").write_bytes(b"x")
+    # And its filmstrip, without which a video is not finished either.
+    (derive.STRIP_DIR / "init_2026").mkdir(parents=True, exist_ok=True)
+    (derive.STRIP_DIR / "init_2026" / "a.mp4.jpg").write_bytes(b"x")
 
     assert derive.pending_files() == []
 
@@ -215,6 +221,9 @@ def test_a_clip_needing_only_a_render_is_not_skipped(
         d = tiers["master"].parent / tier / "init_2026"
         d.mkdir(parents=True, exist_ok=True)
         (d / "a.mp4.jpg").write_bytes(b"x")
+    # And its filmstrip, without which a video is not finished either.
+    (derive.STRIP_DIR / "init_2026").mkdir(parents=True, exist_ok=True)
+    (derive.STRIP_DIR / "init_2026" / "a.mp4.jpg").write_bytes(b"x")
 
     called: list[Path] = []
     monkeypatch.setattr(derive, "render_video",
@@ -238,6 +247,9 @@ def test_a_finished_h264_clip_is_still_skipped(
         d = tiers["master"].parent / tier / "init_2026"
         d.mkdir(parents=True, exist_ok=True)
         (d / "a.mp4.jpg").write_bytes(b"x")
+    # And its filmstrip, without which a video is not finished either.
+    (derive.STRIP_DIR / "init_2026").mkdir(parents=True, exist_ok=True)
+    (derive.STRIP_DIR / "init_2026" / "a.mp4.jpg").write_bytes(b"x")
 
     called: list[Path] = []
     monkeypatch.setattr(derive, "render_video",
