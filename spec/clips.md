@@ -1,10 +1,10 @@
 # Clips — video splitting, and stills from video
 
-**Status: steps 1–5 of [§10](#10-build-order) built** (v0.1.414–435: `hidden`,
-video stacking deferred, the clip model and API, the two-tool splice page
-saved as a draft by identity, NAS cuts with keyframe snapping, keeping clips
-as files, filmstrips, clips' own pictures, stills' JPEGs and playback renders
-for clips of HEVC). Distributions and round trips (step 6) are not. Extends
+**Status: built, but for delivery** (v0.1.414–436). Round trips — a clip,
+still or render that comes back through an import — are recognised by stamp
+and content hash (spec/nas-app.md §15). Clips in distributions wait for the
+delivery trees themselves, which are in the backlog
+([roadmap.md](roadmap.md)). Extends
 [nas-app.md](nas-app.md); where the two disagree, this file is the newer intent
 for clips, and the code remains the source of truth for what exists.
 
@@ -349,7 +349,9 @@ ticks appear once the NAS has read them.
 3. The splice page, previewing by clamping C.
 4. NAS cuts, and the image rebuild.
 5. Desktop: playback renders, stills, filmstrip.
-6. Distributions and round trips.
+6. Round trips — built. Distributions — in the backlog, with the delivery
+   trees themselves: a clip goes in like any video, its own date written into
+   the copy, replaced in place under the same name when its range changes.
 
 **Vocabulary:** code comments that say *clip* for any video are reworded, so
 the word means only this.

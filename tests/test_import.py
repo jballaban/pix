@@ -712,3 +712,27 @@ def test_loop_seed_skips_matching_file(
     assert not (landing / "IMG_SEEN.JPG").exists()      # seed-skipped, never pulled
     assert (landing / "IMG_NEW.JPG").exists()           # not in seed → downloaded
     assert not importer._sidecar_path(landing / "IMG_SEEN.JPG").exists()
+
+
+def test_a_file_already_in_the_library_is_let_go_as_it_lands(
+    tmp_path: Path, monkeypatch: "pytest.MonkeyPatch"
+) -> None:
+    """Asked the moment it is down (`pix.nas.roundtrip.checker`): not staged,
+    and its record says why, so the next import skips it too."""
+    obj = _file_obj("o1", "IMG.HEIC", b"good-bytes")
+    landing = tmp_path / "import" / "iPhone"
+    landing.mkdir(parents=True)
+    summary = importer.ImportSummary(device=_dev(), landing=landing)
+    monkeypatch.setattr(importer.wpd, "open_device",
+                        lambda _dev_id: _FakeDev({"DEVICE": [obj]},
+                                                 {"o1": b"good-bytes"}))
+    monkeypatch.setattr(importer, "media_check", _scripted_media_check({}))
+    importer.import_loop(
+        _dev(), "iPhone", landing, summary, None, seed=set(), committed=set(),
+        log_verify=lambda *_: None,
+        already_held=lambda path: "init_2026/IMG_1.HEIC")
+
+    assert summary.returned == 1
+    assert not (landing / "IMG.HEIC").exists()
+    record = importer._read_sidecar(importer._sidecar_path(landing / "IMG.HEIC"))
+    assert record is not None and record["returned"] == "init_2026/IMG_1.HEIC"

@@ -1205,3 +1205,20 @@ def test_the_scan_finds_a_still_with_no_file(
         d.mkdir(parents=True, exist_ok=True)
         (d / (still + ".jpg")).write_bytes(b"x")
     assert real / still in derive.pending_files()
+
+
+def test_the_index_carries_a_clips_hashes(
+    client: TestClient, video: Path, app_env: dict[str, Path]
+) -> None:
+    """What `process` notes of a clip's own files reaches its row — which is
+    what an import looks a returning copy up by — and the note is not taken
+    for a file of its own."""
+    [clip] = _make(client, (0, 10))
+    note = app_env["share"] / "meta" / "init_2026" / f"{clip}.json"
+    note.write_text(json.dumps({"file": clip, "folder": "init_2026",
+                                "clip": True, "content_hash": "m:cut",
+                                "render_hash": "m:play"}), encoding="utf-8")
+    _rebuild(app_env)
+    row = _have(app_env, clip)
+    assert (row["content_hash"], row["render_hash"]) == ("m:cut", "m:play")
+    assert row["clip_of"] == "b.mp4", "the note became a row of its own"

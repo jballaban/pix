@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Callable, Literal
 
 from pix.markers import IMPORT_TMP_SUFFIX, is_pix_marker
-from pix.nas import ledger, staging as st
+from pix.nas import ledger, roundtrip, staging as st
 from pix.nas.const import IMPORT_ROOT
 
 
@@ -49,6 +49,7 @@ class FolderImportSummary:
     adopted: int = 0       # already landed from a cancelled run; sidecar written
     skipped: int = 0       # already staged or already uploaded
     ignored: int = 0       # companions we never land
+    returned: int = 0      # pix's own files come back — recorded, not landed
     failed: list[str] = field(default_factory=lambda: [])
 
     @property
@@ -119,6 +120,17 @@ def run_folder_import(
             continue
 
         landed = staging / Path(rel)
+        # Something pix made and handed out: recorded as come back, and not
+        # landed — so upload never copies it, and it is never asked about
+        # again (`pix.nas.roundtrip`).
+        came_from = roundtrip.returned(src)
+        if came_from is not None:
+            st.write_sidecar(landed, name=name, source_root=source, rel=rel,
+                             size=stat.st_size, mtime_ns=stat.st_mtime_ns,
+                             returned=came_from)
+            manifest.add(key)
+            summary.returned += 1
+            continue
         try:
             outcome = _land(src, landed, stat.st_size)
         except OSError as e:

@@ -163,3 +163,18 @@ cleanup pass is the only place that needs to reason about collisions at all).
 
 Performance-oriented ideas (against already-built code paths) live in
 [perf-backlog.md](perf-backlog.md).
+
+## Delivery trees — the NAS app's distributions
+
+Designed in [nas-app.md §7](nas-app.md#7-distributions), not built: standing
+trees on the NAS (`/photo` for Synology Photos, `/tv`, `/book`) kept in step
+with curation — copies with metadata baked in, canonical names assigned once,
+drift reported rather than stopped. Needs a design pass first: §7 was written
+when curation was a `tier`, and it is now an `audience`.
+
+Clips join it with no new concepts ([clips.md](clips.md) §7): a clip is
+delivered like any video, from its cut or its playback render, with its own
+effective date written into the copy; and because its footage can change when
+its range does, its delivered copy is replaced in place, under the same name,
+so a Synology Photos album pointing at it keeps the entry.
+

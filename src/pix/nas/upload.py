@@ -55,9 +55,9 @@ from pix.duration import format_duration_compact, format_size
 from pix.ingest import MANIFEST_DIRNAME
 from pix.markers import EXPORT_TMP_SUFFIX, IMPORT_TMP_SUFFIX
 from pix.progress import LiveProgress
-from pix.nas import ledger, staging as st
+from pix.nas import ledger, roundtrip, staging as st
 from pix.nas.lock import UploadLock
-from pix.nas.const import IMPORT_ROOT, LEDGER_NAME, MASTER_DIR
+from pix.nas.const import INDEX_DB, IMPORT_ROOT, LEDGER_NAME, MASTER_DIR
 
 #: Concurrency for the SMB copy. 32 is where measured throughput plateaued;
 #: past that the Atom serving the share becomes the limit, not the client.
@@ -98,6 +98,10 @@ class UploadSummary:
     #: Why staging was kept although nothing failed: files in it that upload
     #: did not copy, because no import record it understands names them.
     unaccounted: list[str] = field(default_factory=lambda: [])
+    #: Files already in the library — pix's own come back, or a copy of a
+    #: master — recorded and not copied, as `rel is folder/name`.
+    returned: int = 0
+    returned_names: list[str] = field(default_factory=lambda: [])
 
 
 @dataclass(frozen=True)
@@ -207,6 +211,11 @@ def _upload_one(staging: Path, *, echo: Callable[[str], None]) -> UploadSummary:
 
     lock = threading.Lock()
     total_bytes = sum(i.size for i in items)
+    # A device import has already hashed what it downloaded; a folder import
+    # only linked its files, so this is where theirs are asked about — the
+    # file is read here to be copied anyway (`roundtrip`).
+    known = (roundtrip.known_hashes(INDEX_DB)
+             if any(i.root not in staged.serials for i in items) else None)
     started = time.monotonic()
     # Mutable so the progress thread can read it without the lock. `inflight`
     # is what makes a cancel legible: the operator sees copies closing out
@@ -233,6 +242,19 @@ def _upload_one(staging: Path, *, echo: Callable[[str], None]) -> UploadSummary:
             if item.flat in already:
                 with lock:
                     summary.skipped += 1
+                progress.advance()
+                return
+            match = roundtrip.held(item.source, known)
+            if match is not None:
+                # Already in the library, as this: not copied, and the ledger
+                # says so, so the folder is never asked about again.
+                with lock:
+                    summary.returned += 1
+                    summary.returned_names.append(f"{item.rel} is {match}")
+                    _append(log, {
+                        "rel": item.rel, "root": item.root, "size": item.size,
+                        "outcome": "returned", "matches": match, **item.extra,
+                    })
                 progress.advance()
                 return
             try:
@@ -280,6 +302,10 @@ def _upload_one(staging: Path, *, echo: Callable[[str], None]) -> UploadSummary:
             for rel, root, size, extra in culled:
                 if flatten(rel) in already:
                     continue
+                if extra.get("outcome") == "returned":
+                    summary.returned += 1
+                    summary.returned_names.append(
+                        f"{rel} is {extra.get('matches')}")
                 _append(log, {"rel": rel, "root": root, "size": size,
                               "outcome": "culled", **extra})
 
@@ -382,6 +408,13 @@ def _collect(staging: Path) -> _Staged:
             # reach the ledger, because the skip key is (rel, size). A culled
             # entry without a size would never join the manifest, and the file
             # would be re-imported on the next run.
+            #
+            # Gone because the import found it already in the library
+            # (`roundtrip`) is recorded as that rather than as a cull: it was
+            # never the user's to decide about.
+            back = data.get("returned")
+            if isinstance(back, str) and back:
+                extra = {**extra, "outcome": "returned", "matches": back}
             if isinstance(size, int):
                 staged.culled.append((rel, root, size, extra))
             continue

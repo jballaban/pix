@@ -1483,6 +1483,20 @@ destroying a master sweeps its render with it. The stamp remains worth writing:
 it is what distinguishes an untouched round trip from one that was edited after
 it left, which no hash of the incoming file can answer on its own.
 
+**Built (v0.1.436), as early as each import allows** (`pix.nas.roundtrip`).
+Renders, clips' cuts and playback renders, and stills carry `pix:SourceFile`
+(clips `pix:ClipId` too), found by reading a file's first megabyte — pix's MP4s
+are `+faststart` and a JPEG's XMP comes first — and never mistaken for the
+older `pix:` tags the seeded library carries. A **device import** asks of each
+file the moment it is down, by stamp and then by content hash against every
+master, render and clip's file in the index, and lets a match go before it is
+staged. A **folder import** checks the stamp and leaves the hash to `upload`,
+since hashing there would read the whole source. Either way the `.importinfo`
+stays marked *returned*, and upload writes it as a `returned` ledger line
+naming what it matched — so a device never offers it again. The hash check is
+as current as the index; the stamp does not wait for it. `pix:ArtifactId` is
+not written: the index's render hash does its job.
+
 **The stamp is an optimisation, not a guarantee.** Messaging strips metadata, so
 a render sent to family and sent back arrives bare and falls through to the
 perceptual path like any other derivative. Every mechanism here is a cheaper

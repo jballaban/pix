@@ -54,6 +54,7 @@ from pix.progress import LiveProgress
 from pix.nas import clips
 from pix.nas import decisions
 from pix.nas import identity
+from pix.nas import roundtrip
 from pix.nas import ledger
 from pix.nas.const import (
     LARGE_DIR, LEDGER_NAME, MASTER_DIR, META_DIR, PREVIEW_DIR, RENDER_DIR,
@@ -714,6 +715,8 @@ def _clip_wants_file(clip: Path, renders: set[str]) -> bool:
     if decision is None or not decision.is_clip:
         return False
     assert decision.clip_in is not None and decision.clip_out is not None
+    if _clip_files(clip, decision, renders) != _clip_hashed(clip):
+        return True
     if decision.is_still:
         return paths.still_path(clip, RENDER_DIR, decision.clip_in).name \
             not in renders
@@ -721,6 +724,59 @@ def _clip_wants_file(clip: Path, renders: set[str]) -> bool:
         return False
     return paths.play_path(clip, RENDER_DIR, decision.clip_in,
                            decision.clip_out).name not in renders
+
+
+def _clip_files(clip: Path, decision: "decisions.Decision",
+                renders: set[str] | None = None) -> dict[str, Path]:
+    """A clip's own files that exist, as `role -> path`: its cut, its
+    playback render, its still."""
+    assert decision.clip_in is not None and decision.clip_out is not None
+    if decision.is_still:
+        wanted = {"content": paths.still_path(clip, RENDER_DIR,
+                                              decision.clip_in)}
+    else:
+        wanted = {"content": paths.cut_path(clip, RENDER_DIR, decision.clip_in,
+                                            decision.clip_out),
+                  "render": paths.play_path(clip, RENDER_DIR, decision.clip_in,
+                                            decision.clip_out)}
+    return {role: path for role, path in wanted.items()
+            if (path.name in renders if renders is not None else path.is_file())}
+
+
+def _clip_hashed(clip: Path) -> dict[str, Path]:
+    """Which of a clip's files its record has hashes of."""
+    record = _record_of(clip) or {}
+    raw: object = record.get("hashed")
+    names = cast("dict[str, Any]", raw) if isinstance(raw, dict) else {}
+    folder = RENDER_DIR / clip.parent.name
+    return {str(role): folder / str(name) for role, name in names.items()}
+
+
+def _note_clip(clip: Path, decision: "decisions.Decision") -> bool:
+    """Record the content hashes of a clip's own files, so an import can
+    tell a copy of one for what it is (`roundtrip`) — the cut or the still as
+    its content, the playback render as its render.
+
+    A meta record of its own, marked as a clip's so the index does not take it
+    for a file; rewritten whenever the files it names are not the files there
+    are, which is how a new cut from the NAS, or a range that moved, is
+    noticed."""
+    files = _clip_files(clip, decision)
+    if files == _clip_hashed(clip):
+        return False
+    record: dict[str, Any] = {"file": clip.name, "folder": clip.parent.name,
+                              "clip": True,
+                              "hashed": {r: p.name for r, p in files.items()}}
+    for role, path in files.items():
+        digest = identity.content_hash(path)
+        if digest:
+            record[f"{role}_hash"] = digest
+    dest = meta_path(clip)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    part = dest.with_name(dest.name + EXPORT_TMP_SUFFIX)
+    part.write_text(json.dumps(record), encoding="utf-8")
+    os.replace(part, dest)
+    return True
 
 
 def _playable_source(clip: Path) -> bool:
@@ -733,7 +789,7 @@ def _playable_source(clip: Path) -> bool:
 
 
 def make_still(source: Path, at: float, dest: Path, *,
-               taken: str | None = None) -> bool:
+               taken: str | None = None, clip_id: str | None = None) -> bool:
     """A still's own file: the frame at `at`, full size, as a JPEG.
 
     **JPEG, like every photograph in the library** (spec/clips.md §6),
@@ -766,11 +822,20 @@ def make_still(source: Path, at: float, dest: Path, *,
     if not tmp.is_file():
         return False
     exiftool = shutil.which("exiftool") or shutil.which("exiftool.exe")
-    if exiftool is not None and taken:
-        subprocess.run([exiftool, "-q", "-overwrite_original",
-                        f"-DateTimeOriginal={taken}", f"-CreateDate={taken}",
-                        str(tmp)], capture_output=True, text=True,
-                       timeout=_FFMPEG_TIMEOUT)
+    if exiftool is not None:
+        # Dated as the frame was taken, and stamped as pix's own
+        # (`roundtrip`), so a copy that comes back is known for what it is.
+        from pix import exiftool_config_path
+
+        tags = [f"-XMP-pix:SourceFile={source.parent.name}/{source.name}",
+                f"-XMP-pix:ClipRange={paths.seconds(at)}"]
+        if clip_id:
+            tags.append(f"-XMP-pix:ClipId={clip_id}")
+        if taken:
+            tags += [f"-DateTimeOriginal={taken}", f"-CreateDate={taken}"]
+        subprocess.run([exiftool, "-config", str(exiftool_config_path()),
+                        "-q", "-overwrite_original", *tags, str(tmp)],
+                       capture_output=True, text=True, timeout=_FFMPEG_TIMEOUT)
     os.replace(tmp, dest)
     return True
 
@@ -784,6 +849,11 @@ def render_clip(source: Path, clip_in: float, clip_out: float, dest: Path,
     same encode as a whole video's render, over the clip's range only.
     """
     return _encode(source, dest, start=clip_in, length=clip_out - clip_in,
+                   stamp=roundtrip.stamp_args(
+                       f"{source.parent.name}/{source.name}",
+                       clip_id=clips.id_of(dest.name.partition("@")[0]),
+                       clip_range=f"{paths.seconds(clip_in)}-"
+                                  f"{paths.seconds(clip_out)}"),
                    timeout=timeout)
 
 
@@ -817,7 +887,8 @@ def _derive_clip(clip: Path, summary: ProcessSummary,
                 capture, _, _ = clips.date(
                     ix.capture_of(_record_of(source)), None,
                     decision.clip_in, None)
-                if make_still(source, decision.clip_in, dest, taken=capture):
+                if make_still(source, decision.clip_in, dest, taken=capture,
+                              clip_id=clips.id_of(clip.name)):
                     with lock:
                         summary.stills += 1
         elif not _playable_source(clip):
@@ -834,6 +905,11 @@ def _derive_clip(clip: Path, summary: ProcessSummary,
     except Exception as e:                    # noqa: BLE001
         with lock:
             summary.failed.append(f"{clip.name}: {type(e).__name__}: {e}")
+    try:
+        _note_clip(clip, decision)
+    except Exception as e:                    # noqa: BLE001
+        with lock:
+            summary.failed.append(f"{clip.name}: hash: {type(e).__name__}: {e}")
     want_thumb, want_large, want_preview, _ = needs_work(clip)
     if not (want_thumb or want_large or want_preview):
         return
@@ -994,10 +1070,13 @@ def render_video(media: Path, *, timeout: float = _ENCODE_TIMEOUT) -> bool:
 
 
 def _encode(media: Path, dest: Path, *, start: float | None = None,
-            length: float | None = None,
+            length: float | None = None, stamp: list[str] | None = None,
             timeout: float = _ENCODE_TIMEOUT) -> bool:
     """Encode `media` — or `length` seconds of it from `start` — to H.264 at
-    `dest`. NVENC first, libx264 after; see `render_video`."""
+    `dest`. NVENC first, libx264 after; see `render_video`.
+
+    **Stamped as pix's own** (`roundtrip`): the master it came from, and for a
+    clip which clip — so a copy downloaded and imported again is known."""
     ffmpeg = shutil.which("ffmpeg") or shutil.which("ffmpeg.exe")
     if ffmpeg is None:
         return False
@@ -1014,8 +1093,11 @@ def _encode(media: Path, dest: Path, *, start: float | None = None,
     # washed-out grey the thumbnails were, and playing it back would disagree
     # with the original on every screen.
     tone = ["-vf", _TONEMAP] if is_hdr(media) else []
-    tail = ["-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart",
-            "-map_metadata", "0", str(tmp)]
+    stamped = stamp if stamp is not None else roundtrip.stamp_args(
+        f"{media.parent.name}/{media.name}")
+    tail = ["-c:a", "aac", "-b:a", "160k",
+            "-movflags", "+faststart+use_metadata_tags",
+            "-map_metadata", "0", *stamped, str(tmp)]
     attempts = [
         [*base, *tone, "-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr",
          "-cq", _CQ, "-b:v", "0", "-pix_fmt", "yuv420p", *tail],

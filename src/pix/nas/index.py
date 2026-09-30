@@ -557,7 +557,13 @@ def build(db_path: Path, *, echo: Callable[[str], None] = lambda _: None,
             for folder, decided, source in _folders(meta_root, master_root):
                 sources: dict[str, dict[str, Any]] = {}
                 codecs: dict[str, str | None] = {}
+                noted: dict[str, dict[str, Any]] = {}
                 for record in _records(meta_root / folder):
+                    # A clip's record — the hashes of its own files — is not a
+                    # file of its own; the clip's row is made below.
+                    if record.get("clip"):
+                        noted[str(record.get("file"))] = record
+                        continue
                     row = _row(folder, record, decided, source)
                     if row is None:
                         stats.skipped.append(f"{folder}: unreadable record")
@@ -592,7 +598,8 @@ def build(db_path: Path, *, echo: Callable[[str], None] = lambda _: None,
                     size = clip_size(master_root / folder / name, decision,
                                      codecs.get(of))
                     conn.execute(_INSERT, _clip_row(folder, name, sources[of],
-                                                    decision, size))
+                                                    decision, size,
+                                                    noted.get(name)))
                     _write_multi(conn, folder, name, decision)
                     tags_seen.update(decision.tags)
                     stats.files += 1
@@ -666,15 +673,16 @@ def refresh(conn: sqlite3.Connection, folder: str, name: str, *,
     of = clips.source_of(name)
     if of is not None and record is None:
         source_record = _record(meta_root / folder / f"{of}.json")
+        noted = _record(meta_root / folder / f"{name}.json")
         if commit:
             with conn:
                 done = _refresh_clip(conn, folder, name, of,
                                      master_root / folder / name, decision,
-                                     codec_of(source_record))
+                                     codec_of(source_record), noted)
         else:
             done = _refresh_clip(conn, folder, name, of,
                                  master_root / folder / name, decision,
-                                 codec_of(source_record))
+                                 codec_of(source_record), noted)
         if done is not None:
             return done
     if record is None:
@@ -722,7 +730,8 @@ def refresh(conn: sqlite3.Connection, folder: str, name: str, *,
 def _refresh_clip(conn: sqlite3.Connection, folder: str, name: str,
                   source: str, media: Path,
                   decision: Decision | None | decisions.Unset,
-                  codec: str | None = None) -> bool | None:
+                  codec: str | None = None,
+                  noted: dict[str, Any] | None = None) -> bool | None:
     """Rewrite a clip's row — or remove it, or say it is not a clip at all.
 
     The one place a refresh adds or removes a row, and deliberately: a clip's
@@ -750,7 +759,7 @@ def _refresh_clip(conn: sqlite3.Connection, folder: str, name: str,
            if existing is not None and existing["suggested_under"] else None)
     _rewrite(conn, folder, name,
              _clip_row(folder, name, source_row, decision,
-                       clip_size(media, decision, codec)),
+                       clip_size(media, decision, codec), noted),
              decision, was)
     return True
 
@@ -989,7 +998,8 @@ def codec_of(record: dict[str, Any] | None) -> str | None:
 
 
 def _clip_row(folder: str, name: str, source: sqlite3.Row | dict[str, Any],
-              decision: Decision, size: int | None = None) -> dict[str, Any]:
+              decision: Decision, size: int | None = None,
+              noted: dict[str, Any] | None = None) -> dict[str, Any]:
     """A clip's row, made from its source's row and its own sidecar.
 
     A clip has no probed facts of its own — no meta record, because it has no
@@ -1028,8 +1038,10 @@ def _clip_row(folder: str, name: str, source: sqlite3.Row | dict[str, Any],
         "precision": precision,
         "stacked_under": decision.stacked_under,
         "no_stack": 1 if decision.no_stack else 0,
-        "content_hash": None,
-        "render_hash": None,
+        # The hashes of its own files, which `process` notes — what lets an
+        # import know a copy of one when it comes back (`roundtrip`).
+        "content_hash": (noted or {}).get("content_hash"),
+        "render_hash": (noted or {}).get("render_hash"),
         "clip_of": clips.source_of(name),
         "clip_in": clip_in,
         "clip_out": clip_out,

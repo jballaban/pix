@@ -92,6 +92,9 @@ class ImportSummary:
     failed_media: list[str] = field(default_factory=lambda: [])   # terminal, resolve on device
     # Import-seed manifest (deprecated-tool skip list) outcomes:
     seed_skipped: int = 0             # objects skipped via a seed manifest
+    # Files pix itself made, handed out and now being given back — recorded,
+    # never landed (spec/nas-app.md §15, `pix.nas.roundtrip`).
+    returned: int = 0
     manifests_deprecated: bool = False  # seed folder present but empty → remove the code
 
 
@@ -221,7 +224,8 @@ def _sidecar_path(landed: Path) -> Path:
 
 
 def _write_sidecar(landed: Path, info: wpd.DeviceInfo, friendly: str,
-                   obj: wpd.WpdObject, device_path: str) -> None:
+                   obj: wpd.WpdObject, device_path: str,
+                   returned: str | None = None) -> None:
     """Write the `.importinfo` sidecar via temp-then-rename (the VERIFIED commit).
 
     `friendly` is the **registry** name (the `.pix/local/import/<friendly>/`
@@ -240,6 +244,10 @@ def _write_sidecar(landed: Path, info: wpd.DeviceInfo, friendly: str,
         "size": obj.size,
         "capture_date": obj.created,
     }
+    if returned is not None:
+        # The file was pix's own, so it is not staged — and the record says
+        # so, which is what keeps the device from offering it again.
+        data["returned"] = returned
     sidecar = _sidecar_path(landed)
     sidecar.parent.mkdir(parents=True, exist_ok=True)  # the `.manifest/` child
     tmp = sidecar.with_name(sidecar.name + IMPORT_TMP_SUFFIX)
@@ -579,12 +587,18 @@ def import_loop(info: wpd.DeviceInfo, friendly: str, landing: Path,
                  summary: ImportSummary, log: IO[str] | None, *,
                  seed: set[tuple[str, int]],
                  committed: set[str],
-                 log_verify: Callable[[str, str, str], None]) -> None:
+                 log_verify: Callable[[str, str, str], None],
+                 already_held: Callable[[Path], str | None] | None = None,
+                 ) -> None:
     """The drain-as-you-go DFS + dirty re-loop (run folder already set up).
 
     Takes its skip-sets and verify logger as parameters rather than deriving
     them from a library root, so the NAS architecture
-    (`pix.nas.device_import`) can reuse this loop unchanged. It is ~200 lines of
+    (`pix.nas.device_import`) can reuse this loop unchanged.
+
+    `already_held` says, of a file just downloaded and verified, what in the
+    library it already is — `pix.nas.roundtrip.checker` — so it is let go
+    there rather than staged. It is ~200 lines of
     recovery-ladder logic validated against a physical iPhone; a second copy of
     it would be the wrong kind of duplication.
     """
@@ -630,8 +644,18 @@ def import_loop(info: wpd.DeviceInfo, friendly: str, landing: Path,
             def commit_verified(landed: Path, obj: wpd.WpdObject,
                                 device_path: str, key: tuple[str, int | None]) -> None:
                 """Write the `.importinfo` sidecar (the VERIFIED commit) and drop
-                any stale `.importissue` marker — the two are mutually exclusive."""
-                _write_sidecar(landed, info, friendly, obj, device_path)
+                any stale `.importissue` marker — the two are mutually exclusive.
+
+                A file pix itself made is let go here instead of staged: its
+                stamp says it came from the archive already, so the media is
+                removed and only the record stays (`pix.nas.roundtrip`)."""
+                came_from = already_held(landed) if already_held else None
+                if came_from is not None:
+                    landed.unlink(missing_ok=True)
+                    summary.returned += 1
+                    _log(log, "RETURNED", f"{device_path} ({came_from})")
+                _write_sidecar(landed, info, friendly, obj, device_path,
+                               returned=came_from)
                 manifest.add(key)
                 _issue_path(landed).unlink(missing_ok=True)
                 verified_keys.add(key)

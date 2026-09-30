@@ -64,7 +64,9 @@ def import_folder(
         f"{summary.name}: {summary.landed} staged "
         f"({summary.linked} linked, {summary.copied} copied, "
         f"{summary.adopted} adopted), {summary.skipped} already staged, "
-        f"{summary.ignored} ignored."
+        f"{summary.ignored} ignored"
+        + (f", {summary.returned} pix's own and let go"
+           if summary.returned else "") + "."
     )
     typer.echo(f"Staging: {summary.staging}")
 
@@ -103,7 +105,9 @@ def import_device(
     typer.echo(
         f"{dev.friendly or dev.model} (serial {dev.serial}): "
         f"{summary.downloaded} new, {summary.skipped} already imported, "
-        f"{summary.verified} verified."
+        f"{summary.verified} verified"
+        + (f", {summary.returned} already in the library and let go"
+           if summary.returned else "") + "."
     )
     typer.echo(f"Staging: {summary.landing}")
 
@@ -147,8 +151,14 @@ def upload() -> None:
             state = "KEPT (unverified)"
         typer.echo(
             f"{s.name}: {s.copied} copied ({gb:.1f} GB), {s.skipped} already there, "
-            f"{s.culled} culled -> {s.master_folder.name}; staging {state}"
+            f"{s.culled} culled"
+            + (f", {s.returned} already in the library" if s.returned else "")
+            + f" -> {s.master_folder.name}; staging {state}"
         )
+        for line in s.returned_names[:10]:
+            typer.echo(f"  already in the library: {line}")
+        if len(s.returned_names) > 10:
+            typer.echo(f"  ... and {len(s.returned_names) - 10} more")
         for line in s.failed[:10]:
             typer.echo(f"  {line}", err=True)
         if len(s.failed) > 10:

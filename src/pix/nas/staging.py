@@ -83,7 +83,8 @@ def sidecar_path(landed: Path) -> Path:
 
 
 def write_sidecar(landed: Path, *, name: str, source_root: Path, rel: str,
-                  size: int, mtime_ns: int) -> None:
+                  size: int, mtime_ns: int,
+                  returned: str | None = None) -> None:
     """Record `landed` as imported, temp-then-rename.
 
     The atomic rename matters: a process killed mid-write must never leave a
@@ -100,6 +101,8 @@ def write_sidecar(landed: Path, *, name: str, source_root: Path, rel: str,
         "size": size,
         "mtime_ns": mtime_ns,
     }
+    if returned is not None:
+        payload["returned"] = returned
     tmp = target.with_name(target.name + IMPORT_TMP_SUFFIX)
     tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     os.replace(tmp, target)

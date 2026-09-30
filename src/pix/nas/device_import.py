@@ -37,7 +37,8 @@ from pix.importer import (
     sanitize_component,
 )
 from pix.nas import ledger
-from pix.nas.const import IMPORT_ROOT
+from pix.nas import roundtrip
+from pix.nas.const import IMPORT_ROOT, INDEX_DB
 
 
 def run_device_import(
@@ -81,6 +82,8 @@ def run_device_import(
         # The ledger is the durable record; a separate verify log would be a
         # second, weaker account of the same events.
         log_verify=lambda device_path, event, detail: None,
+        # Stamp and hash, the moment each file is down (spec/nas-app.md §15).
+        already_held=roundtrip.checker(INDEX_DB),
     )
     return summary
 
