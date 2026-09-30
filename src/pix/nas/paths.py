@@ -82,6 +82,20 @@ def cut_path(media: Path, root: Path, clip_in: float, clip_out: float) -> Path:
         f"{media.name}@{seconds(clip_in)}-{seconds(clip_out)}.cut.mp4")
 
 
+def play_path(media: Path, root: Path, clip_in: float, clip_out: float) -> Path:
+    """Where a clip's playback render lives: the H.264 a browser plays, for a
+    clip whose cut keeps a codec it will not (spec/clips.md §6). Named by its
+    range, for the reason the cut is."""
+    return root / media.parent.name / (
+        f"{media.name}@{seconds(clip_in)}-{seconds(clip_out)}.play.mp4")
+
+
+def still_path(media: Path, root: Path, at: float) -> Path:
+    """Where a still's own file lives: the frame, as a full-size JPEG. Named
+    by its moment, so a still moved to another frame is stale by name."""
+    return root / media.parent.name / (f"{media.name}@{seconds(at)}.still.jpg")
+
+
 def cut_prefix(media: Path) -> str:
     """What every cut of this clip's name starts with, whatever its range."""
     return f"{media.name}@"

@@ -194,6 +194,7 @@ class ProcessSummary:
     metas: int = 0
     renders: int = 0
     strips: int = 0
+    stills: int = 0
     skipped: int = 0            # already had both
     unsupported: int = 0        # nothing we know how to render a frame from
     cancelled: bool = False
@@ -202,7 +203,7 @@ class ProcessSummary:
     @property
     def made(self) -> int:
         return (self.thumbs + self.previews + self.metas + self.renders
-                + self.strips)
+                + self.strips + self.stills)
 
 
 def master_files() -> Iterator[Path]:
@@ -434,7 +435,8 @@ def pending_files(echo: Callable[[str], None] = lambda _: None) -> list[Path]:
                     if of is not None and of in present and (
                             clip + ".jpg" not in thumbs
                             or clip + ".jpg" not in larges
-                            or clip + ".jpg" not in previews):
+                            or clip + ".jpg" not in previews
+                            or _clip_wants_file(folder / clip, renders)):
                         pending.append(folder / clip)
                         scanned["found"] += 1
                     continue
@@ -581,7 +583,8 @@ def _status(summary: ProcessSummary, total: int, started: float,
 
     body = (f"{done}/{total}  {summary.thumbs} thumb, "
             f"{summary.previews} preview, {summary.metas} meta, "
-            f"{summary.renders} render, {summary.strips} strip")
+            f"{summary.renders} render, {summary.strips} strip, "
+            f"{summary.stills} still")
     if summary.failed:
         body += f", {len(summary.failed)} failed"
     if done and rate > 0:
@@ -700,6 +703,90 @@ def _derive_one(media: Path, summary: ProcessSummary, lock: threading.Lock,
             summary.failed.append(f"{media.name}: {type(e).__name__}: {e}")
 
 
+def _clip_wants_file(clip: Path, renders: set[str]) -> bool:
+    """Whether a clip still lacks the file a viewer is given: a still its
+    JPEG, and a clip of footage a browser will not play its H.264 render.
+    A clip of H.264 needs nothing — its cut plays as it is.
+
+    Reads the clip's sidecar and its source's record, which is two small
+    reads per clip; clips are few beside the files the scan lists."""
+    decision = decisions.read(clip)
+    if decision is None or not decision.is_clip:
+        return False
+    assert decision.clip_in is not None and decision.clip_out is not None
+    if decision.is_still:
+        return paths.still_path(clip, RENDER_DIR, decision.clip_in).name \
+            not in renders
+    if _playable_source(clip):
+        return False
+    return paths.play_path(clip, RENDER_DIR, decision.clip_in,
+                           decision.clip_out).name not in renders
+
+
+def _playable_source(clip: Path) -> bool:
+    """Whether a clip's source plays in a browser as it is."""
+    source = clips.source_of(clip.name)
+    if source is None:
+        return True
+    codec = video_codec(clip.parent / source)
+    return bool(codec) and codec.lower() in _PLAYABLE_CODECS
+
+
+def make_still(source: Path, at: float, dest: Path, *,
+               taken: str | None = None) -> bool:
+    """A still's own file: the frame at `at`, full size, as a JPEG.
+
+    **JPEG, like every photograph in the library** (spec/clips.md §6),
+    however it was made. Near the top of JPEG's quality with no colour
+    subsampling, since this is the file that stands in for a photograph
+    somebody chose. HDR is brought down the way poster frames are; the
+    orientation is applied, since a JPEG has nowhere to carry the video's.
+    Dated as the frame was taken, which is the source's own clock plus the
+    moment.
+    """
+    ffmpeg = shutil.which("ffmpeg") or shutil.which("ffmpeg.exe")
+    if ffmpeg is None:
+        return False
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + EXPORT_TMP_SUFFIX + ".jpg")
+    head = [ffmpeg, "-v", "error", "-y", "-ss", f"{at:.3f}", "-i", str(source)]
+    tail = ["-frames:v", "1", "-pix_fmt", "yuvj444p", "-q:v", "1", str(tmp)]
+    tries = ([[*head, "-vf", _TONEMAP, *tail], [*head, *tail]]
+             if is_hdr(source) else [[*head, *tail]])
+    for cmd in tries:
+        try:
+            done = subprocess.run(cmd, capture_output=True, text=True,
+                                  timeout=_FFMPEG_TIMEOUT)
+        except (OSError, subprocess.TimeoutExpired):
+            tmp.unlink(missing_ok=True)
+            continue
+        if done.returncode == 0 and tmp.is_file() and tmp.stat().st_size:
+            break
+        tmp.unlink(missing_ok=True)
+    if not tmp.is_file():
+        return False
+    exiftool = shutil.which("exiftool") or shutil.which("exiftool.exe")
+    if exiftool is not None and taken:
+        subprocess.run([exiftool, "-q", "-overwrite_original",
+                        f"-DateTimeOriginal={taken}", f"-CreateDate={taken}",
+                        str(tmp)], capture_output=True, text=True,
+                       timeout=_FFMPEG_TIMEOUT)
+    os.replace(tmp, dest)
+    return True
+
+
+def render_clip(source: Path, clip_in: float, clip_out: float, dest: Path,
+                *, timeout: float = _ENCODE_TIMEOUT) -> bool:
+    """A clip's playback render: its stretch of the source, as H.264.
+
+    For a clip whose cut keeps a codec a browser will not play — HEVC, most
+    of the phone footage — so that it can be watched and shared at all. The
+    same encode as a whole video's render, over the clip's range only.
+    """
+    return _encode(source, dest, start=clip_in, length=clip_out - clip_in,
+                   timeout=timeout)
+
+
 def _derive_clip(clip: Path, summary: ProcessSummary,
                  lock: threading.Lock) -> None:
     """A clip's own pictures, from a frame inside it.
@@ -719,7 +806,37 @@ def _derive_clip(clip: Path, summary: ProcessSummary,
         return
     source = clip.parent / source_name
     at = decision.clip_in + FRAME_AT * (decision.clip_out - decision.clip_in)
+    # The file a viewer is given first, since it is what lets them see the
+    # clip at all; the pictures after.
+    try:
+        if decision.is_still:
+            dest = paths.still_path(clip, RENDER_DIR, decision.clip_in)
+            if not dest.is_file():
+                from pix.nas import index as ix
+
+                capture, _, _ = clips.date(
+                    ix.capture_of(_record_of(source)), None,
+                    decision.clip_in, None)
+                if make_still(source, decision.clip_in, dest, taken=capture):
+                    with lock:
+                        summary.stills += 1
+        elif not _playable_source(clip):
+            dest = paths.play_path(clip, RENDER_DIR, decision.clip_in,
+                                   decision.clip_out)
+            if not dest.is_file():
+                if render_clip(source, decision.clip_in, decision.clip_out,
+                               dest):
+                    with lock:
+                        summary.renders += 1
+                else:
+                    with lock:
+                        summary.failed.append(f"{clip.name}: render failed")
+    except Exception as e:                    # noqa: BLE001
+        with lock:
+            summary.failed.append(f"{clip.name}: {type(e).__name__}: {e}")
     want_thumb, want_large, want_preview, _ = needs_work(clip)
+    if not (want_thumb or want_large or want_preview):
+        return
     temp = _poster_frame(source, at=at)
     if temp is None:
         with lock:
@@ -870,15 +987,28 @@ def render_video(media: Path, *, timeout: float = _ENCODE_TIMEOUT) -> bool:
     is the same rule `convert.convert_to_mp4` uses — the video bitstream is the
     part worth protecting.
     """
+    if _encode(media, render_path(media), timeout=timeout):
+        _note_render(media)
+        return True
+    return False
+
+
+def _encode(media: Path, dest: Path, *, start: float | None = None,
+            length: float | None = None,
+            timeout: float = _ENCODE_TIMEOUT) -> bool:
+    """Encode `media` — or `length` seconds of it from `start` — to H.264 at
+    `dest`. NVENC first, libx264 after; see `render_video`."""
     ffmpeg = shutil.which("ffmpeg") or shutil.which("ffmpeg.exe")
     if ffmpeg is None:
         return False
 
-    dest = render_path(media)
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(dest.name + EXPORT_TMP_SUFFIX + ".mp4")
 
-    base = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(media)]
+    seek = ["-ss", f"{start:.3f}"] if start is not None else []
+    span = ["-t", f"{length:.3f}"] if length is not None else []
+    base = [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", *seek,
+            "-i", str(media), *span]
     # H.264 in a browser is shown as ordinary picture, so an HDR clip has to
     # be brought down to that before it is encoded — or the render is the same
     # washed-out grey the thumbnails were, and playing it back would disagree
@@ -905,7 +1035,6 @@ def render_video(media: Path, *, timeout: float = _ENCODE_TIMEOUT) -> bool:
             continue
         if proc.returncode == 0 and tmp.is_file() and tmp.stat().st_size > 0:
             tmp.replace(dest)
-            _note_render(media)
             return True
         tmp.unlink(missing_ok=True)
     return False
@@ -1016,6 +1145,15 @@ def _poster_frame(media: Path, *, at: float | None = None) -> Path | None:
             return tmp
         tmp.unlink(missing_ok=True)
     return None
+
+
+def _record_of(media: Path) -> dict[str, Any] | None:
+    """`media`'s meta record, or None."""
+    try:
+        parsed: object = json.loads(meta_path(media).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return cast("dict[str, Any]", parsed) if isinstance(parsed, dict) else None
 
 
 def video_codec(media: Path) -> str | None:

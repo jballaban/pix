@@ -1,10 +1,10 @@
 # Clips — video splitting, and stills from video
 
-**Status: steps 1–4 of [§10](#10-build-order) built, and the filmstrip from
-step 5** (v0.1.414–426: `hidden`, video stacking deferred, the clip model and
-its API, the marker-driven splice page, NAS cuts with keyframe snapping,
-keeping clips as files when a source is binned). Desktop playback renders and
-stills' files for clips, and delivery, are not. Extends
+**Status: steps 1–5 of [§10](#10-build-order) built** (v0.1.414–435: `hidden`,
+video stacking deferred, the clip model and API, the two-tool splice page
+saved as a draft by identity, NAS cuts with keyframe snapping, keeping clips
+as files, filmstrips, clips' own pictures, stills' JPEGs and playback renders
+for clips of HEVC). Distributions and round trips (step 6) are not. Extends
 [nas-app.md](nas-app.md); where the two disagree, this file is the newer intent
 for clips, and the code remains the source of truth for what exists.
 
@@ -180,10 +180,10 @@ sidecars orphaned, and they are swept like any orphaned `.xmp`.
 | File | What | Made by | For |
 |---|---|---|---|
 | **cut** | lossless stream copy (`-c copy`) of C's own samples into `.mp4`, source codec | **the NAS**, seconds after the splice | download (*original*), distributions, materialising |
-| **playback render** | H.264, only when the source codec will not play in a browser | desktop `process` | playing in the app |
+| **playback render** | H.264 of the clip's range, only when the source codec will not play in a browser — `…~k3fa@12.5-40.play.mp4` | desktop `process` | playing in the app; what a viewer is given |
 | **thumb / preview** | as for any video | desktop | grid, preview |
 | **filmstrip** | one sprite per video: up to 40 frames, 90px tall, evenly across it, each its own keyframe seek; a JSON beside it says how many | desktop `process`, into the `strip` tier | the splice page's timeline, which shows as many as fit at 64px or wider — more as it zooms |
-| **still** | JPG, q95+, 4:4:4, full resolution, orientation applied, HDR tone-mapped | desktop, from the **master** | everything a photo is for |
+| **still** | JPG, top quality, 4:4:4, full resolution, orientation applied, HDR tone-mapped, dated as the frame was taken — `…~p9q2@3.5.still.jpg` | desktop `process`, from the **master** | everything a photo is for |
 
 **One video format and one photo format in the library, however an item was
 made.** A `.MOV` source cuts to `.mp4` (a lossless container change); a still

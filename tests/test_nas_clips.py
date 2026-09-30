@@ -1054,3 +1054,154 @@ def test_one_save_is_one_thing_to_take_back(
     first, second = decisions.read(video / a), decisions.read(video / b)
     assert first is not None and second is not None
     assert (first.clip_out, second.clip_in) == (10.0, 20.0)
+
+
+# --- a still's file, and a playback render for HEVC (spec/clips.md §6) --------
+
+def _process_clip(clip: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Run `process` over one clip, pointed at the app's tiers."""
+    from pix.nas import derive
+
+    for tier in ("MASTER_DIR", "THUMB_DIR", "LARGE_DIR", "PREVIEW_DIR",
+                 "RENDER_DIR", "META_DIR"):
+        monkeypatch.setattr(derive, tier, getattr(web, tier))
+    summary = derive.ProcessSummary()
+    derive._derive_one(clip, summary, derive.threading.Lock(),  # pyright: ignore[reportPrivateUsage]
+                       derive._ExifPool(), {"cancelling": 0})  # pyright: ignore[reportPrivateUsage]
+    ix.refresh(ix.connect(web.DB_PATH), "init_2026", clip.name,
+               meta_dir=web.META_DIR, master_dir=web.MASTER_DIR)
+    return summary
+
+
+def test_a_still_becomes_a_photograph_a_viewer_can_have(
+    client: TestClient, real: Path, monkeypatch: pytest.MonkeyPatch,
+    add_user: Callable[..., None], sign_in: Callable[[str, str], TestClient]
+) -> None:
+    import subprocess
+
+    [still] = _make(client, (1.5, 1.5))
+    client.post("/api/decide", json={"folder": "init_2026", "name": still,
+                                     "add_audience": ["kid"]})
+    add_user("kid", "pw")
+    kid = sign_in("kid", "pw")
+    assert still not in kid.get("/browse").text, "shown before it has a file"
+
+    summary = _process_clip(real / still, monkeypatch)
+    assert summary.stills == 1, summary.failed
+    shot = web.RENDER_DIR / "init_2026" / (still + "@1.5.still.jpg")
+    assert shot.is_file()
+    taken = subprocess.run(["exiftool", "-s3", "-DateTimeOriginal", str(shot)],
+                           capture_output=True, text=True).stdout.strip()
+    assert taken == "2026:08:30 15:00:01", taken
+
+    assert still in kid.get("/browse").text
+    r = kid.get(f"/download/init_2026/{still}?original=1")
+    assert r.content == shot.read_bytes()
+    assert still + ".jpg" in r.headers["content-disposition"]
+
+
+@pytest.fixture
+def hevc(app_env: dict[str, Path], writable: Path,
+         monkeypatch: pytest.MonkeyPatch) -> Path:
+    """`b.mp4` as four seconds of HEVC, which no browser here will play."""
+    import shutil
+    import subprocess
+
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg is not installed")
+    out = writable / "b.mp4"
+    done = subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i",
+         "testsrc=size=160x90:rate=25", "-t", "4", "-c:v", "libx265",
+         "-x265-params", "keyint=25:min-keyint=25:log-level=error",
+         "-tag:v", "hvc1", "-pix_fmt", "yuv420p", str(out)],
+        capture_output=True, text=True, timeout=120)
+    if done.returncode != 0:
+        pytest.skip("this ffmpeg cannot encode HEVC")
+    share = app_env["share"]
+    (share / "meta" / "init_2026" / "b.mp4.json").write_text(json.dumps({
+        "file": "b.mp4", "folder": "init_2026", "size": out.stat().st_size,
+        "mtime_ns": 1,
+        "exif": {"QuickTime:Duration": "4 s", "QuickTime:CompressorID": "hvc1",
+                 "EXIF:DateTimeOriginal": "2026:08:30 15:00:00"},
+    }), encoding="utf-8")
+    _rebuild(app_env)
+    monkeypatch.setattr(web._CUTS, "immediate", True)
+    return writable
+
+
+def test_a_clip_of_hevc_is_seen_once_it_has_a_render(
+    client: TestClient, hevc: Path, app_env: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch, add_user: Callable[..., None],
+    sign_in: Callable[[str, str], TestClient]
+) -> None:
+    """Its cut is lossless HEVC and plays nowhere; the render is what a
+    viewer is given."""
+    import subprocess
+
+    [clip] = _make(client, (1, 3))
+    assert _cuts(clip), "the NAS still cuts it"
+    assert _have(app_env, clip)["size"] is None
+    client.post("/api/decide", json={"folder": "init_2026", "name": clip,
+                                     "add_audience": ["kid"]})
+    add_user("kid", "pw")
+    kid = sign_in("kid", "pw")
+    assert clip not in kid.get("/browse").text
+
+    summary = _process_clip(hevc / clip, monkeypatch)
+    assert summary.renders == 1, summary.failed
+    play = web.RENDER_DIR / "init_2026" / (clip + "@1-3.play.mp4")
+    codec = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+         "stream=codec_name", "-of", "csv=p=0", str(play)],
+        capture_output=True, text=True).stdout.strip()
+    assert codec == "h264"
+
+    assert clip in kid.get("/browse").text
+    assert kid.get(f"/media/init_2026/{clip}").content == play.read_bytes()
+    # The original is still the lossless cut, in its own codec.
+    original = kid.get(f"/download/init_2026/{clip}?original=1").content
+    assert original == _cuts(clip)[0].read_bytes()
+
+
+def test_moving_a_clip_throws_away_its_render(
+    client: TestClient, hevc: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    [clip] = _make(client, (1, 3))
+    _process_clip(hevc / clip, monkeypatch)
+    assert list((web.RENDER_DIR / "init_2026").glob(f"{clip}@*.play.mp4"))
+    client.post("/api/clips/range", json={
+        "folder": "init_2026", "name": clip, "start": 2, "end": 3})
+    assert not list((web.RENDER_DIR / "init_2026").glob(f"{clip}@*.play.mp4"))
+    assert _cuts(clip), "the cut is the NAS's, and it re-cut"
+
+
+def test_a_video_with_photos_can_keep_them_as_files(
+    client: TestClient, real: Path, app_env: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch
+) -> None:
+    [clip, still] = _make(client, (1, 3), (3.5, 3.5))
+    _process_clip(real / still, monkeypatch)
+    r = client.post("/api/clips/free", json={"folder": "init_2026",
+                                             "source": "b.mp4"})
+    assert r.status_code == 200, r.text
+    assert sorted(r.json()["freed"]) == sorted([clip + ".mp4", still + ".jpg"])
+    assert _have(app_env, still + ".jpg")["kind"] == "image"
+
+
+def test_the_scan_finds_a_still_with_no_file(
+    client: TestClient, real: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pictures made already, and still pending: its file is what a viewer
+    is given, and the scan has to find that missing too."""
+    from pix.nas import derive
+
+    [still] = _make(client, (1.5, 1.5))
+    for tier in ("MASTER_DIR", "THUMB_DIR", "LARGE_DIR", "PREVIEW_DIR",
+                 "RENDER_DIR", "META_DIR"):
+        monkeypatch.setattr(derive, tier, getattr(web, tier))
+    for tier in ("THUMB_DIR", "LARGE_DIR", "PREVIEW_DIR"):
+        d = getattr(web, tier) / "init_2026"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / (still + ".jpg")).write_bytes(b"x")
+    assert real / still in derive.pending_files()

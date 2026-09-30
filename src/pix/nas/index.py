@@ -956,17 +956,28 @@ def clip_size(media: Path, decision: Decision, codec: str | None) -> int | None:
     """
     if decision.clip_in is None or decision.clip_out is None:
         return None
-    candidates = [paths.render_path(media, RENDER_DIR)]
-    if (decision.clip_in != decision.clip_out
-            and (codec or "").lower() in paths.PLAYABLE_CODECS):
-        candidates.append(paths.cut_path(media, RENDER_DIR, decision.clip_in,
-                                         decision.clip_out))
+    if decision.clip_in == decision.clip_out:
+        candidates = [paths.still_path(media, RENDER_DIR, decision.clip_in)]
+    else:
+        candidates = [paths.play_path(media, RENDER_DIR, decision.clip_in,
+                                      decision.clip_out)]
+        if (codec or "").lower() in paths.PLAYABLE_CODECS:
+            candidates.append(paths.cut_path(media, RENDER_DIR,
+                                             decision.clip_in,
+                                             decision.clip_out))
     for candidate in candidates:
         try:
             return candidate.stat().st_size
         except OSError:
             continue
     return None
+
+
+def capture_of(record: dict[str, Any] | None) -> str | None:
+    """A file's raw capture reading, from its meta record."""
+    raw: object = (record or {}).get("exif")
+    exif = cast("dict[str, Any]", raw) if isinstance(raw, dict) else {}
+    return _capture_date(exif)
 
 
 def codec_of(record: dict[str, Any] | None) -> str | None:

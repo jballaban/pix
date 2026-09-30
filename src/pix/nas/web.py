@@ -7289,7 +7289,7 @@ def _to_send(folder: str, name: str, original: bool) -> tuple[Path, str]:
         if own is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND,
                                 "this clip has not been cut yet")
-        return own, f"{name}.mp4"
+        return own, f"{name}{own.suffix}"
     if not original:
         render = paths.render_path(media, RENDER_DIR)
         if render.is_file():
@@ -8621,26 +8621,30 @@ def api_clips_free(user: Annotated[Principal, Depends(require_admin)],
         if not live:
             raise HTTPException(status.HTTP_409_CONFLICT,
                                 f"{body.source} has no clips")
-        if any(c["clip_in"] == c["clip_out"] for c in live):
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                "its stills have no files yet — pix2 process makes them. "
-                "Hide the video instead for now.")
         made: list[tuple[sqlite3.Row, Path]] = []
         for c in live:
-            file = paths.cut_path(MASTER_DIR / body.folder / str(c["name"]),
-                                  RENDER_DIR, float(c["clip_in"]),
-                                  float(c["clip_out"]))
-            if not file.is_file():
-                raise HTTPException(
-                    status.HTTP_409_CONFLICT,
-                    "its clips are still being cut — try again in a moment")
+            clip_media = MASTER_DIR / body.folder / str(c["name"])
+            if c["clip_in"] == c["clip_out"]:
+                file = paths.still_path(clip_media, RENDER_DIR,
+                                        float(c["clip_in"]))
+                if not file.is_file():
+                    raise HTTPException(
+                        status.HTTP_409_CONFLICT,
+                        "its photos have no files yet — pix2 process makes "
+                        "them. Hide the video instead for now.")
+            else:
+                file = paths.cut_path(clip_media, RENDER_DIR,
+                                      float(c["clip_in"]), float(c["clip_out"]))
+                if not file.is_file():
+                    raise HTTPException(
+                        status.HTTP_409_CONFLICT,
+                        "its clips are still being cut — try again in a moment")
             made.append((c, file))
         record = ix.record_of(META_DIR, body.folder, body.source) or {}
         for c, file in made:
             name = str(c["name"])
             clip = MASTER_DIR / body.folder / name
-            own = MASTER_DIR / body.folder / f"{name}.mp4"
+            own = MASTER_DIR / body.folder / f"{name}{file.suffix}"
             if own.exists():
                 raise HTTPException(status.HTTP_409_CONFLICT,
                                     f"{own.name} is already in master")
@@ -8690,8 +8694,14 @@ def _stand_in(folder: str, own: Path, clip: sqlite3.Row,
                             if k.split(":")[-1] in keep}
     if clip["capture_date"]:
         exif["EXIF:DateTimeOriginal"] = clip["capture_date"]
-    exif["QuickTime:Duration"] = (
-        f'{float(clip["clip_out"]) - float(clip["clip_in"]):.2f} s')
+    if clip["clip_out"] != clip["clip_in"]:
+        exif["QuickTime:Duration"] = (
+            f'{float(clip["clip_out"]) - float(clip["clip_in"]):.2f} s')
+    else:
+        # A photograph now: its codec and length are its video's, not its own.
+        exif = {k: v for k, v in exif.items()
+                if k.split(":")[-1] in ("ImageWidth", "ImageHeight", "Model",
+                                        "Make", "DateTimeOriginal")}
     st = own.stat()
     record = {"file": own.name, "folder": folder, "size": st.st_size,
               "mtime_ns": st.st_mtime_ns, "exif": exif,
@@ -8803,9 +8813,11 @@ def _viewsplice(user: Principal) -> str:
 def _clip_json(row: sqlite3.Row) -> dict[str, Any]:
     """One clip as the splice page and the clip listing read it."""
     start, end = row["clip_in"], row["clip_out"]
-    made = (start != end and start is not None and end is not None
-            and paths.cut_path(MASTER_DIR / str(row["folder"]) / str(row["name"]),
-                               RENDER_DIR, float(start), float(end)).is_file())
+    media = MASTER_DIR / str(row["folder"]) / str(row["name"])
+    made = (start is not None and end is not None and (
+        paths.still_path(media, RENDER_DIR, float(start)).is_file()
+        if start == end else
+        paths.cut_path(media, RENDER_DIR, float(start), float(end)).is_file()))
     return {"name": row["name"], "start": start, "end": end,
             "deleted": bool(row["deleted"]), "event": row["event"],
             "date": row["effective_date"], "cut": bool(made)}
@@ -8816,10 +8828,15 @@ def _clip_file(folder: str, name: str, *, playable: bool) -> Path | None:
     asked for, then its cut — or None while it has neither."""
     media = MASTER_DIR / folder / name
     decision = decisions.read(media)
-    if decision is None or not decision.is_clip or decision.is_still:
+    if decision is None or not decision.is_clip:
         return None
     assert decision.clip_in is not None and decision.clip_out is not None
-    render = paths.render_path(media, RENDER_DIR)
+    if decision.is_still:
+        # A still's one file is its JPEG, original and playable alike.
+        still = paths.still_path(media, RENDER_DIR, decision.clip_in)
+        return still if still.is_file() else None
+    render = paths.play_path(media, RENDER_DIR, decision.clip_in,
+                             decision.clip_out)
     cut_file = paths.cut_path(media, RENDER_DIR, decision.clip_in,
                               decision.clip_out)
     for candidate in ((render, cut_file) if playable else (cut_file,)):
@@ -8870,7 +8887,7 @@ def _cut_one(folder: str, name: str) -> None:
         record = ix.record_of(META_DIR, folder, source_name)
         cut.make(source, decision.clip_in, decision.clip_out, dest,
                  created=_first_frame(record, decision.clip_in))
-    cut.sweep(dest.parent, name, keep=dest)
+    cut.sweep(dest.parent, name, keep=dest, kind=".cut.mp4")
     if DB_PATH.is_file():
         conn = ix.open_rw(DB_PATH)
         try:
@@ -8894,6 +8911,10 @@ def _recut(folder: str, name: str) -> None:
     lands. Neither is needed for a curator, who watches the source.
     """
     media = MASTER_DIR / folder / name
+    # The desktop's files for the old range or moment. Their names carry it,
+    # so every one of them is stale; `process` makes the new ones.
+    for kind in (".play.mp4", ".still.jpg"):
+        cut.sweep(RENDER_DIR / folder, name, keep=None, kind=kind)
     for stale in (paths.render_path(media, RENDER_DIR),
                   paths.derived_path(media, THUMB_DIR),
                   paths.derived_path(media, LARGE_DIR),

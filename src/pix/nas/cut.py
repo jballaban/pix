@@ -203,9 +203,15 @@ def make(media: Path, clip_in: float, clip_out: float, dest: Path, *,
     os.replace(tmp, dest)
 
 
-def sweep(folder: Path, clip_name: str, *, keep: Path | None) -> int:
-    """Remove every cut of `clip_name` but `keep` — the stale ones, whose
-    range is not the clip's any more — and any temp a killed cut left."""
+def sweep(folder: Path, clip_name: str, *, keep: Path | None,
+          kind: str | None = None) -> int:
+    """Remove every file of `clip_name` but `keep` — the stale ones, whose
+    range is not the clip's any more — and any temp a killed one left.
+
+    `kind` narrows it to one sort (`.cut.mp4`, `.play.mp4`, `.still.jpg`),
+    because they share the prefix and each is made by a different party: the
+    cut by the NAS, the other two by the desktop. Without it — a purge —
+    every one goes."""
     removed = 0
     try:
         entries = list(os.scandir(folder))
@@ -214,6 +220,8 @@ def sweep(folder: Path, clip_name: str, *, keep: Path | None) -> int:
     prefix = f"{clip_name}@"
     for entry in entries:
         if not entry.name.startswith(prefix):
+            continue
+        if kind is not None and kind not in entry.name:
             continue
         if keep is not None and entry.name == keep.name:
             continue
