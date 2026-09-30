@@ -23,6 +23,7 @@ function element(id) {
     removeEventListener() {},
     appendChild(child) { this.children.push(child); return child; },
     querySelectorAll() { return []; },
+    setAttribute(k, v) { this[k] = v; },
     remove() {},
     getBoundingClientRect() { return { left: 0, width: 1000 }; },
     fire(type, ev) { (listeners[type] || []).forEach(fn => fn(ev || {})); },

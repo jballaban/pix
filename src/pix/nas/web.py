@@ -3776,6 +3776,34 @@ _MARKS: dict[str, str] = {
     "splice": '<circle cx="6.3" cy="6.8" r="2.7"/>'
               '<circle cx="6.3" cy="17.2" r="2.7"/>'
               '<path d="M8.4 8.5 20 17.6"/><path d="M8.4 15.5 20 6.4"/>',
+    # The splice page's controls. Transport in the shapes every player uses;
+    # a keyframe is the diamond the timeline draws a cut as, so stepping to
+    # one is a chevron at a diamond.
+    # Play and pause solid, as every player draws them — the two controls
+    # read by shape alone, before anything else on the bar.
+    "sp_play": '<path d="M8 5.2v13.6L18.8 12z" fill="currentColor"/>',
+    "sp_pause": '<rect x="6.8" y="5.2" width="3.8" height="13.6" rx="1" '
+                'fill="currentColor"/><rect x="13.4" y="5.2" width="3.8" '
+                'height="13.6" rx="1" fill="currentColor"/>',
+    "sp_prevf": '<path d="M7 6v12"/><path d="M17 6.5 10.5 12l6.5 5.5"/>',
+    "sp_nextf": '<path d="M17 6v12"/><path d="M7 6.5l6.5 5.5L7 17.5"/>',
+    "sp_prevk": '<path d="M3.5 12 7 8.5l3.5 3.5L7 15.5z"/>'
+                '<path d="M19.5 6.5 14 12l5.5 5.5"/>',
+    "sp_nextk": '<path d="M20.5 12 17 8.5l-3.5 3.5 3.5 3.5z"/>'
+                '<path d="M4.5 6.5 10 12l-5.5 5.5"/>',
+    # A marker as the timeline draws one: a knob on a line.
+    "sp_marker": '<circle cx="12" cy="6.5" r="3"/><path d="M12 9.5V21"/>',
+    "sp_photo": '<rect x="3" y="7" width="18" height="13" rx="2.2"/>'
+                '<path d="M8.5 7l1.6-2.6h3.8L15.5 7"/>'
+                '<circle cx="12" cy="13.5" r="3.6"/>',
+    "sp_eye": '<path d="M2.8 12s3.4-6 9.2-6 9.2 6 9.2 6-3.4 6-9.2 6-9.2-6-9.2-6z"/>'
+              '<circle cx="12" cy="12" r="2.8"/>',
+    "sp_eyeoff": '<path d="M2.8 12s3.4-6 9.2-6 9.2 6 9.2 6-3.4 6-9.2 6-9.2-6-9.2-6z"/>'
+                 '<circle cx="12" cy="12" r="2.8"/><path d="M4 20 20 4"/>',
+    "sp_zin": '<circle cx="10.5" cy="10.5" r="6.3"/><path d="M15.2 15.2 20.5 20.5"/>'
+              '<path d="M10.5 7.8v5.4"/><path d="M7.8 10.5h5.4"/>',
+    "sp_zout": '<circle cx="10.5" cy="10.5" r="6.3"/><path d="M15.2 15.2 20.5 20.5"/>'
+               '<path d="M7.8 10.5h5.4"/>',
     # Back out of the bin. A circle turned the other way is *undo* everywhere.
     "restore": '<path d="M3.5 12a8.5 8.5 0 1 0 2.5-6"/>'
                '<path d="M3.4 4.3v5.4h5.4"/>',
@@ -8574,7 +8602,7 @@ def splice(folder: str, name: str,
         "strip": _strip_of(media, folder, name),
     }
     src = f"/media/{_q(folder)}/{_q(name)}"
-    return _page(title, _SPLICE_HTML.replace("{src}", src),
+    return _page(title, _splice_html().replace("{src}", src),
                  user=user,
                  script=(f"<style>{_SPLICE_CSS}</style>"
                          f"<script>const SPLICE={_js(state)};</script>"
@@ -8774,20 +8802,23 @@ _SPLICE_HTML: str = """<div class="splice">
 <span class="dim" id="tdur"></span></div>
 <div class="sctl sbar">
 <div class="sgrp">
-<button id="bplay">Play</button>
-<span class="rates" id="rates" role="group" aria-label="Speed"></span>
-<button id="bprevk" title="Back to the last keyframe (shift+,)">&lsaquo;K</button>
-<button id="bprevf" title="Back a frame (,)">&minus;1f</button>
-<button id="bnextf" title="On a frame (.)">+1f</button>
-<button id="bnextk" title="On to the next keyframe (shift+.)">K&rsaquo;</button>
-<button id="bmark" class="primary" title="Place a marker at the playhead (M)">Marker</button>
+<button id="bplay" class="ic" title="Play (space)" aria-label="Play"><span class="i-play">@sp_play@</span><span class="i-pause">@sp_pause@</span></button>
+<button id="bprevk" class="ic" title="Back to the last keyframe (shift+,)" aria-label="Back to the last keyframe">@sp_prevk@</button>
+<button id="bprevf" class="ic" title="Back a frame (,)" aria-label="Back a frame">@sp_prevf@</button>
+<button id="bnextf" class="ic" title="On a frame (.)" aria-label="On a frame">@sp_nextf@</button>
+<button id="bnextk" class="ic" title="On to the next keyframe (shift+.)" aria-label="On to the next keyframe">@sp_nextk@</button>
+<button id="bmark" class="primary ic" title="Place a marker at the playhead (M)" aria-label="Place a marker">@sp_marker@<span class="word">Marker</span></button>
 </div>
 <span class="spacer"></span>
 <div class="sgrp">
-<button id="bhide" title="(H)">Hide original</button>
-<button id="bstill" title="Take this frame as a photograph (P)">Take photo</button>
-<button id="zout" aria-label="Zoom out" title="Zoom out">&minus;</button>
-<button id="zin" aria-label="Zoom in" title="Zoom in">+</button>
+<button id="bhide" class="ic" title="(H)" aria-label="Hide original"><span class="i-shown">@sp_eyeoff@</span><span class="i-hidden">@sp_eye@</span></button>
+<button id="bstill" class="ic" title="Take this frame as a photograph (P)" aria-label="Take photo">@sp_photo@</button>
+<select id="rate" class="rate" title="Speed ([ and ])" aria-label="Speed">
+<option value="0.5">0.5&times;</option><option value="1" selected>1&times;</option>
+<option value="1.5">1.5&times;</option><option value="2">2&times;</option>
+</select>
+<button id="zout" class="ic" aria-label="Zoom out" title="Zoom out">@sp_zout@</button>
+<button id="zin" class="ic" aria-label="Zoom in" title="Zoom in">@sp_zin@</button>
 </div>
 </div>
 <div class="sctl selbar" id="selbar" hidden>
@@ -8805,6 +8836,15 @@ Dragging across the picture runs through the video; a tap plays. A clip
 starts on a keyframe (the faint ticks), where a lossless cut can begin.
 A dashed clip is still being cut.</p>
 </div>"""
+
+
+def _splice_html() -> str:
+    """The page, with its drawings put in — `@name@` for each, so the markup
+    reads as a layout rather than as a wall of paths."""
+    import re as _re
+
+    return _re.sub(r"@(sp_\w+)@", lambda m: _mark(m.group(1), 20),
+                   _SPLICE_HTML)
 
 
 _SPLICE_CSS: str = """
@@ -8863,6 +8903,14 @@ _SPLICE_CSS: str = """
                        border-color:var(--accent); font-weight:600; }
 .sctl button.danger { color:var(--gone); }
 .sctl button#bhide.on { border-color:var(--top); color:var(--top); }
+/* Icons, with the word only where it earns the room. */
+.sctl button.ic { display:inline-flex; align-items:center; justify-content:center;
+                  gap:6px; padding:0 10px; }
+.sctl button.ic svg { display:block; }
+#bplay .i-pause, #bplay.playing .i-play { display:none; }
+#bplay.playing .i-pause { display:inline-flex; }
+#bhide .i-hidden, #bhide.on .i-shown { display:none; }
+#bhide.on .i-hidden { display:inline-flex; }
 .selbar { padding:6px 8px; border:1px solid var(--line); border-radius:6px; }
 .selbar[hidden] { display:none; }
 .shelp { font-size:13px; line-height:1.45; }
@@ -8906,13 +8954,10 @@ _SPLICE_CSS: str = """
 .sctl button.mark { color:var(--top); border-color:var(--top); }
 /* The picture scrubs: dragging across it runs through the video. */
 .sstage video { touch-action:none; cursor:ew-resize; }
-/* Speed: one control of four, the current one lit. */
-.rates { display:inline-flex; }
-.rates button { min-width:44px; border-radius:0; margin-left:-1px; }
-.rates button:first-child { border-radius:6px 0 0 6px; margin-left:0; }
-.rates button:last-child { border-radius:0 6px 6px 0; }
-.rates button.on { background:var(--accent); color:#0d0f12;
-                   border-color:var(--accent); font-weight:600; }
+/* Speed: the one it is at, and the others a tap away. */
+.sctl select.rate { min-height:40px; padding:0 8px; background:var(--panel);
+                    color:var(--fg); border:1px solid var(--line);
+                    border-radius:6px; font:inherit; }
 """
 
 
@@ -9151,12 +9196,16 @@ v.addEventListener('timeupdate',()=>{
   playhead(!v.paused);
 });
 v.addEventListener('play',()=>{
-  $('bplay').textContent='Pause';
+  $('bplay').classList.add('playing');
+  $('bplay').setAttribute('aria-label','Pause');
   const c=selected();
   if(c&&c.end>c.start&&(v.currentTime<c.start||v.currentTime>=c.end-0.03))
     v.currentTime=c.start;
 });
-v.addEventListener('pause',()=>{$('bplay').textContent='Play';});
+v.addEventListener('pause',()=>{
+  $('bplay').classList.remove('playing');
+  $('bplay').setAttribute('aria-label','Play');
+});
 v.addEventListener('seeked',()=>playhead(true));
 (function loop(){ if(!v.paused) playhead(true); requestAnimationFrame(loop); })();
 
@@ -9320,7 +9369,7 @@ async function bin(){
 }
 function drawHide(){
   const b=$('bhide');
-  b.textContent=hidden?'Show original':'Hide original';
+  b.setAttribute('aria-label',hidden?'Show original':'Hide original');
   b.classList.toggle('on',hidden);
   b.title=(hidden
     ?'The original is out of every view; its clips are not. Show it again'
@@ -9341,32 +9390,18 @@ function step(dt){
 function toggle(){ if(v.paused) v.play().catch(()=>{}); else v.pause(); }
 
 // Playback speed. Slower to find the moment a clip should start, faster to
-// get through footage nothing will be cut from. Remembered on this device,
-// because somebody working through a card of GoPro clips wants the same
-// speed on the next one — and only here, since it is how this person reads,
-// not a fact about the video.
+// get through footage nothing will be cut from. One control showing the
+// speed it is at, and every video starts at normal speed.
 const RATES=[0.5,1,1.5,2];
 let rate=1;
-try{ const kept=parseFloat(localStorage.getItem('pix.splice.rate')||'');
-     if(RATES.includes(kept)) rate=kept; }catch(e){}
 function setRate(r){
   rate=r; v.playbackRate=r;
-  try{ localStorage.setItem('pix.splice.rate',String(r)); }catch(e){}
-  const box=$('rates');
-  if(box) [...box.children].forEach(b=>b.classList.toggle('on',+b.dataset.rate===r));
+  const box=$('rate');
+  if(box) box.value=String(r);
 }
-(function(){
-  const box=$('rates');
-  if(!box) return;
-  for(const r of RATES){
-    const b=document.createElement('button');
-    b.textContent=r+'×'; b.dataset.rate=String(r);
-    b.title='Play at '+r+'× ([ and ] to change)';
-    b.onclick=e=>{e.stopPropagation(); setRate(r);};
-    box.appendChild(b);
-  }
-  setRate(rate);
-})();
+if($('rate')) $('rate').onchange=e=>{
+  setRate(parseFloat(e.target.value)||1); e.target.blur();
+};
 // A browser sets the rate back to 1 when a new source loads.
 v.addEventListener('loadedmetadata',()=>{ v.playbackRate=rate; });
 function nudgeRate(dir){
