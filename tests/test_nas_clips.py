@@ -913,3 +913,44 @@ def test_a_link_can_open_the_preview_it_lands_on() -> None:
     js = web._BROWSE_JS
     assert "want.startsWith('open:')" in js
     assert "window.addEventListener('hashchange',land)" in js
+
+
+def test_a_videos_details_list_its_clips(
+    client: TestClient, real: Path
+) -> None:
+    a, b = _make(client, (0, 1), (2, 3))
+    got = client.get("/api/file/init_2026/b.mp4").json()["clips"]
+    assert [c["name"] for c in got] == [a, b]
+    siblings = client.get(f"/api/file/init_2026/{a}").json()["clips"]
+    assert [c["name"] for c in siblings] == [b]
+
+
+def test_a_viewer_sees_only_the_clips_they_may_see(
+    client: TestClient, real: Path, add_user: Callable[..., None],
+    sign_in: Callable[[str, str], TestClient]
+) -> None:
+    """And none of a clip's siblings unless they may see its source: *these
+    came from one video* says there is one."""
+    a, b = _make(client, (0, 1), (2, 3))
+    client.post("/api/decide/bulk", json={"add_audience": ["kid"], "files": [
+        {"folder": "init_2026", "name": a},
+        {"folder": "init_2026", "name": b}]})
+    add_user("kid", "pw")
+    kid = sign_in("kid", "pw")
+    assert kid.get(f"/api/file/init_2026/{a}").json()["clips"] == []
+
+    client.post("/api/decide", json={"folder": "init_2026", "name": "b.mp4",
+                                     "add_audience": ["kid"]})
+    client.post("/api/decide", json={"folder": "init_2026", "name": b,
+                                     "remove_audience": ["kid"]})
+    listed = kid.get("/api/file/init_2026/b.mp4").json()["clips"]
+    assert [c["name"] for c in listed] == [a]
+
+
+def test_splice_is_in_the_preview_for_the_administrator(
+    client: TestClient, video: Path, add_user: Callable[..., None],
+    sign_in: Callable[[str, str], TestClient]
+) -> None:
+    assert 'id="viewsplice"' in client.get("/browse").text
+    add_user("kid", "pw")
+    assert 'id="viewsplice"' not in sign_in("kid", "pw").get("/browse").text

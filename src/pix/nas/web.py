@@ -1211,6 +1211,14 @@ h2.year span { font-size:13px; font-weight:400; }
            padding:3px 10px; font-size:13px; font-weight:600;
            background:var(--accent); color:#0d0f12; }
 #viewtop[hidden] { display:none; }
+#viewsplice { position:absolute; top:calc(10px + env(safe-area-inset-top));
+              right:calc(160px + env(safe-area-inset-right)); z-index:2;
+              margin:0; opacity:.75; border:1px solid var(--line);
+              border-radius:3px; padding:3px 10px; background:var(--chrome);
+              color:var(--fg); }
+#viewsplice[hidden] { display:none; }
+#viewsplice:hover { opacity:1; border-color:var(--accent); }
+.cliplist { line-height:1.7; font-variant-numeric:tabular-nums; }
 #railtoggle:hover, #viewclose:hover, #viewget:hover { opacity:1; }
 #viewget:hover { border-color:var(--accent); background:var(--chrome);
                  box-shadow:none; }
@@ -1306,6 +1314,7 @@ h2.year span { font-size:13px; font-weight:400; }
      of the word *Details*, which is not a number to rest a layout on once
      everything in the bar is taller and wider. */
   #viewget { right:auto; left:calc(68px + env(safe-area-inset-left)); }
+  #viewsplice { right:auto; left:calc(116px + env(safe-area-inset-left)); }
   /* The one control in here worth a thumb, so it keeps the right-hand side
      to itself rather than joining the row along the left. */
   #viewtop { right:calc(12px + env(safe-area-inset-right)); }
@@ -2795,6 +2804,7 @@ def stack_page(folder: str, name: str,
   <button id="viewclose" title="Close (Esc)">&times;</button>
   <button id="railtoggle" title="Details (I)">Details</button>
   <a id="viewget" class="who-link" download>{_mark("get", 19)}</a>
+  {_viewsplice(user)}
   <button id="viewtop" hidden></button>
   <aside id="rail"></aside>
 </div>
@@ -2871,6 +2881,7 @@ def browse(request: Request,
   <button id="viewclose" title="Close (Esc)">&times;</button>
   <button id="railtoggle" title="Details (I)">Details</button>
   <a id="viewget" class="who-link" download>{_mark("get", 19)}</a>
+  {_viewsplice(user)}
   <aside id="rail"></aside>
 </div>
 <div id="menu" hidden></div>
@@ -4963,7 +4974,7 @@ function load(c){
     vvid.classList.remove('on'); vimg.classList.add('on');
     vimg.src=`/preview/${f}/${n}`;
   }
-  drawGet(c); drawTop(c);
+  drawGet(c); drawTop(c); drawSplice(c);
   vmeta.textContent=`${c.dataset.name} — ${c.dataset.date}`
                    +(c.dataset.tags?' — '+c.dataset.tags.split('\\n').join(', '):'');
   fill(c);
@@ -5026,6 +5037,18 @@ if(viewClose) viewClose.onclick=e=>{e.stopPropagation(); closeViewer();};
 // Where you have decided you want this one. A link rather than a button, so
 // the browser does the transfer and a right-click still offers *save as*.
 const viewGet=document.getElementById('viewget');
+// Splice from the preview, without going back to the grid for it. A clip
+// opens its source's timeline, standing on the clip.
+const viewSplice=document.getElementById('viewsplice');
+function drawSplice(c){
+  if(!viewSplice) return;
+  const to=c&&c.dataset.splice;
+  viewSplice.hidden=!to;
+  if(!to) return;
+  viewSplice.href='/splice/'+encodeURIComponent(c.dataset.folder)+'/'
+    +encodeURIComponent(to)
+    +(to===c.dataset.name?'':'#'+encodeURIComponent(c.dataset.name));
+}
 function drawGet(c){
   if(!viewGet||!c) return;
   const at='/download/'+encodeURIComponent(c.dataset.folder)
@@ -5151,7 +5174,18 @@ function railHtml(d){
           ...(cl.splice?[['Clips',`<a href="${esc(cl.splice)}">edit on its timeline</a>`,
                           null,true]]:[])])
     :'';
-  return clipHtml + `<div class="rail-h">Decisions</div>`
+  // The clips cut from this video — or, on a clip, the others cut from its
+  // source — each a way to its preview, the same way *cut from* is.
+  const toPreview=x=>x.in_view
+    ? location.pathname+location.search+'#open:'+encodeURIComponent(x.key)
+    : x.open;
+  const list=(d.clips||[]).map(x=>`<a class="to-source" data-key="${esc(x.key)}" `
+      +`href="${esc(toPreview(x))}">${x.start===x.end
+        ?'Still at '+secs(x.start):secs(x.start)+' – '+secs(x.end)}</a>`)
+    .join('<br>');
+  const listHtml=list?`<div class="rail-h">${d.clip?'Its other clips':'Clips'}`
+      +` (${d.clips.length})</div><div class="cliplist">${list}</div>`:'';
+  return clipHtml + listHtml + `<div class="rail-h">Decisions</div>`
     + kv([['Status',d.tier||'undecided',d.tier?null:'was'],
           ...eventRow])
     + (tags?`<div style="margin-top:6px">${tags}</div>`
@@ -7652,7 +7686,52 @@ def api_file(folder: str, name: str,
         "exif": {k: str(v) for k, v in sorted(exif.items())},
         "has_render": (RENDER_DIR / folder / (name + ".mp4")).is_file(),
         "clip": _clip_from(user, row, view),
+        "clips": _clips_list(user, row, view),
     })
+
+
+def _clips_list(user: Principal, row: sqlite3.Row,
+                view: ix.Filters) -> list[dict[str, Any]]:
+    """The clips cut from this video — or, on a clip, from its source — that
+    this person may see, each with the way to its preview.
+
+    On a clip these are its siblings, and they follow the same rule as its
+    *cut from*: only for someone who may see the source, since *these came
+    from one video* says there is one.
+    """
+    folder = str(row["folder"])
+    of = row["clip_of"] if "clip_of" in row.keys() else None
+    source = str(of) if of is not None else str(row["name"])
+    if of is None and row["kind"] != "video":
+        return []
+    if of is not None and not _may_see(user, folder, source):
+        return []
+    conn = db()
+    try:
+        cut = [c for c in ix.clips_of(conn, folder, source)
+               if not c["deleted"] and c["name"] != row["name"]]
+        keys = [(folder, str(c["name"])) for c in cut]
+        seen = (set(keys) if user.scope is None else
+                ix.matching(conn, ix.Filters(viewer=user.scope, unfold=True),
+                            keys))
+        here = ix.matching(conn, replace(view, within=None, chosen=None,
+                                         unfold=True), keys)
+    finally:
+        conn.close()
+    out: list[dict[str, Any]] = []
+    for c in cut:
+        key = (folder, str(c["name"]))
+        if key not in seen:
+            continue
+        day = str(c["effective_date"] or "")[:10]
+        out.append({
+            "name": c["name"], "key": f"{folder}/{c['name']}",
+            "start": c["clip_in"], "end": c["clip_out"],
+            "in_view": key in here,
+            "open": ("/browse" + (f"?date={_q(day)}" if len(day) == 10 else "")
+                     + "#open:" + _q(f"{folder}/{c['name']}")),
+        })
+    return out
 
 
 def _clip_from(user: Principal, row: sqlite3.Row,
@@ -8519,6 +8598,14 @@ def _strip_of(media: Path, folder: str, name: str) -> dict[str, Any] | None:
         return None
     return {"n": n, "w": w, "h": h,
             "url": f"/strip/{_q(folder)}/{_q(name)}"}
+
+
+def _viewsplice(user: Principal) -> str:
+    """Splice, from the preview: an administrator's, like the action."""
+    if not may(user, "splice"):
+        return ""
+    return (f'<a id="viewsplice" class="who-link" hidden title="Splice" '
+            f'aria-label="Splice">{_mark("splice", 19)}</a>')
 
 
 def _clip_json(row: sqlite3.Row) -> dict[str, Any]:
