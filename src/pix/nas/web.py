@@ -5211,7 +5211,7 @@ function railHtml(d){
       +`href="${esc(toPreview(x))}">${x.start===x.end
         ?'Still at '+secs(x.start):secs(x.start)+' – '+secs(x.end)}</a>`)
     .join('<br>');
-  const listHtml=list?`<div class="rail-h">${d.clip?'Its other clips':'Clips'}`
+  const listHtml=list?`<div class="rail-h">Clips and photos`
       +` (${d.clips.length})</div><div class="cliplist">${list}</div>`:'';
   return clipHtml + listHtml + `<div class="rail-h">Decisions</div>`
     + kv([['Status',d.tier||'undecided',d.tier?null:'was'],
@@ -7720,20 +7720,16 @@ def api_file(folder: str, name: str,
 
 def _clips_list(user: Principal, row: sqlite3.Row,
                 view: ix.Filters) -> list[dict[str, Any]]:
-    """The clips cut from this video — or, on a clip, from its source — that
-    this person may see, each with the way to its preview.
-
-    On a clip these are its siblings, and they follow the same rule as its
-    *cut from*: only for someone who may see the source, since *these came
-    from one video* says there is one.
-    """
+    """The clips and stills cut from this video that this person may see,
+    each with the way to its preview. Only on the video itself — a clip's
+    details name its source, and the source lists the rest."""
     folder = str(row["folder"])
-    of = row["clip_of"] if "clip_of" in row.keys() else None
-    source = str(of) if of is not None else str(row["name"])
-    if of is None and row["kind"] != "video":
+    # A clip's details point to its source and no further: the siblings are
+    # listed on the source, which is where anybody going looking for them
+    # goes, and a list on every clip would be the same list many times over.
+    if ("clip_of" in row.keys() and row["clip_of"] is not None)             or row["kind"] != "video":
         return []
-    if of is not None and not _may_see(user, folder, source):
-        return []
+    source = str(row["name"])
     conn = db()
     try:
         cut = [c for c in ix.clips_of(conn, folder, source)

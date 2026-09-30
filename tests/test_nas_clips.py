@@ -926,8 +926,8 @@ def test_a_videos_details_list_its_clips(
     a, b = _make(client, (0, 1), (2, 3))
     got = client.get("/api/file/init_2026/b.mp4").json()["clips"]
     assert [c["name"] for c in got] == [a, b]
-    siblings = client.get(f"/api/file/init_2026/{a}").json()["clips"]
-    assert [c["name"] for c in siblings] == [b]
+    # A clip names its source, and no more: the source lists the rest.
+    assert client.get(f"/api/file/init_2026/{a}").json()["clips"] == []
 
 
 def test_a_viewer_sees_only_the_clips_they_may_see(
