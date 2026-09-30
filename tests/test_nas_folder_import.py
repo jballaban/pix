@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -77,15 +78,31 @@ def test_relative_structure_is_preserved(source: Path, staging_root: Path) -> No
     assert staged(staging_root, source, "2015/a/two.mp4").read_bytes() == b"two!!"
 
 
-def test_two_sources_do_not_collide(tmp_path: Path, staging_root: Path) -> None:
+@pytest.fixture
+def short_dir() -> Iterator[Path]:
+    """Somewhere with a short path. The staging folder's name is the
+    source's whole path flattened (`staging.source_tag`), so a source under
+    pytest's temp directory puts that directory in the path twice — past
+    Windows' 260 characters, which no real source (`G:/pix/2001`) comes near."""
+    import shutil
+    import tempfile
+
+    short = Path(tempfile.mkdtemp(prefix="px"))
+    try:
+        yield short
+    finally:
+        shutil.rmtree(short, ignore_errors=True)
+
+
+def test_two_sources_do_not_collide(short_dir: Path, staging_root: Path) -> None:
     """The bug the source tag exists to prevent.
 
     Two library years can hold the same event folder and filename; without the
     tag they would land on top of each other *and* share one skip key, so the
     second import would be silently dropped.
     """
-    a = tmp_path / "2001"
-    b = tmp_path / "2022"
+    a = short_dir / "2001"
+    b = short_dir / "2022"
     for root, payload in ((a, b"first"), (b, b"second-and-longer")):
         (root / "Australia Hockey").mkdir(parents=True)
         (root / "Australia Hockey" / "x.jpg").write_bytes(payload)
