@@ -8428,6 +8428,166 @@ def api_clips_boundary(user: Annotated[Principal, Depends(require_admin)],
     return JSONResponse({"at": at})
 
 
+class DraftClip(BaseModel):
+    """One clip as the splice page ends with it.
+
+    `id` is the clip's name for one already saved, or anything starting
+    `new` for one made in this draft. `copy_of` names the clip a split part
+    was cut from, so it starts with that clip's tags; `absorbs` the clips
+    joined into this one, whose tags merge into it.
+    """
+
+    id: str
+    start: float
+    end: float
+    copy_of: str | None = None
+    absorbs: list[str] = []
+
+
+class SaveClipsBody(BaseModel):
+    folder: str
+    source: str
+    clips: list[DraftClip]
+    deleted: list[str] = []
+
+
+@app.post("/api/clips/save")
+def api_clips_save(user: Annotated[Principal, Depends(require_admin)],
+                   body: Annotated[SaveClipsBody, Body()]) -> JSONResponse:
+    """Save the splice page's draft: the clips it ends with, **by identity**.
+
+    Nothing is inferred. Every clip carries who it is through the edit — a
+    trimmed clip is the same clip, a split part says which clip it was cut
+    from, a join says which clips it absorbed, and a deletion names the clip
+    deleted — because the page asked about each of those when it happened.
+    So this applies exactly that, and a clip that was only moved about keeps
+    everything decided about it, however many times its markers moved.
+
+    Every saved clip must be accounted for — kept, absorbed or deleted. One
+    that is not means the clips changed since the page loaded, and the draft
+    was made against something that is no longer there.
+
+    One History entry for the whole save, and reverting it puts every clip
+    back as it was.
+    """
+    media = _master_file(body.folder, body.source)
+    conn = _clip_conn()
+    try:
+        row = ix.one(conn, body.folder, body.source)
+        if row is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "not indexed")
+        live = {str(c["name"]): c for c in ix.clips_of(conn, body.folder,
+                                                        body.source)
+                if not c["deleted"]}
+        kept = {c.id for c in body.clips if c.id in live}
+        absorbed = {a for c in body.clips for a in c.absorbs}
+        gone = set(body.deleted)
+        for c in body.clips:
+            if not c.id.startswith("new") and c.id not in live:
+                raise HTTPException(status.HTTP_409_CONFLICT,
+                                    f"{c.id} is not a clip of this video "
+                                    "any more — reload the page")
+        missing = set(live) - kept - absorbed - gone
+        if missing or (absorbed | gone) - set(live) or kept & (absorbed | gone):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "the clips changed since this page loaded — reload it")
+        # The ranges, checked as the routes check one: forwards, inside the
+        # video, never over each other — and each start on a keyframe.
+        keys = _keys(body.folder, body.source)
+        ordered = sorted(body.clips, key=lambda c: (c.start, c.end))
+        placed: list[tuple[float, float]] = []
+        final: dict[str, tuple[float, float]] = {}
+        for c in ordered:
+            start, end = _ms(c.start), _ms(c.end)
+            if start != end:
+                lo = max([e for s0, e in placed
+                          if s0 != e and e <= start + 0.0005] + [0.0])
+                start = _snap_start(keys, start, end, lo)
+            _check(start, end, siblings=placed, duration=row["duration"])
+            placed.append((start, end))
+            final[c.id] = (start, end)
+
+        def said(name: str) -> tuple[Decision, float]:
+            path = _master_file(body.folder, name)
+            try:
+                at = decisions.sidecar_path(path).stat().st_mtime
+            except OSError:
+                at = 0.0
+            return decisions.read(path) or Decision(), at
+
+        base = clips.inherited(decisions.read(media), row["event"])
+        taken = {clips.id_of(str(c["name"]))
+                 for c in ix.clips_of(conn, body.folder, body.source)}
+        names: dict[str, str] = {}
+        content: dict[str, Decision] = {}
+        writes: list[tuple[str, str, _Change, bool]] = []
+        # Saved clips first, so a split part copying one copies what it says.
+        for c in body.clips:
+            if c.id not in live:
+                continue
+            start, end = final[c.id]
+            if c.absorbs:
+                merged, at = said(c.id)
+                for other in c.absorbs:
+                    theirs, their_at = said(other)
+                    merged = clips.merged(merged, at, theirs, their_at)
+                    at = max(at, their_at)
+                content[c.id] = merged
+                writes.append((body.folder, c.id,
+                               _content(merged, start=start, end=end), False))
+            else:
+                content[c.id] = said(c.id)[0]
+                was = live[c.id]
+                if (float(was["clip_in"]), float(was["clip_out"])) != (start, end):
+                    writes.append((body.folder, c.id,
+                                   _Change(clip_in=start, clip_out=end), False))
+            names[c.id] = c.id
+        pending = [c for c in body.clips if c.id not in live]
+        while pending:
+            progressed = False
+            for c in list(pending):
+                parent = c.copy_of
+                if parent is not None and parent not in content:
+                    continue
+                start, end = final[c.id]
+                start_with = content[parent] if parent else base
+                # A new clip can absorb one too — a split part joined to its
+                # neighbour — and takes on its tags the same way.
+                at = 0.0
+                for other in c.absorbs:
+                    theirs, their_at = said(other)
+                    start_with = clips.merged(start_with, at, theirs, their_at)
+                    at = max(at, their_at)
+                clip_id = clips.new_id(taken)
+                taken.add(clip_id)
+                name = clips.name_of(body.source, clip_id)
+                names[c.id] = name
+                content[c.id] = start_with
+                writes.append((body.folder, name,
+                               _content(start_with, start=start, end=end),
+                               True))
+                pending.remove(c)
+                progressed = True
+            if not progressed:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                    "a split part copies a clip that is not "
+                                    "in the draft")
+        for other in sorted(absorbed):
+            writes.append((body.folder, other, _gone(), False))
+        for other in sorted(gone):
+            writes.append((body.folder, other, _Change(deleted=True), False))
+        undo = _write_clips(conn, writes)
+    finally:
+        conn.close()
+    if undo:
+        history.record(user.name, f"edited the clips of {body.source}", undo)
+    for b in undo:
+        if b.name not in gone:
+            _recut(body.folder, b.name)
+    return JSONResponse({"names": names, "changes": len(undo)})
+
+
 class FreeBody(BaseModel):
     folder: str
     source: str
@@ -8794,7 +8954,6 @@ def api_keyframes(folder: str, name: str,
 _SPLICE_HTML: str = """<div class="splice">
 <div class="sstage" id="stage"><video id="sv" playsinline preload="auto" src="{src}"></video></div>
 <div class="tlwrap" id="tlwrap"><div class="track" id="track">
-<div class="lane" id="lane" title="Click to place a marker"></div>
 <div class="strip" id="strip"></div>
 <div class="keys" id="keys"></div>
 <div class="bars" id="bars"></div><div class="ph" id="ph"></div></div></div>
@@ -8807,7 +8966,7 @@ _SPLICE_HTML: str = """<div class="splice">
 <button id="bprevf" class="ic" title="Back a frame (,)" aria-label="Back a frame">@sp_prevf@</button>
 <button id="bnextf" class="ic" title="On a frame (.)" aria-label="On a frame">@sp_nextf@</button>
 <button id="bnextk" class="ic" title="On to the next keyframe (shift+.)" aria-label="On to the next keyframe">@sp_nextk@</button>
-<button id="bmark" class="primary ic" title="Place a marker at the playhead (M)" aria-label="Place a marker">@sp_marker@<span class="word">Marker</span></button>
+<button id="bnew" class="primary ic" title="Make a new clip (N)" aria-label="New clip">@sp_marker@<span class="word">New clip</span></button>
 </div>
 <span class="spacer"></span>
 <div class="sgrp">
@@ -8821,20 +8980,36 @@ _SPLICE_HTML: str = """<div class="splice">
 <button id="zin" class="ic" aria-label="Zoom in" title="Zoom in">@sp_zin@</button>
 </div>
 </div>
-<div class="sctl selbar" id="selbar" hidden>
-<b id="selname"></b><span class="gap"></span>
-<a id="bopen" class="btn" title="This clip in the grid">Open</a>
-<button id="bbin" class="danger" title="Bin this clip (Delete)">Bin</button>
+<div class="sctl toolbar" id="newbar" hidden>
+<b>New clip</b><span class="dim" id="newsay">drag across the timeline, or set its start and end at the playhead</span>
+<span class="gap"></span>
+<button id="bnewin" title="Start it at the playhead (I)">Start here</button>
+<button id="bnewout" title="End it at the playhead (O)">End here</button>
+<button id="bnewcancel" title="(Esc)">Cancel</button>
 </div>
-<p class="dim shelp"><b>Markers make the clips.</b> Place one with
-<b>Marker</b> (M), or click the strip along the top of the timeline. In
-uncut footage the first marker starts a clip and the next one ends it; a
-marker inside a clip cuts it in two. Drag a marker to move it. Click a marker
-to take it away: the clip grows to the next marker, and joins the clip there
-if there is one. Every change saves as you make it, and History can undo it.
-Dragging across the picture runs through the video; a tap plays. A clip
-starts on a keyframe (the faint ticks), where a lossless cut can begin.
-A dashed clip is still being cut.</p>
+<div class="sctl toolbar" id="selbar" hidden>
+<b id="selname"></b><span class="gap"></span>
+<button id="bstart" title="Start the clip at the playhead (I)">Start here</button>
+<button id="bend" title="End the clip at the playhead (O)">End here</button>
+<button id="bsplit" title="Cut this clip in two at the playhead (S)">Split here</button>
+<button id="bjoin" title="Join the next clip into this one (J)">Join next</button>
+<a id="bopen" class="btn" title="This clip in the grid">Open</a>
+<button id="bdel" class="danger" title="Delete this clip (Delete)">Delete</button>
+</div>
+<div class="sctl toolbar draftbar" id="draftbar" hidden>
+<b id="dirty"></b><span class="spacer"></span>
+<button id="bundo" title="Undo the last change (Ctrl+Z)">Undo</button>
+<button id="bdiscard" title="Throw away every unsaved change">Discard</button>
+<button id="bsave" class="primary" title="Save every change (Ctrl+S)">Save</button>
+</div>
+<p class="dim shelp"><b>New clip</b> makes one: drag across the timeline, or
+set its start and end at the playhead (I and O). <b>Click a clip</b> to edit
+it — drag its ends, set them at the playhead, split it, join the next one to
+it, or delete it. A clip made or moved over another trims it back, and asks
+before it removes or splits one. Nothing is saved until <b>Save</b>, and
+<b>Discard</b> throws the changes away. A clip starts on a keyframe (the faint
+ticks), where a lossless cut can begin. A dashed clip is still being cut; an
+amber one is not saved yet.</p>
 </div>"""
 
 
@@ -8890,6 +9065,18 @@ _SPLICE_CSS: str = """
 .sctl { display:flex; flex-wrap:wrap; align-items:center; gap:6px;
         margin:8px 0; }
 .sctl .gap { width:8px; }
+.toolbar { padding:6px 8px; border:1px solid var(--line); border-radius:6px; }
+.toolbar[hidden] { display:none; }
+.draftbar { border-color:var(--top); }
+.draftbar b { color:var(--top); }
+/* Not saved yet: amber, whatever else it is. */
+.bar.draft { border-color:var(--top); background:var(--top-bed); }
+.bar.draft.on { background:#e3b34166; }
+.newrange { position:absolute; top:10px; bottom:10px; min-width:2px;
+            border:1.5px dashed var(--top); background:var(--top-bed);
+            border-radius:4px; box-sizing:border-box; pointer-events:none; }
+.newstart { position:absolute; top:4px; bottom:4px; width:2px; margin-left:-1px;
+            background:var(--top); pointer-events:none; }
 /* One row: playing and marking on the left, the rest to the right. On a
    phone the right-hand group wraps under, and still keeps to the right. */
 .sbar .sgrp { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
@@ -8966,16 +9153,22 @@ _SPLICE_JS: str = r"""
 const S=SPLICE;
 const $=id=>document.getElementById(id);
 const v=$('sv'), wrap=$('tlwrap'), track=$('track'), bars=$('bars'),
-      lane=$('lane'), ph=$('ph'), note=$('note');
-let clips=S.clips.slice(), sel=null, zoom=1, dur=S.duration||0, busy=false;
-let hidden=!!S.hidden, dragging=false, shown=null, keys=null;
-// A marker placed in uncut footage, waiting for the one that ends its clip.
-// The only thing on this page that is not saved the moment it is made,
-// because half a clip is not a clip.
-let pending=null;
+      ph=$('ph'), note=$('note');
+let zoom=1, dur=S.duration||0, busy=false, dragging=false, shown=null,
+    keys=null, hidden=!!S.hidden, sel=null;
 const frame=1/(S.fps||30);
 const ms=t=>Math.round(t*1000)/1000;
-const near=(a,b)=>Math.abs(a-b)<Math.max(frame*2,0.05);
+const EPS=0.0005;
+
+// **The draft.** The clips as they will be saved, each carrying who it is:
+// a saved clip keeps its name however it is trimmed, a clip made here is
+// `new…` until Save names it, a split part says which clip it was cut from,
+// and a join says which clips it absorbed. Nothing reaches the server until
+// Save, and then the draft is sent as it ends — so moving an end about and
+// back again is only ever a trim.
+let saved=[], draft=[], deleted=[], undos=[], temp=0;
+// Making a new clip: `null` when not, and otherwise its start once set.
+let creating=null;
 
 function say(text,bad){
   if(!note) return;
@@ -8990,9 +9183,6 @@ function fmt(t){
   const m=Math.floor(t/60), s=t-m*60;
   return m+':'+(s<10?'0':'')+s.toFixed(2);
 }
-// The frame actually on screen. `currentTime` is where the browser means to
-// be, which is not reliably a frame boundary; a still has to be the frame you
-// stopped on.
 if(v.requestVideoFrameCallback){
   const tick=(n,meta)=>{shown=meta.mediaTime; v.requestVideoFrameCallback(tick);};
   v.requestVideoFrameCallback(tick);
@@ -9000,40 +9190,54 @@ if(v.requestVideoFrameCallback){
 function here(){
   return ms(v.paused&&!v.seeking&&shown!=null?shown:(v.currentTime||0));
 }
-const ranges=()=>clips.filter(c=>c.end>c.start).sort((a,b)=>a.start-b.start);
-const stills=()=>clips.filter(c=>c.end===c.start);
-const selected=()=>clips.find(c=>c.name===sel)||null;
-const inside=t=>ranges().find(c=>c.start<t-0.0005&&t<c.end-0.0005)||null;
 const pct=t=>(dur>0?t/dur*100:0)+'%';
+const ranges=()=>draft.filter(c=>c.end>c.start).sort((a,b)=>a.start-b.start);
+const stills=()=>draft.filter(c=>c.end===c.start);
+const selected=()=>draft.find(c=>c.id===sel)||null;
+const isSaved=id=>saved.some(c=>c.name===id);
+const savedOf=id=>saved.find(c=>c.name===id)||null;
+const inside=t=>ranges().find(c=>c.start<t-EPS&&t<c.end-EPS)||null;
+const newId=()=>'new'+(++temp);
 
-// The markers, read off the clips. **A marker belongs to its clip** — its
-// start or its end — and where two clips touch they share one, which is a
-// cut. Nothing pairs markers by counting them, so taking one away never
-// re-pairs the rest and moves a clip's tags onto somebody else's footage.
-function markers(){
-  const out=[], rs=ranges();
-  rs.forEach((c,i)=>{
-    const prev=rs[i-1];
-    if(prev&&Math.abs(prev.end-c.start)<0.002)
-      out[out.length-1]={t:c.start,kind:'cut',left:prev,right:c};
-    else out.push({t:c.start,kind:'in',right:c});
-    out.push({t:c.end,kind:'out',left:c});
-  });
-  return out;
+function fromServer(list){
+  saved=list.filter(c=>!c.deleted);
+  draft=saved.map(c=>({id:c.name,start:c.start,end:c.end,copy_of:null,
+                       absorbs:[]}));
+  deleted=[]; undos=[]; creating=null;
+  if(sel&&!selected()) sel=null;
 }
-// The uncut stretch around `t`: from the clip before it to the clip after.
-function gapAt(t){
-  let lo=0, hi=dur;
-  for(const c of ranges()){
-    if(c.end<=t+0.0005) lo=Math.max(lo,c.end);
-    else if(c.start>=t-0.0005) hi=Math.min(hi,c.start);
-    else return null;
+fromServer(S.clips);
+// How many things Save would do — what the bar counts and leaving warns of.
+function changes(){
+  let n=deleted.length;
+  for(const c of draft){
+    const was=savedOf(c.id);
+    if(!was) n++;
+    else if(Math.abs(was.start-c.start)>EPS||Math.abs(was.end-c.end)>EPS) n++;
+    n+=c.absorbs.length;
   }
-  return [lo,hi];
+  return n;
+}
+function changed(c){
+  const was=savedOf(c.id);
+  return !was||Math.abs(was.start-c.start)>EPS||Math.abs(was.end-c.end)>EPS
+         ||c.absorbs.length>0;
+}
+function remember(){
+  undos.push(JSON.stringify({draft,deleted,temp}));
+  if(undos.length>200) undos.shift();
+}
+function undo(){
+  const last=undos.pop();
+  if(!last){say('nothing to undo');return;}
+  const st=JSON.parse(last);
+  draft=st.draft; deleted=st.deleted; temp=st.temp;
+  if(sel&&!selected()) sel=null;
+  draw(); say('undone');
 }
 
 async function send(url,body){
-  if(busy){say('still saving the last change');return null;}
+  if(busy){say('still saving');return null;}
   busy=true;
   try{
     const r=await fetch(url,{method:'POST',
@@ -9046,61 +9250,79 @@ async function send(url,body){
   }catch(e){say('could not reach the server',true);return null;}
   finally{busy=false;}
 }
-async function reload(){
+async function fetchSaved(){
   try{
     const r=await fetch('/api/clips/'+encodeURIComponent(S.folder)+'/'
                         +encodeURIComponent(S.source));
-    if(r.ok) clips=(await r.json()).filter(c=>!c.deleted);
+    if(r.ok) return await r.json();
   }catch(e){}
-  if(sel&&!selected()) sel=null;
-  draw();
+  return null;
 }
 
+// --- drawing ----------------------------------------------------------------
 function draw(){
   track.style.width=(zoom*100)+'%';
   bars.innerHTML='';
-  track.querySelectorAll('.mk').forEach(x=>x.remove());
   for(const c of ranges()){
     const b=document.createElement('div');
-    b.className='bar'+(c.name===sel?' on':'')+(c.cut===false?' uncut':'');
+    const was=savedOf(c.id);
+    b.className='bar'+(c.id===sel?' on':'')+(changed(c)?' draft':'')
+      +(was&&!changed(c)&&was.cut===false?' uncut':'');
     b.style.left=pct(c.start); b.style.width=pct(c.end-c.start);
     b.title=fmt(c.start)+' – '+fmt(c.end);
     b.onpointerdown=e=>e.stopPropagation();
-    b.onclick=e=>{e.stopPropagation(); if(!dragging) pick(c.name);};
+    b.onclick=e=>{e.stopPropagation(); if(!dragging) pick(c.id);};
+    if(c.id===sel) for(const side of ['l','r']){
+      const h=document.createElement('div');
+      h.className='h '+side;
+      h.onpointerdown=e=>drag(e,c,side);
+      h.onclick=e=>e.stopPropagation();
+      b.appendChild(h);
+    }
     bars.appendChild(b);
   }
   for(const c of stills()){
     const p=document.createElement('div');
-    p.className='pin'+(c.name===sel?' on':'');
+    p.className='pin'+(c.id===sel?' on':'');
     p.style.left=pct(c.start);
-    p.title='Still at '+fmt(c.start);
+    p.title='Photo at '+fmt(c.start);
     p.onpointerdown=e=>e.stopPropagation();
-    p.onclick=e=>{e.stopPropagation(); pick(c.name);};
+    p.onclick=e=>{e.stopPropagation(); pick(c.id);};
     bars.appendChild(p);
   }
-  drawStrip();
-  for(const m of markers()) track.appendChild(marker(m));
-  if(pending!==null) track.appendChild(marker({t:pending,kind:'pending'}));
+  if(creating!==null){
+    const l=document.createElement('div');
+    l.className='newstart'; l.style.left=pct(creating);
+    bars.appendChild(l);
+  }
   $('tdur').textContent=fmt(dur);
-  drawKeys(); playhead(false); drawSel();
+  drawStrip(); drawKeys(); playhead(false); drawBars();
 }
-function marker(m){
-  const el=document.createElement('div');
-  el.className='mk '+m.kind;
-  el.style.left=pct(m.t);
-  const knob=document.createElement('div');
-  knob.className='knob';
-  knob.title=(m.kind==='cut'?'Cut':m.kind==='in'?'Start':m.kind==='out'?'End'
-              :'Start, waiting for an end')+' at '+fmt(m.t)
-             +' — drag to move, click to take away';
-  knob.onpointerdown=e=>grab(e,m,el);
-  knob.onclick=e=>e.stopPropagation();
-  el.appendChild(knob);
-  return el;
+function drawBars(){
+  const c=selected(), n=changes();
+  $('newbar').hidden=!newMode;
+  $('newsay').textContent=creating===null
+    ?'drag across the timeline, or set its start and end at the playhead'
+    :'starts at '+fmt(creating)+' — now set where it ends';
+  $('selbar').hidden=!c||newMode;
+  if(c&&!newMode){
+    const still=c.end===c.start;
+    $('selname').textContent=still?'Photo at '+fmt(c.start)
+      :'Clip '+fmt(c.start)+' – '+fmt(c.end);
+    for(const id of ['bstart','bend','bsplit','bjoin']) $(id).hidden=still;
+    $('bjoin').hidden=still||!nextOf(c);
+    const was=savedOf(c.id);
+    $('bopen').hidden=!was;
+    if(was){
+      const day=(was.date||'').slice(0,10);
+      $('bopen').href='/browse'+(day?'?date='+encodeURIComponent(day):'')
+        +'#open:'+encodeURIComponent(S.folder+'/'+c.id);
+    }
+  }
+  $('draftbar').hidden=!n;
+  $('dirty').textContent=n+' unsaved change'+(n===1?'':'s');
+  $('bundo').hidden=!undos.length;
 }
-// As many of the strip's frames as fit at a readable width — at least 64px,
-// or a frame's own width if that is wider — spread evenly, so a long clip is
-// a row of moments you can read along. Zooming in makes room for more.
 function drawStrip(){
   const box=$('strip'), st=S.strip;
   if(!box) return;
@@ -9132,14 +9354,11 @@ function drawKeys(){
     const i=document.createElement('i'); i.style.left=pct(k); box.appendChild(i);
   }
 }
-// Where a start can land: the keyframe nearest `t` between `lo` and `hi`,
-// which is the rule the server applies too — so what is drawn is what gets
-// stored.
 function snapStart(t,lo,hi){
   if(!keys||!keys.length) return t;
   let best=null;
   for(const k of keys){
-    if(k<lo-0.0005||k>=hi-0.0005) continue;
+    if(k<lo-EPS||k>=hi-EPS) continue;
     if(best===null||Math.abs(k-t)<Math.abs(best-t)) best=k;
   }
   return best===null?t:best;
@@ -9160,36 +9379,177 @@ function playhead(follow){
   ph.style.left=pct(v.currentTime||0);
   $('tcur').textContent=fmt(v.currentTime||0);
   if(!follow) return;
-  // Kept in view, because a zoomed timeline scrolls and a playhead that
-  // walks off the edge leaves you cutting where you cannot see.
   const x=ph.offsetLeft, w=wrap.clientWidth;
   if(x<wrap.scrollLeft||x>wrap.scrollLeft+w-8)
     wrap.scrollLeft=Math.max(0,x-w/2);
 }
-function pick(name){
-  sel=name;
+function pick(id){
+  if(newMode) return;
+  sel=id;
   const c=selected();
   if(c){v.pause(); v.currentTime=c.start;}
   draw();
 }
-function drawSel(){
-  const c=selected();
-  $('selbar').hidden=!c;
-  if(!c) return;
-  $('selname').textContent=c.end===c.start?'Still at '+fmt(c.start)
-    :'Clip '+fmt(c.start)+' – '+fmt(c.end);
-  const day=(c.date||'').slice(0,10);
-  $('bopen').href='/browse'+(day?'?date='+encodeURIComponent(day):'')
-    +'#'+encodeURIComponent(S.folder+'/'+c.name);
+const nextOf=c=>ranges().find(o=>o!==c&&o.start>=c.end-EPS)||null;
+
+// --- what a range does to the clips it lands on ------------------------------
+// A clip made or moved over others **wins**: one it overlaps is trimmed back
+// to its edge, one it covers is removed, and one it lands inside is split
+// around it. Worked out first, so the question can say exactly what will
+// happen before anything does.
+function effects(a,b,except){
+  const out={trim:[],remove:[],split:[]};
+  for(const c of ranges()){
+    if(c===except) continue;
+    if(c.end<=a+EPS||c.start>=b-EPS) continue;
+    if(c.start>=a-EPS&&c.end<=b+EPS) out.remove.push(c);
+    else if(c.start<a&&c.end>b) out.split.push(c);
+    else out.trim.push(c);
+  }
+  return out;
+}
+function allowed(fx,what){
+  const said=[];
+  if(fx.remove.length) said.push('removes '+fx.remove.length+' clip'
+    +(fx.remove.length===1?'':'s')+' it covers (to the bin)');
+  if(fx.split.length) said.push('splits '+(fx.split.length===1?'the clip'
+    :fx.split.length+' clips')+' it lands inside, in two around it');
+  if(!said.length) return true;
+  return confirm(what+' '+said.join(' and ')+'. Continue?');
+}
+function apply(fx,a,b){
+  for(const c of fx.remove) drop(c);
+  for(const c of fx.trim){
+    if(c.start<a) c.end=a;
+    else c.start=ms(snapStart(b,b,c.end));
+  }
+  for(const c of fx.split){
+    const end=c.end;
+    c.end=a;
+    draft.push({id:newId(),start:ms(snapStart(b,b,end)),end,copy_of:c.id,
+                absorbs:[]});
+  }
+}
+// Take a clip out of the draft: deleted if it was saved, and so is whatever
+// it had absorbed, since those were only living on inside it.
+function drop(c){
+  draft=draft.filter(x=>x!==c);
+  if(isSaved(c.id)) deleted.push(c.id);
+  for(const a of c.absorbs) if(isSaved(a)) deleted.push(a);
+  if(sel===c.id) sel=null;
 }
 
+// --- New clip ---------------------------------------------------------------
+let newMode=false;
+function startNew(){ newMode=true; creating=null; sel=null; draw(); }
+function cancelNew(){ newMode=false; creating=null; draw(); }
+function newStart(t){ if(!newMode) startNew(); creating=ms(t); draw(); }
+function newEnd(t){
+  if(!newMode||creating===null){say('set where the clip starts first',true);return;}
+  makeClip(Math.min(creating,t),Math.max(creating,t));
+}
+function makeClip(a,b){
+  if(b-a<frame){say('a clip needs an end after its start',true);return;}
+  a=ms(snapStart(a,0,b)); b=ms(b);
+  const fx=effects(a,b,null);
+  if(!allowed(fx,'This new clip')) return;
+  remember();
+  apply(fx,a,b);
+  const id=newId();
+  draft.push({id,start:a,end:b,copy_of:null,absorbs:[]});
+  newMode=false; creating=null; sel=id;
+  draw(); say('new clip — Save keeps it');
+}
+
+// --- editing the selected clip --------------------------------------------------
+function setEnds(c,a,b){
+  if(b-a<frame){say('a clip needs an end after its start',true);draw();return;}
+  if(Math.abs(a-c.start)>EPS) a=ms(snapStart(a,0,b));
+  b=ms(b);
+  const fx=effects(a,b,c);
+  if(!allowed(fx,'Moving this clip')){draw();return;}
+  remember();
+  apply(fx,a,b);
+  c.start=a; c.end=b;
+  draw();
+}
+function split(){
+  const c=selected(), t=here();
+  if(!c||c.end===c.start) return;
+  const at=ms(snapStart(t,c.start+0.001,c.end));
+  if(at-c.start<frame||c.end-at<frame){
+    say('move the playhead inside the clip to split it',true);return;}
+  if(!confirm('Split this clip in two at '+fmt(at)+'? The second part '
+             +'becomes a new clip, with a copy of its tags.')) return;
+  remember();
+  draft.push({id:newId(),start:at,end:c.end,copy_of:c.id,absorbs:[]});
+  c.end=at;
+  draw();
+}
+function join(){
+  const c=selected(), next=c&&nextOf(c);
+  if(!next) return;
+  if(!confirm('Join the next clip into this one? It stops being a clip of '
+             +'its own, and its tags merge into this one.')) return;
+  remember();
+  c.end=next.end;
+  if(isSaved(next.id)) c.absorbs.push(next.id);
+  c.absorbs.push(...next.absorbs);
+  draft=draft.filter(x=>x!==next);
+  draw();
+}
+function del(){
+  const c=selected();
+  if(!c) return;
+  const still=c.end===c.start;
+  if(!confirm(still?'Delete this photo?':'Delete this clip? It goes to the '
+                     +'bin when you save.')) return;
+  remember();
+  drop(c);
+  draw();
+}
+function still(){
+  v.pause();
+  remember();
+  const id=newId(), t=here();
+  draft.push({id,start:t,end:t,copy_of:null,absorbs:[]});
+  draw(); say('photo at '+fmt(t)+' — Save keeps it');
+}
+
+// --- saving ---------------------------------------------------------------------
+async function save(){
+  if(!changes()) return;
+  const out=await send('/api/clips/save',{folder:S.folder,source:S.source,
+    clips:draft.map(c=>({id:c.id,start:c.start,end:c.end,
+                         copy_of:c.copy_of,absorbs:c.absorbs})),
+    deleted});
+  if(!out) return;
+  const list=await fetchSaved();
+  if(list){
+    const was=sel;
+    fromServer(list);
+    sel=was&&out.names&&out.names[was]?out.names[was]:null;
+  }
+  draw(); say('saved');
+}
+async function discard(){
+  if(changes()&&!confirm('Throw away every unsaved change?')) return;
+  const list=await fetchSaved();
+  fromServer(list||saved);
+  sel=null; newMode=false;
+  draw(); say('changes discarded');
+}
+window.addEventListener('beforeunload',e=>{
+  if(changes()||creating!==null){e.preventDefault(); e.returnValue='';}
+});
+
+// --- the video ---------------------------------------------------------------------
 v.addEventListener('loadedmetadata',()=>{
   if(isFinite(v.duration)&&v.duration>0) dur=v.duration;
+  v.playbackRate=rate;
   draw(); fromHash();
 });
 v.addEventListener('timeupdate',()=>{
-  // The selected clip loops, so it can be watched through as often as it
-  // takes to be sure of its ends.
   const c=selected();
   if(c&&c.end>c.start&&!v.paused&&v.currentTime>=c.end-0.03)
     v.currentTime=c.start;
@@ -9213,160 +9573,71 @@ function timeAt(x){
   const r=track.getBoundingClientRect();
   return Math.min(dur,Math.max(0,(x-r.left)/(r.width||1)*dur));
 }
-// The clips below the strip: a click moves the playhead and picks the clip
-// there.
-bars.addEventListener('click',e=>{
-  if(dragging) return;
-  v.pause(); v.currentTime=timeAt(e.clientX);
-  const c=inside(v.currentTime); sel=c?c.name:null; draw();
-});
-track.addEventListener('click',e=>{
-  if(dragging||e.target!==track) return;
-  v.pause(); v.currentTime=timeAt(e.clientX); sel=null; draw();
-});
-// The strip: a click places a marker there.
-lane.addEventListener('click',e=>{
-  if(dragging) return;
-  const t=ms(timeAt(e.clientX));
-  v.pause(); v.currentTime=t;
-  place(t);
-});
-
-// **Placing a marker.** Inside a clip it cuts the clip in two. In uncut
-// footage the first one starts a clip and the next one ends it — whichever
-// way round they were placed — and the clip is made the moment it has both.
-async function place(t){
-  t=ms(t);
-  if(markers().some(m=>near(m.t,t))||(pending!==null&&near(pending,t))){
-    say('there is a marker here already — click it to take it away');
-    return;
-  }
-  const c=inside(t);
-  if(c){
-    const out=await send('/api/clips/split',{folder:S.folder,name:c.name,at:t});
-    if(out) say('cut in two');
-    await reload(); return;
-  }
-  const g=gapAt(t);
-  if(!g) return;
-  if(pending===null||pending<g[0]-0.0005||pending>g[1]+0.0005){
-    // A clip's start, so it lands on a keyframe inside this stretch.
-    pending=ms(snapStart(t,g[0],g[1]));
-    draw();
-    say('start at '+fmt(pending)+' — place another marker to end the clip');
-    return;
-  }
-  const lo=Math.min(pending,t), hi=Math.max(pending,t);
-  const start=ms(snapStart(lo,g[0],hi));
-  if(hi-start<frame){say('a clip needs an end after its start',true);return;}
-  const out=await send('/api/clips/make',{folder:S.folder,source:S.source,
-    clips:[{start,end:hi}]});
-  if(out){pending=null; say('made a clip');}
-  await reload();
-}
-// **Taking a marker away.** The clip on its far side grows to the next
-// marker — and where that marker belongs to another clip, the two become
-// one. A cut taken away joins the clips either side of it.
-async function unplace(m){
-  if(m.kind==='pending'){pending=null; draw(); return;}
-  const rs=ranges();
-  let out=null;
-  if(m.kind==='cut'){
-    out=await send('/api/clips/merge',
-                   {folder:S.folder,first:m.left.name,second:m.right.name});
-    if(out) say('joined');
-  }else if(m.kind==='in'){
-    const i=rs.indexOf(m.right), prev=rs[i-1];
-    out=prev
-      ? await send('/api/clips/merge',
-                   {folder:S.folder,first:prev.name,second:m.right.name})
-      : await send('/api/clips/range',{folder:S.folder,name:m.right.name,
-                                       start:0,end:m.right.end});
-    if(out) say(prev?'joined':'the clip now starts at the beginning');
-  }else{
-    const i=rs.indexOf(m.left), next=rs[i+1];
-    out=next
-      ? await send('/api/clips/merge',
-                   {folder:S.folder,first:m.left.name,second:next.name})
-      : await send('/api/clips/range',{folder:S.folder,name:m.left.name,
-                                       start:m.left.start,end:ms(dur)});
-    if(out) say(next?'joined':'the clip now runs to the end');
-  }
-  await reload();
-}
-// **Moving a marker**, or — if it never moved — taking it away. The video
-// follows the marker, so you see the frame you are putting it on.
-function grab(e,m,el){
-  e.preventDefault(); e.stopPropagation();
-  const knob=e.currentTarget, x0=e.clientX;
-  if(knob.setPointerCapture) knob.setPointerCapture(e.pointerId);
-  const rs=ranges();
-  let lo=0, hi=dur, isStart=false;
-  if(m.kind==='cut'){
-    lo=m.left.start+frame; hi=m.right.end-frame; isStart=true;
-  }else if(m.kind==='in'){
-    const i=rs.indexOf(m.right);
-    lo=i>0?rs[i-1].end:0; hi=m.right.end-frame; isStart=true;
-  }else if(m.kind==='out'){
-    const i=rs.indexOf(m.left);
-    lo=m.left.start+frame; hi=i<rs.length-1?rs[i+1].start:dur;
-  }else{
-    const g=gapAt(m.t)||[0,dur]; lo=g[0]; hi=g[1]; isStart=true;
-  }
-  let moved=false, t=m.t;
+// The timeline: a click moves the playhead and leaves the clip there picked;
+// with New clip on, a drag across it is the new clip.
+track.addEventListener('pointerdown',e=>{
+  if(e.pointerType==='touch'&&touches.size>0) return;
+  if(e.button!==undefined&&e.button!==0) return;
+  const x0=e.clientX, t0=timeAt(x0);
+  let drawing=false, t1=t0;
+  const box=document.createElement('div'); box.className='newrange';
   const move=ev=>{
-    if(!moved&&Math.abs(ev.clientX-x0)<6) return;
-    if(!moved){moved=true; dragging=true; v.pause();}
+    if(!newMode) return;
+    if(!drawing&&Math.abs(ev.clientX-x0)<6) return;
+    if(!drawing){drawing=true; dragging=true; v.pause(); bars.appendChild(box);}
+    t1=timeAt(ev.clientX);
+    const a=Math.min(t0,t1), b=Math.max(t0,t1);
+    box.style.left=pct(a); box.style.width=pct(b-a);
+    v.currentTime=t1;
+  };
+  const up=ev=>{
+    track.removeEventListener('pointermove',move);
+    track.removeEventListener('pointerup',up);
+    track.removeEventListener('pointercancel',up);
+    if(drawing){
+      setTimeout(()=>{dragging=false;},0);
+      box.remove();
+      makeClip(Math.min(t0,t1),Math.max(t0,t1));
+      return;
+    }
+    v.pause(); v.currentTime=timeAt(ev.clientX);
+    if(!newMode){ const c=inside(v.currentTime); sel=c?c.id:null; }
+    draw();
+  };
+  track.addEventListener('pointermove',move);
+  track.addEventListener('pointerup',up);
+  track.addEventListener('pointercancel',up);
+});
+// Dragging an end of the selected clip. Past a neighbour it trims it back,
+// and over one it asks before removing it — the same rule as a new clip.
+function drag(e,c,side){
+  e.preventDefault(); e.stopPropagation();
+  dragging=true; v.pause();
+  const h=e.currentTarget, bar=h.parentNode;
+  if(h.setPointerCapture) h.setPointerCapture(e.pointerId);
+  const lo=side==='l'?0:c.start+frame, hi=side==='r'?dur:c.end-frame;
+  let t=side==='l'?c.start:c.end;
+  const move=ev=>{
     t=Math.min(hi,Math.max(lo,timeAt(ev.clientX)));
-    if(isStart) t=snapStart(t,lo,hi);
-    el.style.left=pct(t);
+    if(side==='l') t=snapStart(t,0,c.end);
+    const a=side==='l'?t:c.start, b=side==='r'?t:c.end;
+    bar.style.left=pct(a); bar.style.width=pct(b-a);
     v.currentTime=t;
   };
-  const up=async()=>{
-    knob.removeEventListener('pointermove',move);
-    knob.removeEventListener('pointerup',up);
-    knob.removeEventListener('pointercancel',up);
+  const up=()=>{
+    h.removeEventListener('pointermove',move);
+    h.removeEventListener('pointerup',up);
+    h.removeEventListener('pointercancel',up);
     setTimeout(()=>{dragging=false;},0);
-    if(!moved){ await unplace(m); return; }
-    t=ms(t);
-    if(near(t,m.t)){draw(); return;}
-    let out=null;
-    if(m.kind==='cut')
-      out=await send('/api/clips/boundary',{folder:S.folder,
-        first:m.left.name,second:m.right.name,at:t});
-    else if(m.kind==='in')
-      out=await send('/api/clips/range',{folder:S.folder,name:m.right.name,
-                                         start:t,end:m.right.end});
-    else if(m.kind==='out')
-      out=await send('/api/clips/range',{folder:S.folder,name:m.left.name,
-                                         start:m.left.start,end:t});
-    else{pending=t; draw(); return;}
-    if(out) say('moved');
-    await reload();
+    const a=ms(side==='l'?t:c.start), b=ms(side==='r'?t:c.end);
+    if(a===c.start&&b===c.end){draw();return;}
+    setEnds(c,a,b);
   };
-  knob.addEventListener('pointermove',move);
-  knob.addEventListener('pointerup',up);
-  knob.addEventListener('pointercancel',up);
+  h.addEventListener('pointermove',move);
+  h.addEventListener('pointerup',up);
+  h.addEventListener('pointercancel',up);
 }
-window.addEventListener('beforeunload',e=>{
-  if(pending!==null){e.preventDefault(); e.returnValue='';}
-});
 
-async function still(){
-  v.pause();
-  const t=here();
-  const out=await send('/api/clips/make',{folder:S.folder,source:S.source,
-    clips:[{start:t,end:t}]});
-  if(out){say('took a still at '+fmt(t));}
-  await reload();
-}
-async function bin(){
-  const c=selected();
-  if(!c) return;
-  if(await send('/api/decide',{folder:S.folder,name:c.name,deleted:true})){
-    sel=null; say('binned — it can be restored from the bin');}
-  await reload();
-}
 function drawHide(){
   const b=$('bhide');
   b.setAttribute('aria-label',hidden?'Show original':'Hide original');
@@ -9375,6 +9646,7 @@ function drawHide(){
     ?'The original is out of every view; its clips are not. Show it again'
     :'Take the original out of every view, leaving its clips')+' (H)';
 }
+// Immediate, unlike the clips: this is a decision about the video itself.
 async function hide(){
   const body={folder:S.folder,name:S.source};
   body[hidden?'remove_audience':'add_audience']=[S.hiddenName];
@@ -9389,9 +9661,6 @@ function step(dt){
 }
 function toggle(){ if(v.paused) v.play().catch(()=>{}); else v.pause(); }
 
-// Playback speed. Slower to find the moment a clip should start, faster to
-// get through footage nothing will be cut from. One control showing the
-// speed it is at, and every video starts at normal speed.
 const RATES=[0.5,1,1.5,2];
 let rate=1;
 function setRate(r){
@@ -9402,15 +9671,12 @@ function setRate(r){
 if($('rate')) $('rate').onchange=e=>{
   setRate(parseFloat(e.target.value)||1); e.target.blur();
 };
-// A browser sets the rate back to 1 when a new source loads.
-v.addEventListener('loadedmetadata',()=>{ v.playbackRate=rate; });
 function nudgeRate(dir){
   const i=RATES.indexOf(rate), j=Math.min(RATES.length-1,Math.max(0,i+dir));
   setRate(RATES[j]); say('speed '+RATES[j]+'×');
 }
 
-// The picture scrubs. Dragging across it runs through the video — its whole
-// width is the whole video — and a tap without a drag plays or pauses.
+// The picture scrubs: its whole width is the whole video; a tap plays.
 v.addEventListener('pointerdown',e=>{
   if(e.button!==undefined&&e.button!==0) return;
   const x0=e.clientX, t0=v.currentTime||0;
@@ -9434,8 +9700,6 @@ v.addEventListener('pointerdown',e=>{
   v.addEventListener('pointercancel',up);
 });
 
-// Zoom about a point, so what is under the pointer — or the fingers — stays
-// under it.
 function zoomBy(f,cx){
   const old=zoom;
   zoom=Math.min(64,Math.max(1,zoom*f));
@@ -9466,40 +9730,69 @@ const lift=e=>{touches.delete(e.pointerId); if(touches.size<2) pinch=0;};
 wrap.addEventListener('pointerup',lift);
 wrap.addEventListener('pointercancel',lift);
 
+// I and O mean the clip in hand: the new one while making one, the picked
+// one otherwise — and with neither, I starts a new clip here.
+function markIn(){
+  const c=selected(), t=here();
+  if(newMode||!c) return newStart(t);
+  if(c.end===c.start) return;
+  setEnds(c,t,c.end);
+}
+function markOut(){
+  const c=selected(), t=here();
+  if(newMode) return newEnd(t);
+  if(!c||c.end===c.start){say('pick a clip, or start a new one',true);return;}
+  setEnds(c,c.start,t);
+}
+
 const on=(id,fn)=>{const b=$(id); if(b) b.onclick=e=>{e.stopPropagation(); fn();};};
-on('bplay',toggle); on('bmark',()=>place(here())); on('bstill',still);
+on('bplay',toggle); on('bstill',still); on('bhide',hide);
+on('bnew',()=>newMode?cancelNew():startNew());
+on('bnewin',()=>newStart(here())); on('bnewout',()=>newEnd(here()));
+on('bnewcancel',cancelNew);
 on('bprevf',()=>step(-frame)); on('bnextf',()=>step(frame));
 on('bprevk',()=>toKey(-1)); on('bnextk',()=>toKey(1));
-on('bbin',bin); on('bhide',hide);
+on('bstart',markIn); on('bend',markOut);
+on('bsplit',split); on('bjoin',join); on('bdel',del);
+on('bundo',undo); on('bdiscard',discard); on('bsave',save);
 on('zin',()=>zoomBy(2)); on('zout',()=>zoomBy(0.5));
 document.addEventListener('keydown',e=>{
   const tag=e.target&&e.target.tagName;
-  if(tag==='INPUT'||tag==='TEXTAREA'||e.ctrlKey||e.metaKey||e.altKey) return;
+  if(tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT') return;
   const k=e.key;
+  if((e.ctrlKey||e.metaKey)&&(k==='z'||k==='Z')){undo(); e.preventDefault(); return;}
+  if((e.ctrlKey||e.metaKey)&&(k==='s'||k==='S')){save(); e.preventDefault(); return;}
+  if(e.ctrlKey||e.metaKey||e.altKey) return;
   if(k===' ') toggle();
-  else if(k==='m'||k==='M') place(here());
-  else if(k==='[') nudgeRate(-1);
-  else if(k===']') nudgeRate(1);
+  else if(k==='n'||k==='N') newMode?cancelNew():startNew();
+  else if(k==='i'||k==='I') markIn();
+  else if(k==='o'||k==='O') markOut();
+  else if(k==='s'||k==='S') split();
+  else if(k==='j'||k==='J') join();
   else if(k==='p'||k==='P') still();
   else if(k===','&&!e.shiftKey) step(-frame);
   else if(k==='.'&&!e.shiftKey) step(frame);
   else if(k==='<'||k===',') toKey(-1);
   else if(k==='>'||k==='.') toKey(1);
-  else if(k==='Delete'||k==='Backspace') bin();
+  else if(k==='['||k===']') nudgeRate(k===']'?1:-1);
+  else if(k==='Delete'||k==='Backspace') del();
   else if(k==='h'||k==='H') hide();
-  else if(k==='Escape'){ pending=null; sel=null; draw(); }
+  else if(k==='Escape'){ if(newMode) cancelNew(); else {sel=null; draw();} }
   else return;
   e.preventDefault();
 });
-// Arriving from a clip — *Splice* on a clip opens its source — stands on it.
 function fromHash(){
   let want='';
   try{want=decodeURIComponent(String(location.hash||'').slice(1));}catch(e){}
-  if(want&&clips.some(c=>c.name===want)) pick(want);
+  if(want&&draft.some(c=>c.id===want)) pick(want);
 }
-// Poll while anything is still being cut, so a dashed clip turns solid on
-// its own rather than on the next thing somebody happens to press.
-setInterval(()=>{ if(!busy&&clips.some(c=>c.cut===false&&c.end>c.start)) reload(); },4000);
+// While a saved clip is still being cut, and nothing is unsaved, look again
+// now and then so its dashes resolve on their own.
+setInterval(async()=>{
+  if(busy||changes()||!saved.some(c=>c.cut===false&&c.end>c.start)) return;
+  const list=await fetchSaved();
+  if(list&&!changes()){ fromServer(list); draw(); }
+},4000);
 drawHide(); draw();
 })();
 """

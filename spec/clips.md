@@ -293,46 +293,47 @@ faint keyframe ticks where an in-point can snap, the filmstrip, the playhead.
 The selected clip loops. Long videos zoom — pinch, or ctrl+wheel — and scroll
 with the playhead kept in view. Layout follows size and input, never platform.
 
-**Markers make the clips.** A marker is placed with **Marker** (M) at the
-playhead, or by clicking the strip along the top of the timeline:
+**Two tools, and nothing placed at random.** A single marker gesture could
+not say what it meant: a mark beside a clip might extend it or start
+another, and one inside a clip might split it or trim it. So:
 
-- **In uncut footage** the first marker starts a clip and the next ends it,
-  whichever way round they were placed, and the clip is made the moment it
-  has both. A lone start is the one thing on the page not yet saved — half a
-  clip is not a clip — and leaving with one asks first.
-- **Inside a clip** a marker cuts it in two: one marker, the end of the first
-  and the start of the second. Where two clips touch they share it — a *cut*,
-  drawn as a diamond; a clip's other ends are circles.
-- **Dragging a marker** moves it: a clip's end trims it, a cut moves the
-  boundary between both clips in one edit.
-- **Clicking a marker takes it away.** The clip on its far side grows to the
-  next marker, and where that marker belongs to another clip the two become
-  one — so taking away a cut joins its clips, and taking away the end of a
-  clip with a neighbour joins them across the stretch between.
+- **New clip** (N): drag across the timeline, or set its start and end at
+  the playhead (I, O).
+- **Edit clip**: click a clip, then drag its ends or set them at the
+  playhead (I, O), **Split here** (S), **Join next** (J), **Delete**.
 
-**A marker belongs to its clip.** Nothing pairs markers by counting them:
-with alternating in/out, taking one away would re-pair every marker after it
-and put each clip's tags on somebody else's footage. Tied to their clips,
-every gesture is one of the edits §2 already defines — trim, cut, join, make
-— and each keeps its decisions where they were. **Every change saves as it is
-made** and is in History, since there is nothing left to batch: an earlier
-version marked In/Out drafts and made them with one Split, and one before it
-split whatever was under the playhead; both read as an editor's controls
-rather than as cutting a video up.
+A clip made or moved over others **wins**: one it overlaps is trimmed back to
+its edge, one it covers is removed, one it lands inside is split around it.
 
-A start snaps to a keyframe as it is placed, so what is drawn is what gets
-cut; an end may be any frame. Clicking a clip picks it — it loops when played
-— for **Open** and **Bin**.
+**A draft, saved by identity.** Nothing is written until **Save**; **Discard**
+throws the changes away, **Undo** (Ctrl+Z) steps back, and leaving with
+unsaved changes asks. Every clip carries who it is through the edit — a
+trimmed clip is the same clip however often its ends moved, a split part
+says which clip it copies, a join says which clip it absorbed, a delete
+names the clip — and `/api/clips/save` applies exactly that: no inference
+from where clips ended up, and one History entry for the whole save.
+
+**It asks whenever a file is made or removed**, and never for moving or
+trimming: Split, Join and Delete each confirm, and so does a new or moved
+clip that would remove or split another. A new clip in uncut footage, like
+Take photo, is itself the request, and does not ask. Deleted clips go to the
+bin; joined ones merge into the survivor. Hide original is not part of the
+draft: it is a decision about the video, and is immediate.
+
+This replaced two earlier versions. In the first every gesture wrote at once
+and Split cut whatever was under the playhead; in the second, markers made
+the clips — which read naturally until a click near a clip could mean two
+things.
 
 | | mouse / touch | keyboard |
 |---|---|---|
-| place a marker | **Marker**, or click the strip over the timeline | `M` |
-| move a marker | drag its knob | — |
-| take one away | click its knob | — |
+| make a clip | **New clip**, then drag, or Start/End here | `N`, then `I` `O` |
+| edit a clip | click it: drag its ends; Start/End here; Split here; Join next; Delete | `I` `O`, `S`, `J`, `Delete` |
+| save / throw away / step back | **Save** · **Discard** · **Undo** | `Ctrl+S`, `Ctrl+Z` |
 | take a still | **Take photo** | `P` |
 | move the playhead | click the timeline; **drag across the picture**; tap it to play | space, `,` `.` a frame, shift for a keyframe |
-| a clip | click it: Open, Bin | `Delete` bins it |
-| hide the original | **Hide original** (lit amber while hidden) | `H` |
+| speed | the speed dropdown | `[` `]` |
+| hide the original | **Hide original** (lit while hidden) — immediate | `H` |
 
 Stills are frame-exact through `requestVideoFrameCallback`; `currentTime` is
 not.

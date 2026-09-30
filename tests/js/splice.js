@@ -60,6 +60,8 @@ function fetch(url, opts) {
   return Promise.resolve({ ok: true, json: () => Promise.resolve(answer) });
 }
 const window = { addEventListener() {} };
+// Every question the page asks is answered yes.
+globalThis.confirm = () => true;
 const settle = () => new Promise(r => setImmediate(r));
 
 (async () => {
@@ -70,31 +72,36 @@ const settle = () => new Promise(r => setImmediate(r));
   const key = k => (document.listeners.keydown || []).forEach(fn =>
     fn({ key: k, target: { tagName: 'BODY' }, preventDefault() {} }));
 
-  // The knob of the last-drawn marker of `kind`, pressed and let go without
-  // moving — which takes it away.
-  const knobOf = kind => {
-    const found = els.track.children.filter(c => c.className === 'mk ' + kind);
-    return found[found.length - 1].children[0];
+  // Pick a clip the way a click does: the last-drawn bar covering `t`.
+  const pickAt = t => {
+    const found = els.bars.children.filter(c =>
+      String(c.className).startsWith('bar') && c.onclick);
+    const hit = found.find(c => parseFloat(c.style.left) <= t / SPLICE.duration * 100
+      && parseFloat(c.style.left) + parseFloat(c.style.width) >= t / SPLICE.duration * 100);
+    hit.onclick({ stopPropagation() {} });
   };
-  const tap = knob => {
-    knob.onpointerdown({ preventDefault() {}, stopPropagation() {},
-                         currentTarget: knob, clientX: 100, pointerId: 1 });
-    knob.fire('pointerup');
+  const newClip = (a, b) => {
+    key('n');
+    video.currentTime = a; key('i');
+    video.currentTime = b; key('o');
   };
-  if (scenario === 'place-two') {
-    video.currentTime = 10; key('m');
-    video.currentTime = 20; key('m');
-  } else if (scenario === 'place-inside') {
-    video.currentTime = 10; click('bmark');
-  } else if (scenario === 'remove-cut') {
-    tap(knobOf('cut'));
-  } else if (scenario === 'remove-out') {
-    tap(knobOf('out'));
-  } else if (scenario === 'remove-in') {
-    tap(knobOf('in'));
+  if (scenario === 'new-keys') {
+    newClip(10, 20); click('bsave');
+  } else if (scenario === 'nothing') {
+    click('bsave');
+  } else if (scenario === 'split') {
+    pickAt(5); video.currentTime = 12; click('bsplit'); click('bsave');
+  } else if (scenario === 'join') {
+    pickAt(5); click('bjoin'); click('bsave');
+  } else if (scenario === 'delete') {
+    pickAt(5); click('bdel'); click('bsave');
+  } else if (scenario === 'swallow') {
+    newClip(10, 20); click('bsave');
+  } else if (scenario === 'discard') {
+    newClip(10, 20); click('bdiscard');
   } else if (scenario === 'still') {
     video.currentTime = 12.3456;
-    key('p');
+    key('p'); click('bsave');
   } else if (scenario === 'hide') {
     click('bhide');
   }

@@ -495,52 +495,57 @@ def _clip(name: str, start: float, end: float) -> dict[str, Any]:
     return {"name": name, "start": start, "end": end, "deleted": False}
 
 
-def test_two_markers_in_uncut_footage_make_a_clip(tmp_path: Path) -> None:
-    """The first starts it and the next ends it; the clip is made the moment
-    it has both."""
-    [sent] = _drive(tmp_path, "place-two", [])
-    assert sent["url"] == "/api/clips/make"
-    assert sent["body"]["clips"] == [{"start": 10, "end": 20}]
+def _saved(sent: list[dict[str, Any]]) -> dict[str, Any]:
+    """The one save the page sent — and nothing else it wrote."""
+    [only] = sent
+    assert only["url"] == "/api/clips/save", only
+    return only["body"]
 
 
-def test_a_marker_inside_a_clip_cuts_it(tmp_path: Path) -> None:
-    [sent] = _drive(tmp_path, "place-inside", [_clip("b.mp4~aaaa", 0, 30)])
-    assert sent == {"url": "/api/clips/split",
-                    "body": {"folder": "init_2026", "name": "b.mp4~aaaa",
-                             "at": 10}}
+def test_a_new_clip_is_made_with_in_and_out_and_saved(tmp_path: Path) -> None:
+    body = _saved(_drive(tmp_path, "new-keys", []))
+    assert body["clips"] == [{"id": "new1", "start": 10, "end": 20,
+                              "copy_of": None, "absorbs": []}]
+    assert body["deleted"] == []
 
 
-def test_taking_away_a_cut_joins_its_clips(tmp_path: Path) -> None:
-    [sent] = _drive(tmp_path, "remove-cut", [
-        _clip("b.mp4~aaaa", 0, 10), _clip("b.mp4~bbbb", 10, 20)])
-    assert sent["url"] == "/api/clips/merge"
-    assert (sent["body"]["first"], sent["body"]["second"]) == (
-        "b.mp4~aaaa", "b.mp4~bbbb")
+def test_nothing_is_written_until_save(tmp_path: Path) -> None:
+    assert _drive(tmp_path, "nothing", []) == []
+    assert _drive(tmp_path, "discard", []) == []
 
 
-def test_taking_away_an_end_with_nothing_after_runs_to_the_end(
-    tmp_path: Path
-) -> None:
-    [sent] = _drive(tmp_path, "remove-out", [_clip("b.mp4~aaaa", 0, 10)])
-    assert sent == {"url": "/api/clips/range",
-                    "body": {"folder": "init_2026", "name": "b.mp4~aaaa",
-                             "start": 0, "end": 75}}
+def test_a_split_part_says_which_clip_it_copies(tmp_path: Path) -> None:
+    body = _saved(_drive(tmp_path, "split", [_clip("b.mp4~aaaa", 0, 30)]))
+    assert body["clips"] == [
+        {"id": "b.mp4~aaaa", "start": 0, "end": 12, "copy_of": None,
+         "absorbs": []},
+        {"id": "new1", "start": 12, "end": 30, "copy_of": "b.mp4~aaaa",
+         "absorbs": []}]
 
 
-def test_taking_away_a_start_joins_the_clip_before(tmp_path: Path) -> None:
-    """Markers belong to their clips, so taking one away never re-pairs the
-    rest: the clip grows to the next marker, and joins the clip it belongs
-    to."""
-    [sent] = _drive(tmp_path, "remove-in", [
-        _clip("b.mp4~aaaa", 0, 10), _clip("b.mp4~bbbb", 20, 30)])
-    assert sent["url"] == "/api/clips/merge"
-    assert (sent["body"]["first"], sent["body"]["second"]) == (
-        "b.mp4~aaaa", "b.mp4~bbbb")
+def test_a_join_says_which_clip_it_absorbed(tmp_path: Path) -> None:
+    body = _saved(_drive(tmp_path, "join", [
+        _clip("b.mp4~aaaa", 0, 10), _clip("b.mp4~bbbb", 10, 20)]))
+    assert body["clips"] == [{"id": "b.mp4~aaaa", "start": 0, "end": 20,
+                              "copy_of": None, "absorbs": ["b.mp4~bbbb"]}]
+
+
+def test_a_delete_names_the_clip(tmp_path: Path) -> None:
+    body = _saved(_drive(tmp_path, "delete", [_clip("b.mp4~aaaa", 0, 10)]))
+    assert body["clips"] == [] and body["deleted"] == ["b.mp4~aaaa"]
+
+
+def test_a_new_clip_over_another_removes_it(tmp_path: Path) -> None:
+    """Asked first, and answered yes here."""
+    body = _saved(_drive(tmp_path, "swallow", [_clip("b.mp4~bbbb", 12, 15)]))
+    assert [c["id"] for c in body["clips"]] == ["new1"]
+    assert body["deleted"] == ["b.mp4~bbbb"]
 
 
 def test_a_still_is_taken_at_the_millisecond(tmp_path: Path) -> None:
-    [sent] = _drive(tmp_path, "still", [])
-    assert sent["body"]["clips"] == [{"start": 12.346, "end": 12.346}]
+    body = _saved(_drive(tmp_path, "still", []))
+    assert [(c["start"], c["end"]) for c in body["clips"]] == [
+        (12.346, 12.346)]
 
 
 def test_hiding_the_original_is_the_hidden_audience(tmp_path: Path) -> None:
@@ -954,3 +959,98 @@ def test_splice_is_in_the_preview_for_the_administrator(
     assert 'id="viewsplice"' in client.get("/browse").text
     add_user("kid", "pw")
     assert 'id="viewsplice"' not in sign_in("kid", "pw").get("/browse").text
+
+
+# --- saving a draft by identity ------------------------------------------------
+
+def _save(client: TestClient, clips_: list[dict[str, Any]],
+          deleted: list[str] | None = None) -> Any:
+    return client.post("/api/clips/save", json={
+        "folder": "init_2026", "source": "b.mp4", "clips": clips_,
+        "deleted": deleted or []})
+
+
+def _draft(name: str, start: float, end: float, **more: Any) -> dict[str, Any]:
+    return {"id": name, "start": start, "end": end, **more}
+
+
+def test_a_retrimmed_clip_keeps_everything_decided_about_it(
+    client: TestClient, video: Path
+) -> None:
+    """However its ends moved in between: only the end state is saved, and
+    the clip is still itself."""
+    [a] = _make(client, (0, 10))
+    client.post("/api/decide", json={"folder": "init_2026", "name": a,
+                                     "add_people": ["Mum"]})
+    r = _save(client, [_draft(a, 2, 12)])
+    assert r.status_code == 200, r.text
+    got = decisions.read(video / a)
+    assert got is not None
+    assert (got.clip_in, got.clip_out, got.people) == (2.0, 12.0, ("Mum",))
+
+
+def test_a_saved_split_copies_and_a_saved_join_merges(
+    client: TestClient, video: Path
+) -> None:
+    a, b = _make(client, (0, 10), (20, 30))
+    client.post("/api/decide", json={"folder": "init_2026", "name": a,
+                                     "add_tags": ["beach"]})
+    client.post("/api/decide", json={"folder": "init_2026", "name": b,
+                                     "add_people": ["Mum"]})
+    r = _save(client, [_draft(a, 0, 5, absorbs=[]),
+                       _draft("new1", 5, 30, copy_of=a, absorbs=[b])])
+    assert r.status_code == 200, r.text
+    part = r.json()["names"]["new1"]
+    first, second = decisions.read(video / a), decisions.read(video / part)
+    assert first is not None and second is not None
+    assert (first.clip_out, first.tags) == (5.0, ("beach",))
+    assert (second.clip_in, second.clip_out) == (5.0, 30.0)
+    assert second.tags == ("beach",) and second.people == ("Mum",)
+    assert not decisions.sidecar_path(video / b).exists()
+
+
+def test_a_saved_delete_goes_to_the_bin(client: TestClient, video: Path) -> None:
+    [a] = _make(client, (0, 10))
+    r = _save(client, [], deleted=[a])
+    assert r.status_code == 200, r.text
+    got = decisions.read(video / a)
+    assert got is not None and got.deleted
+
+
+def test_a_new_clip_starts_with_the_videos_tags(
+    client: TestClient, video: Path
+) -> None:
+    r = _save(client, [_draft("new1", 1, 4)])
+    assert r.status_code == 200, r.text
+    got = decisions.read(video / r.json()["names"]["new1"])
+    assert got == Decision(event="Italy - Sicily", clip_in=1.0, clip_out=4.0)
+
+
+def test_a_draft_made_against_other_clips_is_refused(
+    client: TestClient, video: Path
+) -> None:
+    """A saved clip the draft does not account for means the clips changed
+    since the page loaded."""
+    _make(client, (0, 10))
+    r = _save(client, [_draft("new1", 20, 30)])
+    assert r.status_code == 409 and "reload" in r.text, r.text
+
+
+def test_a_draft_that_overlaps_itself_is_refused(
+    client: TestClient, video: Path
+) -> None:
+    r = _save(client, [_draft("new1", 0, 10), _draft("new2", 5, 15)])
+    assert r.status_code == 409 and "overlap" in r.text, r.text
+
+
+def test_one_save_is_one_thing_to_take_back(
+    client: TestClient, video: Path
+) -> None:
+    a, b = _make(client, (0, 10), (20, 30))
+    _save(client, [_draft(a, 0, 30, absorbs=[b])])
+    op = history.recent(1)[0]
+    assert op.summary == "edited the clips of b.mp4"
+    client.post("/history/revert", data={"id": op.id})
+    first, second = decisions.read(video / a), decisions.read(video / b)
+    assert first is not None and second is not None
+    assert (first.clip_out, second.clip_in) == (10.0, 20.0)
