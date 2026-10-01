@@ -857,7 +857,9 @@ def refresh(conn: sqlite3.Connection, folder: str, name: str, *,
 
     **Row-level only, deliberately.** It re-derives from the same two inputs a
     rebuild uses, so it cannot invent a value a rebuild would not produce, and
-    it never removes or adds rows — the set of files is `process`'s business.
+    it adds a row only for a file with probed facts — which is how `update`
+    brings in what `process` just made — and removes one only for a clip
+    whose sidecar has gone (`_refresh_clip`).
     Drift stays in one direction: the index can be behind, never wrong.
 
     Returns False when there are no probed facts for the file, which means it

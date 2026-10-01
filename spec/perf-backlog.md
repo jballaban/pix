@@ -27,6 +27,16 @@ it only if HEIC/PNG/DNG → JPEG dominates wall-clock.
 block buffering (or flush every ~1000 lines) is fine and saves a few seconds on
 200k iterations.
 
+### `pix2 process` with nothing to do (~16s, measured 2026-10-01)
+The index tail is ~1s now (`index.update`); the rest is the run's own overhead
+over SMB, which matters once `process` sits on a timer:
+- `sweep_partials` — ~8s: `rglob` for temp markers over every derived tier on
+  every run. Could run only after a run that did not finish cleanly (a marker
+  written at start, removed at clean exit).
+- `pending_files` — ~8s: seven listings per master folder. Folders whose
+  master and tier listings are unchanged since the last run (directory mtimes)
+  could be skipped.
+
 ## Considered and dropped
 
 - **One ExifTool round-trip per TAG line.** The claim "ExifTool can do both

@@ -211,7 +211,7 @@ def test_a_clips_files_are_noted_for_the_index(
 def test_the_index_is_opened_by_the_path_as_written(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The share is `\\nas\pix2`, and `as_posix` made that `//nas/pix2` —
+    r"""The share is `\\nas\pix2`, and `as_posix` made that `//nas/pix2` —
     a URI authority SQLite refuses. The refusal was swallowed, so every import
     ran with no hash check; the index is opened by its path as written."""
     import sqlite3

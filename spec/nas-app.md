@@ -320,8 +320,9 @@ It recreates the single database this architecture exists to avoid, and breaks
   nothing to do costs a listing and `process` can sit on a timer. A *refresh* rewrites the single
   row whose decision just changed, and is what the app runs: reading 62k records
   to record one tiering is not an interface anyone uses twice. A refresh
-  re-derives from the same two inputs a rebuild uses and never adds or removes
-  rows, so the two cannot disagree — a later rebuild can only confirm it.
+  re-derives from the same two inputs a rebuild uses — adding a row only for a
+  file with probed facts, removing one only for a clip whose sidecar has gone —
+  so the two cannot disagree, and a later rebuild can only confirm it.
 - **Staleness detection is the existing `(size, mtime_ns)` stat comparison**, the
   same key `cache.db` already uses.
 
