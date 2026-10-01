@@ -254,3 +254,21 @@ def test_the_browse_script_parses(tmp_path: Path) -> None:
                             capture_output=True, text=True, timeout=60)
 
     assert result.returncode == 0, result.stderr[-2000:]
+
+
+@pytest.mark.skipif(shutil.which("node") is None,
+                    reason="node is not installed")
+def test_display_puts_each_fact_in_the_lane_it_was_asked_for(
+    tmp_path: Path
+) -> None:
+    """The Display menu, driven: a saved choice is applied on load, a press
+    moves the facts on every cell and is remembered, and what is always there
+    keeps the right-hand end of its lane."""
+    script = tmp_path / "browse.js"
+    script.write_text(web._BROWSE_JS, encoding="utf-8")
+
+    result = subprocess.run(
+        ["node", str(JS_DIR / "display.js"), str(script)],
+        capture_output=True, text=True, timeout=120, cwd=JS_DIR)
+
+    assert result.returncode == 0, (result.stdout + result.stderr)[-2000:]

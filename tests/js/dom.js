@@ -47,7 +47,12 @@ class El {
   get innerHTML() { return this._html; }
   set textContent(v) { this._text = String(v); }
   get textContent() { return this._text; }
-  appendChild(c) { c.parent = this; this.children.push(c); return c; }
+  // Moving, the way a browser does: a node has one parent, so appending it
+  // somewhere takes it out of wherever it was.
+  appendChild(c) {
+    if (c.parent) c.parent.children = c.parent.children.filter(x => x !== c);
+    c.parent = this; this.children.push(c); return c;
+  }
   remove() {
     if (this.parent) {
       this.parent.children = this.parent.children.filter(x => x !== this);

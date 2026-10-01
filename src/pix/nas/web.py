@@ -669,18 +669,19 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
    verb, so it should read as a setting with a state. */
 .sizeset { display:inline-flex; align-items:center; flex:none;
            border:1px solid var(--line); border-radius:5px; overflow:hidden; }
-.sizeopt { min-width:29px; height:calc(var(--ctl) - 2px); padding:0;
+.sizeopt, .showopt { min-width:29px; height:calc(var(--ctl) - 2px); padding:0;
            border:0; border-radius:0; background:none; color:var(--dim);
            font-size:11px; font-weight:700; letter-spacing:.02em;
            display:inline-flex; align-items:center; justify-content:center;
            box-shadow:none; }
-.sizeopt + .sizeopt { border-left:1px solid var(--line); }
-.sizeopt:hover:not(:disabled) { color:var(--fg); background:#2f3745;
+.sizeopt + .sizeopt, .showopt + .showopt { border-left:1px solid var(--line); }
+.showopt { padding:0 7px; font-weight:600; }
+.sizeopt:hover:not(:disabled), .showopt:hover:not(:disabled) { color:var(--fg); background:#2f3745;
                                 border-color:var(--line); }
 /* The pressed one is a bed of accent rather than a fill of it: these sit in
    the bar beside the filters, and a solid blue lozenge there would read as a
    filter doing something rather than as which of three sizes is on. */
-.sizeopt[aria-pressed="true"] { background:var(--accent-bed);
+.sizeopt[aria-pressed="true"], .showopt[aria-pressed="true"] { background:var(--accent-bed);
                                 color:var(--fg); }
 /* **It stays at the top of the screen for as long as you are in it.** Two
    thousand thumbnails scroll past in a few seconds and they all look alike
@@ -823,7 +824,7 @@ h3.group[data-state="some"] .grppick { background:var(--top);
 .cell.picked { outline:3px solid var(--accent); outline-offset:-3px;
                z-index:1; }
 .cell.picked img { opacity:.75; }
-.badge { position:absolute; right:4px; bottom:4px; background:#000a;
+.badge { background:#000a;
          padding:1px 5px; border-radius:3px; font-size:11px; }
 /* Out of the way until wanted: 2,000 circles over 2,000 photographs is a page
    about its own controls. Hover reveals it, and a made choice keeps it. */
@@ -837,14 +838,15 @@ h3.group[data-state="some"] .grppick { background:var(--top);
    beside a living file. The picture is drained and dimmed rather than merely
    badged: at a glance down a grid the corner marks are what every other fact
    already uses, and all four corners are taken.
-   The cross sits where the select circle does and gets out of its way on
-   hover, so the two never argue over the same 20 pixels. */
+   The cross leads the fixed end of the top lane, beside the circle, so the
+   lane of facts flows up to it rather than under it. It was `"¹5"` in a
+   string that reads `¹` as an escape, and drew as a superscript one and a
+   five. */
 .cell.gone img { opacity:.32; filter:grayscale(1); }
-.cell.gone::after { content:"¹5"; position:absolute; left:5px; top:2px;
+.cell.gone .ov.top .fix::before { content:"\\2715"; order:-1;
                     color:var(--gone); font-size:17px; font-weight:700;
                     line-height:20px; text-shadow:0 1px 3px #000d;
-                    pointer-events:none; transition:opacity .08s; }
-.cell.gone:hover::after { opacity:0; }
+                    pointer-events:none; }
 .bin-link { color:var(--gone); font-weight:600; }
 .cell.picked .pick::after,
 .tile.picked .pick::after { content:"\\2713"; color:#0d0f12; font-weight:700;
@@ -856,10 +858,9 @@ h3.group[data-state="some"] .grppick { background:var(--top);
    and a cull needs both at once. */
 .cell[data-audience]:not([data-audience=""]) {
   box-shadow: inset 0 0 0 3px var(--keep); }
-/* The stack count, top-right beside the tags: it is a fact about the file
-   like they are, and a stack is almost never also heavily tagged. Reads as a
-   depth — a card with cards behind it. */
-.stack { position:absolute; right:4px; top:4px; z-index:3;
+/* The stack count, in the fixed end of the top lane beside the circle.
+   Reads as a depth — a card with cards behind it. */
+.stack { position:relative; z-index:3;
          background:#000b; color:var(--fg); font-size:11px; font-weight:600;
          padding:1px 6px; border-radius:3px;
          box-shadow:2px -2px 0 -1px #000b, 4px -4px 0 -2px #000b; }
@@ -886,13 +887,13 @@ h3.group[data-state="some"] .grppick { background:var(--top);
 /* Inside an opened stack, the one that speaks. Everything in there looks
    alike — that is why they were stacked — so without this there is nothing to
    say which one the grid outside will show. */
-.top-mark { position:absolute; right:4px; top:4px; z-index:3;
+.top-mark { position:relative; z-index:3;
             background:var(--accent); color:#0d0f12; font-size:10px;
             font-weight:700; letter-spacing:.05em; text-transform:uppercase;
             padding:2px 6px; border-radius:3px; }
-/* Cut from a video (spec/clips.md). Top-left, the one corner nothing else
-   holds — the select circle comes up over it on hover, which is when it is
-   wanted instead. */
+/* Cut from a video (spec/clips.md). In the fixed end of the top lane, left
+   of the stack badge: it is the same kind of fact about the file, and it has
+   no lane of its own to be moved to — only On or Off in Display. */
 dialog.choice { background:var(--panel); color:var(--fg);
                 border:1px solid var(--line); border-radius:8px;
                 max-width:min(440px, calc(100vw - 32px)); padding:16px; }
@@ -902,34 +903,56 @@ dialog.choice .choices { display:flex; flex-wrap:wrap; gap:8px;
 dialog.choice button { min-height:40px; }
 dialog.choice button.primary { background:var(--accent); color:#0d0f12;
                                border-color:var(--accent); font-weight:600; }
-.clip-mark { position:absolute; left:5px; top:5px; z-index:1;
+.clip-mark { position:relative; z-index:1;
              background:#000b; color:var(--fg); font-size:10px;
              font-weight:700; letter-spacing:.05em; text-transform:uppercase;
              padding:2px 6px; border-radius:3px; }
-/* Both of them stand where the tags do, and were simply covering them. */
-.cell.marked .tags { padding-right:40px; }
-/* People and access bottom-left, tags top-right, duration bottom-right —
-   three corners, nothing overlapping. Each value is its own chip: a thumbnail
-   is 150px and three role names are not, so one run of text just gets cut off
-   mid-word with no way to find out what it said. */
-.who, .tags, .folk { position:absolute; display:flex; gap:3px;
-                     overflow:hidden; max-width:64%; }
-.who  { left:5px; bottom:4px; }
-.tags { right:4px; top:4px; justify-content:flex-end; max-width:72%; }
-/* **Who is in it, above who can see it.** Two facts about people in one
-   corner, one line each, rather than one run in two colours: *pictures of
-   Mum* and *pictures Mum may see* are opposite questions that happen to take
-   the same kind of word, and the hue should not have to carry the whole
-   difference between them on a 150px tile.
+/* **Two lanes, and what is always there holds the right-hand end of each.**
+   Every optional fact about a file — who is in it, who can see it, its tags,
+   which part of the event — goes in the top lane or the bottom one, as the
+   viewer chose in Display (`_INFO`), and flows left to right. A lane that
+   runs out of width wraps *from its own edge inward*: the top one downward,
+   the bottom one upward, so the middle of the photograph is the last thing
+   covered. Nothing is cut to an ellipsis to make it fit; past three lines
+   (two at the small size) the rest are counted in one `+N`.
 
-   The blue people wear, the same value a folder card gives them, because one
-   kind of thing is one colour whichever surface it is written on. */
-.folk { left:5px; bottom:4px; }
-/* Above whatever else is already down there — the access chips, or the mark
-   that says nobody has access yet. The same step the duration badge takes
-   over a sub-event, and the same number. */
-.cell:has(.who) .folk, .cell:has(.unshared) .folk { bottom:21px; }
-.who i, .tags i, .folk i { font-style:normal; max-width:80px; overflow:hidden;
+   The right-hand ends are not part of the flow. Top-right is the select
+   circle with the stack badge and the clip mark to its left; bottom-right is
+   a video's length. They were absolutely placed, each in a corner, and a
+   sub-event that grew pushed the duration up off its own corner. */
+.ov { position:absolute; left:4px; right:4px; display:flex; gap:4px;
+      pointer-events:none; z-index:2; }
+.ov.top { top:4px; align-items:flex-start; }
+.ov.bot { bottom:4px; align-items:flex-end; }
+.ov .lane { flex:1; min-width:0; display:flex; flex-wrap:wrap; gap:3px;
+            align-items:center; }
+.ov.bot .lane { flex-wrap:wrap-reverse; }
+.ov .fix { flex:none; display:flex; gap:4px; align-items:center; }
+/* Only the things in a lane take the pointer: a tooltip, a link, a circle.
+   The lane between them is the photograph, and a press there opens it. */
+.ov .lane > *, .ov .lane i, .ov .fix > * { pointer-events:auto; }
+/* A kind of fact is its chips, not a box around them, so the chips of two
+   kinds share one wrapping run instead of each starting a line. */
+.ov .who, .ov .tags, .ov .folk { display:contents; }
+.ov .pick { position:relative; left:auto; top:auto; }
+.ov .unshared { position:relative; left:auto; bottom:auto; flex:none;
+                margin:0 2px; }
+.ov .more { font-style:normal; padding:1px 5px; border-radius:3px;
+            background:#000b; color:var(--fg); font-size:10px;
+            font-weight:700; }
+.ov .cut { display:none; }
+/* Off, everywhere it is drawn: on the thumbnail and in a folder card's row. */
+html[data-info-people="off"] .ov .folk,
+html[data-info-people="off"] .spread i.people,
+html[data-info-access="off"] .ov .who,
+html[data-info-access="off"] .ov .unshared,
+html[data-info-access="off"] .spread i.audience,
+html[data-info-access="off"] .spread i.none,
+html[data-info-tags="off"] .ov .tags,
+html[data-info-tags="off"] .spread i.tags,
+html[data-info-subevent="off"] .ov .part,
+html[data-info-clip="off"] .ov .clip-mark { display:none; }
+.who i, .tags i, .folk i { font-style:normal; max-width:100%; overflow:hidden;
                   white-space:nowrap; text-overflow:ellipsis;
                   padding:1px 5px; border-radius:3px; background:#000b;
                   font-size:10px; font-weight:600; }
@@ -948,13 +971,10 @@ dialog.choice button.primary { background:var(--accent); color:#0d0f12;
    event's own colour, because it is the same kind of fact about the file and
    not the same kind of thing. The part alone: *Taormina* is the news on a
    150px thumbnail, and the whole name is in the tooltip. */
-.part { position:absolute; right:4px; bottom:4px; max-width:64%;
+.part { max-width:100%; box-sizing:border-box;
         overflow:hidden; white-space:nowrap; text-overflow:ellipsis;
         padding:1px 5px; border-radius:3px; background:#000b;
         color:#f2a3ca; font-size:10px; font-weight:600; }
-/* A video says how long it is in the same corner, so it steps up rather than
-   sitting under the part. */
-.cell:has(.part) .badge { bottom:21px; }
 
 /* Whose work to look at. Links rather than a control, because /history
    carries no page script and because every filter in this app lives in the
@@ -1115,14 +1135,20 @@ h2.year span { font-size:13px; font-weight:400; }
 .memenu .sizerow { display:flex; align-items:center;
                    justify-content:space-between; gap:12px; padding:5px 10px; }
 .memenu .rowlab { color:var(--dim); }
+/* A heading over the facts, so six rows read as a size and then a list. */
+.memenu .rowhead { display:block; padding:9px 10px 2px; color:var(--dim);
+                   font-size:11px; font-weight:700; letter-spacing:.06em;
+                   text-transform:uppercase; }
+/* The Display menu is the account menu's shape on the bar's side. */
+.disp .memenu { min-width:280px; }
 /* Every row but the segmented one, which is three buttons side by side and
    is the one thing in here that must not be stretched to the width. */
-.memenu a, .memenu button:not(.sizeopt) {
+.memenu a, .memenu button:not(.sizeopt):not(.showopt) {
           display:block; width:100%; text-align:left;
           padding:7px 10px; border:0; background:none; color:var(--fg);
           font:inherit; border-radius:4px; text-decoration:none;
           cursor:pointer; box-shadow:none; }
-.memenu a:hover, .memenu button:not(.sizeopt):hover {
+.memenu a:hover, .memenu button:not(.sizeopt):not(.showopt):hover {
           background:#2f3745; box-shadow:none; border-color:transparent; }
 .memenu form { margin:0; }
 /* The way out is the one thing in here that is not navigation. */
@@ -1275,7 +1301,7 @@ h2.year span { font-size:13px; font-weight:400; }
      room for it in the bar. Both copies are always rendered: which one
      applies changes while the page is open, by turning the phone over. */
   .memenu .viewrow { display:flex; }
-  .right .sizeset { display:none; }
+  .right .sizeset, .right > .disp { display:none; }
   /* The corner stays. It was moved to the bottom when the bar was four rows
      deep; the bar is the filters and a gear now, and a picture of the grid
      under it earns the thirty pixels. */
@@ -1381,10 +1407,6 @@ h2.year span { font-size:13px; font-weight:400; }
      way the select circle already is here. */
   .rmgrp { opacity:.55; }
   .addgrp { opacity:1; }
-  /* Nothing hides it on a tap, so it moves off the circle instead of
-     waiting to be got out of the way. */
-  .cell.gone::after { left:auto; right:6px; }
-  .cell.gone:hover::after { opacity:1; }
 
   /* A tap leaves `:hover` stuck on whatever was tapped until something else
      is, so every link keeps a blue box and every folder card stays lit — the
@@ -1428,7 +1450,7 @@ h2.year span { font-size:13px; font-weight:400; }
      them, while `.chips .spare { display:none }` sat two blocks above being
      outweighed. A button centres its own text; nothing here needed to say so.
      */
-  button:not(.tick):not(.grppick):not(.pick):not(.sizeopt), .chip {
+  button:not(.tick):not(.grppick):not(.pick):not(.sizeopt):not(.showopt), .chip {
     min-height:44px; padding:8px 12px; }
   /* Rows in a dropdown are full width, so they stay blocks and simply get
      taller. Carrying the same `:not()`s as the rule above, and not for
@@ -1438,13 +1460,13 @@ h2.year span { font-size:13px; font-weight:400; }
      rule never touched them. Equal weight and later in the sheet is what
      makes this the one that counts. */
   .memenu a, .memenu .quiet, .memenu .bin-link,
-  .memenu button:not(.tick):not(.grppick):not(.pick):not(.sizeopt) {
+  .memenu button:not(.tick):not(.grppick):not(.pick):not(.sizeopt):not(.showopt) {
     min-height:44px; display:flex; align-items:center; width:100%; }
   /* `.sizeopt` is out of both, and out of them by name. It is three buttons
      in one lozenge: stretched to the width there is one of them per line,
      and given a 44px `min-height` inside a menu row that has its own it
      simply grows the row. It gets the thumb-sized square it needs instead. */
-  .sizeopt { min-width:46px; height:44px; }
+  .sizeopt, .showopt { min-width:46px; height:44px; }
   .opt { min-height:44px; align-items:center; }
   .me > summary { min-height:44px; }
 
@@ -1786,9 +1808,10 @@ _BAR_JS: str = """
 #: `/history`, `/accounts` and the login screen too — the same reason the
 #: menu carries no page script of its own.
 _MENU_JS: str = """
-(function () {
-  var me = document.getElementById('me');
-  if (!me) return;
+// Every menu of this shape — the account and Display both — dismisses the
+// same way, so each gets the same three listeners.
+Array.prototype.forEach.call(document.querySelectorAll('details.me'),
+                             function (me) {
   function shut() { me.open = false; }
   // Escape closes it and puts the keyboard back on the control that opened
   // it. Without the second half the next Tab starts from the top of the
@@ -1817,8 +1840,18 @@ _MENU_JS: str = """
   me.addEventListener('focusout', function (e) {
     if (me.open && e.relatedTarget && !me.contains(e.relatedTarget)) shut();
   });
-})();
+});
 """
+
+
+#: The Display choices, applied to `<html>` **before the page paints**, so a
+#: fact turned off is never drawn and then taken away. Only the attributes:
+#: the stylesheet does the hiding, and the page script moves what is shown
+#: into its lane. Anything not one of the known values is left off, which
+#: leaves the default the stylesheet already assumes.
+_INFO_BOOT: str = """<script>try{var s=JSON.parse(localStorage.getItem('pix2.info')
+||'{}'),ok={off:1,top:1,bot:1,on:1};for(var k in s)if(ok[s[k]]&&/^[a-z]+$/.test(k))
+document.documentElement.setAttribute('data-info-'+k,s[k]);}catch(e){}</script>"""
 
 
 def _page(title: str, body: str, *, tools: str = "", rows: str = "",
@@ -1900,7 +1933,7 @@ def _page(title: str, body: str, *, tools: str = "", rows: str = "",
 <meta name="apple-mobile-web-app-title" content="pix">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <title>{title}</title>
-<link rel="icon" href="{_FAVICON}"><style>{_STYLE}</style></head><body>
+<link rel="icon" href="{_FAVICON}"><style>{_STYLE}</style>{_INFO_BOOT}</head><body>
 <div class="topbar">
 <div class="row"><button class="back" id="back" aria-label="Back"
  title="Back">{_BACK}</button>{_brand(zoom)}{tools}
@@ -2055,6 +2088,70 @@ _SIZES: tuple[tuple[str, str, str], ...] = (
     ("small", "S", "Small thumbnails"),
     ("medium", "M", "Medium thumbnails"),
     ("large", "L", "Large thumbnails"))
+
+
+#: What a thumbnail can say about itself, in the order the Display menu lists
+#: it and a lane draws it: `(key, label, where it goes by default)`.
+#:
+#: **Which of them, and where, is the viewer's.** A grid being culled wants
+#: access and nothing else; one being browsed wants none of it. A lane is
+#: `top` or `bot`; `on` is a fact with a place of its own — the clip mark sits
+#: by the stack badge, because it is the same kind of fact about the file.
+#:
+#: What is *not* here cannot be turned off: the stack badge, the duration, the
+#: select circle and the deleted cross. Each is either a control or the one
+#: thing that says the photograph is not what it looks like.
+#:
+#: The defaults are the arrangement before there was a choice, so nothing
+#: moves for anybody who never opens the menu.
+_INFO: tuple[tuple[str, str, str], ...] = (
+    ("people", "People", "bot"),
+    ("access", "Access", "bot"),
+    ("tags", "Tags", "top"),
+    ("subevent", "Sub-event", "bot"),
+    ("clip", "Clip / Still", "on"),
+)
+
+
+def _infoset(key: str, label: str, default: str) -> str:
+    """One fact's switch: Off / Top / Bottom, or Off / On for a fixed one."""
+    choices = (("off", "Off"), ("on", "On")) if default == "on" else (
+        ("off", "Off"), ("top", "Top"), ("bot", "Bottom"))
+    opts = "".join(
+        f'<button type="button" class="showopt" data-info="{key}" '
+        f'data-at="{val}" aria-pressed="{"true" if val == default else "false"}"'
+        f'>{word}</button>' for val, word in choices)
+    return (f'<span class="sizerow"><span class="rowlab">{label}</span>'
+            f'<span class="sizeset" role="group" aria-label="{label}">'
+            f'{opts}</span></span>')
+
+
+def _display_rows(user: Principal) -> str:
+    """Everything about how the grid is drawn, as rows: size, then the facts.
+
+    Access only for an administrator, the same as on a folder card: everybody
+    else sees only what was shared with them, so who else can see it is not a
+    fact their grid has any use for.
+    """
+    return ('<span class="sizerow"><span class="rowlab">Thumbnail size'
+            f'</span>{_sizeset()}</span>'
+            '<span class="rowhead">Info</span>'
+            + "".join(_infoset(*i) for i in _INFO
+                      if i[0] != "access" or user.is_admin))
+
+
+def _display_menu(user: Principal) -> str:
+    """The Display menu, for the bar.
+
+    The size control used to stand there on its own. It is still the first
+    row, because it is still the one you reach for most — but it is one of
+    six ways of saying how you want to look, and a bar with six segmented
+    controls in it is a bar about itself. Narrow, the same rows are a group of
+    the account menu instead, the way the size control already was.
+    """
+    return ('<details class="me disp"><summary><span class="name">Display'
+            '</span><i class="caret">&#9662;</i></summary>'
+            f'<div class="memenu">{_display_rows(user)}</div></details>')
 
 
 def _sizeset() -> str:
@@ -2838,9 +2935,8 @@ def stack_page(folder: str, name: str,
                + (f'<span class="dim">{_h(when)}</span>' if when else "")
                + f'</span><a class="leave" href="{_h(where)}">'
                  f'Leave this stack</a>'),
-        right=('<span class="sizerow"><span class="rowlab">Thumbnail size'
-               f'</span>{_sizeset()}</span>'),
-        bar=_sizeset(),
+        right=_display_rows(user),
+        bar=_display_menu(user),
         rows=_stack_actions(user, decided),
         script=_view_script(user, view, [], stack=key, back=where),
         info=f'<span class="line">{len(rows)} files</span>',
@@ -2916,9 +3012,8 @@ def browse(request: Request,
         # Twice, and the width picks: a labelled row inside the menu, where
         # there is no room for it in the bar, and the bare control in the bar
         # where there is. See `_sizeset`.
-        right=('<span class="sizerow"><span class="rowlab">Thumbnail size'
-               f'</span>{_sizeset()}</span>'),
-        bar=_sizeset(),
+        right=_display_rows(user),
+        bar=_display_menu(user),
         rows=_actions(user),
         # Up a zoom: the same query, minus the stack. A folder view of one
         # stack is the stack, so the only thing the coarser view can say about
@@ -3467,16 +3562,27 @@ def _cell(row: sqlite3.Row, view: ix.Filters | None = None, *,
         f'data-behind="{row["behind"] or 0}" '
         f'data-proposed="{_guessed(row, view or ix.Filters())}">'
         f'<img loading="lazy" src="/thumb/{_q(row["folder"])}/{_q(row["name"])}">'
-        f'<button class="pick" aria-label="select"></button>'
-        + (f'<span class="badge">{_dur(row["duration"])}</span>'
-           if row["kind"] == "video" else "")
-        + _clip_badge(row, view or ix.Filters())
-        + mark
-        + _people_html(_split(row["people"]), view or ix.Filters())
-        + _access_html(shared) + _chips_html("tags", tags)
-        + _part_html(row, view or ix.Filters(), said)
+        # Two lanes, each a run of optional facts that wraps from its own
+        # edge inward, and the right-hand end of each held by what is always
+        # there. Drawn in the default arrangement (`_INFO`); the page script
+        # moves each fact to the lane the viewer chose (`placeInfo`).
+        + _lane("top", _chips_html("tags", tags),
+                _clip_badge(row, view or ix.Filters()) + mark
+                + '<button class="pick" aria-label="select"></button>')
+        + _lane("bot",
+                _people_html(_split(row["people"]), view or ix.Filters())
+                + _access_html(shared)
+                + _part_html(row, view or ix.Filters(), said),
+                f'<span class="badge">{_dur(row["duration"])}</span>'
+                if row["kind"] == "video" else "")
         + "</div>"
     )
+
+
+def _lane(where: str, flow: str, fixed: str) -> str:
+    """One edge of a thumbnail: the facts that flow, then the ones that stay."""
+    return (f'<div class="ov {where}"><span class="lane">{flow}</span>'
+            f'<span class="fix">{fixed}</span></div>')
 
 
 def _clip_attr(row: sqlite3.Row) -> str:
@@ -4102,6 +4208,7 @@ function drawSize(){
   // the width it is about to stop being.
   const px=cellPixels();
   cells.forEach(c=>useSource(c,px));
+  if(typeof clampInfo==='function') clampInfo(cells);
 }
 
 function chooseSize(next){
@@ -4127,6 +4234,178 @@ sizeOpts.forEach(b=>{
   b.onclick=e=>{e.stopPropagation();chooseSize(b.dataset.size);};
 });
 drawSize();
+
+// --- what a thumbnail says (Display) -----------------------------------------
+// Which facts a thumbnail shows, and in which lane. A preference about
+// looking, like the size, so it lives in this browser: a phone and a desk want
+// different amounts of writing over a photograph. The server draws the default
+// arrangement (`_INFO`) and this moves each fact to where it was asked to be.
+//
+// What is hidden is hidden by the stylesheet, from an attribute on <html> set
+// before the page paints (see `_INFO_BOOT`), so a fact turned off never
+// flashes on. Only *where* needs a script, because a lane is a box and a fact
+// has to be inside one.
+const INFO_DEFAULT={people:'bot',access:'bot',tags:'top',subevent:'bot',clip:'on'};
+// Each fact and the elements it is drawn as, in the order a lane lists them.
+const INFO_PARTS=[['people',['.folk']],['access',['.who','.unshared']],
+                  ['tags',['.tags']],['subevent',['.part']]];
+const INFO_ALLOWED={people:['off','top','bot'],access:['off','top','bot'],
+                    tags:['off','top','bot'],subevent:['off','top','bot'],
+                    clip:['off','on']};
+const info={...INFO_DEFAULT};
+try{
+  const saved=JSON.parse(localStorage.getItem('pix2.info')||'{}');
+  for(const k of Object.keys(INFO_DEFAULT))
+    if(saved&&INFO_ALLOWED[k].includes(saved[k])) info[k]=saved[k];
+}catch(e){}
+const showOpts=Array.prototype.slice.call(
+  document.querySelectorAll('.showopt'));
+
+// One edge of a cell, made if the cell came without one — a cell built by
+// hand, or by markup from before there were lanes.
+function laneOf(c,where){
+  let ov=null;
+  for(const k of c.children) if(k.classList.contains('ov')&&
+                                k.classList.contains(where)) ov=k;
+  if(!ov){
+    ov=document.createElement('div'); ov.className='ov '+where;
+    const lane=document.createElement('span'); lane.className='lane';
+    const fix=document.createElement('span'); fix.className='fix';
+    ov.appendChild(lane); ov.appendChild(fix); c.appendChild(ov);
+  }
+  let lane=null, fix=null;
+  for(const k of ov.children){
+    if(k.classList.contains('lane')) lane=k;
+    if(k.classList.contains('fix')) fix=k;
+  }
+  return {lane, fix};
+}
+
+// Everything in its place. Facts go to their lane in menu order; what is
+// always there goes to the right-hand end it owns — the clip mark, then the
+// stack badge, then the circle at the top; the length at the bottom.
+function placeInfo(c){
+  const top=laneOf(c,'top'), bot=laneOf(c,'bot');
+  for(const [key,sels] of INFO_PARTS){
+    const into=info[key]==='top'?top.lane:bot.lane;
+    for(const sel of sels){
+      // Appended even where it already is, which is what keeps a lane in
+      // the menu's order when two facts are moved into it one at a time.
+      const el=c.querySelector(sel);
+      if(el) into.appendChild(el);
+    }
+  }
+  for(const sel of ['.clip-mark','.stack','.top-mark','.pick']){
+    const el=c.querySelector(sel);
+    if(el) top.fix.appendChild(el);
+  }
+  const len=c.querySelector('.badge');
+  if(len) bot.fix.appendChild(len);
+}
+
+// Past a few lines a lane stops and says how many more. Measured, because
+// how many chips make a line depends on how wide the thumbnail is and how
+// long the words are — so this runs after anything that changes either.
+// Every reset before any read, and every read before any write, so a grid of
+// two thousand costs two layouts rather than two thousand.
+function laneLines(){ return thumbSize==='small'?2:3; }
+function clampInfo(list){
+  const lanes=[];
+  for(const c of list){
+    if(c.hidden) continue;
+    for(const k of c.children){
+      if(!k.classList.contains('ov')) continue;
+      for(const l of k.children) if(l.classList.contains('lane')) lanes.push(l);
+    }
+  }
+  for(const l of lanes){
+    for(const m of l.querySelectorAll('.more')) m.remove();
+    for(const x of l.querySelectorAll('.cut')) x.classList.remove('cut');
+  }
+  const max=laneLines();
+  const plan=[];
+  for(const l of lanes){
+    const bits=[];
+    for(const x of l.querySelectorAll('i')) bits.push(x);
+    for(const sel of ['.part','.unshared']){
+      const x=l.querySelector(sel); if(x) bits.push(x);
+    }
+    if(bits.length<2) continue;
+    const at=bits.map(x=>[x,x.getBoundingClientRect()]).filter(
+      ([,r])=>r.width||r.height);
+    const tops=[...new Set(at.map(([,r])=>Math.round(r.top)))];
+    if(tops.length<=max) continue;
+    // The lane's own edge first: the top lane reads downward, the bottom
+    // one upward, so its first line is its lowest.
+    const up=l.parentNode&&l.parentNode.classList.contains('bot');
+    tops.sort((a,b)=>up?b-a:a-b);
+    const keep=new Set(tops.slice(0,max));
+    plan.push([l,at.filter(([,r])=>!keep.has(Math.round(r.top))).map(([x])=>x),
+               at.filter(([,r])=>Math.round(r.top)===tops[max-1]).map(([x])=>x)]);
+  }
+  for(const [l,cut,last] of plan){
+    // Room for the count on the last kept line: one more goes with the rest.
+    const drop=last.length>1?[last[last.length-1]]:[];
+    const gone=cut.concat(drop);
+    gone.forEach(x=>x.classList.add('cut'));
+    const more=document.createElement('i');
+    more.className='more';
+    more.textContent='+'+gone.length;
+    more.setAttribute('title',gone.map(x=>x.textContent||x.getAttribute('title')
+                                      ||'').filter(Boolean).join(', '));
+    l.appendChild(more);
+  }
+}
+
+function drawInfo(){
+  const root=document.documentElement;
+  for(const [k,v] of Object.entries(info)){
+    if(root&&root.setAttribute) root.setAttribute('data-info-'+k,v);
+  }
+  showOpts.forEach(b=>b.setAttribute('aria-pressed',
+    info[b.dataset.info]===b.dataset.at?'true':'false'));
+  cells.forEach(placeInfo);
+  clampInfo(cells);
+}
+
+function chooseInfo(key,at){
+  if(!INFO_ALLOWED[key]||!INFO_ALLOWED[key].includes(at)||info[key]===at) return;
+  info[key]=at;
+  try{localStorage.setItem('pix2.info',JSON.stringify(info));}catch(e){}
+  drawInfo();
+}
+showOpts.forEach(b=>{
+  b.onclick=e=>{e.stopPropagation();chooseInfo(b.dataset.info,b.dataset.at);};
+});
+
+// A chip made later — a write repaints access, a stack gets its badge, a
+// stack opened in place brings its files — is made straight into the cell, by
+// code that knows nothing about lanes. Rather than teach every one of them,
+// anything that arrives as a cell's own child is put where it belongs.
+if(typeof MutationObserver!=='undefined'&&grid){
+  let due=new Set(), queued=false;
+  new MutationObserver(records=>{
+    for(const r of records){
+      const t=r.target;
+      if(t&&t.classList&&t.classList.contains('cell')) due.add(t);
+      for(const n of r.addedNodes||[])
+        if(n.classList&&n.classList.contains('cell')) due.add(n);
+    }
+    if(queued||!due.size) return;
+    queued=true;
+    requestAnimationFrame(()=>{
+      queued=false;
+      const list=[...due]; due=new Set();
+      list.forEach(placeInfo); clampInfo(list);
+    });
+  }).observe(grid,{childList:true,subtree:true});
+}
+let infoTimer=null;
+window.addEventListener('resize',()=>{
+  clearTimeout(infoTimer);
+  infoTimer=setTimeout(()=>clampInfo(cells),150);
+});
+drawInfo();
 
 // --- filter chips ------------------------------------------------------------
 function url(patch){

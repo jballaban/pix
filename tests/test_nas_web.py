@@ -145,7 +145,8 @@ def test_a_deleted_cell_says_so(client: TestClient, writable: Path) -> None:
     html = client.get("/browse?event=Italy%20-%20Sicily&deleted=with").text
     assert 'class="cell gone"' in html
     assert 'data-deleted="1"' in html
-    assert ".cell.gone::after" in html, "nothing marks it"
+    assert '.cell.gone .ov.top .fix::before { content:"\\2715";' in html, \
+        "nothing marks it"
 
 
 def test_a_non_admin_cannot_ask_for_the_deleted(
@@ -982,7 +983,13 @@ def test_a_stack_mark_does_not_cover_the_tags(
 
     html = client.get("/browse?event=Italy%20-%20Sicily").text
     assert "cell marked" in html
-    assert ".cell.marked .tags" in html
+    # The badge is in the fixed end of the top lane and the tags flow in the
+    # lane beside it, so neither can be drawn over the other.
+    top = _cell_html(html, "a.jpg")
+    top = top[top.index('class="ov top"'):top.index('class="ov bot"')]
+    lane, fix = top.split('class="fix"')
+    assert 'class="tags"' in lane
+    assert 'class="stack' in fix
 
 
 def test_bringing_a_stack_up_is_part_of_the_same_gesture(
@@ -3649,11 +3656,13 @@ def test_what_is_about_you_lives_under_your_name(client: TestClient) -> None:
     filters, which are what the bar is for."""
     html = client.get("/browse").text
     bar = html[html.index('class="row"'):html.index("</div><main")]
+    account = bar[bar.index('id="me"'):]
 
-    menu = bar[bar.index('class="memenu"'):]
+    menu = account[account.index('class="memenu"'):]
     for item in ("/history", "/accounts", "Sign out"):
         assert item in menu, f"{item} is not under the name"
-    assert "admin" in bar[:bar.index('class="memenu"')], "the name is hidden"
+    assert "admin" in account[:account.index('class="memenu"')], \
+        "the name is hidden"
 
 
 def test_what_is_waiting_is_an_icon_not_a_sentence(
@@ -3775,8 +3784,9 @@ def test_the_menu_can_be_dismissed_without_going_back_to_the_trigger(
     # from the top of the document.
     assert "s.focus()" in js
 
+    # Every menu of that shape, the account's and Display's alike.
     for url in ("/browse", "/history", "/accounts", "/"):
-        assert "getElementById('me')" in client.get(url).text, url
+        assert "querySelectorAll('details.me')" in client.get(url).text, url
 
 
 def test_the_menu_comes_out_of_the_control_that_opened_it(
@@ -4050,9 +4060,12 @@ def test_the_three_corners_do_not_collide(client: TestClient) -> None:
     """Access bottom-left, tags top-right, duration bottom-right."""
     css = client.get("/browse").text
 
-    assert ".who  { left:5px; bottom:4px; }" in css
-    assert ".tags { right:4px; top:4px;" in css
-    assert ".badge { position:absolute; right:4px; bottom:4px;" in css
+    # Two lanes, each held at its right-hand end by what is always there.
+    assert ".ov.top { top:4px; align-items:flex-start; }" in css
+    assert ".ov.bot { bottom:4px; align-items:flex-end; }" in css
+    assert ".ov .fix { flex:none;" in css
+    # And each wraps from its own edge inward.
+    assert ".ov.bot .lane { flex-wrap:wrap-reverse; }" in css
 
 
 def test_an_edited_cell_looks_like_a_fetched_one(client: TestClient) -> None:
@@ -4516,6 +4529,18 @@ def test_the_offer_is_not_made_to_a_desktop_browser(client: TestClient) -> None:
 
 # --- reachable with a thumb ---------------------------------------------------
 
+def _cell_html(html: str, name: str) -> str:
+    """One thumbnail's markup, whole — from its name to the next cell.
+
+    Not to the first `</div>`: a cell holds its two lanes, and that is where
+    the top one ends.
+    """
+    cell = html[html.index(f'data-name="{name}"'):]
+    ends = [i for i in (cell.find('<div class="cell', 1),
+                        cell.find("</section>")) if i > 0]
+    return cell[:min(ends)] if ends else cell
+
+
 def _media_block(sheet: str, query: str) -> str:
     """One `@media` block's body, braces balanced.
 
@@ -4803,8 +4828,7 @@ def test_a_thumbnail_says_who_is_in_it(
         "folder": "init_2026", "name": "a.jpg", "add_people": ["Mom", "Dad"]})
 
     html = client.get("/browse").text
-    cell = html[html.index('data-name="a.jpg"'):]
-    cell = cell[:cell.index("</div>")]
+    cell = _cell_html(html, "a.jpg")
 
     folk = cell[cell.index('class="folk"'):]
     assert "<i title=\"Dad\">Dad</i>" in folk, folk[:200]
@@ -4823,17 +4847,17 @@ def test_who_is_in_it_is_not_who_can_see_it(
         "add_people": ["Mom"], "add_audience": ["bob"]})
 
     html = client.get("/browse").text
-    cell = html[html.index('data-name="a.jpg"'):]
-    cell = cell[:cell.index("</div>")]
+    cell = _cell_html(html, "a.jpg")
 
-    # Two runs of chips, not one with two colours in it.
+    # Two kinds of chip, each its own run, not one run in two colours.
     assert 'class="folk"' in cell and 'class="who"' in cell
     assert "Mom" in cell[cell.index('class="folk"'):cell.index('class="who"')]
 
     css = html[html.index("<style>"):html.index("</style>")]
-    # Both in the bottom-left corner, the people above.
-    assert ".folk { left:5px; bottom:4px; }" in css
-    assert ".cell:has(.who) .folk, .cell:has(.unshared) .folk"             " { bottom:21px; }" in css
+    # Both in the bottom lane by default, the people first.
+    bottom = cell[cell.index('class="ov bot"'):]
+    assert bottom.index('class="folk"') < bottom.index('class="who"')
+    assert ".ov .who, .ov .tags, .ov .folk { display:contents; }" in css
     # And in the blue people wear — the same value a folder card gives them,
     # because one kind of thing is one colour on every surface.
     assert ".folk i { color:#a6c8ff; }" in css
@@ -4851,8 +4875,7 @@ def test_a_thumbnail_leaves_off_the_person_the_view_is_already_about(
         "folder": "init_2026", "name": "a.jpg", "add_people": ["Mom", "Dad"]})
 
     narrowed = client.get("/browse?person=Mom").text
-    cell = narrowed[narrowed.index('data-name="a.jpg"'):]
-    cell = cell[:cell.index("</div>")]
+    cell = _cell_html(narrowed, "a.jpg")
     folk = cell[cell.index('class="folk"'):]
 
     assert "Dad" in folk, "the name that is still news is gone too"
@@ -5611,7 +5634,7 @@ def test_three_rarely_used_controls_became_one() -> None:
     # And the size control goes back inside it — the whole group, so that a
     # section divider and its padding are not left standing over nothing.
     assert ".memenu .viewrow { display:flex; }" in coarse
-    assert ".right .sizeset { display:none; }" in coarse
+    assert ".right .sizeset, .right > .disp { display:none; }" in coarse
     # Which is the off position everywhere else.
     assert ".memenu .viewrow { display:none; }" in web._STYLE
 
@@ -5626,11 +5649,11 @@ def test_the_size_control_stands_in_the_bar_where_there_is_room(
     html = client.get("/browse?event=Italy%20-%20Sicily").text
     row = html[html.index('class="row"'):html.index("</div><main")]
 
-    assert row.count('class="sizeset"') == 2, row
-    # One in the bar, beside the account rather than inside it; one inside,
-    # on a row that says what it is on — three letters in a box say nothing.
-    outside, inside = row.split('class="memenu"')
-    assert 'class="sizeset"' in outside
+    assert row.count('data-size="small"') == 2, row
+    # One in the bar's Display menu, beside the account rather than inside
+    # it; one inside, on a row that says what it is on — three letters in a box say nothing.
+    outside, inside = row.split('id="me"')
+    assert 'data-size="small"' in outside
     assert 'class="rowlab">Thumbnail size' in inside
     assert 'class="sizeset"' in inside
 
@@ -6027,6 +6050,68 @@ def test_a_touchscreen_that_claims_hover_reveals_nothing_on_hover() -> None:
     hover = _media_block(web._STYLE, "(hover: none), (any-pointer: coarse)")
 
     assert ".pick { opacity:.55; }" in hover
+
+
+# --- Display --------------------------------------------------------------------
+
+def test_display_offers_every_optional_fact_and_nothing_required(
+    client: TestClient
+) -> None:
+    """Size first, then each fact a thumbnail can carry with its places. What
+    cannot be turned off — the stack badge, the length, the circle — is not
+    offered."""
+    html = client.get("/browse").text
+    menu = html[html.index('class="me disp"'):html.index('id="me"')]
+
+    assert menu.index('data-size="small"') < menu.index('data-info=')
+    for key in ("people", "access", "tags", "subevent"):
+        for at in ("off", "top", "bot"):
+            assert f'data-info="{key}" data-at="{at}"' in menu, (key, at)
+    # A fact with a place of its own is only on or off.
+    assert 'data-info="clip" data-at="on"' in menu
+    assert 'data-info="clip" data-at="top"' not in menu
+    for fixed in ("stack", "duration", "badge"):
+        assert f'data-info="{fixed}"' not in menu
+
+
+def test_a_household_member_is_not_offered_access(
+    household: dict[str, object]
+) -> None:
+    kid = cast(TestClient, household["kid"])
+    assert 'data-info="access"' not in kid.get("/browse").text
+
+
+def test_a_fact_turned_off_is_hidden_before_the_page_paints(
+    client: TestClient
+) -> None:
+    """The choice is put on `<html>` from the head, so the stylesheet hides a
+    fact before it is ever drawn — on a thumbnail and on a folder card both."""
+    html = client.get("/browse").text
+    head = html[:html.index("</head>")]
+
+    assert "pix2.info" in head and "data-info-" in head
+    css = html[html.index("<style>"):html.index("</style>")]
+    assert 'html[data-info-people="off"] .ov .folk' in css
+    assert 'html[data-info-people="off"] .spread i.people' in css
+    assert 'html[data-info-access="off"] .spread i.none' in css
+    assert 'html[data-info-tags="off"] .spread i.tags' in css
+
+
+def test_a_cell_is_drawn_in_the_default_lanes(
+    client: TestClient, writable: Path
+) -> None:
+    """Tags along the top, people and access and the sub-event along the
+    bottom — the arrangement before there was a choice — with the circle at
+    the top-right and nothing of the photograph's own facts beside it."""
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg",
+        "add_people": ["Mom"], "add_tags": ["beach"]})
+    cell = _cell_html(client.get("/browse").text, "a.jpg")
+    top = cell[cell.index('class="ov top"'):cell.index('class="ov bot"')]
+    bot = cell[cell.index('class="ov bot"'):]
+
+    assert 'class="tags"' in top and 'class="folk"' in bot
+    assert top.index('class="fix"') < top.index('class="pick"')
 
 
 # --- an event, and one level inside it ----------------------------------------

@@ -74,7 +74,7 @@ const sizeBtn = k => sizeOpts.find(b => b.dataset.size === k);
 const pressed = set => set.filter(b => b.getAttribute('aria-pressed') === 'true')
                           .map(b => b.dataset.size).join();
 
-const badgeOn = c => c.children.find(k => k._classes.has('stack')) || null;
+const badgeOn = c => c.querySelector('.stack') || null;
 // Choosing a top is a control on the photograph now, not the photograph
 // itself: clicking one opens it, here as everywhere else.
 const chooseOn = c => c.children.find(k => k._classes.has('choose')) || null;
@@ -865,7 +865,7 @@ function arrow(key, opts) {
     // In its place, what it was really saying. Merging stacks puts several of
     // these among photographs that look alike — which is why they were
     // stacked — and the one to keep is usually one of them.
-    const wasTop = c => c.children.find(k => k._classes.has('top-mark'));
+    const wasTop = c => c.querySelector('.top-mark');
     check('and says instead which one was speaking', !!wasTop(cells[0]),
           'nothing marks the file the stack was showing');
     check('only the ones that were', !wasTop(cells[1]) && !wasTop(opened),
@@ -1157,7 +1157,7 @@ function arrow(key, opts) {
     const two = document.querySelectorAll('.cell').slice(0, 2);
     const wasKind = two[1].dataset.kind;
     two[1].dataset.kind = 'video';
-    two.forEach(c => c.children.find(k => k._classes.has('pick')).click());
+    two.forEach(c => c.querySelector('.pick').click());
 
     const n = calls.length;
     actBtn('stack').click();
@@ -1701,7 +1701,7 @@ function arrow(key, opts) {
     const two = document.querySelectorAll('.cell').slice(0, 2);
     two[0].dataset.audience = 'ghost';
     two[1].dataset.audience = '';
-    two.forEach(c => c.children.find(k => k._classes.has('pick')).click());
+    two.forEach(c => c.querySelector('.pick').click());
     check('two files are selected',
           document.byId.selcount.textContent === '2 selected',
           document.byId.selcount.textContent);
@@ -1760,7 +1760,7 @@ function arrow(key, opts) {
     const two = document.querySelectorAll('.cell').slice(0, 2);
     two[0].dataset.audience = 'ghost';
     two[1].dataset.audience = '';
-    two.forEach(c => c.children.find(k => k._classes.has('pick')).click());
+    two.forEach(c => c.querySelector('.pick').click());
 
     const n = calls.length;
     access.click();
@@ -1873,7 +1873,7 @@ function arrow(key, opts) {
     deselect();
     const one = document.querySelectorAll('.cell')[0];
     one.dataset.event = '';
-    one.children.find(k => k._classes.has('pick')).click();
+    one.querySelector('.pick').click();
 
     actBtn('event').click();
     await settle(); await settle();
@@ -1926,7 +1926,7 @@ function arrow(key, opts) {
     deselect();
     const one = document.querySelectorAll('.cell')[0];
     one.dataset.event = 'Sicily > Taormina';
-    one.children.find(k => k._classes.has('pick')).click();
+    one.querySelector('.pick').click();
 
     actBtn('event').click();
     await settle(); await settle();
@@ -1961,7 +1961,7 @@ function arrow(key, opts) {
     deselect();
     const one = document.querySelectorAll('.cell')[0];
     one.dataset.event = 'Cornwall';
-    one.children.find(k => k._classes.has('pick')).click();
+    one.querySelector('.pick').click();
 
     actBtn('event').click();
     await settle(); await settle();
@@ -2024,12 +2024,12 @@ function arrow(key, opts) {
   {
     deselect();
     const one = document.querySelectorAll('.cell')[0];
-    const partOn = c => c.children.find(k => k._classes.has('part'));
+    const partOn = c => c.querySelector('.part');
     // Earlier blocks set `dataset.event` by hand, which the page never does,
     // so anything they left on the cell is theirs rather than the page's.
     if (partOn(one)) partOn(one).remove();
     one.dataset.event = 'Cornwall';
-    one.children.find(k => k._classes.has('pick')).click();
+    one.querySelector('.pick').click();
     check('a file in no part of its event says nothing', !partOn(one));
 
     actBtn('event').click();
@@ -2076,7 +2076,7 @@ function arrow(key, opts) {
     const two = document.querySelectorAll('.cell').slice(0, 2);
     two[0].dataset.event = 'Sicily > Taormina';
     two[1].dataset.event = 'Sicily > Catania';
-    two.forEach(c => c.children.find(k => k._classes.has('pick')).click());
+    two.forEach(c => c.querySelector('.pick').click());
 
     actBtn('event').click();
     await settle(); await settle();
@@ -2108,7 +2108,7 @@ function arrow(key, opts) {
     const two = document.querySelectorAll('.cell').slice(0, 2);
     two[0].dataset.event = 'Sicily > Taormina';
     two[1].dataset.event = 'Cornwall';
-    two.forEach(c => c.children.find(k => k._classes.has('pick')).click());
+    two.forEach(c => c.querySelector('.pick').click());
 
     actBtn('event').click();
     await settle(); await settle();
@@ -2139,7 +2139,7 @@ function arrow(key, opts) {
     deselect();
     const one = document.querySelectorAll('.cell')[0];
     one.dataset.event = 'Sicily';
-    one.children.find(k => k._classes.has('pick')).click();
+    one.querySelector('.pick').click();
 
     actBtn('event').click();
     await settle(); await settle();
@@ -2185,7 +2185,7 @@ function arrow(key, opts) {
     deselect();
     const one = document.querySelectorAll('.cell')[0];
     one.dataset.event = '';
-    one.children.find(k => k._classes.has('pick')).click();
+    one.querySelector('.pick').click();
 
     actBtn('event').click();
     await settle(); await settle();

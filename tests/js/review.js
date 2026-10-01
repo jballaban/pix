@@ -272,7 +272,7 @@ function deselect() {
         && at('two.jpg') === at('lead.jpg') + 2,
         `${at('lead.jpg')} ${at('one.jpg')} ${at('two.jpg')}`);
   check('and it no longer claims to be a stack',
-        !lead.children.find(k => k._classes.has('stack'))
+        !lead.querySelector('.stack')
         && lead.dataset.proposed === '0');
   check('so it cannot be refused twice', no.hidden === true);
 

@@ -220,7 +220,7 @@ function run() {
         actBtn('download').textContent);
 
   // --- one photograph ---------------------------------------------------------
-  cells[0].children[0].click();
+  cells[0].querySelector('.pick').click();
   actBtn('download').click();
   await settled();
 
@@ -259,8 +259,8 @@ function run() {
 
   // --- a heic keeps its own name -----------------------------------------------
   shared = null; fetched.length = 0;
-  cells[0].children[0].click();   // off
-  cells[1].children[0].click();   // on
+  cells[0].querySelector('.pick').click();   // off
+  cells[1].querySelector('.pick').click();   // on
   actBtn('download').click();
   await settled();
   save.click();
@@ -296,7 +296,7 @@ function run() {
   // --- a selection bigger than the sheet is for --------------------------------
   shared = null; fetched.length = 0; went = null;
   document.submitted = [];
-  cells[0].children[0].click();   // both now
+  cells[0].querySelector('.pick').click();   // both now
   check('two are selected',
         document.byId.selcount.textContent === '2 selected',
         document.byId.selcount.textContent);
@@ -328,7 +328,7 @@ function run() {
   // finishes, which made this the difference between the library being
   // cullable on a phone and not.
   {
-    const on = c => c.children.find(k => k._classes.has('pick'));
+    const on = c => c.querySelector('.pick');
     const fire = (c, type) => (on(c)._listeners[type] || []).forEach(fn => fn({}));
     // A finger that stays down: the hold comes due before it lifts.
     const hold = c => { fire(c, 'touchstart'); heldOut(); fire(c, 'touchend');
@@ -433,7 +433,7 @@ function run() {
     const menu = document.byId.menu;
     focused.length = 0;
     document.activeElement = null;
-    cells[0].children[0].click();
+    cells[0].querySelector('.pick').click();
     actBtn('tags').click();
     await settled();
 
@@ -452,7 +452,7 @@ function run() {
     document.activeElement = null;
     (listeners.scroll || []).forEach(fn => fn());
     check('a scroll of the page itself still closes it', menu.hidden === true);
-    cells[0].children[0].click();   // back to nothing selected
+    cells[0].querySelector('.pick').click();   // back to nothing selected
   }
 
   // --- what a phone actually downloads to fill a cell --------------------------
@@ -510,7 +510,7 @@ function run() {
   check('the word goes back',
         actBtn('download').textContent === 'Download',
         actBtn('download').textContent);
-  cells[0].children[0].click();
+  cells[0].querySelector('.pick').click();
   actBtn('download').click();
   await settled();
   check('nothing is fetched into the page', fetched.length === 0,
