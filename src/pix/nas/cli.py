@@ -204,8 +204,9 @@ def process() -> None:
         raise typer.Exit(code=1) from e
 
     typer.echo(
-        f"{summary.thumbs} thumbnail(s), {summary.previews} preview(s), "
-        f"{summary.skipped} already done, {summary.unsupported} unsupported"
+        f"{summary.actions()}; {summary.skipped} already done, "
+        f"{summary.unsupported} unsupported"
+        + (f", {len(summary.failed)} failed" if summary.failed else "")
     )
     for line in summary.failed[:10]:
         typer.echo(f"  {line}", err=True)

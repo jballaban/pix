@@ -55,7 +55,7 @@ def test_cancel_then_restart_completes_the_rest(
     monkeypatch.setattr(derive, "_resize", interrupt_partway)
     first = derive.run_process()
     assert first.cancelled is True
-    assert first.made < 36                      # 12 files x 3 tiers
+    assert first.made < 48                      # 12 files x 4 outputs
 
     monkeypatch.setattr(derive, "_resize", real)
     second = derive.run_process()
@@ -86,7 +86,8 @@ def test_restart_does_not_redo_finished_work(
     monkeypatch.setattr(derive, "_resize", real)
     second = derive.run_process()
 
-    assert first.made + second.made == 18       # 6 files x 3 tiers, each once
+    assert first.made + second.made == 24       # 6 files x 4: thumb, large,
+                                                # preview, meta — each once
 
 
 def test_partials_are_swept_on_the_next_run(tiers: dict[str, Path]) -> None:

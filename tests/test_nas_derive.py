@@ -162,3 +162,19 @@ def test_orientation_is_applied_not_carried(tiers: dict[str, Path]) -> None:
 
 def test_empty_master_is_not_an_error(tiers: dict[str, Path]) -> None:
     assert derive.run_process().made == 0
+
+
+def test_every_counter_a_run_keeps_is_one_it_reports() -> None:
+    """A counter missing from `ACTIONS` is work a run did and never said:
+    strips and stills were counted for weeks and printed nowhere."""
+    import dataclasses
+
+    counted = {f.name for f in dataclasses.fields(derive.ProcessSummary)
+               if f.type in ("int", int)} - {"skipped", "unsupported"}
+    assert counted == {f for f, _ in derive.ProcessSummary.ACTIONS}
+
+
+def test_the_summary_names_only_what_was_made() -> None:
+    s = derive.ProcessSummary(strips=8, renders=1)
+    assert s.actions() == "1 render(s), 8 strip(s)"
+    assert derive.ProcessSummary().actions() == "nothing made"

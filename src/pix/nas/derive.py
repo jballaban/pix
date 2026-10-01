@@ -42,7 +42,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterator, cast
+from typing import Any, Callable, ClassVar, Iterator, cast
 
 from PIL import Image
 
@@ -204,10 +204,26 @@ class ProcessSummary:
     #: catch up on afterwards, and nothing else does.
     handled: list[Path] = field(default_factory=lambda: [])
 
+    #: Every kind of thing a run makes, as `(counter, what to call it)`, in
+    #: the order they are reported. The one list both the live line and the
+    #: closing summary read, so a new counter cannot be kept and never shown.
+    ACTIONS: ClassVar[tuple[tuple[str, str], ...]] = (
+        ("thumbs", "thumbnail"), ("larges", "large"),
+        ("previews", "preview"), ("metas", "meta"), ("renders", "render"),
+        ("strips", "strip"), ("stills", "still"),
+    )
+
     @property
     def made(self) -> int:
-        return (self.thumbs + self.previews + self.metas + self.renders
-                + self.strips + self.stills)
+        return sum(getattr(self, field_) for field_, _ in self.ACTIONS)
+
+    def actions(self, *, all_: bool = False) -> str:
+        """What was made, as `3 thumbnail(s), 1 render(s)` — only what is
+        nonzero unless `all_`, so a run says what it did rather than reciting
+        every kind of thing it might have."""
+        parts = [f"{getattr(self, f)} {label}(s)" for f, label in self.ACTIONS
+                 if all_ or getattr(self, f)]
+        return ", ".join(parts) if parts else "nothing made"
 
 
 def master_files() -> Iterator[Path]:
@@ -596,10 +612,7 @@ def _status(summary: ProcessSummary, total: int, started: float,
     elapsed = max(time.monotonic() - started, 0.001)
     rate = done / elapsed
 
-    body = (f"{done}/{total}  {summary.thumbs} thumb, "
-            f"{summary.previews} preview, {summary.metas} meta, "
-            f"{summary.renders} render, {summary.strips} strip, "
-            f"{summary.stills} still")
+    body = f"{done}/{total}  {summary.actions(all_=True)}"
     if summary.failed:
         body += f", {len(summary.failed)} failed"
     if done and rate > 0:
@@ -926,7 +939,9 @@ def _derive_clip(clip: Path, summary: ProcessSummary,
         with lock:
             summary.failed.append(f"{clip.name}: {type(e).__name__}: {e}")
     try:
-        _note_clip(clip, decision)
+        if _note_clip(clip, decision):
+            with lock:
+                summary.metas += 1
     except Exception as e:                    # noqa: BLE001
         with lock:
             summary.failed.append(f"{clip.name}: hash: {type(e).__name__}: {e}")
