@@ -8,7 +8,7 @@ is proven. When the old architecture is amputated, this package is promoted to
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Callable
 
 import typer
 
@@ -21,6 +21,7 @@ from pix.nas import ledger
 from pix.nas.ledger import NasUnreachable
 from pix.nas.lock import Locked, ProcessLock
 from pix.nas.upload import run_upload
+from pix.progress import LiveProgress
 
 app: typer.Typer = typer.Typer(
     name="pix2",
@@ -211,11 +212,12 @@ def process() -> None:
     if len(summary.failed) > 10:
         typer.echo(f"  ... and {len(summary.failed) - 10} more", err=True)
 
-    # Rebuild the index here rather than leaving it as a step to remember.
-    # `process` is the last pipeline stage and knows new derived data exists,
-    # and a rebuild is correct for whatever currently exists — so even a
-    # cancelled run leaves a valid index rather than a stale one.
-    _reindex(quiet=True)
+    # Index here rather than leaving it as a step to remember. Only what this
+    # run touched, plus anything with facts and no row: a run with nothing to
+    # do costs a listing, not a rebuild, so `process` can be run on a timer
+    # without the app noticing. Even a cancelled run leaves the index current
+    # for whatever it finished.
+    _update_index([(p.parent.name, p.name) for p in summary.handled])
 
     if summary.cancelled:
         typer.echo("")
@@ -243,12 +245,64 @@ def index_cmd() -> None:
     _reindex(quiet=False)
 
 
+def _indexing() -> tuple[LiveProgress, Callable[[int, int], None],
+                         Callable[[str], None]]:
+    """A progress line for indexing, and the two callbacks that drive it."""
+    count: dict[str, int] = {"done": 0, "total": 0}
+    said: list[str] = ["reading"]
+    progress = LiveProgress(status_provider=lambda: (
+        f"index: reading {count['done']:,}/{count['total']:,}"
+        if said[0] == "reading" else f"index: {said[0]}"))
+
+    def tick(done: int, total: int) -> None:
+        if total != count["total"]:
+            count["total"] = total
+            progress.set_total(total)
+        progress.advance(done - count["done"])
+        count["done"] = done
+
+    def phase(message: str) -> None:
+        if message.startswith("indexed "):
+            return                       # per folder: the count says it
+        said[0] = message
+        progress.set_label(message)
+
+    return progress, tick, phase
+
+
+def _update_index(touched: list[tuple[str, str]]) -> None:
+    """Catch the index up after `process`, rebuilding only when it must."""
+    from pix.nas import index as ix
+    from pix.nas.const import INDEX_DB
+
+    try:
+        if INDEX_DB.is_file():
+            ix.open_ro(INDEX_DB).close()
+            fresh = True
+        else:
+            fresh = False
+    except ix.StaleIndex:
+        fresh = False
+    if not fresh:
+        _reindex(quiet=True)
+        return
+    progress, tick, _ = _indexing()
+    with progress:
+        progress.begin("index")
+        written = ix.update(INDEX_DB, touched, tick=tick)
+    typer.echo(f"indexed {written:,} file(s)" if written
+               else "index up to date")
+
+
 def _reindex(*, quiet: bool) -> None:
     """Rebuild the index, reporting unless it is a trailing step of another run."""
     from pix.nas import index as ix
     from pix.nas.const import INDEX_DB
 
-    stats = ix.build(INDEX_DB, echo=lambda m: None)
+    progress, tick, phase = _indexing()
+    with progress:
+        progress.begin("index")
+        stats = ix.build(INDEX_DB, echo=phase, tick=tick)
     if quiet:
         typer.echo(f"indexed {stats.files:,} file(s)")
         return

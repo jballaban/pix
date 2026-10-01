@@ -34,12 +34,15 @@ records to record one decision is not a UI anyone uses twice.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
+import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, ClassVar, Iterator, Sequence, cast
+from typing import Any, Callable, ClassVar, Sequence, cast
 
 from pix import datestr
 from pix.nas import clips
@@ -530,93 +533,298 @@ def _require_current(conn: sqlite3.Connection) -> None:
     raise StaleIndex(found, SCHEMA_VERSION)
 
 
+#: How many reads of the share are in flight at once. Each one is ~5ms of SMB
+#: latency and almost no work, so they overlap almost perfectly: measured
+#: 5.5ms a record one at a time against 0.8ms at 8–16, and no better beyond.
+READERS: int = 16
+
+#: How many rows an incremental update writes per transaction. The app's own
+#: writes wait behind each one, so a batch is kept to something that commits
+#: in well under the five seconds a waiting writer gives up after.
+UPDATE_BATCH: int = 200
+
+#: A folder's sidecars, by media name, with the mtime each had when listed —
+#: what lets a build notice the decisions made while it was running.
+Sidecars = dict[str, int]
+
+
 def build(db_path: Path, *, echo: Callable[[str], None] = lambda _: None,
           meta_dir: Path | None = None,
-          master_dir: Path | None = None) -> IndexStats:
+          master_dir: Path | None = None,
+          tick: Callable[[int, int], None] | None = None) -> IndexStats:
     """Rebuild the index from the meta tier and master's decision sidecars.
 
-    Wholesale, because this is the path that discovers **which files exist** —
-    and that only changes when ingest runs, so it is the rare operation. The
-    input is ~5KB per file, so even 62k is a small read. Changing a decision
-    takes `refresh` instead.
+    Wholesale, because this is the path that discovers **which files exist**
+    from nothing — the repair, and the answer to a schema bump. A file added
+    since the last build takes `update`, and a decision takes `refresh`.
+
+    **Built beside, then published.** The rows are made in a local file and
+    copied into the live index in one transaction at the end, so the app goes
+    on answering from the old index for the whole of the read — nearly all of
+    a build — instead of waiting on a lock the build held throughout.
+
+    A decision made in the app while the build runs would be overwritten by the
+    row the build read before it, so the sidecars are listed again before and
+    after publishing and whatever changed is refreshed (`_catch_up`).
+
+    `tick(done, total)` is called as records are read, for a progress display.
     """
     meta_root = meta_dir if meta_dir is not None else META_DIR
     master_root = master_dir if master_dir is not None else MASTER_DIR
 
-    conn = connect(db_path)
+    with tempfile.TemporaryDirectory(prefix="pix-index-") as scratch:
+        local = Path(scratch) / "index.db"
+        conn = connect(local)
+        try:
+            stats, seen = _build_into(conn, meta_root, master_root, echo, tick)
+            seen = _catch_up(conn, seen, meta_root, master_root)
+        finally:
+            conn.close()
+        echo("publishing")
+        _publish(local, db_path)
+    # Anything decided between the last look and the publish landed in the old
+    # rows, which the publish has just replaced.
+    live = open_rw(db_path)
+    try:
+        _catch_up(live, seen, meta_root, master_root)
+    finally:
+        live.close()
+    return stats
+
+
+def _build_into(conn: sqlite3.Connection, meta_root: Path, master_root: Path,
+                echo: Callable[[str], None],
+                tick: Callable[[int, int], None] | None,
+                ) -> tuple[IndexStats, dict[str, Sidecars]]:
+    """Fill an empty index. Returns what it did and the sidecars it saw."""
     stats = IndexStats()
     events_seen: set[str] = set()
     tags_seen: set[str] = set()
 
-    try:
-        with conn:
-            conn.execute("DELETE FROM files")
-            conn.execute("DELETE FROM file_tags")
-            conn.execute("DELETE FROM file_people")
-            conn.execute("DELETE FROM file_audience")
-            for folder, decided, source in _folders(meta_root, master_root):
-                sources: dict[str, dict[str, Any]] = {}
-                codecs: dict[str, str | None] = {}
-                noted: dict[str, dict[str, Any]] = {}
-                for record in _records(meta_root / folder):
-                    # A clip's record — the hashes of its own files — is not a
-                    # file of its own; the clip's row is made below.
-                    if record.get("clip"):
-                        noted[str(record.get("file"))] = record
-                        continue
-                    row = _row(folder, record, decided, source)
-                    if row is None:
-                        stats.skipped.append(f"{folder}: unreadable record")
-                        continue
-                    conn.execute(_INSERT, row)
-                    name = str(row["name"])
-                    sources[name] = row
-                    if row["kind"] == "video":
-                        codecs[name] = codec_of(record)
-                    decision = decided.get(name)
-                    if decision is not None:
+    with ThreadPoolExecutor(max_workers=READERS) as pool:
+        listed = _listings(pool, meta_root, master_root)
+        seen = {folder: sidecars for folder, _, sidecars in listed}
+        total = sum(len(jsons) for _, jsons, _ in listed)
+        done = 0
+        if tick is not None:
+            tick(0, total)
+        try:
+            with conn:
+                for folder, jsons, sidecars in listed:
+                    master_folder = master_root / folder
+                    meta_folder = meta_root / folder
+                    source_f = pool.submit(_source, master_folder)
+                    # Keyed by presence, valued by content: a sidecar that will
+                    # not parse still counts as one. Master is the record, so a
+                    # damaged file there has to stay visible rather than
+                    # reading as "never decided".
+                    names = sorted(sidecars)
+                    decided: dict[str, Decision | None] = dict(zip(
+                        names, pool.map(decisions.read,
+                                 [master_folder / n for n in names])))
+                    source = source_f.result()
+                    sources: dict[str, dict[str, Any]] = {}
+                    codecs: dict[str, str | None] = {}
+                    noted: dict[str, dict[str, Any]] = {}
+                    for record in pool.map(
+                            _record, [meta_folder / j for j in jsons]):
+                        done += 1
+                        if tick is not None:
+                            tick(done, total)
+                        if record is None:
+                            continue
+                        # A clip's record — the hashes of its own files — is
+                        # not a file of its own; the clip's row is made below.
+                        if record.get("clip"):
+                            noted[str(record.get("file"))] = record
+                            continue
+                        row = _row(folder, record, decided, source)
+                        if row is None:
+                            stats.skipped.append(f"{folder}: unreadable record")
+                            continue
+                        conn.execute(_INSERT, row)
+                        name = str(row["name"])
+                        sources[name] = row
+                        if row["kind"] == "video":
+                            codecs[name] = codec_of(record)
+                        decision = decided.get(name)
+                        if decision is not None:
+                            _write_multi(conn, folder, name, decision)
+                            tags_seen.update(decision.tags)
+                        stats.files += 1
+                        if row["capture_date"]:
+                            stats.with_date += 1
+                        if row["has_sidecar"]:
+                            stats.with_sidecar += 1
+                        if row["event"]:
+                            events_seen.add(str(row["event"]))
+                    # Clips after every file, because a clip is made from its
+                    # source's row and the folder is listed in no useful order.
+                    for name, decision in decided.items():
+                        if decision is None or not decision.is_clip:
+                            continue
+                        of = clips.source_of(name)
+                        if of is None or of not in sources:
+                            # A clip with nothing to cut from. Never shown:
+                            # there is no footage behind it.
+                            stats.skipped.append(f"{folder}/{name}: no source")
+                            continue
+                        size = clip_size(master_folder / name, decision,
+                                         codecs.get(of))
+                        conn.execute(_INSERT, _clip_row(
+                            folder, name, sources[of], decision, size,
+                            noted.get(name)))
                         _write_multi(conn, folder, name, decision)
                         tags_seen.update(decision.tags)
-                    stats.files += 1
-                    if row["capture_date"]:
-                        stats.with_date += 1
-                    if row["has_sidecar"]:
+                        stats.files += 1
                         stats.with_sidecar += 1
-                    if row["event"]:
-                        events_seen.add(str(row["event"]))
-                # Clips after every file, because a clip is made from its
-                # source's row and the folder is listed in no useful order.
-                for name, decision in decided.items():
-                    if decision is None or not decision.is_clip:
-                        continue
-                    of = clips.source_of(name)
-                    if of is None or of not in sources:
-                        # A clip with nothing to cut from. Never shown: there
-                        # is no footage behind it.
-                        stats.skipped.append(f"{folder}/{name}: no source")
-                        continue
-                    size = clip_size(master_root / folder / name, decision,
-                                     codecs.get(of))
-                    conn.execute(_INSERT, _clip_row(folder, name, sources[of],
-                                                    decision, size,
-                                                    noted.get(name)))
-                    _write_multi(conn, folder, name, decision)
-                    tags_seen.update(decision.tags)
-                    stats.files += 1
-                    stats.with_sidecar += 1
-                    if decision.event:
-                        events_seen.add(decision.event)
-                echo(f"indexed {folder}")
-            # Last, because it is a question about the library rather than
-            # about any one file, and it cannot be asked until they are all in.
-            stats.suggested = resuggest(conn)
-            conn.execute("INSERT OR REPLACE INTO meta VALUES ('built_at', ?)",
-                         (str(int(time.time())),))
-    finally:
-        stats.events = len(events_seen)
-        stats.tags = len(tags_seen)
+                        if decision.event:
+                            events_seen.add(decision.event)
+                    echo(f"indexed {folder}")
+                # Last, because it is a question about the library rather than
+                # about any one file, and it cannot be asked until they are all
+                # in.
+                stats.suggested = resuggest(conn)
+                conn.execute(
+                    "INSERT OR REPLACE INTO meta VALUES ('built_at', ?)",
+                    (str(int(time.time())),))
+        finally:
+            stats.events = len(events_seen)
+            stats.tags = len(tags_seen)
+    return stats, seen
 
-    return stats
+
+def _catch_up(conn: sqlite3.Connection, seen: dict[str, Sidecars],
+              meta_root: Path, master_root: Path) -> dict[str, Sidecars]:
+    """Refresh every file whose sidecar changed since `seen` was listed.
+
+    Changed means written, created or removed — an edit, a clip made, a
+    decision cleared. The comparison is between two listings of the same
+    directory by the same server, so no clock on this machine is involved.
+    Returns the new listing, for the next pass.
+    """
+    with ThreadPoolExecutor(max_workers=READERS) as pool:
+        now = dict(zip(seen, pool.map(
+            _sidecars_in, [master_root / f for f in seen])))
+    with conn:
+        for folder, sidecars in now.items():
+            before = seen[folder]
+            for name in sorted(set(before) | set(sidecars)):
+                if before.get(name) != sidecars.get(name):
+                    refresh(conn, folder, name, meta_dir=meta_root,
+                            master_dir=master_root, commit=False)
+    return now
+
+
+def _publish(built: Path, db_path: Path) -> None:
+    """Copy a finished index into the live one, in one transaction.
+
+    Into it rather than over it: replacing the file underneath the app would
+    strand any write it had in flight on the old file, whose rollback journal
+    the new one would then read as its own. SQLite's own locking keeps this
+    safe, and the cache is sized to hold the whole change until commit, so
+    readers carry on until the last moment instead of from the first page the
+    change spilled.
+    """
+    live = connect(db_path)
+    try:
+        live.execute("PRAGMA cache_size = -524288")       # KiB: 512 MB
+        live.execute("ATTACH DATABASE ? AS built", (str(built),))
+        live.execute("BEGIN IMMEDIATE")
+        for table in ("files", "file_tags", "file_people", "file_audience",
+                      "meta"):
+            live.execute(f"DELETE FROM main.{table}")
+            live.execute(f"INSERT INTO main.{table} SELECT * FROM built.{table}")
+        live.commit()
+        live.execute("DETACH DATABASE built")
+    finally:
+        live.close()
+
+
+def update(db_path: Path, wanted: Sequence[tuple[str, str]], *,
+           meta_dir: Path | None = None,
+           master_dir: Path | None = None,
+           tick: Callable[[int, int], None] | None = None) -> int:
+    """Bring the index up to date for the files `process` touched, and any
+    that have probed facts but no row. Returns how many rows it wrote.
+
+    The steady-state path. `process` adds files to the library a handful at a
+    time, and rebuilding 62k rows to add five is a minute of the app blocked
+    for nothing. The second set is what makes skipping the rebuild safe: a run
+    killed between making a file's record and indexing it leaves a record with
+    no row, and that is found here on the next run rather than never.
+
+    Everything that reads the share is done **before** the write lock is taken,
+    and rows go in batches, so the app's own writes wait at most one batch.
+    """
+    meta_root = meta_dir if meta_dir is not None else META_DIR
+    master_root = master_dir if master_dir is not None else MASTER_DIR
+
+    conn = open_rw(db_path)
+    try:
+        with ThreadPoolExecutor(max_workers=READERS) as pool:
+            todo = sorted(set(wanted) | set(_unindexed(conn, pool, meta_root)))
+            if tick is not None:
+                tick(0, len(todo))
+            if not todo:
+                return 0
+            folders = sorted({f for f, _ in todo})
+            source_of = dict(zip(folders, pool.map(
+                _source, [master_root / f for f in folders])))
+
+            def fetch(item: tuple[str, str]) -> tuple[
+                    dict[str, Any] | None, Decision | None] | None:
+                folder, name = item
+                media = master_root / folder / name
+                decision = (decisions.read(media)
+                            if decisions.sidecar_path(media).is_file()
+                            else None)
+                # A clip's facts are its source's row, which `refresh` reads
+                # for itself; its own record is not one.
+                if clips.source_of(name) is not None:
+                    if decision is None or not decision.is_clip:
+                        return None     # a clip's leftover record, no clip
+                    return None, decision
+                return record_of(meta_root, folder, name), decision
+
+            written = 0
+            fetched = pool.map(fetch, todo)
+            for start in range(0, len(todo), UPDATE_BATCH):
+                batch = todo[start:start + UPDATE_BATCH]
+                got = [next(fetched) for _ in batch]
+                with conn:
+                    for (folder, name), one_ in zip(batch, got):
+                        if one_ is None:
+                            continue
+                        record, decision = one_
+                        if refresh(conn, folder, name, meta_dir=meta_root,
+                                   master_dir=master_root, decision=decision,
+                                   record=record, source=source_of[folder],
+                                   commit=False):
+                            written += 1
+                if tick is not None:
+                    tick(start + len(batch), len(todo))
+        return written
+    finally:
+        conn.close()
+
+
+def _unindexed(conn: sqlite3.Connection, pool: ThreadPoolExecutor,
+               meta_root: Path) -> list[tuple[str, str]]:
+    """Files with a meta record and no row: one listing per folder."""
+    if not meta_root.is_dir():
+        return []
+    folders = sorted(p.name for p in meta_root.iterdir() if p.is_dir())
+    have: dict[str, set[str]] = {}
+    for row in conn.execute("SELECT folder, name FROM files"):
+        have.setdefault(str(row[0]), set()).add(str(row[1]))
+    out: list[tuple[str, str]] = []
+    for folder, jsons in zip(folders, pool.map(
+            _jsons_in, [meta_root / f for f in folders])):
+        indexed = have.get(folder, set())
+        out.extend((folder, j[: -len(".json")]) for j in jsons
+                   if j[: -len(".json")] not in indexed)
+    return out
 
 
 _INSERT: str = (
@@ -638,6 +846,7 @@ def refresh(conn: sqlite3.Connection, folder: str, name: str, *,
             master_dir: Path | None = None,
             decision: Decision | None | decisions.Unset = decisions.UNSET,
             record: dict[str, Any] | None = None,
+            source: str | None = None,
             commit: bool = True) -> bool:
     """Re-read one file's facts and decision, and rewrite just its row.
 
@@ -661,6 +870,8 @@ def refresh(conn: sqlite3.Connection, folder: str, name: str, *,
     is already known. `record` is the same bargain for the meta file — 5KB
     of JSON per file, and 11ms of latency to fetch it. Both default to
     *nobody told me*, in which case this reads them itself.
+    `source` likewise: what the folder was imported as, used only when the
+    file has no row yet to carry it from.
 
     **`commit=False` leaves the transaction to the caller.** One commit per
     row is an fsync per row, and the index lives on the share: measured at
@@ -708,6 +919,7 @@ def refresh(conn: sqlite3.Connection, folder: str, name: str, *,
         "SELECT suggested_under, source FROM files "
         "WHERE folder = ? AND name = ?", (folder, name)).fetchone()
     source = (str(before["source"]) if before and before["source"]
+              else source if source is not None
               else _source(master_root / folder))
     row = _row(folder, record, decided, source)
     if row is None:
@@ -813,48 +1025,52 @@ def built_at(conn: sqlite3.Connection) -> float | None:
         return None
 
 
-def _folders(
-    meta_root: Path, master_root: Path
-) -> Iterator[tuple[str, dict[str, Decision | None], str | None]]:
-    """Each master folder in the meta tier, with the decisions made in it and
-    what it was imported as.
+def _listings(pool: ThreadPoolExecutor, meta_root: Path, master_root: Path
+              ) -> list[tuple[str, list[str], Sidecars]]:
+    """Each master folder in the meta tier: its records and its sidecars.
 
-    Sidecars are **listed once per folder** rather than stat-ed per file: over
-    SMB that is one round trip against tens of thousands. Only the sidecars that
-    actually exist are then opened, which in the steady state is a small
-    fraction — a file has no sidecar until a human decides something about it.
+    **Listed once per folder** rather than stat-ed per file: over SMB that is
+    one round trip against tens of thousands. Only the sidecars that actually
+    exist are then opened, which in the steady state is a small fraction — a
+    file has no sidecar until a human decides something about it.
     """
     if not meta_root.is_dir():
-        return
-    for folder in sorted(p for p in meta_root.iterdir() if p.is_dir()):
-        master_folder = master_root / folder.name
-        decided: dict[str, Decision | None] = {}
-        try:
-            sidecars = [p.name for p in master_folder.iterdir()
-                        if p.name.lower().endswith(".xmp")]
-        except OSError:
-            sidecars = []
-        for sidecar in sidecars:
-            media = master_folder / sidecar[: -len(".xmp")]
-            # Keyed by presence, valued by content: a sidecar that will not
-            # parse still counts as one. Master is the record, so a damaged file
-            # there has to stay visible rather than reading as "never decided".
-            decided[media.name] = decisions.read(media)
-        yield folder.name, decided, _source(master_folder)
+        return []
+    folders = sorted(p.name for p in meta_root.iterdir() if p.is_dir())
+    jsons = pool.map(_jsons_in, [meta_root / f for f in folders])
+    sidecars = pool.map(_sidecars_in, [master_root / f for f in folders])
+    return list(zip(folders, jsons, sidecars))
 
 
-def _records(folder: Path) -> Iterator[dict[str, Any]]:
-    """Every metadata record in one folder of the meta tier."""
+def _jsons_in(folder: Path) -> list[str]:
+    """The metadata records in one folder of the meta tier, by name."""
     try:
-        paths = sorted(folder.iterdir())
+        return sorted(n for n in os.listdir(folder)
+                      if n.lower().endswith(".json"))
     except OSError:
-        return
-    for path in paths:
-        if path.suffix.lower() != ".json":
-            continue
-        record = _record(path)
-        if record is not None:
-            yield record
+        return []
+
+
+def _sidecars_in(master_folder: Path) -> Sidecars:
+    """One master folder's sidecars: media name to the sidecar's mtime.
+
+    `scandir`, because on Windows its `stat` is answered from the listing the
+    server already sent — the mtime costs nothing extra.
+    """
+    out: Sidecars = {}
+    try:
+        with os.scandir(master_folder) as entries:
+            for entry in entries:
+                if not entry.name.lower().endswith(".xmp"):
+                    continue
+                try:
+                    mtime = entry.stat().st_mtime_ns
+                except OSError:
+                    mtime = 0
+                out[entry.name[: -len(".xmp")]] = mtime
+    except OSError:
+        pass
+    return out
 
 
 def record_of(meta_dir: Path, folder: str, name: str

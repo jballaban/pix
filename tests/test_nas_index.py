@@ -1703,3 +1703,94 @@ def test_hidden_wins_over_a_share_for_a_viewer(tree: dict[str, Path]) -> None:
         seen = ix.files(conn, ix.Filters(viewer=frozenset({"family"}),
                                          audience=audience), limit=100)
         assert not seen, audience
+
+
+# --- incremental update, and edits during a build ---------------------------
+
+def _names(tree: dict[str, Path]) -> set[str]:
+    conn = ix.open_ro(tree["db"])
+    try:
+        return {str(r["name"]) for r in conn.execute("SELECT name FROM files")}
+    finally:
+        conn.close()
+
+
+def _update(tree: dict[str, Path],
+            touched: list[tuple[str, str]] | None = None) -> int:
+    return ix.update(tree["db"], touched or [], meta_dir=tree["meta"],
+                     master_dir=tree["master"])
+
+
+def test_an_update_with_nothing_new_writes_nothing(
+        tree: dict[str, Path]) -> None:
+    """What makes `process` cheap enough to run on a timer."""
+    _record(tree, "f", "a.jpg", {})
+    _build(tree)
+
+    assert _update(tree) == 0
+    assert _names(tree) == {"a.jpg"}
+
+
+def test_an_update_adds_what_process_made(tree: dict[str, Path]) -> None:
+    _record(tree, "f", "a.jpg", {})
+    _build(tree)
+    _record(tree, "f", "b.jpg", {"EXIF:Model": "X"})
+
+    assert _update(tree, [("f", "b.jpg")]) == 1
+    assert _names(tree) == {"a.jpg", "b.jpg"}
+
+
+def test_an_update_finds_a_record_nobody_indexed(
+        tree: dict[str, Path]) -> None:
+    """A run killed between making a record and indexing it is healed by
+    the next run, without being told about the file."""
+    _build(tree)
+    _record(tree, "g", "lost.jpg", {})
+
+    assert _update(tree) == 1
+    assert _names(tree) == {"lost.jpg"}
+
+
+def test_an_update_reads_the_decision(tree: dict[str, Path]) -> None:
+    _build(tree)
+    _record(tree, "f", "a.jpg", {})
+    decisions.write(tree["master"] / "f" / "a.jpg", Decision(event="Lake"))
+
+    _update(tree, [("f", "a.jpg")])
+    conn = ix.open_ro(tree["db"])
+    assert conn.execute("SELECT event FROM files").fetchone()[0] == "Lake"
+
+
+def test_a_decision_made_during_a_build_survives_it(
+        tree: dict[str, Path]) -> None:
+    """The build read the sidecar before the edit; the catch-up reads it
+    after, so the publish does not put the old value back."""
+    _record(tree, "f", "a.jpg", {})
+    _record(tree, "f", "b.jpg", {})
+    _build(tree)
+    conn = ix.connect(tree["db"])
+    try:
+        seen = {"f": ix._sidecars_in(tree["master"] / "f")}  # pyright: ignore[reportPrivateUsage]
+        decisions.write(tree["master"] / "f" / "b.jpg", Decision(event="Late"))
+        ix._catch_up(conn, seen, tree["meta"], tree["master"])  # pyright: ignore[reportPrivateUsage]
+        row = conn.execute(
+            "SELECT event FROM files WHERE name = 'b.jpg'").fetchone()
+    finally:
+        conn.close()
+    assert row[0] == "Late"
+
+
+def test_a_rebuild_publishes_under_an_open_reader(
+        tree: dict[str, Path]) -> None:
+    """The app holds connections open; a rebuild goes into the same file
+    rather than replacing it underneath them."""
+    _record(tree, "f", "a.jpg", {})
+    _build(tree)
+    reader = ix.open_ro(tree["db"])
+    try:
+        _record(tree, "f", "b.jpg", {})
+        _build(tree)
+        names = {str(r[0]) for r in reader.execute("SELECT name FROM files")}
+    finally:
+        reader.close()
+    assert names == {"a.jpg", "b.jpg"}

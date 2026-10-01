@@ -200,6 +200,9 @@ class ProcessSummary:
     unsupported: int = 0        # nothing we know how to render a frame from
     cancelled: bool = False
     failed: list[str] = field(default_factory=lambda: [])
+    #: Every file this run worked on, finished or not — what the index has to
+    #: catch up on afterwards, and nothing else does.
+    handled: list[Path] = field(default_factory=lambda: [])
 
     @property
     def made(self) -> int:
@@ -529,6 +532,8 @@ def run_process(*, echo: Callable[[str], None] = lambda _: None) -> ProcessSumma
         finally:
             state["inflight"] -= 1
             state["done"] += 1
+            with lock:
+                summary.handled.append(media)
 
     progress = LiveProgress(
         total=len(pending),

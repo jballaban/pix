@@ -311,8 +311,13 @@ It recreates the single database this architecture exists to avoid, and breaks
   success update the index. Drift then only ever means "the index is behind,"
   which a rescan fixes — never "the record is wrong."
 - **Two write paths, and the difference is the file set.** A *rebuild* is what
-  discovers which files exist, so it is wholesale and belongs to ingest —
-  `pix2 index`, and the tail of `pix2 process`. A *refresh* rewrites the single
+  discovers which files exist from nothing, so it is wholesale — `pix2 index`,
+  or `process` finding no index of the current shape. It builds in a local file
+  and publishes into the live one in a single transaction, so the app keeps
+  answering throughout, and re-lists sidecars before and after to pick up
+  decisions made while it ran. The tail of `pix2 process` is an *update*: the
+  files that run touched, plus any meta record with no row, so a run with
+  nothing to do costs a listing and `process` can sit on a timer. A *refresh* rewrites the single
   row whose decision just changed, and is what the app runs: reading 62k records
   to record one tiering is not an interface anyone uses twice. A refresh
   re-derives from the same two inputs a rebuild uses and never adds or removes
