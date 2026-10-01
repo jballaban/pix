@@ -205,6 +205,10 @@ reverse proxy routes, and terminates TLS if you give it a certificate — it doe
 not authenticate — so the app's own login is the only thing in front of your
 photographs.
 
+The certificate is a `*.ballaban.ca` wildcard issued and renewed by a separate
+acme.sh container, which is NAS infrastructure rather than part of pix — its
+setup lives in its own repo, [jballaban/acme](https://github.com/jballaban/acme).
+
 The session cookie is not marked `secure`, because the app is served over
 plain HTTP on the LAN and a cookie marked secure would simply never be sent —
 which reads as *login silently does nothing*. Behind a TLS-terminating proxy
