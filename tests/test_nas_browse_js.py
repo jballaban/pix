@@ -272,3 +272,21 @@ def test_display_puts_each_fact_in_the_lane_it_was_asked_for(
         capture_output=True, text=True, timeout=120, cwd=JS_DIR)
 
     assert result.returncode == 0, (result.stdout + result.stderr)[-2000:]
+
+
+@pytest.mark.skipif(shutil.which("node") is None,
+                    reason="node is not installed")
+def test_an_action_in_the_viewer_is_about_the_photograph_on_show(
+    tmp_path: Path
+) -> None:
+    """With one photograph selected and another open in the viewer, Delete
+    in the viewer deletes the one on show; the bar still means the
+    selection; and a binned file is offered Restore instead."""
+    script = tmp_path / "browse.js"
+    script.write_text(web._BROWSE_JS, encoding="utf-8")
+
+    result = subprocess.run(
+        ["node", str(JS_DIR / "viewacts.js"), str(script)],
+        capture_output=True, text=True, timeout=120, cwd=JS_DIR)
+
+    assert result.returncode == 0, (result.stdout + result.stderr)[-2000:]

@@ -6499,3 +6499,32 @@ def test_archiving_is_said_as_archiving_in_history() -> None:
             == "took {n} out of the archive")
     assert (web._summary(web._Change(add_audience=("family",)))  # pyright: ignore[reportPrivateUsage]
             == "gave family access to {n}")
+
+
+def test_the_viewer_offers_what_can_be_done_to_one_file(
+    client: TestClient
+) -> None:
+    """Everything the bar does that makes sense of a single photograph, and
+    none of the stack actions — each of those asks about several."""
+    html = client.get("/browse").text
+    row = html[html.index('<div id="viewacts">'):]
+    row = row[:row.index('<aside id="rail">')]
+
+    for act in ("event", "tags", "people", "date", "access", "delete",
+                "restore", "purge"):
+        assert f'data-vact="{act}"' in row, act
+    assert 'id="viewget"' in row and 'id="viewsplice"' in row
+    for act in ("stack", "top", "unstack", "nostack"):
+        assert f'data-vact="{act}"' not in row, act
+
+
+def test_a_household_member_gets_the_viewer_actions_they_get_in_the_bar(
+    household: dict[str, object]
+) -> None:
+    kid = cast(TestClient, household["kid"])
+    html = kid.get("/browse").text
+    row = html[html.index('<div id="viewacts">'):]
+    row = row[:row.index('<aside id="rail">')]
+
+    assert 'data-vact="tags"' in row
+    assert 'data-vact="access"' not in row and 'data-vact="purge"' not in row

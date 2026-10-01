@@ -1205,6 +1205,9 @@ h2.year span { font-size:13px; font-weight:400; }
 #rail { touch-action:pan-y;
         width:330px; flex:none; background:var(--panel); overflow-y:auto;
         border-left:1px solid var(--line); padding:14px 16px 30px;
+        /* Clear of the row of controls that floats along the top of the
+           viewer, which runs over the top of this column. */
+        padding-top:calc(52px + env(safe-area-inset-top));
         font-size:13px; }
 #viewer.norail #rail { display:none; }
 /* The viewer covers the whole screen, the status bar and the island
@@ -1218,8 +1221,24 @@ h2.year span { font-size:13px; font-weight:400; }
              opacity:.75; font-size:17px; line-height:1; padding:2px 10px; }
 /* Beside Details, because it is the same kind of thing: something you reach
    for about the photograph you are looking at, rather than a way out of it. */
-#viewget { position:absolute; top:calc(10px + env(safe-area-inset-top));
-           right:calc(112px + env(safe-area-inset-right)); z-index:2; margin:0;
+/* One row of everything that acts on the photograph on show, left of
+   Details: what the bar does to a selection, done to this one. Icons alone —
+   the names are in the tooltips and the labels, and nine words would not fit
+   beside a photograph. */
+#viewacts { position:absolute; top:calc(10px + env(safe-area-inset-top));
+            right:calc(112px + env(safe-area-inset-right)); z-index:2;
+            display:flex; align-items:center; gap:6px; }
+#viewacts .vgrp { display:flex; gap:6px; }
+#viewacts .vgrp[hidden] { display:none; }
+#viewacts button[data-vact] { margin:0; opacity:.75; padding:3px 8px;
+            background:var(--chrome); display:inline-flex;
+            align-items:center; }
+#viewacts button[data-vact]:hover { opacity:1; border-color:var(--accent); }
+#viewacts button.danger[data-vact]:hover { border-color:#c2604f; }
+#viewacts .word { display:none; }
+/* A menu opened from the viewer has to be over it. */
+#menu.over { z-index:40; }
+#viewget { position:static; margin:0;
            opacity:.75; border:1px solid var(--line); border-radius:3px;
            padding:3px 10px; font-size:13px; background:var(--chrome);
            color:var(--fg); }
@@ -1231,15 +1250,11 @@ h2.year span { font-size:13px; font-weight:400; }
 
    In the accent, because it is the one control in here that decides something
    rather than fetching or dismissing. */
-#viewtop { position:absolute; top:calc(10px + env(safe-area-inset-top));
-           right:calc(196px + env(safe-area-inset-right)); z-index:2;
-           margin:0; border:1px solid var(--accent); border-radius:3px;
+#viewtop { position:static; margin:0; border:1px solid var(--accent); border-radius:3px;
            padding:3px 10px; font-size:13px; font-weight:600;
            background:var(--accent); color:#0d0f12; }
 #viewtop[hidden] { display:none; }
-#viewsplice { position:absolute; top:calc(10px + env(safe-area-inset-top));
-              right:calc(160px + env(safe-area-inset-right)); z-index:2;
-              margin:0; opacity:.75; border:1px solid var(--line);
+#viewsplice { position:static; margin:0; opacity:.75; border:1px solid var(--line);
               border-radius:3px; padding:3px 10px; background:var(--chrome);
               color:var(--fg); }
 #viewsplice[hidden] { display:none; }
@@ -1336,14 +1351,14 @@ h2.year span { font-size:13px; font-weight:400; }
           /* Clear of the row of controls that floats over the top of it. */
           padding-top:calc(52px + env(safe-area-inset-top));
           padding-bottom:calc(30px + env(safe-area-inset-bottom)); }
-  /* Three controls, two corners. `right:112px` was measured against the width
-     of the word *Details*, which is not a number to rest a layout on once
-     everything in the bar is taller and wider. */
-  #viewget { right:auto; left:calc(68px + env(safe-area-inset-left)); }
-  #viewsplice { right:auto; left:calc(116px + env(safe-area-inset-left)); }
-  /* The one control in here worth a thumb, so it keeps the right-hand side
-     to itself rather than joining the row along the left. */
-  #viewtop { right:calc(12px + env(safe-area-inset-right)); }
+  /* A row of its own under Close and Details, the whole width and
+     scrolling sideways if it must: nine controls do not fit between two on a
+     phone, and a second line of them would cover the photograph. */
+  #viewacts { top:calc(52px + env(safe-area-inset-top));
+              left:calc(12px + env(safe-area-inset-left));
+              right:calc(12px + env(safe-area-inset-right));
+              overflow-x:auto; scrollbar-width:none; }
+  #rail { padding-top:calc(96px + env(safe-area-inset-top)); }
 }
 
 /* Anything the page keeps out of sight until the pointer is over it is
@@ -2920,9 +2935,7 @@ def stack_page(folder: str, name: str,
   <div class="meta" id="vmeta"></div></div>
   <button id="viewclose" title="Close (Esc)">&times;</button>
   <button id="railtoggle" title="Details (I)">Details</button>
-  <a id="viewget" class="who-link" download>{_mark("get", 19)}</a>
-  {_viewsplice(user)}
-  <button id="viewtop" hidden></button>
+  {_viewacts(user, stack=True)}
   <aside id="rail"></aside>
 </div>
 <div id="menu" hidden></div>
@@ -2996,8 +3009,7 @@ def browse(request: Request,
   <div class="meta" id="vmeta"></div></div>
   <button id="viewclose" title="Close (Esc)">&times;</button>
   <button id="railtoggle" title="Details (I)">Details</button>
-  <a id="viewget" class="who-link" download>{_mark("get", 19)}</a>
-  {_viewsplice(user)}
+  {_viewacts(user)}
   <aside id="rail"></aside>
 </div>
 <div id="menu" hidden></div>
@@ -3960,7 +3972,7 @@ _ACT_MARKS: dict[str, str] = {
 
 
 def _act(act: str, word: str, cls: str = "", *,
-         user: Principal | None = None) -> str:
+         user: Principal | None = None, attr: str = "data-act") -> str:
     """One button in the edit bar: its drawing, and its name beside it.
 
     **The name is an element of its own, and it is carried three times.** On a
@@ -3984,7 +3996,7 @@ def _act(act: str, word: str, cls: str = "", *,
     # The ellipsis says *this one asks something next*, which is a fact about
     # the button and not part of what it is called.
     name = word.replace("&hellip;", "").strip()
-    return (f'<button data-act="{act}"{kind} title="{name}" '
+    return (f'<button {attr}="{act}"{kind} title="{name}" '
             f'aria-label="{name}">{_mark(_ACT_MARKS.get(act, ""))}'
             f'<span class="word">{word}</span></button>')
 
@@ -5078,6 +5090,9 @@ function drawDate(){
 // count saying none, and the actions quietly applying to it anyway. Pass
 // `keep` to move without disturbing a selection.
 function setCur(n,keep){
+  // An action asked for from the viewer was about the photograph that was
+  // on show. Another one on show is not what its open menu was for.
+  if(vActing){vActing=null; closeMenu();}
   if(!cells.length){cur=-1;return;}
   n=Math.max(0,Math.min(cells.length-1,n));
   cells.forEach(c=>c.classList.remove('cur'));
@@ -5135,7 +5150,7 @@ function drawSel(){
   // file out of the view leaves it, and it sat there open over a grid it
   // could no longer touch. Filter and grouping menus are about the view
   // rather than the selection, so they are left alone.
-  if(!picked.size&&menuCtx&&(menuCtx.mode==='set'||menuCtx.mode==='date'))
+  if(!targets().length&&menuCtx&&(menuCtx.mode==='set'||menuCtx.mode==='date'))
     closeMenu();
   // Each set is on screen exactly when the selection holds files it applies
   // to. Not greyed: an action that is absent says *not for these files*,
@@ -5302,7 +5317,7 @@ function load(c){
     vvid.classList.remove('on'); vimg.classList.add('on');
     vimg.src=`/preview/${f}/${n}`;
   }
-  drawGet(c); drawTop(c); drawSplice(c);
+  drawGet(c); drawTop(c); drawSplice(c); drawViewActs(c);
   vmeta.textContent=`${c.dataset.name} — ${c.dataset.date}`
                    +(c.dataset.tags?' — '+c.dataset.tags.split('\\n').join(', '):'');
   fill(c);
@@ -5561,7 +5576,10 @@ function openViewer(n){
   viewer.classList.add('on');
   setCur(n===undefined?(cur<0?0:cur):n, true);
 }
-function closeViewer(){ viewer.classList.remove('on'); vvid.pause(); }
+function closeViewer(){
+  viewer.classList.remove('on'); vvid.pause();
+  if(vActing){vActing=null; closeMenu();}
+}
 // The stage fills the viewer, so clicking beside the picture lands on it
 // rather than on the viewer itself — the old check never matched and there
 // was no way back out except the keyboard.
@@ -5666,7 +5684,12 @@ window.addEventListener('unhandledrejection',
 
 // Exactly what is ticked — no implicit extra. A count that says none while
 // an action changes something is the one thing a selection must never do.
+// What an action acts on: the selection — or, while an action was asked for
+// from the viewer, the one photograph on show. One place, so every action,
+// its menu and its suggestions agree about which files they mean.
+let vActing=null;
 function targets(){
+  if(vActing) return [...vActing];
   return [...picked];
 }
 
@@ -6593,7 +6616,7 @@ async function unstack(){
   if(dissolving) location.reload();
 }
 function targetsOn(side){
-  return [...picked].filter(c=>side==='gone'?gone(c):!gone(c));
+  return targets().filter(c=>side==='gone'?gone(c):!gone(c));
 }
 
 // A file that no longer matches the filters leaves the grid. Keeping it on
@@ -7020,10 +7043,8 @@ async function send(cs,body,label,sharedBatch){
 // for a column called `share` — a 400, and an empty list every time.
 const ACT_COLUMN={tags:'tag', people:'person', access:'audience',
                   event:'event'};
-(actions?[...actions.querySelectorAll('[data-act]')]:[]).forEach(b=>{
-  const act=b.dataset.act;
-  b.onclick=e=>{
-    e.stopPropagation();
+// Which action a button asks for, done to whatever `targets` says.
+function runAct(act,b){
     if(act==='delete'){closeMenu();deleteSelection();return;}
     if(act==='stack'){closeMenu();stackSelection();return;}
     if(act==='top'){closeMenu();makeTop();return;}
@@ -7035,8 +7056,35 @@ const ACT_COLUMN={tags:'tag', people:'person', access:'audience',
     if(act==='splice'){closeMenu();spliceSelection();return;}
     openMenu(b, act==='date'
       ? {mode:'date'}
-      : {column:ACT_COLUMN[act]||act, mode:'set', as:act});};
+      : {column:ACT_COLUMN[act]||act, mode:'set', as:act});
+}
+(actions?[...actions.querySelectorAll('[data-act]')]:[]).forEach(b=>{
+  b.onclick=e=>{
+    e.stopPropagation();
+    if(vActing){vActing=null; closeMenu();}
+    if(menu) menu.classList.remove('over');
+    runAct(b.dataset.act,b);
+  };
 });
+// The same actions from the viewer, done to the photograph on show and to
+// nothing else — whatever happens to be selected in the grid behind it.
+function viewAct(act,b){
+  const c=cells[cur];
+  if(!c) return;
+  if(!vActing||vActing[0]!==c){closeMenu(); vActing=[c];}
+  if(menu) menu.classList.add('over');
+  runAct(act,b);
+}
+document.querySelectorAll('[data-vact]').forEach(b=>{
+  b.onclick=e=>{e.stopPropagation(); viewAct(b.dataset.vact,b);};
+});
+// A binned file is restored or purged; a living one is everything else.
+function drawViewActs(c){
+  const dead=!!(c&&gone(c));
+  document.querySelectorAll('.vgrp').forEach(g=>{
+    g.hidden=(g.dataset.side==='gone')!==dead;
+  });
+}
 
 // A page of its own rather than a menu: a timeline is not a thing a menu can
 // hold. A clip opens its source's, standing on the clip.
@@ -9092,6 +9140,42 @@ def _strip_of(media: Path, folder: str, name: str) -> dict[str, Any] | None:
         return None
     return {"n": n, "w": w, "h": h,
             "url": f"/strip/{_q(folder)}/{_q(name)}"}
+
+
+def _viewacts(user: Principal, *, stack: bool = False) -> str:
+    """What can be done to the one photograph filling the screen.
+
+    Everything the bar does that makes sense of a single file, so that seeing
+    something worth acting on is not a reason to leave it: name its event,
+    tag it, say who is in it, fix its date, decide who sees it, cut it, save
+    it, bin it. The stack actions are not here — each is a question about
+    several photographs — except *Show this one* on a stack's own page, which
+    is the question that page is for.
+
+    The same buttons as the bar, by the same rules (`_act`, `may`), marked
+    `data-vact` rather than `data-act` so the bar's wiring cannot pick them
+    up. The page script points the bar's own actions at the file on show
+    (`viewAct`), so a menu here is the same menu, with the same suggestions,
+    the same confirmation and the same History line.
+
+    Two sets, like the bar's: a binned file is restored or purged, never
+    tagged.
+    """
+    live = "".join(_act(a, w, c, user=user, attr="data-vact") for a, w, c in (
+        ("event", "Event&hellip;", ""), ("tags", "Tags&hellip;", ""),
+        ("people", "People&hellip;", ""), ("date", "Date&hellip;", ""),
+        ("access", "Access&hellip;", "")))
+    gone = "".join(_act(a, w, c, user=user, attr="data-vact") for a, w, c in (
+        ("restore", "Restore", ""), ("purge", "Purge&hellip;", "danger")))
+    bin_ = _act("delete", "Delete", "danger", user=user, attr="data-vact")
+    return ('<div id="viewacts">'
+            + ('<button id="viewtop" hidden></button>' if stack else "")
+            + f'<span class="vgrp" data-side="live">{live}</span>'
+            + _viewsplice(user)
+            + f'<a id="viewget" class="who-link" download>{_mark("get", 19)}</a>'
+            + f'<span class="vgrp" data-side="live">{bin_}</span>'
+            + f'<span class="vgrp" data-side="gone" hidden>{gone}</span>'
+            + '</div>')
 
 
 def _viewsplice(user: Principal) -> str:
