@@ -3057,7 +3057,7 @@ def _view_script(user: Principal, view: ix.Filters, groups: list[str], *,
         # spelled again here: the page draws a chip that sets it, and two
         # copies of a sentinel are two chances to disagree about what it is.
         f"UNREVIEWED={_js(ix.UNREVIEWED)},"
-        f"HIDDEN={_js(decisions.HIDDEN)},HIDDEN_LABEL={_js(_HIDDEN_LABEL)},"
+        f"ARCHIVED={_js(decisions.ARCHIVED)},ARCHIVED_LABEL={_js(_ARCHIVED_LABEL)},"
         f"EVENT_SEP={_js(decisions.EVENT_SEP)},"
         f"NO_EVENT={_js(ix.NO_EVENT)},"
         f"USUAL={_js(store().usual)},PAGE={_js(page)},"
@@ -4063,14 +4063,15 @@ def _same_field(a: str, b: str) -> bool:
 #: Offered *in addition* to whatever already exists. Audience names are free
 #: text, but "nobody yet" is a state rather than a name, and it is the single
 #: most useful thing to filter on — it is the pile of work.
-#: What `hidden` is called wherever it is offered. Said as what it does rather
-#: than as a name, because it is the one value in the access menu that is not
-#: somebody: it takes the file out of every view, the curator's own included.
-_HIDDEN_LABEL: str = "Hidden — out of every view"
+#: What `archived` is called wherever it is offered. Said as what it does
+#: as well as what it is, because it is the one value in the access menu that
+#: is not somebody: it takes the file out of every view, the curator's own
+#: included.
+_ARCHIVED_LABEL: str = "Archived — out of every view"
 
 _EXTRA: dict[str, tuple[tuple[str, str], ...]] = {
     "audience": ((ix.UNREVIEWED, "Nobody — not shared yet"),
-                 (decisions.HIDDEN, _HIDDEN_LABEL)),
+                 (decisions.ARCHIVED, _ARCHIVED_LABEL)),
 }
 
 _BROWSE_JS = """
@@ -4685,7 +4686,7 @@ async function openMenu(anchorEl,ctx){
     // it answers the same question — who may see this — with *nobody, me
     // included*. Only when acting, because the filter has it in `extra`.
     const seed=ctx.column!=='audience' ? []
-      : [...(ctx.mode==='filter'?[]:[[HIDDEN,HIDDEN_LABEL]]),
+      : [...(ctx.mode==='filter'?[]:[[ARCHIVED,ARCHIVED_LABEL]]),
          ...USERS.map(u=>[u,u])];
     const have=new Set(opts.map(o=>o.value));
     opts=[...extra,...seed].filter(e=>!have.has(e[0]))
@@ -6775,8 +6776,8 @@ function paint(c,field,value,add){
   // Hidden stands alone, as the server keeps it (`decisions._exclusive`):
   // hiding clears the grants, and granting anything clears the hiding.
   if(field==='audience'&&add){
-    if(value===HIDDEN){set.clear();set.add(HIDDEN);}
-    else set.delete(HIDDEN);
+    if(value===ARCHIVED){set.clear();set.add(ARCHIVED);}
+    else set.delete(ARCHIVED);
   }
   c.dataset[field]=[...set].sort().join('\\n');
   repaint(c,field);
@@ -7075,7 +7076,7 @@ async function deleteSelection(){
     const choice=await clipsChoice(blocked);
     if(!choice) return;
     if(choice==='hide'){
-      await applyToSelection('access',HIDDEN,true,blocked);
+      await applyToSelection('access',ARCHIVED,true,blocked);
     }else{
       for(const c of blocked){
         const r=await fetch('/api/clips/free',{method:'POST',
@@ -7117,7 +7118,7 @@ function clipsChoice(blocked){
       b.onclick=()=>{d.close(); d.remove(); done(value);};
       row.appendChild(b);
     };
-    add(one?'Hide it instead':'Hide them instead','hide','primary');
+    add(one?'Archive it instead':'Archive them instead','hide','primary');
     add('Bin '+(one?'it':'them')+', keep the clips as files','free');
     add('Cancel',null);
     d.appendChild(row);
@@ -7738,7 +7739,7 @@ def _clip_rules(conn: sqlite3.Connection | None, change: _Change,
                 raise HTTPException(
                     status.HTTP_409_CONFLICT,
                     f"{t.name} has {n} clip{'s' if n != 1 else ''} cut from "
-                    f"it — hide it instead, or bin {them} first")
+                    f"it — archive it instead, or bin {them} first")
         return out
     for t in targets:
         source = clips.source_of(t.name)
@@ -8085,8 +8086,8 @@ def _clip_from(user: Principal, row: sqlite3.Row,
     query = [f"date={_q(day)}"] if len(day) == 10 else []
     # A hidden source is out of the administrator's own grid too, so the way
     # to it asks for hidden files by name.
-    if parent is not None and decisions.HIDDEN in _split(parent["audience"]):
-        query.append(f"audience={_q(decisions.HIDDEN)}")
+    if parent is not None and decisions.ARCHIVED in _split(parent["audience"]):
+        query.append(f"audience={_q(decisions.ARCHIVED)}")
     return {
         "source": source,
         "key": f"{folder}/{source}",
@@ -8922,7 +8923,7 @@ def api_clips_free(user: Annotated[Principal, Depends(require_admin)],
                     raise HTTPException(
                         status.HTTP_409_CONFLICT,
                         "its photos have no files yet — pix2 process makes "
-                        "them. Hide the video instead for now.")
+                        "them. Archive the video instead for now.")
             else:
                 file = paths.cut_path(clip_media, RENDER_DIR,
                                       float(c["clip_in"]), float(c["clip_out"]))
@@ -9061,8 +9062,8 @@ def splice(folder: str, name: str,
     state = {
         "folder": folder, "source": name,
         "duration": row["duration"], "fps": fps,
-        "hidden": decisions.HIDDEN in _split(row["audience"]),
-        "hiddenName": decisions.HIDDEN,
+        "hidden": decisions.ARCHIVED in _split(row["audience"]),
+        "hiddenName": decisions.ARCHIVED,
         "clips": [_clip_json(c) for c in cut if not c["deleted"]],
         "strip": _strip_of(media, folder, name),
     }
@@ -9286,7 +9287,7 @@ _SPLICE_HTML: str = """<div class="splice">
 </div>
 <span class="spacer"></span>
 <div class="sgrp">
-<button id="bhide" class="ic" title="(H)" aria-label="Hide original"><span class="i-shown">@sp_eyeoff@</span><span class="i-hidden">@sp_eye@</span></button>
+<button id="bhide" class="ic" title="(H)" aria-label="Archive original"><span class="i-shown">@sp_eyeoff@</span><span class="i-hidden">@sp_eye@</span></button>
 <button id="bstill" class="ic" title="Take this frame as a photograph (P)" aria-label="Take photo">@sp_photo@</button>
 <select id="rate" class="rate" title="Speed ([ and ])" aria-label="Speed">
 <option value="0.5">0.5&times;</option><option value="1" selected>1&times;</option>
@@ -9956,11 +9957,12 @@ function drag(e,c,side){
 
 function drawHide(){
   const b=$('bhide');
-  b.setAttribute('aria-label',hidden?'Show original':'Hide original');
+  b.setAttribute('aria-label',hidden?'Unarchive original':'Archive original');
   b.classList.toggle('on',hidden);
   b.title=(hidden
-    ?'The original is out of every view; its clips are not. Show it again'
-    :'Take the original out of every view, leaving its clips')+' (H)';
+    ?'The original is archived, out of every view; its clips are not. '
+     +'Bring it back'
+    :'Archive the original — out of every view, leaving its clips')+' (H)';
 }
 // Immediate, unlike the clips: this is a decision about the video itself.
 async function hide(){
@@ -9968,7 +9970,7 @@ async function hide(){
   body[hidden?'remove_audience':'add_audience']=[S.hiddenName];
   if(await send('/api/decide',body)){
     hidden=!hidden; drawHide();
-    say(hidden?'original hidden':'original back in view');
+    say(hidden?'original archived':'original back in view');
   }
 }
 function step(dt){
@@ -10663,6 +10665,12 @@ def _summary(change: _Change) -> str:
     once it has put them back together, does.
     """
     files = "{n}"
+    # Archiving is not giving somebody access, though it is written as an
+    # audience — and *gave archived access to 3* is not how anybody says it.
+    if list(change.add_audience) == [decisions.ARCHIVED]:
+        return f"archived {files}"
+    if list(change.remove_audience) == [decisions.ARCHIVED]:
+        return f"took {files} out of the archive"
     if change.add_audience:
         return f"gave {', '.join(change.add_audience)} access to {files}"
     if change.remove_audience:
@@ -11214,7 +11222,7 @@ async def accounts_save(request: Request,
     who = accounts.canonical(name)
     if not who:
         return _back("a name is required")
-    if who == decisions.HIDDEN:
+    if who == decisions.ARCHIVED:
         return _back(f"{who} is reserved — it is how a file is kept out of "
                      "every view")
 

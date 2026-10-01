@@ -91,8 +91,8 @@ independent. Live inheritance (*own value, else C's*) fails on the set-valued
 fields: taking Mum off one clip when she is inherited needs a stored *not Mum*,
 a subtraction layer nothing else in the model has. Deleted, stacked-under and
 no-stack are not copied — they are about C's place in the grid, not its
-content — and neither is `hidden` (§3), for the same reason: a clip is
-usually made in order to hide its source, and one born hidden would vanish
+content — and neither is `archived` (§3), for the same reason: a clip is
+usually made in order to archive its source, and one born archived would vanish
 the moment it was made. C's own sidecar is left as it was.
 
 **The date is the exception, and is live**: a clip's effective date is C's
@@ -101,30 +101,34 @@ clip carries its own override. It is single-valued and derived, so it has none
 of the problem above, and correcting C's date moves every clip with it. Clips
 tied to the same second sort by in-point.
 
-## 3. Hiding — an audience, and an explicit act
+## 3. Archiving — an audience, and an explicit act
 
-Nothing hides automatically. C, its clips and its stills sit side by side, and
-the curator hides whatever they like. An automatic rule (*C hides while it has
-clips*) was considered first; it forced questions — does a still hide C? what
+Nothing is archived automatically. C, its clips and its stills sit side by
+side, and the curator archives whatever they like. An automatic rule (*C is
+archived while it has clips*) was considered first; it forced questions — does a still archive C? what
 of a stack C speaks for? — that an explicit act simply does not raise.
 
-**`hidden` is a built-in audience value**, reserved like `admin`:
+**`archived` is a built-in audience value**, reserved like `admin`. It was
+`hidden` until 2026-10-01; every sidecar and log line was rewritten when it was
+renamed, so there is no alias:
 
 - **Exclusive.** Setting it clears every other audience; adding any audience
-  clears it. Hidden-and-shared is a contradiction.
-- **A decision.** A hidden file is not *New*.
+  clears it. Archived-and-shared is a contradiction.
+- **A decision.** An archived file is not *New*.
 - **Out of the admin's default view too**, with a filter to bring it back.
   That is what distinguishes it from `private` (a role with no members, which
   an administrator still sees): hiding is about the curator's own grid, not
-  only about everyone else's.
+  only about everyone else's. *Archived* rather than *hidden* because that is
+  what it is for — kept, and not in front of you — where *hidden* read as a
+  secret.
 - **Admin-only**, like every edit today — so splicing is admin-only as well.
 
-It is not the bin. Binned is *on its way to being purged*; hidden is *keep
+It is not the bin. Binned is *on its way to being purged*; archived is *keep
 this, and don't show it*. It is also not specific to clips: anything can be
-hidden. The splice page offers **Hide original** as a one-click convenience —
+archived. The splice page offers **Archive original** as a one-click convenience —
 the same generic act, where it is wanted.
 
-Hiding a file that speaks for a stack hides the stack, by the existing rule
+Archiving a file that speaks for a stack archives the stack, by the existing rule
 that a decision on the head reaches everything behind it.
 
 ## 4. Stacking — video is deferred
@@ -149,7 +153,7 @@ reason to delete C — exactly the gesture that would destroy them.
 
 Binning C while it has clips that are not binned offers two choices:
 
-- **Don't** — hide C instead.
+- **Don't** — archive C instead.
 - **Bin anyway, and make the clips independent.** Each clip's cut (§6) is
   copied into C's master folder as a real file with its sidecar, becoming an
   ordinary video with no source. A still's JPG likewise. This is a copy, not
@@ -317,7 +321,7 @@ from where clips ended up, and one History entry for the whole save.
 trimming: Split, Join and Delete each confirm, and so does a new or moved
 clip that would remove or split another. A new clip in uncut footage, like
 Take photo, is itself the request, and does not ask. Deleted clips go to the
-bin; joined ones merge into the survivor. Hide original is not part of the
+bin; joined ones merge into the survivor. Archive original is not part of the
 draft: it is a decision about the video, and is immediate.
 
 This replaced two earlier versions. In the first every gesture wrote at once
@@ -333,7 +337,7 @@ things.
 | take a still | **Take photo** | `P` |
 | move the playhead | click the timeline; **drag across the picture**; tap it to play | space, `,` `.` a frame, shift for a keyframe |
 | speed | the speed dropdown | `[` `]` |
-| hide the original | **Hide original** (lit while hidden) — immediate | `H` |
+| archive the original | **Archive original** (lit while archived) — immediate | `H` |
 
 Stills are frame-exact through `requestVideoFrameCallback`; `currentTime` is
 not.
@@ -344,7 +348,7 @@ ticks appear once the NAS has read them.
 
 ## 10. Build order
 
-1. `hidden`, and deferring video stacks — each useful on its own.
+1. `archived` (then `hidden`), and deferring video stacks — each useful on its own.
 2. The clip model: sidecars, index rows, date, copy-at-creation, the bin dialog.
 3. The splice page, previewing by clamping C.
 4. NAS cuts, and the image rebuild.

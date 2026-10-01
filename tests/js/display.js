@@ -100,8 +100,8 @@ const location = { href: '/browse', reload: () => {} };
 const history = { back: () => {} };
 const VIEW = { event: null, date: null, tag: null, audience: null, kind: null,
                band: null, deleted: null, stacks: null, within: null };
-globalThis.HIDDEN = 'hidden';
-globalThis.HIDDEN_LABEL = 'Hidden';
+globalThis.ARCHIVED = 'archived';
+globalThis.ARCHIVED_LABEL = 'Hidden';
 
 const laneOf = (c, where) => {
   const ov = c.children.find(k => k._classes.has('ov') && k._classes.has(where));

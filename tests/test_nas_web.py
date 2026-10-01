@@ -6420,33 +6420,33 @@ def test_hiding_takes_a_file_out_of_the_curators_own_grid(
     see it either, until they ask for it by name."""
     r = client.post("/api/decide", json={
         "folder": "init_2026", "name": "a.jpg",
-        "add_audience": [decisions.HIDDEN]})
+        "add_audience": [decisions.ARCHIVED]})
     assert r.status_code == 200, r.text
     assert decisions.read(writable / "a.jpg") == Decision(
-        audience=(decisions.HIDDEN,))
+        audience=(decisions.ARCHIVED,))
 
     assert "a.jpg" not in client.get("/browse?event=Italy%20-%20Sicily").text
     assert "a.jpg" in client.get(
-        "/browse?event=Italy%20-%20Sicily&audience=hidden").text
+        "/browse?event=Italy%20-%20Sicily&audience=archived").text
 
 
 def test_hiding_is_offered_in_the_access_menu(client: TestClient) -> None:
     html = client.get("/browse").text
-    assert f"HIDDEN={json.dumps(decisions.HIDDEN)}" in html
+    assert f"ARCHIVED={json.dumps(decisions.ARCHIVED)}" in html
     assert "out of every view" in html
 
 
-def test_nobody_can_be_called_hidden(client: TestClient) -> None:
+def test_nobody_can_be_called_archived(client: TestClient) -> None:
     """A login called that would be granted exactly the files nobody is
     meant to see."""
-    client.post("/accounts/save", data={"name": "Hidden", "password": "pw"})
+    client.post("/accounts/save", data={"name": "Archived", "password": "pw"})
     client.post("/accounts/save", data={"name": "kid", "password": "pw",
-                                        "groups": "family,hidden"})
-    client.post("/accounts/groups", data={"groups": "family,hidden"})
+                                        "groups": "family,archived"})
+    client.post("/accounts/groups", data={"groups": "family,archived"})
 
     book = accounts.load()
-    assert decisions.HIDDEN not in book.users
-    assert decisions.HIDDEN not in book.groups
+    assert decisions.ARCHIVED not in book.users
+    assert decisions.ARCHIVED not in book.groups
     assert book.users["kid"].groups == ("family",)
 
 
@@ -6488,3 +6488,14 @@ def test_a_page_put_back_by_the_browser_is_loaded_again(
     splice page were missing from it until it was reloaded by hand."""
     html = client.get("/browse").text
     assert "if (e.persisted) location.reload();" in html
+
+
+def test_archiving_is_said_as_archiving_in_history() -> None:
+    """It is written as an audience, but *gave archived access to 3* is not
+    how anybody says it."""
+    arch = (decisions.ARCHIVED,)
+    assert web._summary(web._Change(add_audience=arch)) == "archived {n}"  # pyright: ignore[reportPrivateUsage]
+    assert (web._summary(web._Change(remove_audience=arch))  # pyright: ignore[reportPrivateUsage]
+            == "took {n} out of the archive")
+    assert (web._summary(web._Change(add_audience=("family",)))  # pyright: ignore[reportPrivateUsage]
+            == "gave family access to {n}")

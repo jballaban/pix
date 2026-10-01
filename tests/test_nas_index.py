@@ -1651,7 +1651,7 @@ def test_two_clips_of_the_same_moment_are_not_a_suggestion(
 def _hide(tree: dict[str, Path], name: str) -> None:
     (tree["master"] / "f").mkdir(parents=True, exist_ok=True)
     decisions.write(tree["master"] / "f" / name,
-                    Decision(audience=(decisions.HIDDEN,)))
+                    Decision(audience=(decisions.ARCHIVED,)))
 
 
 def test_a_hidden_photograph_is_not_guessed_into_a_stack(
@@ -1683,7 +1683,7 @@ def test_hidden_is_out_of_every_view_until_asked_for(
         return sorted(str(r["name"]) for r in ix.files(conn, f, limit=100))
 
     assert names(ix.Filters()) == ["b.jpg"]
-    assert names(ix.Filters(audience=decisions.HIDDEN)) == ["a.jpg"]
+    assert names(ix.Filters(audience=decisions.ARCHIVED)) == ["a.jpg"]
     assert ix.count(conn, ix.Filters()) == 1
     # Decided: a hidden file is not waiting for anybody.
     assert names(ix.Filters(audience=ix.UNREVIEWED)) == ["b.jpg"]
@@ -1696,10 +1696,10 @@ def test_hidden_wins_over_a_share_for_a_viewer(tree: dict[str, Path]) -> None:
     _shot(tree, "a.jpg", "2026:08:30 10:00:00")
     (tree["master"] / "f").mkdir(parents=True, exist_ok=True)
     decisions.write(tree["master"] / "f" / "a.jpg",
-                    Decision(audience=(decisions.HIDDEN, "family")))
+                    Decision(audience=(decisions.ARCHIVED, "family")))
     conn = _built(tree)
 
-    for audience in (None, decisions.HIDDEN):
+    for audience in (None, decisions.ARCHIVED):
         seen = ix.files(conn, ix.Filters(viewer=frozenset({"family"}),
                                          audience=audience), limit=100)
         assert not seen, audience

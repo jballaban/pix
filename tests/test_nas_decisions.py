@@ -572,24 +572,24 @@ def test_hiding_clears_every_grant(media: Path) -> None:
     """Not kept underneath, waiting to leak back the moment the hiding is
     taken off by hand."""
     decisions.change(media, add_audience=["family", "kid"])
-    _, now = decisions.change(media, add_audience=[decisions.HIDDEN])
-    assert now.audience == (decisions.HIDDEN,)
+    _, now = decisions.change(media, add_audience=[decisions.ARCHIVED])
+    assert now.audience == (decisions.ARCHIVED,)
 
 
 def test_sharing_a_hidden_file_shows_it(media: Path) -> None:
-    decisions.change(media, add_audience=[decisions.HIDDEN])
+    decisions.change(media, add_audience=[decisions.ARCHIVED])
     _, now = decisions.change(media, add_audience=["family"])
     assert now.audience == ("family",)
 
 
 def test_asking_for_hidden_and_a_share_at_once_hides(media: Path) -> None:
     """Hidden-and-shared is a contradiction; the safe side of it wins."""
-    _, now = decisions.change(media, audience=["family", decisions.HIDDEN])
-    assert now.audience == (decisions.HIDDEN,)
+    _, now = decisions.change(media, audience=["family", decisions.ARCHIVED])
+    assert now.audience == (decisions.ARCHIVED,)
 
 
 def test_unhiding_leaves_nothing_behind(media: Path) -> None:
-    decisions.change(media, add_audience=[decisions.HIDDEN])
-    _, now = decisions.change(media, remove_audience=[decisions.HIDDEN])
+    decisions.change(media, add_audience=[decisions.ARCHIVED])
+    _, now = decisions.change(media, remove_audience=[decisions.ARCHIVED])
     assert now.audience == ()
     assert decisions.read(media) is None

@@ -88,8 +88,8 @@ const USUAL = 'family';
 // The audience value meaning *nobody yet*, as the server sends it.
 const UNREVIEWED = 'new';
 // The audience that takes a file out of every view; global, as in drive.js.
-globalThis.HIDDEN = 'hidden';
-globalThis.HIDDEN_LABEL = 'Hidden — out of every view';
+globalThis.ARCHIVED = 'archived';
+globalThis.ARCHIVED_LABEL = 'Hidden — out of every view';
 // What separates an event from a sub-event in one name.
 const EVENT_SEP = ' > ';
 const NO_EVENT = '(none)';

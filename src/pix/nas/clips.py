@@ -143,11 +143,11 @@ def inherited(source: Decision | None, event: str | None) -> Decision:
     `hidden`**, for the same reason. A clip is usually made in order to hide
     its source; a clip born hidden would vanish the moment it was made.
     """
-    from pix.nas.decisions import HIDDEN
+    from pix.nas.decisions import ARCHIVED
 
     was = source or Decision()
     return Decision(event=event or was.event, tags=was.tags, people=was.people,
-                    audience=tuple(a for a in was.audience if a != HIDDEN))
+                    audience=tuple(a for a in was.audience if a != ARCHIVED))
 
 
 def merged(first: Decision, first_at: float,

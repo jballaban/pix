@@ -52,7 +52,7 @@ from typing import Any, cast
 from pix.markers import SIDECAR_TMP_SUFFIX
 from pix.nas import auth
 from pix.nas.const import ACCOUNTS_FILE
-from pix.nas.decisions import HIDDEN
+from pix.nas.decisions import ARCHIVED
 
 #: The built-in administrator. Hard-coded so it cannot be removed or renamed,
 #: and excluded from every audience: an admin sees everything already.
@@ -62,7 +62,7 @@ ADMIN: str = "admin"
 #: because it is the audience that takes a file out of every view
 #: (spec/clips.md §3) — a login called that would be granted exactly the files
 #: nobody is meant to see.
-RESERVED: frozenset[str] = frozenset({ADMIN, HIDDEN})
+RESERVED: frozenset[str] = frozenset({ADMIN, ARCHIVED})
 
 
 def canonical(name: str) -> str:

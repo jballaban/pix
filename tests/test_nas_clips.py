@@ -87,7 +87,7 @@ def test_a_clip_starts_with_its_sources_content_but_not_its_place() -> None:
     """Deleted, stacked and hidden are about where the source sits in the
     grid. A clip born hidden would vanish the moment it was made."""
     source = Decision(event="Sicily", tags=("beach",), people=("Mum",),
-                      audience=(decisions.HIDDEN,), deleted=True,
+                      audience=(decisions.ARCHIVED,), deleted=True,
                       stacked_under="f/x.mp4")
     got = clips.inherited(source, None)
     assert got == Decision(event="Sicily", tags=("beach",), people=("Mum",))
@@ -305,7 +305,7 @@ def test_a_source_cannot_be_binned_while_it_has_clips(
     [clip] = _make(client, (0, 30))
     r = client.post("/api/decide", json={
         "folder": "init_2026", "name": "b.mp4", "deleted": True})
-    assert r.status_code == 409 and "hide it" in r.text, r.text
+    assert r.status_code == 409 and "archive it" in r.text, r.text
     assert decisions.read(video / "b.mp4") is None
 
     # With its clips in the same gesture, it goes.
@@ -481,7 +481,7 @@ def _drive(tmp_path: Path, scenario: str,
     state = tmp_path / "state.json"
     state.write_text(json.dumps({
         "folder": "init_2026", "source": "b.mp4", "duration": 75, "fps": 25,
-        "hidden": False, "hiddenName": decisions.HIDDEN, "clips": cut}),
+        "hidden": False, "hiddenName": decisions.ARCHIVED, "clips": cut}),
         encoding="utf-8")
     harness = Path(__file__).parent / "js" / "splice.js"
     result = subprocess.run(["node", str(harness), str(script), str(state),
@@ -552,7 +552,7 @@ def test_hiding_the_original_is_the_hidden_audience(tmp_path: Path) -> None:
     [sent] = _drive(tmp_path, "hide", [])
     assert sent == {"url": "/api/decide",
                     "body": {"folder": "init_2026", "name": "b.mp4",
-                             "add_audience": [decisions.HIDDEN]}}
+                             "add_audience": [decisions.ARCHIVED]}}
 
 
 # --- cuts (spec/clips.md §6) ---------------------------------------------------

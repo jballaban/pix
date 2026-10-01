@@ -222,8 +222,8 @@ const UNREVIEWED = 'new';
 // The audience that takes a file out of every view. Global rather than one
 // more parameter on each of the harness's `new Function` calls, which all
 // see the global scope.
-globalThis.HIDDEN = 'hidden';
-globalThis.HIDDEN_LABEL = 'Hidden — out of every view';
+globalThis.ARCHIVED = 'archived';
+globalThis.ARCHIVED_LABEL = 'Hidden — out of every view';
 // What separates an event from a sub-event in one name.
 const EVENT_SEP = ' > ';
 const NO_EVENT = '(none)';

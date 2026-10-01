@@ -163,7 +163,13 @@ def join_event(head: str | None, leaf: str | None) -> str | None:
 #: The reserved audience that takes a file out of every view (spec/clips.md
 #: §3). Kept here, beside the decision it is a value of; the index and the
 #: accounts both import it rather than spelling it again.
-HIDDEN: str = "hidden"
+#:
+#: **Archived**, and it was *hidden* until 2026-10-01: what it is for is
+#: keeping something without having it in front of you — a source video once
+#: its clips are cut, the takes nobody wants to see again — and *hidden*
+#: sounded like a secret. Every sidecar and log line was rewritten when it was
+#: renamed, so there is one value and no alias to keep.
+ARCHIVED: str = "archived"
 
 
 class Unset:
@@ -493,12 +499,12 @@ def _exclusive(merged: tuple[str, ...], replaced: Sequence[str],
     already hidden and already, somehow, shared (a sidecar written by
     something else) is resolved in favour of hiding, the safe direction.
     """
-    if HIDDEN not in merged or len(merged) == 1:
+    if ARCHIVED not in merged or len(merged) == 1:
         return merged
     asked = set(normalize_names([*replaced, *added]))
-    if HIDDEN in asked or not asked:
-        return (HIDDEN,)
-    return tuple(v for v in merged if v != HIDDEN)
+    if ARCHIVED in asked or not asked:
+        return (ARCHIVED,)
+    return tuple(v for v in merged if v != ARCHIVED)
 
 
 # --- serialization -----------------------------------------------------------

@@ -1612,8 +1612,8 @@ def _always(filters: Filters) -> list[str]:
     # and only for an administrator. A viewer's scope already excludes a file
     # whose one audience is `hidden`, but a sidecar written by something else
     # can say hidden *and* shared, and hidden has to win that too.
-    if filters.audience != decisions.HIDDEN or filters.viewer is not None:
-        out.append(_NOT_HIDDEN)
+    if filters.audience != decisions.ARCHIVED or filters.viewer is not None:
+        out.append(_NOT_ARCHIVED)
     # A clip reaches a viewer only once it has a file of its own
     # (spec/clips.md §7) — which is what its size records. Until then it can
     # only play as its source clamped to a range, and that would hand the
@@ -1639,10 +1639,10 @@ def _always(filters: Filters) -> list[str]:
 #: A lookup on `file_audience`'s primary key, so it costs a seek per row. The
 #: name is inlined rather than bound: it is a constant of the code, and every
 #: caller of `_always` would otherwise have to remember to bind it.
-_NOT_HIDDEN: str = (
+_NOT_ARCHIVED: str = (
     "NOT EXISTS (SELECT 1 FROM file_audience fh "
     "WHERE fh.folder = files.folder AND fh.name = files.name "
-    f"AND fh.who = '{decisions.HIDDEN}')")
+    f"AND fh.who = '{decisions.ARCHIVED}')")
 
 
 def _source_seen(filters: Filters) -> tuple[str, dict[str, Any]]:
@@ -1669,7 +1669,7 @@ def _source_seen(filters: Filters) -> tuple[str, dict[str, Any]]:
             "AND s.deleted = 0 "
             "AND NOT EXISTS (SELECT 1 FROM file_audience sh "
             "  WHERE sh.folder = s.folder AND sh.name = s.name "
-            f"  AND sh.who = '{decisions.HIDDEN}') "
+            f"  AND sh.who = '{decisions.ARCHIVED}') "
             "AND EXISTS (SELECT 1 FROM file_audience sv "
             "  WHERE sv.folder = s.folder AND sv.name = s.name "
             f"  AND sv.who IN ({holes})))", dict(names))
@@ -1981,7 +1981,7 @@ def _unhidden(conn: sqlite3.Connection,
     """
     hidden = {(str(r[0]), str(r[1])) for r in conn.execute(
         "SELECT folder, name FROM file_audience WHERE who = ?",
-        (decisions.HIDDEN,))}
+        (decisions.ARCHIVED,))}
     if not hidden:
         return list(rows)
     return [r for r in rows
