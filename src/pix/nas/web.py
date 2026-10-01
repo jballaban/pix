@@ -1359,9 +1359,21 @@ h2.year span { font-size:13px; font-weight:400; }
     opacity:1; pointer-events:auto; }
 }
 
-@media (hover: none) {
+/* **Anything that can be touched**, not only what says it cannot hover. An
+   iPad can report hover — with a keyboard case, or simply as iPadOS does —
+   while the finger is what taps, and Safari treats a tap that *reveals*
+   something on hover as the hover alone: the select circle faded in and the
+   folder card did not open, while a chip, which reveals nothing, did. So on
+   a touchscreen nothing waits for a hover to appear. */
+@media (hover: none), (any-pointer: coarse) {
   /* Touch has no hover, so here the circle is the only way to select at all. */
   .pick { opacity:.55; }
+  /* The shelf heading's controls, which `(hover: hover)` above fades out
+     until hovered — the same swallowed first tap, on a heading. */
+  h3.group.shelf .crumbsep,
+  h3.group.shelf .crumb:last-child:not(:first-child),
+  h3.group.shelf .addgrp,
+  h3.group.shelf > span.dim { opacity:1; pointer-events:auto; }
   /* The only way to say which file a stack shows. It is on screen solely
      while one is being chosen, so there is nothing for it to clutter. */
   .choose { opacity:1; }

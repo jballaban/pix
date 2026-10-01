@@ -6011,9 +6011,22 @@ def test_nothing_hides_where_there_is_no_way_to_ask_for_it(
 ) -> None:
     """A control you cannot reveal is a control you do not have, so on a phone
     all of it stays on screen."""
-    hover = _media_block(web._STYLE, "(hover: none)")
+    hover = _media_block(web._STYLE, "(hover: none), (any-pointer: coarse)")
 
-    assert "crumbsep" not in hover and "addgrp { opacity:0" not in hover
+    assert "addgrp { opacity:0" not in hover
+    # What `(hover: hover)` fades out is put back, for a touchscreen that
+    # also says it can hover.
+    assert "h3.group.shelf .crumbsep" in hover
+    assert "opacity:1; pointer-events:auto" in hover
+
+
+def test_a_touchscreen_that_claims_hover_reveals_nothing_on_hover() -> None:
+    """An iPad can report hover, and Safari takes a tap that reveals something
+    as the hover alone — the folder card did not open. So the rules that keep
+    controls on screen ask about any coarse pointer, not just about hover."""
+    hover = _media_block(web._STYLE, "(hover: none), (any-pointer: coarse)")
+
+    assert ".pick { opacity:.55; }" in hover
 
 
 # --- an event, and one level inside it ----------------------------------------
