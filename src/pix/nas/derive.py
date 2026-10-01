@@ -106,14 +106,8 @@ _NO_RENDER_EXTS: frozenset[str] = frozenset({".insv", ".insp"})
 #: regardless, so this is recoverable if it ever proves too low.
 _CQ: str = "26"
 
-_IMAGE_EXTS: frozenset[str] = frozenset({
-    ".jpg", ".jpeg", ".heic", ".heif", ".png", ".gif",
-    ".tif", ".tiff", ".webp", ".bmp",
-})
-_VIDEO_EXTS: frozenset[str] = frozenset({
-    ".mov", ".mp4", ".m4v", ".avi", ".mkv", ".wmv",
-    ".webm", ".3gp", ".mts", ".mpg", ".mpeg", ".insv", ".insp",
-})
+_IMAGE_EXTS: frozenset[str] = paths.IMAGE_EXTS
+_VIDEO_EXTS: frozenset[str] = paths.VIDEO_EXTS
 
 
 class ProcessError(Exception):

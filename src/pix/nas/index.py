@@ -259,14 +259,8 @@ CREATE INDEX IF NOT EXISTS file_audience_who ON file_audience(who);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 """
 
-_VIDEO_EXTS: frozenset[str] = frozenset({
-    ".mov", ".mp4", ".m4v", ".avi", ".mkv", ".wmv",
-    ".webm", ".3gp", ".mts", ".mpg", ".mpeg", ".insv", ".insp",
-})
-_IMAGE_EXTS: frozenset[str] = frozenset({
-    ".jpg", ".jpeg", ".heic", ".heif", ".png", ".gif",
-    ".tif", ".tiff", ".webp", ".bmp",
-})
+_VIDEO_EXTS: frozenset[str] = paths.VIDEO_EXTS
+_IMAGE_EXTS: frozenset[str] = paths.IMAGE_EXTS
 
 
 @dataclass

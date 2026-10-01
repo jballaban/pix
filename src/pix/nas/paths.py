@@ -54,6 +54,19 @@ def render_path(media: Path, root: Path) -> Path:
 #: be spliced is whether the page can play it.
 PLAYABLE_CODECS: frozenset[str] = frozenset({"avc1", "avc3", "h264"})
 
+#: What counts as a photograph and what as a video, by extension. One pair,
+#: because `process` deciding what to make pictures of and the index deciding
+#: what kind a file is are the same question — two copies of the list let a
+#: new extension be processed as a video and then listed as `other`.
+IMAGE_EXTS: frozenset[str] = frozenset({
+    ".jpg", ".jpeg", ".heic", ".heif", ".png", ".gif",
+    ".tif", ".tiff", ".webp", ".bmp",
+})
+VIDEO_EXTS: frozenset[str] = frozenset({
+    ".mov", ".mp4", ".m4v", ".avi", ".mkv", ".wmv",
+    ".webm", ".3gp", ".mts", ".mpg", ".mpeg", ".insv", ".insp",
+})
+
 
 def strip_path(media: Path, root: Path) -> Path:
     """Where `media`'s filmstrip sprite lives: its frames side by side."""
