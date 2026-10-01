@@ -197,3 +197,28 @@ def test_a_video_with_no_filmstrip_is_work_to_do(
     monkeypatch.setattr(derive, "wants_render", lambda media: False)
 
     assert [p.name for p in derive.pending_files()] == ["a.mp4"]
+
+
+def test_a_clip_whose_picture_ends_before_its_sound_gets_a_filmstrip(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The strip is spaced over the container's length, and in a short phone
+    clip the audio runs on past the last picture — so the last frame asked
+    for is after the video has ended. A player holds the last picture there,
+    and so does the strip, rather than giving up on the whole thing and
+    trying again every run."""
+    import shutil
+    import subprocess
+
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg is not installed")
+    monkeypatch.setattr(derive, "STRIP_DIR", tmp_path / "strip")
+    clip = tmp_path / "master" / "f" / "short.mp4"
+    clip.parent.mkdir(parents=True)
+    subprocess.run(["ffmpeg", "-v", "error", "-y",
+                    "-f", "lavfi", "-i", "testsrc=size=160x90:rate=30:d=0.2",
+                    "-f", "lavfi", "-i", "sine=d=0.5",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+                    str(clip)], check=True, timeout=60)
+
+    assert derive.make_strip(clip)
+    assert not derive.wants_strip(clip)

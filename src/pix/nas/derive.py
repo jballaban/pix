@@ -328,7 +328,16 @@ def make_strip(media: Path) -> bool:
                 if done.returncode == 0 and tmp.is_file():
                     break
             if not tmp.is_file():
-                return False
+                # Past the last picture. The container's length is the
+                # longest stream's, and in a short phone clip that is the
+                # sound — so the last time asked for can fall after the video
+                # has ended, where a player holds the final picture. The strip
+                # does the same, rather than giving up on the clip and having
+                # every run try it again.
+                if not frames:
+                    return False
+                frames.append(frames[-1].copy())
+                continue
             with Image.open(tmp) as im:
                 frames.append(im.convert("RGB").copy())
             tmp.unlink(missing_ok=True)
@@ -646,6 +655,12 @@ def _derive_one(media: Path, summary: ProcessSummary, lock: threading.Lock,
             if make_strip(media):
                 with lock:
                     summary.strips += 1
+            elif not state["cancelling"]:
+                # Said, because the scan will ask for it again next run and a
+                # file retried forever in silence is how this went unnoticed.
+                with lock:
+                    summary.failed.append(
+                        f"{media.name}: strip: no frame could be read")
         except Exception as e:                # noqa: BLE001
             if not state["cancelling"]:
                 with lock:
