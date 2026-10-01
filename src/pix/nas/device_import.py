@@ -83,7 +83,7 @@ def run_device_import(
         # second, weaker account of the same events.
         log_verify=lambda device_path, event, detail: None,
         # Stamp and hash, the moment each file is down (spec/nas-app.md §15).
-        already_held=roundtrip.checker(INDEX_DB),
+        already_held=roundtrip.checker(INDEX_DB, warn=echo),
     )
     return summary
 

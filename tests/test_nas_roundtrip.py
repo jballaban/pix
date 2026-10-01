@@ -206,3 +206,26 @@ def test_a_clips_files_are_noted_for_the_index(
     assert record["clip"] is True
     assert record["content_hash"] == identity.content_hash(still)
     assert not derive._note_clip(clip, decision), "nothing changed"  # pyright: ignore[reportPrivateUsage]
+
+
+def test_the_index_is_opened_by_the_path_as_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The share is `\\nas\pix2`, and `as_posix` made that `//nas/pix2` —
+    a URI authority SQLite refuses. The refusal was swallowed, so every import
+    ran with no hash check; the index is opened by its path as written."""
+    import sqlite3
+
+    db = tmp_path / "index.db"
+    sqlite3.connect(db).execute(
+        "CREATE TABLE files (folder, name, content_hash, render_hash)").connection.commit()
+    opened: list[str] = []
+    real = sqlite3.connect
+
+    def spy(target: str, *args: Any, **kwargs: Any) -> sqlite3.Connection:
+        opened.append(str(target))
+        return real(target, *args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", spy)
+    assert roundtrip.known_hashes(db) == {}
+    assert opened and opened[0] == f"file:{db}?mode=ro"

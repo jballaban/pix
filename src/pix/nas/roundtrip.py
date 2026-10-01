@@ -92,10 +92,18 @@ def known_hashes(index_db: Path) -> dict[str, str] | None:
 
     if not index_db.is_file():
         return None
+    # Read-only by URI, with the path as the platform writes it. `as_posix`
+    # turned the share's UNC path into `//nas/pix2`, which SQLite reads
+    # as a URI *authority* and refuses — and that refusal was swallowed, so
+    # every import ran with no hash check at all.
     try:
-        conn = sqlite3.connect(f"file:{index_db.as_posix()}?mode=ro", uri=True)
+        conn = sqlite3.connect(f"file:{index_db}?mode=ro", uri=True)
+        conn.execute("SELECT 1")
     except sqlite3.Error:
-        return None
+        try:
+            conn = sqlite3.connect(str(index_db))
+        except sqlite3.Error:
+            return None
     try:
         rows = conn.execute(
             "SELECT folder, name, content_hash, render_hash FROM files "
@@ -128,11 +136,17 @@ def held(path: Path, known: dict[str, str] | None) -> str | None:
     return known.get(digest) if digest else None
 
 
-def checker(index_db: Path) -> "Callable[[Path], str | None]":
+def checker(index_db: Path, *,
+            warn: Callable[[str], None] = lambda _: None
+            ) -> "Callable[[Path], str | None]":
     """Both checks, for a file just landed on local disk: the stamp first,
     since it is a read of the head, then the hash. The index is read once, when
-    this is made, rather than per file."""
+    this is made, rather than per file — and if it cannot be, `warn` says so,
+    since the stamp alone catches only pix's own files."""
     known = known_hashes(index_db)
+    if known is None:
+        warn("the index could not be read, so copies of files already in the "
+             "library are recognised only by pix's own stamp this time")
 
     def check(path: Path) -> str | None:
         return returned(path) or held(path, known)

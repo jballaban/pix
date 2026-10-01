@@ -214,8 +214,13 @@ def _upload_one(staging: Path, *, echo: Callable[[str], None]) -> UploadSummary:
     # A device import has already hashed what it downloaded; a folder import
     # only linked its files, so this is where theirs are asked about — the
     # file is read here to be copied anyway (`roundtrip`).
-    known = (roundtrip.known_hashes(INDEX_DB)
-             if any(i.root not in staged.serials for i in items) else None)
+    folder_items = any(i.root not in staged.serials for i in items)
+    known = roundtrip.known_hashes(INDEX_DB) if folder_items else None
+    if folder_items and known is None:
+        # Said, not swallowed: an upload that silently checked nothing is how
+        # a copy of the library gets into it.
+        echo(f"{name}: the index could not be read, so copies of files "
+             "already in the library cannot be recognised this time")
     started = time.monotonic()
     # Mutable so the progress thread can read it without the lock. `inflight`
     # is what makes a cancel legible: the operator sees copies closing out
