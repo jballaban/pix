@@ -62,7 +62,7 @@ construction rather than by machinery. See [§12](#12-what-this-deletes).
 /pix/thumb/{device}_{datetime}/{filepath}_{filename}.{ext}.jpg
 /pix/preview/{device}_{datetime}/{filepath}_{filename}.{ext}.jpg
 /pix/rules.yaml                                                   distribution definitions
-/photo, /tv, /book, ...                                           distributions
+/tv, /book, ...                                                   distributions
 <distribution>/.pix-export.json                                   per-tree manifest
 ```
 
@@ -338,9 +338,9 @@ already delivery-ready. One per file — no size or quality profiles.
   (`IMG_4471.HEIC.jpg`), so a render path is computed mechanically from a master
   path and vice versa, with no lookup table.
 - **High quality by default** — near-visually-lossless JPEG, high-bitrate H.264.
-  Consumers downscale for themselves (Synology Photos makes its own thumbnails;
-  TVs downscale). This is what lets one render serve `/photo`, `/tv` *and*
-  `/book`, where a delivery-compressed copy would be a visible loss on print.
+  Consumers downscale for themselves (the app serves its own previews; TVs
+  downscale). This is what lets one render serve the app, `/tv` *and* `/book`,
+  where a delivery-compressed copy would be a visible loss on print.
 - Renders carry **no pix metadata**. Metadata is baked at distribution time
   instead, which means a tag change never invalidates a render and never
   re-transcodes anything. (If non-destructive editing is ever built
@@ -428,7 +428,7 @@ Curation is one decision per file, carried by **`tier`**:
 |---|---|---|
 | uncategorized | *absent* | not yet reviewed |
 | not good enough | `none` | reviewed, **kept forever**, never delivered |
-| photo-app worthy | `photo` | available to the family |
+| worth showing | `photo` | available to the family |
 | top | `top` | the handful you show when you show a few |
 
 Values are **ordered** — `top` implies `photo` — which matches the workflow:
@@ -459,18 +459,23 @@ sidecars-are-lost safety net survives without it.
 
 ### The trees
 
-Two standing distributions on the NAS, kept continuously reconciled:
+**The app is the only viewer.** Everyone in the household browses, curates and
+plays through it ([§8](#8-the-app)). An earlier draft added a `/photo` tree
+(`tier:photo,top`) for Synology Photos as the family's primary view; it was
+**dropped** (2026-10-01) so pix controls the whole experience — one access model,
+one curation surface, one playback path — instead of a second copy of the photo
+tier behind a second permission model, viewed by software that writes back into
+files.
+
+That leaves one standing distribution on the NAS, kept continuously reconciled:
 
 | Tree | Filter | For |
 |---|---|---|
-| `/photo` | `tier:photo,top` | Synology Photos — the **primary** way the family views everything |
 | top-10 | `tier:top` | dumb consumers: a TV that plays a folder, a book service that takes an upload |
 
-The top tree duplicates a subset of `/photo`, which is fine — it is ~10 per event.
 With `rating` gone there is no curation signal *inside* a delivery copy to filter
-on, so membership can only be expressed by which tree a file sits in. That makes
-the second tree necessary rather than merely convenient: it is the only way a
-consumer gets only the handful.
+on, so membership can only be expressed by which tree a file sits in. That is
+what the top tree is for: it is the only way a consumer gets only the handful.
 
 
 **Everything else is ad-hoc, from the desktop.** A people-grouped set for LLM
@@ -484,18 +489,19 @@ it. (`{person}` depends on face detection, which is deferred and unbuilt.)
 > defines.
 
 Each is a standing named rule (filter + template + extension allowlist) in
-`/pix/rules.yaml`, materialized into its own shared folder — `/photo` for
-Synology Photos, `/tv` to sync to televisions, `/book` for print.
+`/pix/rules.yaml`, materialized into its own shared folder — `/tv` to sync to
+televisions, `/book` for print.
 
 - **Copies, not links.** The runtime the app gets on the NAS is not known, so the
   design must not depend on hard links or reflinks. Copying is also what today's
   `pix export` already does and is known to work. If link support is detected at
   runtime it is a pure optimization; correctness never depends on it.
-- **Never link to master.** A distribution folder is managed by other software —
-  Synology Photos writes ratings back into files — and a link would carry that
-  write through into a sacred original. Distributions resolve to a copy, always.
+- **Never link to master.** A distribution folder is read by other software, and
+  some of it writes back — photo apps write ratings into files — and a link would
+  carry that write through into a sacred original. Distributions resolve to a
+  copy, always.
 - **Metadata is baked into the copy** at creation. This is what makes the tree
-  self-describing to Synology Photos and to anything else, and it is the second,
+  self-describing to whatever consumes it, and it is the second,
   independent carrier of the curation: if every sidecar were lost, every file
   ever delivered still holds its event and date, and its tier is recoverable from
   which tree it sits in.
@@ -506,23 +512,18 @@ Synology Photos, `/tv` to sync to televisions, `/book` for print.
   the copy gets a canonical name. Because a name is assigned when a copy is
   created and never changed afterward, the
   [stable-collision-suffix problem](roadmap.md) never arises.
-- **Distributions are one-way, and that is enforced rather than assumed.** Give
-  the family **read-only** DSM permissions on `/photo` and write access only to
-  the app's account. Synology Photos stays fully usable — albums, favorites,
-  people and its own tags all live in its database, never in the media — but it
-  cannot delete or add files. `@eaDir` thumbnail folders still appear, written by
-  the indexer as system; the reconcile already skips them as NAS artifacts.
+- **Distributions are one-way, and that is enforced rather than assumed.** Every
+  consumer gets **read-only** DSM permissions on a tree and only the app's account
+  can write, so nothing downstream can delete or add files. `@eaDir` thumbnail
+  folders still appear, written by DSM's indexer as system; the reconcile already
+  skips them as NAS artifacts.
 - **Drift reports rather than stops.** `export.md` hard-stops the whole run on
   unexplained drift, which was right when the target might be a hand-curated
   folder. Over a regenerable tree with an untouchable master it is too aggressive:
-  a stray file should not stop `/photo` reconciling. Missing gets restored from
+  a stray file should not stop a tree reconciling. Missing gets restored from
   master, modified gets overwritten, **foreign gets reported and never touched** —
   a photo someone dropped in exists nowhere else, so deleting it would destroy
   their only copy.
-- **Path churn breaks Synology Photos albums.** Renaming an event moves the copies
-  within the tree, and any album pointing at the old paths loses those entries.
-  Nothing pix can prevent — worth knowing before renaming an event that albums
-  hang off.
 
 **Update semantics** — all cheap, none requiring a re-transcode:
 
@@ -1098,7 +1099,6 @@ the converting.
 | renders | whatever needs conversion; disposable | no |
 | thumbnails | ~20GB | no |
 | previews | ~20GB | no |
-| `/photo` | ~0.15TB | no |
 | top-10 tree | negligible — ~10 per event | no |
 | **offsite** | **~2.3TB** | |
 
@@ -1542,8 +1542,8 @@ handle on derivatives and stays useful until identity gives a precise one.
 *(Resolved in discussion: **what makes two files the same photograph, and what
 to do about each kind** — [§15](#15-identity--when-two-files-are-the-same-photograph);
 import-ledger identity — [§9](#9-ingest--the-desktop-cli);
-distributions and the curation scale — [§7](#7-distributions); multi-user, auth and
-Synology Photos write-back — [§8](#8-the-app); Btrfs — [§10](#10-hardware);
+distributions, the curation scale and the app as the only viewer —
+[§7](#7-distributions); multi-user and auth — [§8](#8-the-app); Btrfs — [§10](#10-hardware);
 the sidecar/index model — [§4](#4-metadata--xmp-sidecars); seeding — [§14](#14-seeding-the-existing-library);
 **where a judgement about a set lives** — see stacks, below.)*
 

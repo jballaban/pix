@@ -102,7 +102,7 @@ _NO_RENDER_EXTS: frozenset[str] = frozenset({".insv", ".insp"})
 #: 26 because a render that is 2.45x larger than the original it derives from is
 #: the wrong shape for a disposable tier — and across the 421 HEVC clips that is
 #: ~22GB rather than ~31GB. Quality still sits well above what its consumers need
-#: (a browser grid, Synology Photos, a TV), and the master keeps the original
+#: (a browser grid, a TV), and the master keeps the original
 #: regardless, so this is recoverable if it ever proves too low.
 _CQ: str = "26"
 

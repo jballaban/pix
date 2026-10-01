@@ -263,7 +263,7 @@ details link to it, and for the administrator to its timeline as well.
 **A delivered clip's content can change**, which [§7](nas-app.md#7-distributions)
 said never happens. When a range changes, its copy is removed from the tree
 until the new cut lands, then replaced **in place, under the same canonical
-name**, so a Synology Photos album pointing at it keeps the entry. Canonical
+name**, so anything that refers to it by path keeps the entry. Canonical
 names come from the clip's effective date, so a video's clips arrive in order.
 
 **Round trips** resolve by the stamp: `pix:ClipId` beside `pix:SourceId`,
