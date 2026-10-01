@@ -240,3 +240,19 @@ def test_skip_key_is_case_and_separator_insensitive() -> None:
 
 def test_source_tag_distinguishes_sibling_trees() -> None:
     assert st.source_tag(Path(r"G:\pix\2001")) != st.source_tag(Path(r"G:\pix\2022"))
+
+
+def test_a_dot_folder_is_never_walked(source: Path, staging_root: Path) -> None:
+    """Android keeps a preview of every photo in `Pictures/.thumbnails`, and
+    one phone import landed 1,500 of them as photographs. A dot-folder is the
+    platform's own, never the user's — whatever is inside it."""
+    thumbs = source / "Pictures" / ".thumbnails"
+    thumbs.mkdir(parents=True)
+    (thumbs / "17000.jpg").write_bytes(b"preview")
+    (source / "Pictures" / "real.jpg").write_bytes(b"photo")
+
+    s = fi.run_folder_import(source, NAME)
+
+    assert staged(staging_root, source, "Pictures/real.jpg").exists()
+    assert not staged(staging_root, source, "Pictures/.thumbnails").exists()
+    assert s.landed == 4

@@ -112,11 +112,12 @@ the source; migrate flattens later), so the month-bucket names are harmless.
 **Import lands everything faithfully except an explicit non-media skip-list.**
 Import is a dumb, byte-exact copier with **no format opinions** — it takes every
 object under the camera-roll root as-is, *including unknown extensions* (so it
-never silently drops something it doesn't recognise). **Two** narrow exceptions,
-both provably non-media:
+never silently drops something it doesn't recognise). **Three** narrow
+exceptions, all non-media:
 
-1. An explicit extension denylist of known non-media companions, currently just
-   **`.AAE`** (Apple's non-destructive edit-instruction sidecars — 73 in the
+1. An explicit extension denylist of known non-media companions — **`.AAE`**
+   and **`.url`** (`importer.SKIP_EXTENSIONS`; a GoPro keeps an internet
+   shortcut on its card). `.AAE` is Apple's non-destructive edit-instruction sidecar (73 in the
    sample; not media, never wanted). Accepted consequence: for a photo edited
    non-destructively (stored as original + `.AAE`), skipping the `.AAE` means the
    **original** lands, not the edited render.
@@ -129,6 +130,12 @@ both provably non-media:
    not bare and still lands. Migrate's `EXTENSION_POLICY` also lists `.nomedia` /
    `.database_uuid` as `delete`, a backstop for copies that arrive from non-import
    sources.
+3. **Dot-folders** — no import descends into a folder whose name starts with a
+   dot (`importer.is_hidden_folder`, used by device and folder import alike).
+   That is the platform's own space, not the user's: Android's gallery keeps a
+   preview of every photo in `Pictures/.thumbnails`, and one phone import landed
+   1,500 of them as photographs. Accepted cost: a vault app hiding real photos in
+   a dot-folder is skipped too.
 
 A `.__*`-style temp or the sync-client working dirs are not on a phone, so nothing
 else needs filtering. Landed media is additionally run through a

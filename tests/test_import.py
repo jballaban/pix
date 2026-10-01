@@ -736,3 +736,24 @@ def test_a_file_already_in_the_library_is_let_go_as_it_lands(
     assert not (landing / "IMG.HEIC").exists()
     record = importer._read_sidecar(importer._sidecar_path(landing / "IMG.HEIC"))
     assert record is not None and record["returned"] == "init_2026/IMG_1.HEIC"
+
+
+def test_a_device_import_never_enters_a_dot_folder() -> None:
+    """The phone's gallery cache, `Pictures/.thumbnails`, is not photographs."""
+    from types import SimpleNamespace
+
+    tree = {
+        "root": [SimpleNamespace(id="pics", filename="Pictures", is_folder=True)],
+        "pics": [SimpleNamespace(id="t", filename=".thumbnails", is_folder=True),
+                 SimpleNamespace(id="a", filename="a.jpg", is_folder=False)],
+        "t": [SimpleNamespace(id="x", filename="17000.jpg", is_folder=False)],
+    }
+    dev = SimpleNamespace(children=lambda parent: tree[parent])
+    seen: list[str] = []
+
+    importer._traverse(dev, "root", "",  # pyright: ignore[reportPrivateUsage, reportArgumentType]
+                       lambda obj, path: seen.append(path) or False)
+
+    assert seen == ["Pictures/a.jpg"]
+    assert importer.is_hidden_folder(".thumbnails")
+    assert not importer.is_hidden_folder("DCIM")

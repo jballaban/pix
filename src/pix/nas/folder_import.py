@@ -157,16 +157,17 @@ def run_folder_import(
 
 
 def _walk(source: Path) -> list[Path]:
-    """Every file under `source`, skipping our own `.manifest/` children.
+    """Every file under `source`, never descending into a dot-folder
+    (`importer.is_hidden_folder`) — which also covers our own `.manifest/`.
 
     Sorted so a run is deterministic and its progress legible — seeding walks
     tens of thousands of files and "where did it get to" should be answerable.
     """
-    from pix.ingest import MANIFEST_DIRNAME
+    from pix.importer import is_hidden_folder
 
     found: list[Path] = []
     for dirpath, dirnames, filenames in os.walk(source):
-        dirnames[:] = sorted(d for d in dirnames if d != MANIFEST_DIRNAME)
+        dirnames[:] = sorted(d for d in dirnames if not is_hidden_folder(d))
         base = Path(dirpath)
         found.extend(base / f for f in sorted(filenames))
     return found

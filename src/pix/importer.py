@@ -208,6 +208,19 @@ def _is_bare_dotfile(name: str) -> bool:
     return name.startswith(".") and Path(name).suffix == ""
 
 
+def is_hidden_folder(name: str) -> bool:
+    """True for a folder an import never descends into: any leading-dot name.
+
+    The convention every platform uses for *not the user's files*, and on a
+    phone it is where the junk lives — Android's gallery keeps a preview of
+    every photograph in `Pictures/.thumbnails`, and one import of a phone
+    landed 1,500 of them as photographs. `.trashed`, app caches and our own
+    `.manifest`/`.pix` folders are the same case. The cost, accepted: a vault
+    app hiding real photographs in a dot-folder is skipped with them.
+    """
+    return name.startswith(".")
+
+
 def _is_skippable_companion(obj: wpd.WpdObject) -> bool:
     """True for non-media files import never lands: the explicit extension
     denylist (`SKIP_EXTENSIONS`) or a bare dotfile (see `_is_bare_dotfile`)."""
@@ -826,6 +839,8 @@ def _traverse(dev: wpd.Device, parent_id: str, rel: str,
             dirty = True
     for obj in folders:
         name = obj.filename
+        if is_hidden_folder(name):
+            continue
         sub = f"{rel}/{name}" if rel else name
         if _traverse(dev, obj.id, sub, act):
             dirty = True
