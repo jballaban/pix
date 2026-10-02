@@ -63,3 +63,17 @@ def test_no_asset_has_carriage_returns() -> None:
     cannot slip `\r` into a script that is then served to a phone."""
     for path in [*JS, *CSS, *assets.STATIC.glob("html/*.html")]:
         assert b"\r" not in path.read_bytes(), path.name
+
+
+def test_the_web_apps_roots_are_never_the_real_share() -> None:
+    """The web app looks its roots up in one module, and the test guard has
+    to have redirected every one of them — or a test writes to the archive."""
+    import os
+
+    from pix.nas import webroots
+
+    real = Path(os.environ.get("PIX2_SHARE") or r"\nas\pix2")
+    for name in ("DB_PATH", "MASTER_DIR", "META_DIR", "THUMB_DIR",
+                 "PREVIEW_DIR", "LARGE_DIR", "RENDER_DIR", "STRIP_DIR"):
+        value: Path = getattr(webroots, name)
+        assert real not in (value, *value.parents), name

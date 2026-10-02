@@ -28,6 +28,7 @@ from pix.nas import derive
 from pix.nas import history
 from pix.nas import index as ix
 from pix.nas import web
+from pix.nas import webroots
 from pix.nas.web import _split
 from pix.nas.decisions import Decision
 
@@ -2465,7 +2466,7 @@ def test_the_login_page_never_leaves_the_app(app_env: dict[str, Path]) -> None:
 
 def test_a_missing_index_says_what_to_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sign_in: Callable[[str, str], TestClient]) -> None:
     """'503' is useless on its own; the fix is one command."""
-    monkeypatch.setattr(web, "DB_PATH", tmp_path / "nope.db")
+    monkeypatch.setattr(webroots, "DB_PATH", tmp_path / "nope.db")
     monkeypatch.setattr(accounts, "ACCOUNTS_FILE", tmp_path / "users.json")
 
     r = sign_in(accounts.ADMIN, "admin").get("/")
@@ -2549,8 +2550,8 @@ def writable(app_env: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> Path:
     m = app_env["share"] / "master" / "init_2026"
     m.mkdir(parents=True, exist_ok=True)
     (m / "a.jpg").write_bytes(b"\xff\xd8original")
-    monkeypatch.setattr(web, "MASTER_DIR", app_env["share"] / "master")
-    monkeypatch.setattr(web, "META_DIR", app_env["share"] / "meta")
+    monkeypatch.setattr(webroots, "MASTER_DIR", app_env["share"] / "master")
+    monkeypatch.setattr(webroots, "META_DIR", app_env["share"] / "meta")
     return m
 
 

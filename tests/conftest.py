@@ -86,10 +86,13 @@ def _isolate_nas_paths(  # pyright: ignore[reportUnusedFunction]
     import pix.nas
     from pix.nas import const, derive
 
+    # Recursively: the web app is becoming a package of its own, and a root
+    # bound in a module one level down is as able to reach the live share as
+    # one at the top.
     modules = [const]
-    for info in pkgutil.iter_modules(pix.nas.__path__):
+    for info in pkgutil.walk_packages(pix.nas.__path__, prefix="pix.nas."):
         try:
-            modules.append(importlib.import_module(f"pix.nas.{info.name}"))
+            modules.append(importlib.import_module(info.name))
         except Exception:                        # noqa: BLE001
             continue                             # optional deps, not our problem
 
@@ -129,7 +132,7 @@ def app_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
     """A small archive on disk, indexed, with the app pointed at it."""
     import json
 
-    from pix.nas import accounts, web
+    from pix.nas import accounts, webroots
     from pix.nas import index as ix
 
     share = tmp_path / "nas"
@@ -158,9 +161,9 @@ def app_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
     db = tmp_path / "index.db"
     ix.build(db, meta_dir=meta, master_dir=master)
 
-    monkeypatch.setattr(web, "DB_PATH", db)
-    monkeypatch.setattr(web, "THUMB_DIR", thumb)
-    monkeypatch.setattr(web, "PREVIEW_DIR", preview)
+    monkeypatch.setattr(webroots, "DB_PATH", db)
+    monkeypatch.setattr(webroots, "THUMB_DIR", thumb)
+    monkeypatch.setattr(webroots, "PREVIEW_DIR", preview)
     # Accounts live in the sandbox; the autouse NAS guard already keeps
     # ACCOUNTS_FILE off the real share, and this pins it per test.
     monkeypatch.setattr(accounts, "ACCOUNTS_FILE", tmp_path / "users.json")
@@ -170,12 +173,12 @@ def app_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
 @pytest.fixture
 def master(app_env: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> Path:
     """A master folder holding the real files the media endpoint streams."""
-    from pix.nas import web
+    from pix.nas import webroots
 
     m = app_env["share"] / "master" / "init_2026"
     m.mkdir(parents=True, exist_ok=True)
     (m / "b.mp4").write_bytes(bytes([0, 0, 0, 0x18]) + b"ftypmp42" + b"x" * 400)
-    monkeypatch.setattr(web, "MASTER_DIR", app_env["share"] / "master")
+    monkeypatch.setattr(webroots, "MASTER_DIR", app_env["share"] / "master")
     return m
 
 
@@ -183,13 +186,13 @@ def master(app_env: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> Path:
 def writable(app_env: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> Path:
     """Master with the real files a decision attaches to, and the tier roots the
     endpoints resolve against."""
-    from pix.nas import web
+    from pix.nas import webroots
 
     m = app_env["share"] / "master" / "init_2026"
     m.mkdir(parents=True, exist_ok=True)
     (m / "a.jpg").write_bytes(b"\xff\xd8original")
-    monkeypatch.setattr(web, "MASTER_DIR", app_env["share"] / "master")
-    monkeypatch.setattr(web, "META_DIR", app_env["share"] / "meta")
+    monkeypatch.setattr(webroots, "MASTER_DIR", app_env["share"] / "master")
+    monkeypatch.setattr(webroots, "META_DIR", app_env["share"] / "meta")
     return m
 
 

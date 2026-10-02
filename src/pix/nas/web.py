@@ -56,14 +56,9 @@ from pix.nas.assets import asset
 from pix.nas import destroy as destroy_mod
 from pix.nas import history
 from pix.nas import index as ix
-from pix.nas.const import (
-    INDEX_DB, LARGE_DIR, MASTER_DIR, META_DIR, PREVIEW_DIR, RENDER_DIR,
-    STRIP_DIR, THUMB_DIR,
-)
+from pix.nas import webroots
 from pix.nas.decisions import Decision, Unset
 
-#: Re-exported so the CLI and tests have one name for it.
-DB_PATH: Path = INDEX_DB
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI) -> AsyncGenerator[None]:
@@ -217,11 +212,11 @@ def require_admin(user: Annotated[Principal, Depends(require_user)]) -> Principa
 
 def db() -> sqlite3.Connection:
     """A connection to the index, or a clear error if it has not been built."""
-    if not DB_PATH.is_file():
+    if not webroots.DB_PATH.is_file():
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
-            f"index not built — run `pix2 index` (expected at {DB_PATH})")
-    return ix.open_ro(DB_PATH)
+            f"index not built — run `pix2 index` (expected at {webroots.DB_PATH})")
+    return ix.open_ro(webroots.DB_PATH)
 
 
 @app.exception_handler(ix.StaleIndex)
@@ -2427,8 +2422,8 @@ def _has_render(row: sqlite3.Row) -> bool:
         return False
     try:
         return paths.render_path(
-            MASTER_DIR / str(row["folder"]) / str(row["name"]),
-            RENDER_DIR).is_file()
+            webroots.MASTER_DIR / str(row["folder"]) / str(row["name"]),
+            webroots.RENDER_DIR).is_file()
     except OSError:
         return False
 
@@ -2868,7 +2863,7 @@ _BROWSE_JS: str = "".join(asset(f"js/browse/{p}") for p in _BROWSE_PARTS)
 def thumb(folder: str, name: str,
           user: Annotated[Principal, Depends(require_user)]) -> FileResponse:
     _allowed(user, folder, name)
-    return _serve(THUMB_DIR, folder, name, user)
+    return _serve(webroots.THUMB_DIR, folder, name, user)
 
 
 @app.get("/strip/{folder}/{name}")
@@ -2876,7 +2871,7 @@ def strip(folder: str, name: str,
           user: Annotated[Principal, Depends(require_user)]) -> FileResponse:
     """A video's filmstrip, for the splice page's timeline."""
     _allowed(user, folder, name)
-    return _serve(STRIP_DIR, folder, name, user)
+    return _serve(webroots.STRIP_DIR, folder, name, user)
 
 
 @app.get("/large/{folder}/{name}")
@@ -2886,14 +2881,14 @@ def large(folder: str, name: str,
     stretches to 460px wants 920 device pixels, which `thumb` has not got and
     `preview` has four times too many of."""
     _allowed(user, folder, name)
-    return _serve(LARGE_DIR, folder, name, user)
+    return _serve(webroots.LARGE_DIR, folder, name, user)
 
 
 @app.get("/preview/{folder}/{name}")
 def preview(folder: str, name: str,
             user: Annotated[Principal, Depends(require_user)]) -> FileResponse:
     _allowed(user, folder, name)
-    return _serve(PREVIEW_DIR, folder, name, user)
+    return _serve(webroots.PREVIEW_DIR, folder, name, user)
 
 
 def _allowed(user: Principal, folder: str, name: str) -> None:
@@ -2945,7 +2940,7 @@ def media(folder: str, name: str,
     # (spec/clips.md §7). Only a curator gets here: `_allowed` has already
     # refused a viewer, who would otherwise be handed all of the source.
     source = clips.source_of(name)
-    if source is not None and not (MASTER_DIR / folder / name).is_file():
+    if source is not None and not (webroots.MASTER_DIR / folder / name).is_file():
         own = _clip_file(folder, name, playable=True)
         if own is not None:
             return FileResponse(own, media_type="video/mp4",
@@ -2954,10 +2949,10 @@ def media(folder: str, name: str,
         name = source
     # Prefer the render: for an HEVC master it is the only playable copy, and
     # where both exist they are the same footage.
-    rendered = (RENDER_DIR / folder / (name + ".mp4")).resolve()
-    target = (MASTER_DIR / folder / name).resolve()
-    if (MASTER_DIR.resolve() not in target.parents
-            or RENDER_DIR.resolve() not in rendered.parents):
+    rendered = (webroots.RENDER_DIR / folder / (name + ".mp4")).resolve()
+    target = (webroots.MASTER_DIR / folder / name).resolve()
+    if (webroots.MASTER_DIR.resolve() not in target.parents
+            or webroots.RENDER_DIR.resolve() not in rendered.parents):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "bad path")
     if rendered.is_file():
         target = rendered
@@ -2989,7 +2984,7 @@ def _serve(root: Path, folder: str, name: str,
     if not target.is_file():
         stand_in = clips.source_of(name)
         if stand_in is None:
-            record = ix.record_of(META_DIR, folder, name) or {}
+            record = ix.record_of(webroots.META_DIR, folder, name) or {}
             raw = record.get("stand_in")
             stand_in = raw if isinstance(raw, str) and raw else None
     if stand_in is not None:
@@ -3041,7 +3036,7 @@ def _to_send(folder: str, name: str, original: bool) -> tuple[Path, str]:
                                 "this clip has not been cut yet")
         return own, f"{name}{own.suffix}"
     if not original:
-        render = paths.render_path(media, RENDER_DIR)
+        render = paths.render_path(media, webroots.RENDER_DIR)
         if render.is_file():
             return render, Path(name).with_suffix(render.suffix).name
     return media, name
@@ -3232,7 +3227,7 @@ def _records_for(targets: Sequence[Target]
     if len(targets) < 2:
         return {}
     def one(t: Target) -> tuple[str, str, dict[str, Any] | None]:
-        return t.folder, t.name, ix.record_of(META_DIR, t.folder, t.name)
+        return t.folder, t.name, ix.record_of(webroots.META_DIR, t.folder, t.name)
 
     out: dict[tuple[str, str], dict[str, Any]] = {}
     with ThreadPoolExecutor(max_workers=META_READERS) as pool:
@@ -3500,9 +3495,9 @@ def api_file(folder: str, name: str,
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "not indexed")
 
-    media = MASTER_DIR / folder / name
-    decision = decisions.read(media) if _under(MASTER_DIR, media) else None
-    record = ix.record_for(folder, name, meta_dir=META_DIR) or {}
+    media = webroots.MASTER_DIR / folder / name
+    decision = decisions.read(media) if _under(webroots.MASTER_DIR, media) else None
+    record = ix.record_for(folder, name, meta_dir=webroots.META_DIR) or {}
     raw: object = record.get("exif")
     exif: dict[str, Any] = (
         cast("dict[str, Any]", raw) if isinstance(raw, dict) else {})
@@ -3539,7 +3534,7 @@ def api_file(folder: str, name: str,
         "inherited": inherited,
         "facts": facts,
         "exif": {k: str(v) for k, v in sorted(exif.items())},
-        "has_render": (RENDER_DIR / folder / (name + ".mp4")).is_file(),
+        "has_render": (webroots.RENDER_DIR / folder / (name + ".mp4")).is_file(),
         "clip": _clip_from(user, row, view),
         "clips": _clips_list(user, row, view),
     })
@@ -3723,7 +3718,7 @@ def api_decide(user: Annotated[Principal, Depends(require_user)],
     # whether a stack is open — this is the scripting surface, and the page
     # writes through `/api/decide/bulk` — so it asks what this person's
     # ordinary view would fold, which is the only reading available.
-    conn = ix.open_rw(DB_PATH) if DB_PATH.is_file() else None
+    conn = ix.open_rw(webroots.DB_PATH) if webroots.DB_PATH.is_file() else None
     try:
         view = ix.Filters()
         named = Target(folder=body.folder, name=body.name)
@@ -3807,7 +3802,7 @@ def api_purge(user: Annotated[Principal, Depends(require_admin)],
     purged = 0
     failed: list[dict[str, str]] = []
     gone: list[dict[str, str]] = []
-    conn = ix.open_rw(DB_PATH) if DB_PATH.is_file() else None
+    conn = ix.open_rw(webroots.DB_PATH) if webroots.DB_PATH.is_file() else None
     try:
         for target in body.files:
             try:
@@ -3899,10 +3894,10 @@ def _ms(value: float) -> float:
 
 
 def _clip_conn() -> sqlite3.Connection:
-    if not DB_PATH.is_file():
+    if not webroots.DB_PATH.is_file():
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE,
                             "the index has not been built")
-    return ix.open_rw(DB_PATH)
+    return ix.open_rw(webroots.DB_PATH)
 
 
 def _clip_row(conn: sqlite3.Connection, folder: str,
@@ -4442,9 +4437,9 @@ def api_clips_free(user: Annotated[Principal, Depends(require_admin)],
                                 f"{body.source} has no clips")
         made: list[tuple[sqlite3.Row, Path]] = []
         for c in live:
-            clip_media = MASTER_DIR / body.folder / str(c["name"])
+            clip_media = webroots.MASTER_DIR / body.folder / str(c["name"])
             if c["clip_in"] == c["clip_out"]:
-                file = paths.still_path(clip_media, RENDER_DIR,
+                file = paths.still_path(clip_media, webroots.RENDER_DIR,
                                         float(c["clip_in"]))
                 if not file.is_file():
                     raise HTTPException(
@@ -4452,18 +4447,18 @@ def api_clips_free(user: Annotated[Principal, Depends(require_admin)],
                         "its photos have no files yet — pix2 process makes "
                         "them. Archive the video instead for now.")
             else:
-                file = paths.cut_path(clip_media, RENDER_DIR,
+                file = paths.cut_path(clip_media, webroots.RENDER_DIR,
                                       float(c["clip_in"]), float(c["clip_out"]))
                 if not file.is_file():
                     raise HTTPException(
                         status.HTTP_409_CONFLICT,
                         "its clips are still being cut — try again in a moment")
             made.append((c, file))
-        record = ix.record_of(META_DIR, body.folder, body.source) or {}
+        record = ix.record_of(webroots.META_DIR, body.folder, body.source) or {}
         for c, file in made:
             name = str(c["name"])
-            clip = MASTER_DIR / body.folder / name
-            own = MASTER_DIR / body.folder / f"{name}{file.suffix}"
+            clip = webroots.MASTER_DIR / body.folder / name
+            own = webroots.MASTER_DIR / body.folder / f"{name}{file.suffix}"
             if own.exists():
                 raise HTTPException(status.HTTP_409_CONFLICT,
                                     f"{own.name} is already in master")
@@ -4478,8 +4473,8 @@ def api_clips_free(user: Annotated[Principal, Depends(require_admin)],
                 _stand_in(body.folder, own, c, record, body.source)
                 destroy_mod.destroy(clip, conn=conn, folder=body.folder,
                                     name=name)
-            ix.refresh(conn, body.folder, own.name, meta_dir=META_DIR,
-                       master_dir=MASTER_DIR)
+            ix.refresh(conn, body.folder, own.name, meta_dir=webroots.META_DIR,
+                       master_dir=webroots.MASTER_DIR)
             freed.append(own.name)
         binned = _Change(deleted=True)
         was, decision, _ = _decide(body.folder, body.source, binned,
@@ -4525,7 +4520,7 @@ def _stand_in(folder: str, own: Path, clip: sqlite3.Row,
     record = {"file": own.name, "folder": folder, "size": st.st_size,
               "mtime_ns": st.st_mtime_ns, "exif": exif,
               "placeholder": True, "stand_in": source}
-    path = paths.meta_path(own, META_DIR)
+    path = paths.meta_path(own, webroots.META_DIR)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(record), encoding="utf-8")
@@ -4549,7 +4544,7 @@ def splice(folder: str, name: str,
     one is the same range in the other.
     """
     source = clips.source_of(name)
-    if source is not None and not (MASTER_DIR / folder / name).is_file():
+    if source is not None and not (webroots.MASTER_DIR / folder / name).is_file():
         return RedirectResponse(
             f"/splice/{_q(folder)}/{_q(source)}#{_q(name)}",
             status_code=status.HTTP_303_SEE_OTHER)
@@ -4571,11 +4566,11 @@ def splice(folder: str, name: str,
         why = ("this video is in a stack — take it out first. Video "
                "stacking is still to be designed, and cutting a video out "
                "from under one is part of that question.")
-    record = ix.record_of(META_DIR, folder, name) or {}
+    record = ix.record_of(webroots.META_DIR, folder, name) or {}
     raw: object = record.get("exif")
     exif = cast("dict[str, Any]", raw) if isinstance(raw, dict) else {}
     codec = str(exif.get("QuickTime:CompressorID") or "").lower()
-    playable = (paths.render_path(media, RENDER_DIR).is_file()
+    playable = (paths.render_path(media, webroots.RENDER_DIR).is_file()
                 or codec in paths.PLAYABLE_CODECS)
     if why is None and not playable:
         why = ("waiting for processing — this video will not play in a "
@@ -4606,7 +4601,7 @@ def _strip_of(media: Path, folder: str, name: str) -> dict[str, Any] | None:
     """The filmstrip `process` made for this video, as the page draws it —
     or None, and the timeline is plain until there is one."""
     try:
-        raw: object = json.loads(paths.strip_info_path(media, STRIP_DIR)
+        raw: object = json.loads(paths.strip_info_path(media, webroots.STRIP_DIR)
                                  .read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
@@ -4668,11 +4663,11 @@ def _viewsplice(user: Principal) -> str:
 def _clip_json(row: sqlite3.Row) -> dict[str, Any]:
     """One clip as the splice page and the clip listing read it."""
     start, end = row["clip_in"], row["clip_out"]
-    media = MASTER_DIR / str(row["folder"]) / str(row["name"])
+    media = webroots.MASTER_DIR / str(row["folder"]) / str(row["name"])
     made = (start is not None and end is not None and (
-        paths.still_path(media, RENDER_DIR, float(start)).is_file()
+        paths.still_path(media, webroots.RENDER_DIR, float(start)).is_file()
         if start == end else
-        paths.cut_path(media, RENDER_DIR, float(start), float(end)).is_file()))
+        paths.cut_path(media, webroots.RENDER_DIR, float(start), float(end)).is_file()))
     return {"name": row["name"], "start": start, "end": end,
             "deleted": bool(row["deleted"]), "event": row["event"],
             "date": row["effective_date"], "cut": bool(made)}
@@ -4681,18 +4676,18 @@ def _clip_json(row: sqlite3.Row) -> dict[str, Any]:
 def _clip_file(folder: str, name: str, *, playable: bool) -> Path | None:
     """A clip's own file: its playback render first where `playable` is
     asked for, then its cut — or None while it has neither."""
-    media = MASTER_DIR / folder / name
+    media = webroots.MASTER_DIR / folder / name
     decision = decisions.read(media)
     if decision is None or not decision.is_clip:
         return None
     assert decision.clip_in is not None and decision.clip_out is not None
     if decision.is_still:
         # A still's one file is its JPEG, original and playable alike.
-        still = paths.still_path(media, RENDER_DIR, decision.clip_in)
+        still = paths.still_path(media, webroots.RENDER_DIR, decision.clip_in)
         return still if still.is_file() else None
-    render = paths.play_path(media, RENDER_DIR, decision.clip_in,
+    render = paths.play_path(media, webroots.RENDER_DIR, decision.clip_in,
                              decision.clip_out)
-    cut_file = paths.cut_path(media, RENDER_DIR, decision.clip_in,
+    cut_file = paths.cut_path(media, webroots.RENDER_DIR, decision.clip_in,
                               decision.clip_out)
     for candidate in ((render, cut_file) if playable else (cut_file,)):
         if candidate.is_file():
@@ -4722,32 +4717,32 @@ def _first_frame(record: dict[str, Any] | None, offset: float) -> str | None:
 def _cut_one(folder: str, name: str) -> None:
     """Make one clip's cut, if it has none for its current range, then bring
     its row up to date — which is what lets a viewer see it."""
-    media = MASTER_DIR / folder / name
+    media = webroots.MASTER_DIR / folder / name
     source_name = clips.source_of(name)
     if source_name is None:
         return
     decision = decisions.read(media)
     if decision is None or not decision.is_clip:
-        cut.sweep(RENDER_DIR / folder, name, keep=None)
+        cut.sweep(webroots.RENDER_DIR / folder, name, keep=None)
         return
     if decision.is_still:
         return
     assert decision.clip_in is not None and decision.clip_out is not None
-    source = MASTER_DIR / folder / source_name
+    source = webroots.MASTER_DIR / folder / source_name
     if not source.is_file():
         return
-    dest = paths.cut_path(media, RENDER_DIR, decision.clip_in,
+    dest = paths.cut_path(media, webroots.RENDER_DIR, decision.clip_in,
                           decision.clip_out)
     if not dest.is_file():
-        record = ix.record_of(META_DIR, folder, source_name)
+        record = ix.record_of(webroots.META_DIR, folder, source_name)
         cut.make(source, decision.clip_in, decision.clip_out, dest,
                  created=_first_frame(record, decision.clip_in))
     cut.sweep(dest.parent, name, keep=dest, kind=".cut.mp4")
-    if DB_PATH.is_file():
-        conn = ix.open_rw(DB_PATH)
+    if webroots.DB_PATH.is_file():
+        conn = ix.open_rw(webroots.DB_PATH)
         try:
-            ix.refresh(conn, folder, name, meta_dir=META_DIR,
-                       master_dir=MASTER_DIR)
+            ix.refresh(conn, folder, name, meta_dir=webroots.META_DIR,
+                       master_dir=webroots.MASTER_DIR)
         finally:
             conn.close()
 
@@ -4765,15 +4760,15 @@ def _recut(folder: str, name: str) -> None:
     is replaced by the worker, which keeps the old one only until the new one
     lands. Neither is needed for a curator, who watches the source.
     """
-    media = MASTER_DIR / folder / name
+    media = webroots.MASTER_DIR / folder / name
     # The desktop's files for the old range or moment. Their names carry it,
     # so every one of them is stale; `process` makes the new ones.
     for kind in (".play.mp4", ".still.jpg"):
-        cut.sweep(RENDER_DIR / folder, name, keep=None, kind=kind)
-    for stale in (paths.render_path(media, RENDER_DIR),
-                  paths.derived_path(media, THUMB_DIR),
-                  paths.derived_path(media, LARGE_DIR),
-                  paths.derived_path(media, PREVIEW_DIR)):
+        cut.sweep(webroots.RENDER_DIR / folder, name, keep=None, kind=kind)
+    for stale in (paths.render_path(media, webroots.RENDER_DIR),
+                  paths.derived_path(media, webroots.THUMB_DIR),
+                  paths.derived_path(media, webroots.LARGE_DIR),
+                  paths.derived_path(media, webroots.PREVIEW_DIR)):
         try:
             stale.unlink(missing_ok=True)
         except OSError:
@@ -4784,10 +4779,10 @@ def _recut(folder: str, name: str) -> None:
 def _resume_cuts() -> None:
     """Schedule every living clip that has no cut for its range — the ones a
     restart interrupted, and any made while ffmpeg was missing."""
-    if cut.ffmpeg() is None or not DB_PATH.is_file():
+    if cut.ffmpeg() is None or not webroots.DB_PATH.is_file():
         return
     try:
-        conn = ix.open_ro(DB_PATH)
+        conn = ix.open_ro(webroots.DB_PATH)
     except Exception:                            # noqa: BLE001
         return
     try:
@@ -4800,14 +4795,14 @@ def _resume_cuts() -> None:
     finally:
         conn.close()
     for row in rows:
-        media = MASTER_DIR / str(row["folder"]) / str(row["name"])
-        if not paths.cut_path(media, RENDER_DIR, float(row["clip_in"]),
+        media = webroots.MASTER_DIR / str(row["folder"]) / str(row["name"])
+        if not paths.cut_path(media, webroots.RENDER_DIR, float(row["clip_in"]),
                               float(row["clip_out"])).is_file():
             _CUTS.schedule(str(row["folder"]), str(row["name"]))
 
 
 def _keys(folder: str, source: str) -> tuple[float, ...] | None:
-    return cut.keyframes(MASTER_DIR / folder / source)
+    return cut.keyframes(webroots.MASTER_DIR / folder / source)
 
 
 def _snap_start(keys: tuple[float, ...] | None, start: float, end: float,
@@ -4932,7 +4927,7 @@ def api_decide_bulk(user: Annotated[Principal, Depends(require_user)],
     # One index connection for the whole batch. Opening a SQLite file over SMB
     # per row dominated the cost — measured at 96ms/file against the NAS, most
     # of it the open rather than the write.
-    conn = ix.open_rw(DB_PATH) if DB_PATH.is_file() else None
+    conn = ix.open_rw(webroots.DB_PATH) if webroots.DB_PATH.is_file() else None
     # **After the expansion, not before it.** `_behind` adds files the request
     # never named — the rest of a stack — so checking what was sent would let
     # a household member reach the others through it.
@@ -5174,7 +5169,7 @@ def _decide(folder: str, name: str, change: _Change,
                 and isinstance(change.event_leaf, Unset))
     inherited = ix.inherited_event(
         record if record is not None
-        else ix.record_of(META_DIR, folder, name)) if half else None
+        else ix.record_of(webroots.META_DIR, folder, name)) if half else None
     with _write_lock:
         try:
             was, decision = decisions.change(
@@ -5206,9 +5201,9 @@ def _decide(folder: str, name: str, change: _Change,
         if (decision == was if was is not None else decision.is_empty()):
             return was, decision, True
         indexed = False
-        own = conn is None and DB_PATH.is_file()
+        own = conn is None and webroots.DB_PATH.is_file()
         if own:
-            conn = ix.open_rw(DB_PATH)
+            conn = ix.open_rw(webroots.DB_PATH)
         if conn is not None:
             try:
                 # Passed rather than left to the index's own constants, so the
@@ -5217,7 +5212,7 @@ def _decide(folder: str, name: str, change: _Change,
                 # The decision is the one just written, so the refresh
                 # does not go back to the share to read it again.
                 indexed = ix.refresh(conn, folder, name,
-                                     meta_dir=META_DIR, master_dir=MASTER_DIR,
+                                     meta_dir=webroots.META_DIR, master_dir=webroots.MASTER_DIR,
                                      decision=decision, record=record,
                                      commit=commit)
             except sqlite3.Error:
@@ -5450,8 +5445,8 @@ def _master_file(folder: str, name: str, *, creating: bool = False) -> Path:
     does: a decision about a clip that does not exist is not a way to invent
     one.
     """
-    target = (MASTER_DIR / folder / name).resolve()
-    if MASTER_DIR.resolve() not in target.parents:
+    target = (webroots.MASTER_DIR / folder / name).resolve()
+    if webroots.MASTER_DIR.resolve() not in target.parents:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "bad path")
     if name.lower().endswith(".xmp"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
@@ -5591,10 +5586,10 @@ def healthz() -> dict[str, Any]:
     as *dead* would have Container Manager restart a container that is working
     perfectly, over and over, and the restart would not fix it.
     """
-    state: dict[str, Any] = {"ok": True, "index": DB_PATH.is_file()}
-    if DB_PATH.is_file():
+    state: dict[str, Any] = {"ok": True, "index": webroots.DB_PATH.is_file()}
+    if webroots.DB_PATH.is_file():
         try:
-            ix.open_ro(DB_PATH).close()
+            ix.open_ro(webroots.DB_PATH).close()
         except ix.StaleIndex as stale:
             state["index"] = False
             state["says"] = stale.say()
@@ -6061,13 +6056,13 @@ async def history_revert(
     failed = 0
     moved = 0
     undo: list[history.Before] = []
-    conn = ix.open_rw(DB_PATH) if DB_PATH.is_file() else None
+    conn = ix.open_rw(webroots.DB_PATH) if webroots.DB_PATH.is_file() else None
     try:
         for item in op.files:
-            media = MASTER_DIR / item.folder / item.name
+            media = webroots.MASTER_DIR / item.folder / item.name
             # A clip has no file, and may have no sidecar either — reverting
             # the merge that removed it is how it comes back.
-            if not _under(MASTER_DIR, media) or not (
+            if not _under(webroots.MASTER_DIR, media) or not (
                     media.is_file() or _is_clip_path(media, creating=True)):
                 failed += 1
                 continue
@@ -6089,7 +6084,7 @@ async def history_revert(
                 if conn is not None:
                     try:
                         ix.refresh(conn, item.folder, item.name,
-                                   meta_dir=META_DIR, master_dir=MASTER_DIR)
+                                   meta_dir=webroots.META_DIR, master_dir=webroots.MASTER_DIR)
                     except sqlite3.Error:
                         pass
             if clips.source_of(item.name) is not None and (

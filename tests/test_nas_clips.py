@@ -21,6 +21,7 @@ from pix.nas import decisions
 from pix.nas import history
 from pix.nas import index as ix
 from pix.nas import web
+from pix.nas import webroots
 from pix.nas.decisions import Decision
 
 
@@ -639,7 +640,7 @@ def real(app_env: dict[str, Path], writable: Path,
 
 
 def _cuts(name: str) -> list[Path]:
-    folder = web.RENDER_DIR / "init_2026"
+    folder = webroots.RENDER_DIR / "init_2026"
     return sorted(folder.glob(f"{name}@*.cut.mp4")) if folder.is_dir() else []
 
 
@@ -811,7 +812,7 @@ def test_the_splice_page_draws_the_filmstrip(
     from pix.nas import paths as tier_paths
 
     _playable(app_env)
-    info = tier_paths.strip_info_path(video / "b.mp4", web.STRIP_DIR)
+    info = tier_paths.strip_info_path(video / "b.mp4", webroots.STRIP_DIR)
     info.parent.mkdir(parents=True, exist_ok=True)
     info.write_text(json.dumps({"n": 15, "w": 160, "h": 90}), encoding="utf-8")
     html = client.get("/splice/init_2026/b.mp4").text
@@ -886,17 +887,17 @@ def test_process_gives_a_clip_pictures_of_its_own(
     from pix.nas import derive
 
     [clip] = _make(client, (1, 3))
-    monkeypatch.setattr(derive, "MASTER_DIR", web.MASTER_DIR)
-    monkeypatch.setattr(derive, "THUMB_DIR", web.THUMB_DIR)
-    monkeypatch.setattr(derive, "LARGE_DIR", web.LARGE_DIR)
-    monkeypatch.setattr(derive, "PREVIEW_DIR", web.PREVIEW_DIR)
+    monkeypatch.setattr(derive, "MASTER_DIR", webroots.MASTER_DIR)
+    monkeypatch.setattr(derive, "THUMB_DIR", webroots.THUMB_DIR)
+    monkeypatch.setattr(derive, "LARGE_DIR", webroots.LARGE_DIR)
+    monkeypatch.setattr(derive, "PREVIEW_DIR", webroots.PREVIEW_DIR)
 
     assert real / clip in derive.pending_files()
     summary = derive.ProcessSummary()
     derive._derive_one(real / clip, summary, derive.threading.Lock(),  # pyright: ignore[reportPrivateUsage]
                        derive._ExifPool(), {"cancelling": 0})  # pyright: ignore[reportPrivateUsage]
     assert summary.thumbs == 1, summary.failed
-    assert (web.THUMB_DIR / "init_2026" / (clip + ".jpg")).is_file()
+    assert (webroots.THUMB_DIR / "init_2026" / (clip + ".jpg")).is_file()
     assert real / clip not in derive.pending_files()
 
 
@@ -1064,12 +1065,12 @@ def _process_clip(clip: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
 
     for tier in ("MASTER_DIR", "THUMB_DIR", "LARGE_DIR", "PREVIEW_DIR",
                  "RENDER_DIR", "META_DIR"):
-        monkeypatch.setattr(derive, tier, getattr(web, tier))
+        monkeypatch.setattr(derive, tier, getattr(webroots, tier))
     summary = derive.ProcessSummary()
     derive._derive_one(clip, summary, derive.threading.Lock(),  # pyright: ignore[reportPrivateUsage]
                        derive._ExifPool(), {"cancelling": 0})  # pyright: ignore[reportPrivateUsage]
-    ix.refresh(ix.connect(web.DB_PATH), "init_2026", clip.name,
-               meta_dir=web.META_DIR, master_dir=web.MASTER_DIR)
+    ix.refresh(ix.connect(webroots.DB_PATH), "init_2026", clip.name,
+               meta_dir=webroots.META_DIR, master_dir=webroots.MASTER_DIR)
     return summary
 
 
@@ -1088,7 +1089,7 @@ def test_a_still_becomes_a_photograph_a_viewer_can_have(
 
     summary = _process_clip(real / still, monkeypatch)
     assert summary.stills == 1, summary.failed
-    shot = web.RENDER_DIR / "init_2026" / (still + "@1.5.still.jpg")
+    shot = webroots.RENDER_DIR / "init_2026" / (still + "@1.5.still.jpg")
     assert shot.is_file()
     taken = subprocess.run(["exiftool", "-s3", "-DateTimeOriginal", str(shot)],
                            capture_output=True, text=True).stdout.strip()
@@ -1150,7 +1151,7 @@ def test_a_clip_of_hevc_is_seen_once_it_has_a_render(
 
     summary = _process_clip(hevc / clip, monkeypatch)
     assert summary.renders == 1, summary.failed
-    play = web.RENDER_DIR / "init_2026" / (clip + "@1-3.play.mp4")
+    play = webroots.RENDER_DIR / "init_2026" / (clip + "@1-3.play.mp4")
     codec = subprocess.run(
         ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
          "stream=codec_name", "-of", "csv=p=0", str(play)],
@@ -1169,10 +1170,10 @@ def test_moving_a_clip_throws_away_its_render(
 ) -> None:
     [clip] = _make(client, (1, 3))
     _process_clip(hevc / clip, monkeypatch)
-    assert list((web.RENDER_DIR / "init_2026").glob(f"{clip}@*.play.mp4"))
+    assert list((webroots.RENDER_DIR / "init_2026").glob(f"{clip}@*.play.mp4"))
     client.post("/api/clips/range", json={
         "folder": "init_2026", "name": clip, "start": 2, "end": 3})
-    assert not list((web.RENDER_DIR / "init_2026").glob(f"{clip}@*.play.mp4"))
+    assert not list((webroots.RENDER_DIR / "init_2026").glob(f"{clip}@*.play.mp4"))
     assert _cuts(clip), "the cut is the NAS's, and it re-cut"
 
 
@@ -1199,9 +1200,9 @@ def test_the_scan_finds_a_still_with_no_file(
     [still] = _make(client, (1.5, 1.5))
     for tier in ("MASTER_DIR", "THUMB_DIR", "LARGE_DIR", "PREVIEW_DIR",
                  "RENDER_DIR", "META_DIR"):
-        monkeypatch.setattr(derive, tier, getattr(web, tier))
+        monkeypatch.setattr(derive, tier, getattr(webroots, tier))
     for tier in ("THUMB_DIR", "LARGE_DIR", "PREVIEW_DIR"):
-        d = getattr(web, tier) / "init_2026"
+        d = getattr(webroots, tier) / "init_2026"
         d.mkdir(parents=True, exist_ok=True)
         (d / (still + ".jpg")).write_bytes(b"x")
     assert real / still in derive.pending_files()
