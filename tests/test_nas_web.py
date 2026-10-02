@@ -1338,9 +1338,9 @@ def test_a_section_is_a_box_so_the_next_heading_pushes_the_last_one_off(
     """
     html = client.get("/?date=2026&group=year").text
 
-    assert '<section class="sect">' in html
+    assert '<section class="sect" data-key=' in html
     # The heading first, then the things it names, both inside the box.
-    sect = html[html.index('<section class="sect">'):]
+    sect = html[html.index('<section class="sect" data-key='):]
     assert sect.index("<h3 class=\"group") < sect.index('<div class="cells">')
 
     # And the grid is no longer the grid: it is a column of them, one per
@@ -6604,3 +6604,36 @@ def test_a_fixed_filter_offers_only_what_is_there(client: TestClient) -> None:
     gone = {s["value"]: s["n"]
             for s in client.get("/api/suggest?column=deleted").json()}
     assert gone == {"gone": 0, "live": 2}
+
+
+# --- the grid a page at a time ------------------------------------------------
+
+def test_the_grid_comes_a_page_at_a_time(
+    client: TestClient, writable: Path, app_env: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first page with the grid, the rest from `/api/page` as it is
+    scrolled towards; a heading counts its whole section either way."""
+    monkeypatch.setattr(web, "FIRST_PAGE", 1)
+    html = client.get("/browse?group=none").text
+    assert 'data-total="2" data-served="1"' in html
+    assert 'id="more"' in html
+    assert '<span class="dim">2</span>' in html, "the heading counts the page"
+
+    nxt = client.get("/api/page?group=none&offset=1").json()
+    assert nxt["served"] == 2 and nxt["total"] == 2
+    assert nxt["html"].count('data-name=') == 1
+    # The same section, so the page can join it to the one on screen.
+    first = html[html.index('<section class="sect" data-key='):]
+    key = first[:first.index(">")]
+    assert key in nxt["html"]
+
+    done = client.get("/api/page?group=none&offset=2").json()
+    assert done["html"] == "" and done["served"] == 2
+
+
+def test_a_page_is_the_filtered_view(client: TestClient, writable: Path) -> None:
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "add_tags": ["beach"]})
+    got = client.get("/api/page?group=none&tag=beach&offset=0").json()
+    assert got["total"] == 1 and 'data-name="a.jpg"' in got["html"]

@@ -2932,6 +2932,26 @@ _TIERS: tuple[tuple[str, int], ...] = (
 #: (1,766) in a single page, because paging through a cull loses your place.
 PAGE_LIMIT: int = 2000
 
+#: How many thumbnails come with the grid, and how many each later page
+#: brings. Enough to fill a large screen at the small size twice over, so
+#: the first scroll has something under it; small enough that a view of the
+#: whole library answers in a quarter of a second rather than in ten. The
+#: rest arrive as they are scrolled towards — a file nobody scrolls to is
+#: never queried, drawn or sent.
+FIRST_PAGE: int = 240
+NEXT_PAGE: int = 240
+
+
+def _totals(conn: sqlite3.Connection, view: ix.Filters,
+            groups: list[str]) -> dict[tuple[object, ...], int]:
+    """Every section's whole count, by its key — for headings that say how
+    many are in the section, not how many of them have arrived."""
+    if not groups:
+        return {}
+    n = len(groups)
+    return {tuple(r[f"grp{i}"] for i in range(n)): int(r["n"])
+            for r in ix.sections(conn, view, groups=groups, limit=100_000)}
+
 
 @app.get("/event/{event}", response_class=HTMLResponse)
 def event_grid(event: str) -> RedirectResponse:
@@ -3097,13 +3117,16 @@ def browse(request: Request,
             status_code=307)
     conn = db()
     groups = _groupings(group)
-    rows = ix.files(conn, view, groups=groups, limit=PAGE_LIMIT)
+    rows = ix.files(conn, view, groups=groups, limit=FIRST_PAGE)
     total = ix.count(conn, view)
 
-    cells = _sections(rows, groups, view)
-    shown = (f"{total:,} files" if total <= PAGE_LIMIT else
-             f"{len(rows):,} of {total:,} files")
-    body = (f'<div class="grid" id="grid">{cells}</div>' if rows else
+    cells = _sections(rows, groups, view, _totals(conn, view, groups), total)
+    shown = f"{total:,} files"
+    # How many there are in all, and how many came with the page: the rest
+    # arrive as the grid is scrolled towards them (`/api/page`).
+    body = (f'<div class="grid" id="grid" data-total="{total}" '
+            f'data-served="{len(rows)}">{cells}</div>'
+            '<div id="more" aria-hidden="true"></div>' if rows else
             '<p class="empty">Nothing matches these filters.</p>')
     return _page("pix2 browse", f"""{body}
 <div id="viewer">
@@ -3428,7 +3451,9 @@ def _groupings(raw: str) -> list[str]:
 
 
 def _sections(rows: list[sqlite3.Row], groups: list[str],
-              view: ix.Filters | None = None) -> str:
+              view: ix.Filters | None = None,
+              totals: dict[tuple[object, ...], int] | None = None,
+              total: int | None = None) -> str:
     """The cells, with one heading wherever the section changes.
 
     **One heading, not one per level.** Nested headings meant an indent for
@@ -3445,8 +3470,10 @@ def _sections(rows: list[sqlite3.Row], groups: list[str],
     """
     said = "subevent" in groups
     if not groups:
-        return _section(_heading([], 0, len(rows)),
-                        "".join(_cell(r, view, groups=groups) for r in rows))
+        return _section(_heading([], 0, total if total is not None
+                                 else len(rows)),
+                        "".join(_cell(r, view, groups=groups) for r in rows),
+                        key=())
 
     out: list[str] = []
     for keys, run in groupby(rows, key=lambda r: tuple(
@@ -3454,14 +3481,19 @@ def _sections(rows: list[sqlite3.Row], groups: list[str],
         batch = list(run)
         labels = [_group_label(k, g, groups[:i], batch[0])
                   for i, (k, g) in enumerate(zip(keys, groups))]
+        # The whole section's count, not the part of it on this page: the
+        # grid arrives a page at a time, and a heading saying 240 over a day
+        # of 1,100 photographs would be describing the page, not the day.
         out.append(_section(
-            _heading(labels, len(groups), len(batch)),
+            _heading(labels, len(groups),
+                     (totals or {}).get(keys, len(batch))),
             "".join(_cell(r, view, said=said, groups=groups)
-                    for r in batch)))
+                    for r in batch), key=keys))
     return "".join(out)
 
 
-def _section(heading: str, items: str) -> str:
+def _section(heading: str, items: str,
+             key: tuple[object, ...] = ()) -> str:
     """One heading and everything under it, in a box of their own.
 
     The heading used to be a grid item spanning every column, and the cells
@@ -3480,8 +3512,11 @@ def _section(heading: str, items: str) -> str:
     all; and the cells are still in document order, so arrow-key movement
     walks straight through the sections without knowing they are there.
     """
-    return (f'<section class="sect">{heading}'
-            f'<div class="cells">{items}</div></section>')
+    # The section's key, so a page arriving later can tell whether it
+    # carries on the section already at the bottom of the grid or starts the
+    # next one — the same day must not get a second heading.
+    return (f'<section class="sect" data-key="{_h(_js(list(key)))}">'
+            f'{heading}<div class="cells">{items}</div></section>')
 
 
 def _heading(labels: list[str], levels: int, count: int, *,
@@ -5555,8 +5590,10 @@ if(selall) selall.onclick=e=>{
     return;
   }
   if(picked.size){clearPicks();return;}
-  cells.forEach((_,n)=>togglePick(n,true));
-  drawSel();
+  // Every file the view holds, not the part of it scrolled into so far.
+  const go=()=>{ cells.forEach((_,n)=>togglePick(n,true)); drawSel(); };
+  if(moreToCome()){ say('loading every file…'); loadAll().then(()=>{say('');go();}); }
+  else go();
 };
 
 // --- viewer ------------------------------------------------------------------
@@ -6442,6 +6479,8 @@ function fanOut(head,html){
   const at=cells.indexOf(head);
   cells.splice(at<0?cells.length:at+1,0,...added);
   added.forEach(c=>{wire(c);useSource(c);});
+  // In the view now, and in the server's order ahead of the next page.
+  served+=added.length; total+=added.length;
   const badge=head.querySelector('.stack');
   if(badge) badge.remove();
   head.dataset.proposed='0';
@@ -6912,6 +6951,9 @@ function drop(gone){
     c=>!leaving.includes(c)&&c.getBoundingClientRect().bottom>0);
   const wasAt=anchorCell?anchorCell.getBoundingClientRect().top:null;
   leaving.forEach(c=>{picked.delete(c); c.remove();});
+  // Out of the server's order as well as the grid's.
+  served=Math.max(0,served-leaving.length);
+  total=Math.max(0,total-leaving.length);
   const was=cells.indexOf(at);
   cells=cells.filter(c=>!leaving.includes(c));
   resection();
@@ -7600,7 +7642,18 @@ function resection(){
     // empty section holding the gap where a section used to be.
     if(!mine.length){ (h.parentNode||h).remove(); return; }
     const n=h.querySelector('.dim');
-    if(n) n.textContent=mine.length.toLocaleString();
+    if(!n) return;
+    // The grid arrives a page at a time, so the cells present are not the
+    // section. The heading keeps the server's count for the whole of it and
+    // moves by what has come and gone since (`seen` is how many cells were
+    // here when that count was true).
+    if(n.dataset.base===undefined){
+      n.dataset.base=String(parseInt((n.textContent||'').replace(/[^0-9]/g,''),10)
+                            ||mine.length);
+      n.dataset.seen=String(mine.length);
+    }
+    const now=+n.dataset.base+(mine.length-(+n.dataset.seen));
+    n.textContent=Math.max(now,mine.length).toLocaleString();
   });
 }
 
@@ -7612,7 +7665,7 @@ function drawGroupPicks(){
   });
 }
 
-document.querySelectorAll('.group').forEach(h=>{
+function wireHeading(h){
   // Each crumb is two controls: the name changes that level, the cross drops
   // it. Removal is on the crumb rather than inside the menu because *take this
   // away* is a thing you should be able to see, not go and find.
@@ -7635,13 +7688,145 @@ document.querySelectorAll('.group').forEach(h=>{
   const gp=h.querySelector('.grppick');
   if(gp) gp.onclick=e=>{
     e.stopPropagation();
-    const mine=sectionCells(h);
-    const on=mine.some(c=>!picked.has(c));
-    mine.forEach(c=>togglePick(cells.indexOf(c),on));
-    if(on&&mine.length) setCur(cells.indexOf(mine[0]),true);
-    drawSel();
+    const pick=()=>{
+      const mine=sectionCells(h);
+      const on=mine.some(c=>!picked.has(c));
+      mine.forEach(c=>togglePick(cells.indexOf(c),on));
+      if(on&&mine.length) setCur(cells.indexOf(mine[0]),true);
+      drawSel();
+    };
+    // The whole group, not the part of it that has arrived: a day is
+    // selected as a day. Waiting only when there is something to wait for.
+    const sec=h.parentNode;
+    if(moreToCome()&&sec&&!sec.nextElementSibling) loadSection(h).then(pick);
+    else pick();
   };
-});
+}
+document.querySelectorAll('.group').forEach(wireHeading);
+resection();
+
+// --- the rest of the grid, as it is scrolled towards -------------------------
+// The grid comes with its first page and the rest arrive as you near the
+// bottom, so a view of the whole library answers in a quarter of a second and
+// a file nobody scrolls to is never queried, drawn or sent.
+//
+// `served` is how many rows the server has handed over that the grid still
+// holds. A write that takes files out of the view takes them out of the
+// server's order too, so the next page starts that many rows earlier — the
+// count follows `drop`, or the next page would skip exactly those.
+const moreEl=document.getElementById('more');
+let served=grid?+(grid.dataset.served||0):0;
+let total=grid?+(grid.dataset.total||0):0;
+let paging=null;
+function moreToCome(){ return !!moreEl&&served<total; }
+function keyOfSection(sec){ return sec&&sec.dataset?sec.dataset.key:undefined; }
+
+async function loadMore(){
+  if(paging) return paging;
+  if(!moreToCome()) return;
+  paging=(async()=>{
+    const p=new URLSearchParams(location.search);
+    p.set('offset',String(served));
+    let out=null;
+    try{ out=await (await fetch('/api/page?'+p)).json(); }
+    catch(e){ say('could not load more: '+e.message,true); return; }
+    if(!out) return;
+    total=+out.total;
+    served=+out.served;
+    if(out.html) appendPage(out.html);
+    if(moreEl) moreEl.hidden=!moreToCome();
+  })();
+  try{ await paging; }finally{ paging=null; }
+  // Still near the bottom after it arrived — a tall screen, small
+  // thumbnails, or a fast scroll — so another. The observer only says when
+  // the marker *comes* into reach, and it never left.
+  if(moreToCome()&&nearTheEnd()) setTimeout(loadMore,0);
+}
+function nearTheEnd(){
+  if(!moreEl||!moreEl.getBoundingClientRect) return false;
+  const r=moreEl.getBoundingClientRect();
+  return r.top<(window.innerHeight||0)*2.5;
+}
+
+// Everything still to come. For the gestures that mean *all of them* —
+// select all, a group's own circle, the end of the viewer — which cannot be
+// answered from a part.
+async function loadAll(){
+  while(moreToCome()){
+    const was=served;
+    await loadMore();
+    if(served<=was) break;
+  }
+}
+// Enough to hold the whole of one section: until the section after it has
+// started, or there is nothing more.
+async function loadSection(h){
+  const sec=h&&h.parentNode;
+  while(moreToCome()&&sec&&!sec.nextElementSibling){
+    const was=served;
+    await loadMore();
+    if(served<=was) break;
+  }
+}
+
+function appendPage(html){
+  const holder=document.createElement('div');
+  holder.innerHTML=html;
+  const incoming=[...holder.children];
+  const sections=[...grid.querySelectorAll('.sect')];
+  const last=sections[sections.length-1];
+  const fresh=[];
+  incoming.forEach((sec,i)=>{
+    // The page may carry on the section the grid ends with: the same day
+    // keeps the one heading, and its cells join the ones already under it.
+    if(i===0&&last&&keyOfSection(sec)===keyOfSection(last)){
+      const into=last.querySelector('.cells');
+      const kids=[...(sec.querySelector('.cells')||sec).children];
+      const n=last.querySelector('.group .dim');
+      kids.forEach(c=>{ into.appendChild(c); fresh.push(c); });
+      // Arrived, and already counted by the heading.
+      if(n&&n.dataset.seen!==undefined)
+        n.dataset.seen=String(+n.dataset.seen+kids.length);
+      return;
+    }
+    grid.appendChild(sec);
+    const h=sec.querySelector('.group');
+    if(h) wireHeading(h);
+    sec.querySelectorAll('.cell').forEach(c=>fresh.push(c));
+  });
+  // Never the same file twice: a page asked for while a write was moving
+  // the order can overlap the one before.
+  const have=new Set(cells.map(c=>c.dataset.folder+'/'+c.dataset.name));
+  const added=fresh.filter(c=>{
+    const k=c.dataset.folder+'/'+c.dataset.name;
+    if(have.has(k)){ c.remove(); return false; }
+    have.add(k); return true;
+  });
+  cells.push(...added);
+  const px=cellPixels();
+  added.forEach(c=>{ wire(c); useSource(c,px); placeInfo(c); });
+  clampInfo(added);
+  resection(); drawSel();
+}
+
+if(moreEl&&typeof IntersectionObserver!=='undefined'){
+  // Well before the bottom, so the next page is there by the time it is
+  // looked at: a screen and a half of warning at any thumbnail size.
+  new IntersectionObserver(es=>{
+    if(es.some(e=>e.isIntersecting)) loadMore();
+  },{rootMargin:'0px 0px 150% 0px'}).observe(moreEl);
+}
+// And on scroll, as well: an observer only speaks when the marker crosses
+// into reach, and a browser that skips one — a tab restored from the cache,
+// a jump with the End key — would leave the grid stopped at a page.
+if(moreEl){
+  let scrollDue=false;
+  window.addEventListener('scroll',()=>{
+    if(scrollDue||!moreToCome()) return;
+    scrollDue=true;
+    setTimeout(()=>{ scrollDue=false; if(nearTheEnd()) loadMore(); },120);
+  },{passive:true});
+}
 
 drawChips(); drawSel();
 
@@ -8215,6 +8400,37 @@ def api_files(user: Annotated[Principal, Depends(require_user)],
               offset: Annotated[int, Query(ge=0)] = 0) -> JSONResponse:
     rows = ix.files(db(), view, limit=limit, offset=offset)
     return JSONResponse([dict(r) for r in rows])
+
+
+@app.get("/api/page")
+def api_page(user: Annotated[Principal, Depends(require_user)],
+             view: Annotated[ix.Filters, Depends(filters)],
+             group: Annotated[str, Query()] = "day",
+             offset: Annotated[int, Query(ge=0)] = 0,
+             limit: Annotated[int, Query(ge=1, le=2000)] = NEXT_PAGE
+             ) -> JSONResponse:
+    """The grid's next page, as the sections it is drawn in.
+
+    The same rows `browse` would have drawn there, in the same order and the
+    same markup, so a page that arrives later is indistinguishable from one
+    that came with the grid. Its first section may carry on the one already at
+    the bottom of the screen; the page script joins them by `data-key`.
+
+    `offset` is how many rows the page has been given and still holds — the
+    script counts down the ones a write took out of the view, or the next
+    page would start that many rows late and they would never be seen.
+    """
+    del user
+    conn = db()
+    groups = _groupings(group)
+    rows = ix.files(conn, view, groups=groups, limit=limit, offset=offset)
+    total = ix.count(conn, view)
+    return JSONResponse({
+        "html": _sections(rows, groups, view, _totals(conn, view, groups),
+                          total) if rows else "",
+        "served": offset + len(rows),
+        "total": total,
+    })
 
 
 @app.get("/api/suggest")
