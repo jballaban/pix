@@ -6,7 +6,7 @@
 // Usage: node drive.js <path to the extracted browse script>
 'use strict';
 const fs = require('fs');
-const { El, document, sizeset, section } = require('./dom.js');
+const { El, document, sizeset, section, runPage } = require('./dom.js');
 
 const js = fs.readFileSync(process.argv[2], 'utf8');
 const failures = [];
@@ -250,12 +250,8 @@ function arrow(key, opts) {
 
 (async () => {
   try {
-    new Function(
-      'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
-      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING',
-      'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout', js,
-    )(document, window, fetch, localStorage, location, confirm,
-      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn());
+    runPage(js, ['document', 'window', 'fetch', 'localStorage', 'location', 'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout'],
+      [document, window, fetch, localStorage, location, confirm, VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn()]);
   } catch (e) {
     console.log('FAIL the script threw on load: ' + e.message);
     process.exit(1);
@@ -1054,15 +1050,8 @@ function arrow(key, opts) {
     document.querySelectorAll = sel => (sel === '.cell' ? cells
                                       : sel === '.group' ? [heading]
                                       : sel === '.stage' ? [stage] : realQsa(sel));
-    new Function(
-      'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
-      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED',
-      'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout', js,
-    )(document, window, fetch, localStorage, location, confirm,
-      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, ONE_FIELD, ['event'], PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK,
-      fn => fn());
+    runPage(js, ['document', 'window', 'fetch', 'localStorage', 'location', 'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout'],
+      [document, window, fetch, localStorage, location, confirm, VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD, ['event'], PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn()]);
 
     const named = () => menu.querySelectorAll('.opt').map(
       o => (o.innerHTML.match(/<span>([^<]*)<\/span>/) || [])[1]);
@@ -1204,13 +1193,8 @@ function arrow(key, opts) {
     document.querySelectorAll = sel => (sel === '.cell' ? all
                                       : sel === '.group' ? [h1, h2]
                                       : sel === '.stage' ? [stage] : realQsa(sel));
-    new Function(
-      'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
-      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout', js,
-    )(document, window, fetch, localStorage, location, confirm,
-      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn());
+    runPage(js, ['document', 'window', 'fetch', 'localStorage', 'location', 'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout'],
+      [document, window, fetch, localStorage, location, confirm, VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn()]);
 
     // One file out of the first section, and the whole of the second.
     s1[0].querySelector('.pick').click();
@@ -1271,13 +1255,8 @@ function arrow(key, opts) {
     document.querySelectorAll = sel => (sel === '.cell' ? shelf
                                       : sel === '.group' ? []
                                       : sel === '.stage' ? [stage] : realQsa(sel));
-    new Function(
-      'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
-      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout', js,
-    )(document, window, fetch, localStorage, location, confirm,
-      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn());
+    runPage(js, ['document', 'window', 'fetch', 'localStorage', 'location', 'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout'],
+      [document, window, fetch, localStorage, location, confirm, VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn()]);
 
     // Push the first one out of the view, the way an edit does.
     shelf[0].querySelector('.pick').click();
@@ -1321,13 +1300,8 @@ function arrow(key, opts) {
     document.querySelectorAll = sel => (sel === '.cell' ? col
                                       : sel === '.group' ? []
                                       : sel === '.stage' ? [stage] : realQsa(sel));
-    new Function(
-      'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
-      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout', js,
-    )(document, window, fetch, localStorage, location, confirm,
-      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn());
+    runPage(js, ['document', 'window', 'fetch', 'localStorage', 'location', 'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout'],
+      [document, window, fetch, localStorage, location, confirm, VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn()]);
 
     // Scrolled a couple of rows down: c2 straddles the top of the screen.
     scrolled = 250;
@@ -1363,13 +1337,8 @@ function arrow(key, opts) {
     document.querySelectorAll = sel => (sel === '.cell' ? many
                                       : sel === '.group' ? []
                                       : sel === '.stage' ? [stage] : realQsa(sel));
-    new Function(
-      'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
-      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout', js,
-    )(document, window, fetch, localStorage, location, confirm,
-      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn());
+    runPage(js, ['document', 'window', 'fetch', 'localStorage', 'location', 'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout'],
+      [document, window, fetch, localStorage, location, confirm, VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn()]);
 
     document.byId.selall.click();          // all 250
     const n = calls.length;
@@ -1492,25 +1461,15 @@ function arrow(key, opts) {
 
     // A fresh page finds the preference where it was left.
     stored['pix2.thumb'] = 'large';
-    new Function(
-      'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
-      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout', js,
-    )(document, window, fetch, localStorage, location, confirm,
-      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn());
+    runPage(js, ['document', 'window', 'fetch', 'localStorage', 'location', 'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout'],
+      [document, window, fetch, localStorage, location, confirm, VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn()]);
     check('a new page opens at the size you left it',
           grid.dataset.size === 'large', grid.dataset.size);
 
     // What these were called for an afternoon.
     stored['pix2.thumb'] = 'huge';
-    new Function(
-      'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
-      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout', js,
-    )(document, window, fetch, localStorage, location, confirm,
-      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn());
+    runPage(js, ['document', 'window', 'fetch', 'localStorage', 'location', 'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout'],
+      [document, window, fetch, localStorage, location, confirm, VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn()]);
     check('and one saved under the old names still opens there',
           grid.dataset.size === 'large', grid.dataset.size);
   }
@@ -1531,13 +1490,8 @@ function arrow(key, opts) {
     let landed = null;
     cells.forEach(c => { c.scrollIntoView = () => { landed = c; }; });
     location.hash = '#' + encodeURIComponent('f/b.jpg');
-    new Function(
-      'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
-      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout', js,
-    )(document, window, fetch, localStorage, location, confirm,
-      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn());
+    runPage(js, ['document', 'window', 'fetch', 'localStorage', 'location', 'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout'],
+      [document, window, fetch, localStorage, location, confirm, VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn()]);
     check('a page told which photograph to land on scrolls to it',
           landed === cells[1], landed && landed.dataset.name);
 
@@ -1546,13 +1500,8 @@ function arrow(key, opts) {
     // nowhere. That is an address that is merely old, not an error.
     landed = null;
     location.hash = '#' + encodeURIComponent('f/gone.jpg');
-    new Function(
-      'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
-      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout', js,
-    )(document, window, fetch, localStorage, location, confirm,
-      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn());
+    runPage(js, ['document', 'window', 'fetch', 'localStorage', 'location', 'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout'],
+      [document, window, fetch, localStorage, location, confirm, VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn()]);
     check('and one naming a photograph that is not here says nothing',
           landed === null, landed && landed.dataset.name);
     location.hash = '';
@@ -1577,13 +1526,8 @@ function arrow(key, opts) {
     // their own grids and would answer the same key press.
     keys.keydown = [];
     behindCells = '';
-    new Function(
-      'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
-      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout', js,
-    )(document, window, fetch, localStorage, location, confirm,
-      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn());
+    runPage(js, ['document', 'window', 'fetch', 'localStorage', 'location', 'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout'],
+      [document, window, fetch, localStorage, location, confirm, VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn()]);
 
     three[0].querySelector('.pick').click();
     three[1].querySelector('.pick').click();
@@ -1620,13 +1564,8 @@ function arrow(key, opts) {
                                       : sel === '.group' ? []
                                       : sel === '.stage' ? [stage] : realQsa(sel));
     keys.keydown = [];
-    new Function(
-      'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
-      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout', js,
-    )(document, window, fetch, localStorage, location, confirm,
-      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-      GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn());
+    runPage(js, ['document', 'window', 'fetch', 'localStorage', 'location', 'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout'],
+      [document, window, fetch, localStorage, location, confirm, VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn()]);
 
     const get = actBtn('download');
     check('nothing selected offers no download', get.hidden === true);

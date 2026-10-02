@@ -14,7 +14,7 @@
 // Usage: node save.js <path to the extracted browse script>
 'use strict';
 const fs = require('fs');
-const { El, document, sizeset, section } = require('./dom.js');
+const { El, document, sizeset, section, runPage } = require('./dom.js');
 
 // The stub's `focus` does nothing, which is exactly what a phone must not be
 // asked to do: raising the keyboard is the whole question. Recorded, and it
@@ -199,10 +199,8 @@ const PARAMS = ['document', 'window', 'fetch', 'localStorage', 'location',
                 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD',
                 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout', 'clearTimeout'];
 function run() {
-  new Function(...PARAMS, js)(
-    document, window, fetch, localStorage, location, confirm, matchMedia,
-    navigator, VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-    GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, timer, cancelTimer);
+  runPage(js, [...PARAMS],
+      [document, window, fetch, localStorage, location, confirm, matchMedia, navigator, VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, timer, cancelTimer]);
 }
 
 (async () => {

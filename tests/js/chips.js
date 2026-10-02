@@ -9,7 +9,7 @@
 // Run as: node chips.js <browse.js> <date> <expected date after closing>,
 // because the ladder is a step at a time and each step is its own page.
 const fs = require('fs');
-const { El, document, sizeset, section } = require('./dom.js');
+const { El, document, sizeset, section, runPage } = require('./dom.js');
 
 const js = fs.readFileSync(process.argv[2], 'utf8');
 const startDate = process.argv[3];
@@ -116,14 +116,8 @@ const optionLabels = () => document.byId.menu.querySelectorAll('.opt')
 
 (async () => {
   try {
-    new Function(
-      'document', 'window', 'fetch', 'localStorage', 'location', 'history',
-      'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS',
-      'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK',
-      'setTimeout', js,
-    )(document, window, fetch, localStorage, location, history, confirm,
-      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD,
-      GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn());
+    runPage(js, ['document', 'window', 'fetch', 'localStorage', 'location', 'history', 'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout'],
+      [document, window, fetch, localStorage, location, history, confirm, VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn()]);
   } catch (e) {
     console.log('FAIL the script threw on load: ' + e.message);
     process.exit(1);
@@ -174,17 +168,9 @@ const optionLabels = () => document.byId.menu.querySelectorAll('.opt')
   // to tell them apart or it would be disagreeing with the folder that set
   // it, so the chip says which it is and the cross climbs to the other.
   location.href = '/browse?start';
-  new Function(
-    'document', 'window', 'fetch', 'localStorage', 'location', 'history',
-    'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS',
-    'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE',
-    'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout', js,
-  )(document, window, fetch, localStorage, location, history, confirm,
-    { ...VIEW, date: null, kind: null,
-      event: 'Sicily' + EVENT_SEP + NO_EVENT },
-    [['event', 'Event']], FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-    GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP,
-    NO_EVENT, fn => fn());
+  runPage(js, ['document', 'window', 'fetch', 'localStorage', 'location', 'history', 'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout'],
+      [document, window, fetch, localStorage, location, history, confirm, { ...VIEW, date: null, kind: null,
+      event: 'Sicily' + EVENT_SEP + NO_EVENT }, [['event', 'Event']], FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, fn => fn()]);
 
   const ev = chipFor('Event');
   check('the event is on the bar', ev !== undefined,
@@ -205,17 +191,9 @@ const optionLabels = () => document.byId.menu.querySelectorAll('.opt')
   // The whole event is the top of the ladder: there is nothing above a trip
   // but the library, which is what clearing means.
   location.href = '/browse?start';
-  new Function(
-    'document', 'window', 'fetch', 'localStorage', 'location', 'history',
-    'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS',
-    'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE',
-    'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout', js,
-  )(document, window, fetch, localStorage, location, history, confirm,
-    { ...VIEW, date: null, kind: null,
-      event: 'Sicily' + EVENT_SEP + 'Taormina' },
-    [['event', 'Event']], FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL,
-    GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP,
-    NO_EVENT, fn => fn());
+  runPage(js, ['document', 'window', 'fetch', 'localStorage', 'location', 'history', 'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout'],
+      [document, window, fetch, localStorage, location, history, confirm, { ...VIEW, date: null, kind: null,
+      event: 'Sicily' + EVENT_SEP + 'Taormina' }, [['event', 'Event']], FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, fn => fn()]);
 
   const part = chipFor('Event');
   check('a part of an event is shown whole',

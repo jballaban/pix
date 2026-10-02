@@ -291,3 +291,24 @@ function section(head, kids, into) {
 }
 
 module.exports = { El, document, sizeset, section };
+
+// The page script, run the way a page runs it. The server hands a page one
+// config object, `window.PIX`, which the script unpacks on its first line;
+// the names in upper case are that object, the rest are the browser's own
+// (`document`, `fetch`, `setTimeout` …) and are the script's parameters here.
+// A few a stage sets on the global object — `ARCHIVED` and its label — are
+// config too, and are carried into it.
+function runPage(js, names, values) {
+  const env = {}, config = {};
+  names.forEach((n, i) => {
+    (/^[A-Z][A-Z0-9_]*$/.test(n) ? config : env)[n] = values[i];
+  });
+  for (const k of ['ARCHIVED', 'ARCHIVED_LABEL', 'MARKS', 'FIXED_GROUPS']) {
+    if (!(k in config) && k in globalThis) config[k] = globalThis[k];
+  }
+  const win = env.window || {};
+  win.PIX = config;
+  env.window = win;
+  return new Function(...Object.keys(env), js)(...Object.values(env));
+}
+module.exports.runPage = runPage;

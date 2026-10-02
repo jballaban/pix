@@ -1267,7 +1267,7 @@ def test_to_a_viewer_who_may_not_see_the_source_a_clip_is_a_video(
 
 def test_an_old_link_to_a_type_opens_both_halves(client: TestClient) -> None:
     html = client.get("/browse?kind=image").text
-    view = html[html.index("const VIEW="):html.index("const VIEW=") + 300]
+    view = html[html.index('"VIEW": '):html.index('"VIEW": ') + 300]
     assert '"kind": ["photo", "still"]' in view, view
 
 
@@ -1275,7 +1275,7 @@ def test_videos_alone_is_videos_and_not_clips(client: TestClient) -> None:
     """`video` is a box of its own; it used to be read as both halves, so
     ticking Videos came back as Videos and Clips."""
     html = client.get("/browse?kind=video").text
-    view = html[html.index("const VIEW="):html.index("const VIEW=") + 300]
+    view = html[html.index('"VIEW": '):html.index('"VIEW": ') + 300]
     assert '"kind": "video"' in view, view
 
 

@@ -6,7 +6,7 @@
 // those three apart is the whole of the feature, and drive.js's two cells
 // cannot pose the question.
 const fs = require('fs');
-const { El, document, sizeset, section } = require('./dom.js');
+const { El, document, sizeset, section, runPage } = require('./dom.js');
 
 const js = fs.readFileSync(process.argv[2], 'utf8');
 const failures = [];
@@ -205,13 +205,8 @@ function deselect() {
   const realAdd = document.addEventListener.bind(document);
   document.addEventListener = (t, fn) => { (keys[t] ||= []).push(fn); realAdd(t, fn); };
   try {
-    new Function(
-      'document', 'window', 'fetch', 'localStorage', 'location', 'confirm',
-      'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL',
-      'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout', js,
-    )(document, window, fetch, localStorage, location, confirm,
-      VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD,
-      GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn());
+    runPage(js, ['document', 'window', 'fetch', 'localStorage', 'location', 'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout'],
+      [document, window, fetch, localStorage, location, confirm, VIEW, CHIPS, FIXED, EXTRA, ADMIN, USERS, GROUPS, USUAL, GRID_GROUPS, ONE_FIELD, GROUPING, PAGE, TIERS, UNREVIEWED, EVENT_SEP, NO_EVENT, STACK, BACK, fn => fn()]);
   } catch (e) {
     console.log('FAIL the script threw on load: ' + e.message);
     process.exit(1);

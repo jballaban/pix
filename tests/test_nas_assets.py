@@ -79,3 +79,18 @@ def test_the_web_apps_roots_are_never_the_real_share() -> None:
                  "PREVIEW_DIR", "LARGE_DIR", "RENDER_DIR", "STRIP_DIR"):
         value: Path = getattr(webroots, name)
         assert real not in (value, *value.parents), name
+
+
+def test_the_script_unpacks_exactly_what_the_page_is_handed() -> None:
+    """`window.PIX` is the one contract between the server and the page
+    script: a key the server stops sending is an `undefined` somewhere in
+    three thousand lines, and one the script stops reading is dead weight."""
+    import re
+
+    from pix.nas.webapp import pages
+
+    first = assets.asset("js/browse/00-page.js")
+    unpacked = first[first.index("const {"):first.index("} = window.PIX")]
+    names = {re.sub(r"=.*", "", n).strip()
+             for n in unpacked[len("const {"):].split(",") if n.strip()}
+    assert names == set(pages.PageConfig.__annotations__)

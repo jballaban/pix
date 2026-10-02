@@ -17,7 +17,7 @@ import urllib.parse
 
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -464,7 +464,7 @@ def test_the_page_is_handed_every_filter_it_is_showing(
     view. A filter missing here is a chip that cannot show what it is set to and
     an edit that reports itself as made somewhere else."""
     html = client.get("/browse?deleted=only&event=Italy%20-%20Sicily").text
-    view = html[html.index("const VIEW="):html.index(",CHIPS")]
+    view = html[html.index('"VIEW": '):html.index(', "CHIPS"')]
 
     for name in ("event", "tag", "date", "audience", "kind", "band", "deleted"):
         assert f'"{name}"' in view, f"{name} missing from {view}"
@@ -758,7 +758,7 @@ def test_a_stack_is_no_longer_somewhere_the_library_can_be_narrowed_to(
     assert r.status_code == 307, r.status_code
     # And nothing on the grid can put one back.
     grid = client.get("/browse").text
-    assert "within" not in grid[grid.index("const VIEW="):grid.index(",CHIPS")]
+    assert "within" not in grid[grid.index('"VIEW": '):grid.index(', "CHIPS"')]
 
 
 def test_a_write_still_says_which_stack_it_was_made_in(
@@ -1036,14 +1036,13 @@ def test_the_page_knows_it_is_inside_a_stack(
         "stacked_under": "init_2026/a.jpg",
         "files": [{"folder": "init_2026", "name": "b.jpg"}]})
     html = client.get("/stack/init_2026/a.jpg").text
-    view = html[html.index("const VIEW="):html.index(",CHIPS")]
+    view = html[html.index('"VIEW": '):html.index(', "CHIPS"')]
 
     # Not through the filters. `within` is out of `Filters.NAMES`, so the view
     # the page rebuilds its own address from cannot contain one — a stack is
     # not somewhere the library can be narrowed to.
     assert "within" not in view, view
-    assert 'STACK="init_2026/a.jpg"' in html, \
-        html[html.index("PAGE="):html.index("PAGE=") + 140]
+    assert _pix(html)["STACK"] == "init_2026/a.jpg", _pix(html)["STACK"]
 
     # It is said on the write instead, which is the one place it changes
     # anything: with the members in front of the curator a cascade must not
@@ -1596,7 +1595,7 @@ def test_the_stacks_chip_offers_only_what_narrows_the_view(
     on this* is what the cross says, and a value that only clears the filter
     is a second way to say it sitting among the ones that do something."""
     html = client.get("/browse").text
-    fixed = html[html.index("FIXED="):html.index("EXTRA=")]
+    fixed = json.dumps(_pix(html)["FIXED"])
     stacks = fixed[fixed.index('"stacks"'):]
 
     for label in ("Stacked", "Suggested", "Not in a stack"):
@@ -1686,7 +1685,7 @@ def test_a_guess_is_only_for_the_person_who_can_answer_it(
 
     html = sign_in("kid", "pw").get("/browse").text
 
-    assert '"stacks"' in html[html.index("CHIPS="):html.index("FIXED=")]
+    assert "stacks" in [c[0] for c in _pix(html)["CHIPS"]]
     # And the guess is on screen as a stack, which is the only way there is
     # ever a suggestion in front of them to refuse.
     assert 'data-name="x.jpg"' in html
@@ -2250,7 +2249,7 @@ def test_the_same_filters_are_on_both_pages(client: TestClient) -> None:
     grid = client.get("/browse").text
 
     for page in (home, grid):
-        chips = page[page.index("CHIPS="):page.index("FIXED=")]
+        chips = json.dumps(_pix(page)["CHIPS"])
         assert '"event"' in chips and '"camera"' in chips, chips
     assert 'id="chips"' in home
 
@@ -3584,7 +3583,7 @@ def test_the_page_is_told_what_each_tier_holds(client: TestClient) -> None:
     """Arithmetic there rather than a second copy of these numbers here —
     they are `derive`'s to choose, and have already changed once."""
     html = client.get("/browse").text
-    tiers = html[html.index("TIERS="):html.index("GRID_GROUPS=")]
+    tiers = json.dumps(_pix(html)["TIERS"])
 
     assert str(derive.THUMB_PX) in tiers and str(derive.LARGE_PX) in tiers
     assert str(derive.PREVIEW_PX) in tiers, tiers
@@ -4036,9 +4035,9 @@ def test_the_page_script_comes_last(client: TestClient) -> None:
     anything — and said nothing, because saying things was the broken part."""
     html = client.get("/browse").text
 
-    assert html.index('id="note"') < html.index("const VIEW=")
-    assert html.index('id="count"') < html.index("const VIEW=")
-    assert html.index('id="grid"') < html.index("const VIEW=")
+    assert html.index('id="note"') < html.index('"VIEW": ')
+    assert html.index('id="count"') < html.index('"VIEW": ')
+    assert html.index('id="grid"') < html.index('"VIEW": ')
 
 
 def test_every_element_the_script_looks_up_exists(client: TestClient) -> None:
@@ -4549,6 +4548,13 @@ def test_the_offer_is_not_made_to_a_desktop_browser(client: TestClient) -> None:
 
 
 # --- reachable with a thumb ---------------------------------------------------
+
+def _pix(html: str) -> dict[str, Any]:
+    """What the page script is told about the page — `window.PIX`, parsed."""
+    at = html.index("window.PIX=") + len("window.PIX=")
+    return cast("dict[str, Any]",
+                json.loads(html[at:html.index(";</script>", at)]))
+
 
 def _cell_html(html: str, name: str) -> str:
     """One thumbnail's markup, whole — from its name to the next cell.
@@ -6453,7 +6459,7 @@ def test_hiding_takes_a_file_out_of_the_curators_own_grid(
 
 def test_hiding_is_offered_in_the_access_menu(client: TestClient) -> None:
     html = client.get("/browse").text
-    assert f"ARCHIVED={json.dumps(decisions.ARCHIVED)}" in html
+    assert _pix(html)["ARCHIVED"] == decisions.ARCHIVED
     assert "out of every view" in html
 
 
@@ -6565,7 +6571,7 @@ def test_a_filter_repeated_in_the_address_is_any_of_them(
     html = client.get("/browse?tag=beach&tag=sunset").text
     assert 'data-name="a.jpg"' in html and 'data-name="c.jpg"' in html
     # And the page is told both, as a list.
-    view = html[html.index("const VIEW="):]
+    view = html[html.index('"VIEW": '):]
     assert '"tag": ["beach", "sunset"]' in view[:400], view[:400]
 
 
@@ -6575,7 +6581,7 @@ def test_the_old_stacks_words_still_open_the_same_view(
     """Links from before the checkboxes keep working."""
     def view(url: str) -> str:
         html = client.get(url).text
-        return html[html.index("const VIEW="):html.index("const VIEW=") + 400]
+        return html[html.index('"VIEW": '):html.index('"VIEW": ') + 400]
 
     assert '"stacks": ["stacked", "suggested"]' in view("/browse?stacks=only")
     assert '"stacks": "suggested"' in view("/browse?stacks=guesses")

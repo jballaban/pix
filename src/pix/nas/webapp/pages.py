@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
-from typing import Annotated, cast
+from typing import Annotated, cast, TypedDict
 
 from fastapi import Depends, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -401,6 +401,38 @@ def browse(request: Request,
         user=user)
 
 
+class PageConfig(TypedDict):
+    """Everything the page script is told about this page and this view.
+
+    One object, `window.PIX`, which the script unpacks on its first line
+    (`static/js/browse/00-page.js`) — the keys are the names it reads them
+    by. Typed, so a key missing or misspelt is a type error here rather than
+    an `undefined` three thousand lines into the script.
+    """
+
+    VIEW: dict[str, str | list[str] | None]
+    CHIPS: tuple[tuple[str, str], ...]
+    FIXED: dict[str, tuple[tuple[str, str], ...]]
+    FIXED_GROUPS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]]
+    EXTRA: dict[str, tuple[tuple[str, str], ...]]
+    ADMIN: bool
+    USERS: list[str]
+    GROUPS: list[str]
+    MARKS: dict[str, str]
+    UNREVIEWED: str
+    ARCHIVED: str
+    ARCHIVED_LABEL: str
+    EVENT_SEP: str
+    NO_EVENT: str
+    USUAL: str | None
+    PAGE: str
+    STACK: str
+    BACK: str
+    TIERS: tuple[tuple[str, int], ...]
+    GRID_GROUPS: tuple[tuple[str, str], ...]
+    ONE_FIELD: dict[str, str]
+    GROUPING: list[str]
+
 def view_script(user: Principal, view: ix.Filters, groups: list[str], *,
                  page: str = "/browse", stack: str = "",
                  back: str = "") -> str:
@@ -416,29 +448,38 @@ def view_script(user: Principal, view: ix.Filters, groups: list[str], *,
     actions, so the script finds none of those elements and wires none of
     them. That is a page without photographs on it, not a broken one.
     """
-    return (
-        f"<script>const VIEW={js(view_dict(view))},"
-        f"CHIPS={js(chips(user))},FIXED={js(FIXED)},"
-        f"FIXED_GROUPS={js(FIXED_GROUPS)},"
-        f"EXTRA={js(EXTRA)},ADMIN={js(user.is_admin)},"
-        f"USERS={js(audience_names())},GROUPS={js(group_names())},"
-        f"MARKS={js({c: mark(c) for c, _ in chips(user)})},"
+    config: PageConfig = {
+        "VIEW": view_dict(view),
+        "CHIPS": chips(user),
+        "FIXED": FIXED,
+        "FIXED_GROUPS": FIXED_GROUPS,
+        "EXTRA": EXTRA,
+        "ADMIN": user.is_admin,
+        "USERS": audience_names(),
+        "GROUPS": group_names(),
+        "MARKS": {c: mark(c) for c, _ in chips(user)},
         # The word the audience filter uses for *nobody yet*. Sent rather than
         # spelled again here: the page draws a chip that sets it, and two
         # copies of a sentinel are two chances to disagree about what it is.
-        f"UNREVIEWED={js(ix.UNREVIEWED)},"
-        f"ARCHIVED={js(decisions.ARCHIVED)},ARCHIVED_LABEL={js(ARCHIVED_LABEL)},"
-        f"EVENT_SEP={js(decisions.EVENT_SEP)},"
-        f"NO_EVENT={js(ix.NO_EVENT)},"
-        f"USUAL={js(store().usual)},PAGE={js(page)},"
+        "UNREVIEWED": ix.UNREVIEWED,
+        "ARCHIVED": decisions.ARCHIVED,
+        "ARCHIVED_LABEL": ARCHIVED_LABEL,
+        "EVENT_SEP": decisions.EVENT_SEP,
+        "NO_EVENT": ix.NO_EVENT,
+        "USUAL": store().usual,
+        "PAGE": page,
         # Which stack's page this is, and the way out of it. Empty everywhere
         # else, which is how the script knows it is not on one — the grid asks
         # the same question of a shelf of stacks and answers it in place.
-        f"STACK={js(stack)},BACK={js(back)},"
-        f"TIERS={js(TIERS)},"
-        f"GRID_GROUPS={js(GRID_GROUPS)},ONE_FIELD={js(ONE_FIELD)},"
-        f"GROUPING={js(groups)};</script>"
-        f"<script>{BROWSE_JS}</script>")
+        "STACK": stack,
+        "BACK": back,
+        "TIERS": TIERS,
+        "GRID_GROUPS": GRID_GROUPS,
+        "ONE_FIELD": ONE_FIELD,
+        "GROUPING": groups,
+    }
+    return (f"<script>window.PIX={js(config)};</script>"
+            f"<script>{BROWSE_JS}</script>")
 
 
 def from_link(op_id: str | None, stale: str | None, shown: int) -> str:

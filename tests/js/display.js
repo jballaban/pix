@@ -3,7 +3,7 @@
 // Its own stage because it is about where things *are* inside a cell, which no
 // other stage looks at — they all press the circle and read the request.
 const fs = require('fs');
-const { El, document, sizeset, section } = require('./dom.js');
+const { El, document, sizeset, section, runPage } = require('./dom.js');
 
 const js = fs.readFileSync(process.argv[2], 'utf8');
 const failures = [];
@@ -126,18 +126,9 @@ const fixOf = (c, where) => {
 const holds = (box, cls) => !!box && box.children.some(k => k._classes.has(cls));
 
 try {
-  new Function(
-    'document', 'window', 'fetch', 'localStorage', 'location', 'history',
-    'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS',
-    'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS',
-    'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout', js,
-  )(document, window, fetch, localStorage, location, history, () => true,
-    VIEW, [['event', 'Event'], ['kind', 'Type']],
-    { kind: [['photo', 'Photos'], ['still', 'Stills'], ['video', 'Videos'],
-             ['clip', 'Clips'], ['other', 'Other']] },
-    {}, true, ['family'], ['family'], 'family',
-    [['day', 'By day']], { event: 'event', subevent: 'event' }, ['day'],
-    '/browse', [['/thumb/', 400]], 'new', ' > ', '(none)', '', '', fn => fn());
+  runPage(js, ['document', 'window', 'fetch', 'localStorage', 'location', 'history', 'confirm', 'VIEW', 'CHIPS', 'FIXED', 'EXTRA', 'ADMIN', 'USERS', 'GROUPS', 'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS', 'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout'],
+      [document, window, fetch, localStorage, location, history, () => true, VIEW, [['event', 'Event'], ['kind', 'Type']], { kind: [['photo', 'Photos'], ['still', 'Stills'], ['video', 'Videos'],
+             ['clip', 'Clips'], ['other', 'Other']] }, {}, true, ['family'], ['family'], 'family', [['day', 'By day']], { event: 'event', subevent: 'event' }, ['day'], '/browse', [['/thumb/', 400]], 'new', ' > ', '(none)', '', '', fn => fn()]);
 } catch (e) {
   console.log('FAIL the script threw on load: ' + e.message);
   process.exit(1);

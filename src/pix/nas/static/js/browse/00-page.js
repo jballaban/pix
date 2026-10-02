@@ -1,3 +1,9 @@
+// What the server says about this page and this view (`pages.PageConfig`):
+// one object, unpacked here so the rest of the script reads each by name.
+const {VIEW, CHIPS, FIXED, FIXED_GROUPS={}, EXTRA, ADMIN, USERS, GROUPS,
+       MARKS={}, UNREVIEWED, ARCHIVED, ARCHIVED_LABEL, EVENT_SEP, NO_EVENT,
+       USUAL, PAGE, STACK, BACK, TIERS, GRID_GROUPS, ONE_FIELD,
+       GROUPING} = window.PIX;
 
 const grid=document.getElementById('grid');
 const menu=document.getElementById('menu');

@@ -30,9 +30,9 @@ function url(patch){
 // fallback is not decoration: a filter added to `_CHIPS` without a drawing
 // would otherwise be a button with nothing in it, which is invisible — so an
 // undrawn filter falls back to being a word, the way all of them used to be.
-const MARK=(typeof MARKS!=='undefined')?MARKS:{};
+const MARK=MARKS;
 // A fixed filter's headings (`_FIXED_GROUPS`), where it has any.
-const HEADS=(typeof FIXED_GROUPS!=='undefined')?FIXED_GROUPS:{};
+const HEADS=FIXED_GROUPS;
 function markOf(col,label){return MARK[col]||esc(label);}
 
 function drawChips(){
