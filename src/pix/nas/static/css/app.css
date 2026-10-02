@@ -1,0 +1,1334 @@
+
+/* **A card has to look like a card.** The surfaces were a shade apart and
+   measured it: a tile against the page was 1.08:1, and its own border 1.04:1
+   against the tile — which is not an edge, it is a rumour of one. Forty of
+   them read as a single grey field with text in it, which is the complaint.
+   Raised until each plane is told from the one beneath it: the page, the
+   surfaces on it, and the lines that end them. No colour changed; the steps
+   between them did. */
+:root { color-scheme: dark; --bg:#14161a; --fg:#e7e9ee; --dim:#98a1b2;
+        --line:#3a4250; --accent:#6aa3ff; --keep:#56c16a; --top:#e3b341; --gone:#e06c5a;
+        /* Tags had no colour of their own and wore white, which on a card
+           beside three coloured things reads as *the one nobody assigned*.
+           Violet because it is the hue left: clear of the blue people wear,
+           the green an audience does, and the amber that means unfinished. */
+        --tag:#a48bff;
+        /* A sub-event is *which part of the trip*, and it is not a tag — two
+           violet lozenges on one thumbnail would say it was. Rose because it
+           is the hue left over: clear of the blue people wear, the green an
+           audience does, the violet of a tag and the amber of unfinished
+           work, and far enough round from the red that means deleted. */
+        --event:#e879b0;
+        /* Each of those again as something to sit *on*. A chip was coloured
+           text in a near-black lozenge, so the colour was a thin outline of
+           itself; filled at a seventh it becomes the chip, and a card reads
+           as a few facts in their own colours rather than a grey list. */
+        --keep-bed:#56c16a26; --accent-bed:#6aa3ff26;
+        --tag-bed:#a48bff26; --top-bed:#e3b34126;
+        --event-bed:#e879b026;
+        --panel:#222833;
+        /* Accent at a sixth, for saying *this one* behind a word rather than
+           through it. */
+        --tint:#6aa3ff2b;
+        /* The bars are a surface, not part of the page. They were the same
+           colour as it, separated by a single line — which put the tick that
+           selects *everything* a few pixels from the one that selects the
+           first group, on the same background, looking like the same kind of
+           control. Reaching for the group and selecting the library is a
+           mistake the colour was inviting. */
+        --chrome:#262d38;
+        /* One control's outer height: a 21px line (14px at 1.5), 4px of
+           padding each side, 1px of border each side. Named because two rules
+           have to agree on it — see `.row`. */
+        --ctl:31px;
+        /* The side gutter, in one place, because three bars and the page
+           itself have to agree about it — and because in landscape the notch
+           lies over the left of the screen, so each of them has to take the
+           larger of the gutter and whatever the device says is unusable. */
+        --gut:20px;
+        /* How far down the page the sticky section headings start, which is
+           whatever the bar above them currently measures. `_BAR_JS` writes
+           the real number; this is the bar at its shortest — one row of
+           controls between its two 9px margins — so the first frame before
+           the observer has run is close rather than wrong. */
+        --bar:calc(49px + env(safe-area-inset-top,0px)); }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.5
+       system-ui,-apple-system,Segoe UI,sans-serif; }
+a { color:var(--accent); text-decoration:none; }
+/* Never an underline. It lands across the descenders of the very word you are
+   reading at the moment you are trying to read it, and this page is lists of
+   names — events, days, accounts, cameras — where the letters are the
+   content. A tint behind the word says the same thing and leaves them alone.
+   The `box-shadow` spread is the padding: it gives the tint room to breathe
+   without taking up any, so nothing on the line moves. */
+a:hover { background:var(--tint); box-shadow:0 0 0 3px var(--tint);
+          border-radius:2px; }
+.dim { color:var(--dim); }
+main { padding:16px max(var(--gut),env(safe-area-inset-right)) 20px
+               max(var(--gut),env(safe-area-inset-left)); }
+
+/* The bar never leaves: filters are the address of what you are looking at,
+   and losing them 2,000 thumbnails down is losing your place. */
+/* Installed on a phone, the page owns the whole screen — including the strip
+   behind the clock and the one the home indicator sits on. `env()` is zero in a
+   browser tab, so this costs nothing there and is the difference between an app
+   and a web page in a window everywhere else. */
+.topbar { position:sticky; top:0; z-index:5;
+          /* A plane catches more light at its top edge. Two stops and four
+             per cent is not a gradient anybody will name — it is the
+             difference between a panel and a rectangle of paint. */
+          background:linear-gradient(180deg,#2b3340 0%,var(--chrome) 100%);
+          border-bottom:1px solid #0b0e13;
+          padding:calc(9px + env(safe-area-inset-top))
+                  max(var(--gut),env(safe-area-inset-right)) 9px
+                  max(var(--gut),env(safe-area-inset-left));
+          /* It scrolls over the grid, so it reads as a layer above it rather
+             than as the first thing in it. */
+          box-shadow:0 8px 16px -12px #000c; }
+.row { display:flex; gap:9px; align-items:center; flex-wrap:wrap;
+       min-height:var(--ctl); }
+/* The top row never wraps as a whole. The filters are the one part of it that
+   grows without limit, so they are the one part allowed to take two lines —
+   and they take them *inside their own box*, or the account and the way out
+   get carried down with them, and the way out is what you reach for when
+   something has gone wrong. */
+.topbar > .row:first-child { flex-wrap:nowrap; align-items:flex-start; }
+.topbar > .row:first-child > .brand,
+.topbar > .row:first-child > .right {
+       min-height:var(--ctl); display:flex; align-items:center; flex:none; }
+/* Takes the slack and gives it back: `min-width:0` is what lets a flex item
+   shrink below its own content, which is what makes the chips wrap rather
+   than push everything past the end of the row. */
+.topbar > .row:first-child > .chips { flex:1 1 auto; min-width:0; }
+/* The action row empties and fills as the selection changes and it sits above
+   the grid, so its height must not depend on what is in it — otherwise every
+   thumbnail on the page moves the moment you tick one. `--ctl` is what a text
+   button actually measures, so the reserved height and the filled height are
+   the same number.
+   Deliberately not `min-height` on the buttons themselves to say it twice —
+   `.tick`, `.grppick` and `.pick` are buttons with a fixed 16 or 20 pixels,
+   and a min-height outranks their `height`, which would have made an oval of
+   every select circle in the grid. */
+/* `box-sizing: border-box` is set on everything, so a min-height covers the
+   element's own padding and border as well as its content. A stacked row has
+   8px of padding and a 1px rule above it, which the first row does not — so
+   reserving a bare control's height here reserved 22px of room for a 31px
+   button, and the row jumped nine pixels the moment one appeared. It has to
+   ask for the control *plus* its own chrome. */
+.row + .row { margin-top:8px; border-top:1px solid var(--line); padding-top:8px;
+              min-height:calc(var(--ctl) + 8px + 1px); }
+/* Everywhere, including a tab that has one of its own.
+   It was gated to the installed app on the grounds that a second back button
+   beside the browser's is clutter. The answer to that is that this is an app
+   on a desktop too, and an app is self-contained: the way out of where you
+   are should be part of it and in the same place every time, rather than
+   something you reach for outside the window on one platform and inside it on
+   another. */
+/* `--ctl` rather than padding, because this one holds a 19px drawing and
+   everything beside it holds a 21px line of text: matched padding gave a
+   29px button against 31px chips, two pixels short in a row that aligns to
+   the top. The height is the number to agree on; the glyph centres in
+   whatever that leaves. */
+.back { display:inline-flex; align-items:center; justify-content:center;
+        min-height:var(--ctl); padding:4px 7px;
+        margin-right:2px; flex:none; }
+.back:disabled { opacity:.3; }
+/* Three frames, one in front, with a picture in it — the app in one glyph:
+   photographs, and one of them standing for the others. */
+.brand { display:inline-flex; align-items:center; color:var(--fg); }
+.brand:hover { background:none; box-shadow:none; }
+.brand svg { display:block; }
+.brand:hover .front { stroke:var(--accent); }
+.count { font-variant-numeric:tabular-nums; color:var(--dim);
+         white-space:nowrap; }
+.spacer { flex:1; }
+/* The chips had no container rule at all, so they sat against one another with
+   nothing between them and read as one control. Same gap as the row they are
+   in, so filters and actions line up. */
+.chips { display:flex; gap:9px; align-items:center; flex-wrap:wrap; }
+/* What a stack's page is, where a grid's filters would be. A page with no
+   address written on it is a page you cannot tell from the one before, and
+   this one has no filters to say it with — so it says it in words. */
+.whatis { display:flex; gap:9px; align-items:baseline; flex-wrap:wrap;
+          min-width:0; }
+.whatis b { font-weight:600; font-variant-numeric:tabular-nums; }
+.whatis .dim { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+/* Nobody has said yet. The amber that means unfinished everywhere else in
+   here, so a suggestion reads as a question wherever it is met. */
+.whatis .asked { font-style:normal; color:var(--top);
+                 background:var(--top-bed); border-radius:999px;
+                 padding:1px 9px; font-size:12px; font-weight:600;
+                 white-space:nowrap; }
+/* The way out, as a link. It was a cross on a chip pretending the stack was a
+   filter; a page is left rather than cleared, and the address it goes to is
+   the grid it was opened from — carried in, because the browser can only
+   answer that on the way back and a stack reached from a bookmark has nothing
+   behind it. */
+.leave { white-space:nowrap; }
+.leave:hover { box-shadow:0 0 0 3px var(--tint); }
+/* The filters you are not using are a list of everything the app can ask,
+   which is not a thing to read past on the way to the ones you are. The same
+   `+` the grouping heading uses, for the same gesture: one more of these. */
+.chips .addchip { display:none; }
+.addchip { padding:3px 9px; font-weight:600; color:var(--dim); }
+.addchip:hover { color:var(--fg); border-color:var(--dim); }
+/* The install offer, above the footer rather than over the photographs. It is
+   an aside, not a decision to make, so it has the weight of one: panel colours,
+   one line, and a way to end it permanently. */
+.install { position:fixed; left:12px; right:12px; z-index:6;
+           bottom:calc(12px + env(safe-area-inset-bottom));
+           display:flex; gap:10px; align-items:center; font-size:13px;
+           background:var(--panel); border:1px solid var(--line);
+           border-radius:8px; padding:9px 11px;
+           box-shadow:0 12px 30px -14px #000; }
+.install .say { flex:1 1 auto; }
+.install button { font:inherit; }
+.install .no { background:none; border:none; color:var(--dim);
+               cursor:pointer; padding:4px 6px; }
+.install .no:hover { color:var(--fg); }
+/* Not a strip that is usually empty — a note that is not there until there
+   is something to say. It is how every write reports whether it happened, so
+   it has to be unmissable when it speaks and take nothing when it does not. */
+.note { position:fixed; z-index:22;
+        left:50%; transform:translateX(-50%);
+        bottom:calc(14px + env(safe-area-inset-bottom));
+        max-width:min(560px, calc(100vw - 24px));
+        background:var(--panel); color:var(--fg);
+        border:1px solid var(--line); border-radius:6px;
+        padding:9px 14px; font-size:13px;
+        box-shadow:0 14px 34px -12px #000e; }
+.note[hidden] { display:none; }
+/* Signed out there is no menu to put it in, and the login screen is the one
+   page a deploy can be checked on without a session. */
+.ver { color:var(--dim); font-size:11px; margin-right:10px;
+       font-variant-numeric:tabular-nums; }
+/* What the library is, under the account. Read when wanted, never standing
+   in front of the photographs. The rule above it is with the other group
+   breaks, so there is one rule about where a menu divides rather than two. */
+.memenu .info { display:block; }
+.memenu .info .line { display:block; padding:3px 10px; color:var(--dim);
+                      font-size:11px; white-space:nowrap; }
+.memenu .info .ver { font-variant-numeric:tabular-nums; }
+
+.note.loud { background:#5a1d16; color:#ffd9d2; border-color:#7c2f24;
+             font-weight:600; }
+
+/* Still used inside the date menu, which explains what an empty box will
+   do — a sentence about the control you are looking at, which is not the
+   same thing as a standing list of gestures along the bottom of the app. */
+.hint { color:var(--dim); font-size:12px; }
+.hint b { color:var(--fg); font-weight:600; }
+
+button, .chip { background:linear-gradient(180deg,#313a49,#28303c);
+        color:var(--fg); border:1px solid var(--line);
+        border-radius:5px; padding:4px 10px; font:inherit; cursor:pointer;
+        box-shadow:inset 0 1px 0 #ffffff0f; }
+/* A chip is a drawing, a value and a cross in a row, so it lays them out
+   rather than relying on them being inline. `gap` is what stops the glyph
+   sitting against the number it belongs to. */
+.chip { display:inline-flex; align-items:center; gap:5px; }
+.chip svg, .opt .mark svg { display:block; flex:none; }
+/* A filter that is not doing anything: its question, and nothing else. Dim,
+   because the ones that *are* doing something are what the bar is for and
+   these must not compete with them — a row where everything is lit is a row
+   with nothing highlighted. */
+.chip.off { color:var(--dim); padding:4px 7px; }
+.chip.off:hover { color:var(--fg); }
+/* The list is the only place that shows a glyph and its name together, which
+   makes it where the glyphs are learnt. */
+.opt .mark { color:var(--dim); flex:none; display:block; }
+/* Buttons that are a drawing and a word — the drawing needs the same air from
+   the word that the chips give theirs. */
+#actions button svg { display:block; flex:none; }
+/* The tick is deliberately outside this: it is a circle with nothing in
+   it, and a gap round nothing is still a wider circle. */
+#actions .grp button { display:inline-flex; align-items:center; gap:6px; }
+button:hover:not(:disabled), .chip:hover { border-color:var(--accent); }
+button:disabled { opacity:.4; cursor:default; }
+button.primary { background:linear-gradient(180deg,#83b2ff,#5b97fb);
+                 color:#0b1220; border-color:#5b97fb; font-weight:600;
+                 box-shadow:inset 0 1px 0 #ffffff40,
+                            0 2px 10px -4px #6aa3ff8c; }
+/* Named rather than shouted: it sits with the others because it is one of the
+   things you do, and a soft delete is undoable. */
+button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
+.chip.on { border-color:var(--accent); background:#20293a; }
+/* Arrived at from the log rather than picked from a list, so it is not a
+   dropdown — but it says what it is and can be dismissed, because a filter you
+   cannot see is a library that looks smaller than it is. */
+.from-op { cursor:default; max-width:46ch; overflow:hidden;
+           text-overflow:ellipsis; white-space:nowrap; }
+.from-op .x { margin-left:7px; color:var(--dim); }
+.from-op .x:hover { color:var(--fg); text-decoration:none; }
+.chip .val { color:var(--accent); margin-left:5px; }
+.chip .x { color:var(--dim); margin-left:6px; }
+.chip .x:hover { color:var(--fg); }
+.sep { width:1px; height:20px; background:var(--line); }
+
+/* menu */
+/* `dvh` after `vh`, never instead of it: an engine that does not know the
+   unit keeps the old value rather than losing the rule. `vh` is the viewport
+   as though the browser's own bars were not there, so the bottom of a long
+   list sat underneath them. */
+#menu { position:absolute; z-index:20; width:300px; max-height:60vh;
+        max-height:60dvh;
+        background:var(--panel); border:1px solid var(--line); border-radius:6px;
+        box-shadow:0 10px 30px #0009; display:flex; flex-direction:column; }
+/* An id selector beats the user agent's `[hidden] { display:none }`, so the
+   rule above quietly won and `hidden = true` set a flag that hid nothing —
+   the menu could be opened and never dismissed. */
+#menu[hidden] { display:none; }
+/* A filter's own row: how many are ticked, and the two ways out of that. */
+#menu .fbar { display:flex; align-items:center; gap:6px; padding:6px 8px;
+              border-bottom:1px solid var(--line); position:sticky; top:0;
+              background:var(--panel); z-index:1; }
+#menu .fbar .dim { flex:1; font-size:12px; }
+#menu .fbar button { padding:2px 10px; min-height:26px; }
+#menu .fbar .primary { background:var(--accent); color:#0d0f12;
+                       border-color:var(--accent); font-weight:600; }
+#menu input { background:#14161a; color:var(--fg); border:0;
+              border-bottom:1px solid var(--line); padding:9px 11px; font:inherit;
+              border-radius:6px 6px 0 0; outline:none; width:100%; }
+/* `contain`, so dragging past the end of the list scrolls nothing. Without it
+   the page behind takes over, and the page closing on a scroll is what closes
+   the menu — a list you cannot reach the bottom of without dismissing it. */
+#menulist { overflow-y:auto; padding:4px 0; overscroll-behavior:contain; }
+.opt { display:flex; gap:8px; padding:5px 11px; cursor:pointer;
+       align-items:baseline; }
+.opt:hover, .opt.cur { background:#2a3340; }
+.opt .n { margin-left:auto; color:var(--dim); font-variant-numeric:tabular-nums;
+          font-size:12px; }
+/* Three states, the way a file tree shows them: every one, some, none. A
+   selection is not one thing, and a two-state box would have to lie. */
+.opt .box { width:13px; flex:none; text-align:center; color:var(--keep); }
+.opt[data-state="some"] .box { color:var(--top); }
+.opt.new { color:var(--keep); }
+/* A part of the event above it, and indented to say so. The whole list is on
+   screen at once — an event divided into three is three rows under it, not a
+   second panel you have to open the event to find. */
+.opt.sub { padding-left:27px; }
+/* A heading that ticks the values under it, e.g. *All videos*. */
+.opt.grouphead { font-weight:600; }
+/* Naming a part of an event, under the event it is part of and after the
+   parts it already has. A word until it is wanted: dividing an event up is
+   done once and picked from ever after, so a box standing open under every
+   event on screen is furniture for the rare half of the job. */
+.subnew { display:flex; gap:6px; padding:2px 11px 6px 27px;
+          align-items:center; }
+.subnew .addsub { background:none; border:0; box-shadow:none; padding:2px 0;
+                  color:var(--dim); font-size:12px; }
+.subnew .addsub:hover { color:var(--accent); border-color:transparent; }
+.subnew input { flex:1 1 auto; width:auto; min-width:0; padding:4px 7px;
+                border:1px solid var(--line); border-radius:4px; }
+.subnew input:focus { border-color:var(--accent); }
+.subnew button { padding:3px 9px; flex:none; }
+.band { padding:7px 11px 3px; color:var(--dim); font-size:11px;
+        text-transform:uppercase; letter-spacing:.07em; }
+.band + .band { display:none; }
+#menu .form { padding:10px 11px; display:flex; gap:6px; flex-wrap:wrap;
+              align-items:center; }
+#menu .form input { width:64px; border:1px solid var(--line); border-radius:4px;
+                    padding:4px 6px; }
+#menu .form label { color:var(--dim); font-size:12px; }
+
+/* grid */
+/* Three sizes, and the third is where the thumbnail runs out. Cells stretch
+   past their minimum to fill the row, so 230px already renders around 263 on a
+   wide screen — from a 400px derived thumbnail, which is spent at that point.
+   Bigger than that has to come from the preview tier, which is four times the
+   edge and eleven times the bytes; that is the trade the third size makes and
+   the reason it is a choice rather than the default. */
+/* **The grid is a column of sections, and each section is a grid.** It was
+   one grid with the headings spanning every column, which is the tidier
+   markup and cannot do the one thing a long page of photographs most needs:
+   keep the heading on screen while you are inside the section it names.
+
+   A sticky grid item is confined to its own grid area, and a heading's grid
+   area is the one row it occupies — so it has nowhere to travel and sticks
+   to nothing. Confined to a *section* it has the whole section to travel
+   through, and the next section's heading pushes it off at exactly the right
+   moment, which is the behaviour without anybody writing a scroll handler.
+
+   The columns still line up across sections: every `.cells` is the same
+   `auto-fill` over the same width, so it resolves to the same count. And a
+   heading always started a new row anyway, because it spanned them all — so
+   nothing about the shape of the page has changed. */
+.grid { display:flex; flex-direction:column; }
+.cells { display:grid; gap:6px;
+         grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); }
+.grid[data-size="medium"] .cells {
+         grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); }
+.grid[data-size="large"] .cells {
+         grid-template-columns:repeat(auto-fill,minmax(380px,1fr)); }
+/* A folder: one section of the library, and what is worth knowing about it
+   before you open it. No photograph — a cover was whichever file happened to
+   be first, which said what one picture in there looks like and nothing about
+   the section, and a wall of unrelated pictures is harder to read than a wall
+   of text rather than easier. */
+.grid.folders .cells {
+         grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); }
+.tile { display:flex; flex-direction:column; gap:3px; padding:11px 13px 12px;
+        background:var(--panel); border:1px solid var(--line);
+        border-radius:5px; text-decoration:none; color:var(--fg);
+        /* An edge and a shadow say *this is a thing on top of that* twice,
+           which is what a card needs to say when there are forty of them. */
+        box-shadow:inset 0 1px 0 #ffffff0d,
+                   0 1px 2px #0006, 0 6px 14px -10px #000a; }
+.tile .name { font-size:15px; font-weight:600; line-height:1.25;
+              letter-spacing:-.005em; overflow-wrap:anywhere; }
+.tile .name .sep { color:var(--dim); font-style:normal; font-weight:400;
+                   margin:0 5px; }
+.tile .when { font-size:11px; color:var(--dim); }
+/* The same *of* the count uses, for the same reason: this card is a slice of
+   something longer, and saying so about the files and not about the days told
+   half of one fact. */
+.tile .when.split i { font-style:normal; opacity:.72; margin:0 2px; }
+.tile .n { font-size:12px; margin-top:3px;
+           font-variant-numeric:tabular-nums; }
+.tile .kinds { font-style:normal; color:var(--dim); }
+/* A folder that is one slice of something larger. The two numbers say it
+   without a word — this many here, that many in all — so it needs no colour
+   of its own. On a real library most cards are slices the moment you group by
+   month and event, and a page where most cards are highlighted is a page with
+   no highlight on it. */
+.tile .split i { font-style:normal; color:var(--dim); }
+.tile .kinds::before { content:" · "; }
+/* What the folder holds, in the same chips a thumbnail wears — so a card
+   and a photograph say the same kind of thing about themselves. */
+.spread { display:flex; flex-wrap:wrap; gap:3px; margin-top:6px; }
+.spread i { font-style:normal; font-size:10px; font-weight:600;
+            padding:2px 7px; border-radius:999px;
+            max-width:100%; overflow:hidden; white-space:nowrap;
+            text-overflow:ellipsis; }
+
+/* Each one opens the folder cut down to itself, so it reads as something to
+   press rather than as a label that happens to be there. */
+.spread i[data-col] { cursor:pointer; }
+.spread i[data-col]:hover { background:#000; outline:1px solid currentColor;
+                            outline-offset:-1px; }
+/* The colour is on the chip, not on a box around a run of them — which is
+   what lets every kind share one wrapping line and still be told apart. */
+.spread i.audience { color:#8fe0a0; background:var(--keep-bed); }
+.spread i.people { color:#a6c8ff; background:var(--accent-bed); }
+.spread i.tags { color:#cbb8ff; background:var(--tag-bed); }
+/* What is left to do, in the colour this app has always used for *this wants
+   you* — the same amber as a guessed stack and a half-ticked box. It is the
+   one chip on a card that is a job rather than a fact, and green filed it in
+   with the audience it is counted from.
+
+   **After the three above, and it has to be.** `.spread i.none` and
+   `.spread.audience i` weigh exactly the same, so the later one wins and this
+   was drawn green for as long as it sat higher up the file. Anything added
+   below this that colours a chip takes it back. */
+.spread i.none { color:#f2d38a; background:var(--top-bed); }
+.tile:hover { border-color:var(--accent); background:#272e3b;
+             box-shadow:0 1px 2px #0006, 0 10px 22px -12px #000c; }
+/* A folder can be selected, so it carries the same circle a thumbnail does
+   and reads the same when it is chosen. Top right rather than top left: a
+   card leads with its name, and a control over the first word of it is a
+   control in the way of the thing you are reading. */
+.tile { position:relative; }
+.tile .pick { left:auto; right:9px; top:11px; }
+.tile:hover .pick, .tile.picked .pick { opacity:1; }
+.tile .name { padding-right:28px; }
+.tile.picked { border-color:var(--accent); background:#20273a; }
+/* A section with no address. It is still a real pile of files, so it is still
+   shown — it just cannot be opened on its own. */
+.tile.dead { cursor:default; opacity:.7; }
+.tile.dead:hover { border-color:var(--line); background:var(--panel); }
+/* The three sizes, all three on show, the one you are in pressed.
+
+   It was a single button carrying one letter, and the letter said what you
+   would get *next*: the size you were in was written nowhere, the third
+   setting existed only for somebody who pressed twice to find it, and the
+   only way back to the one you liked was round the loop. A control whose
+   values are invisible until you have been through them is a control nobody
+   finds the value they wanted in — and this one is a preference, not a
+   verb, so it should read as a setting with a state. */
+.sizeset { display:inline-flex; align-items:center; flex:none;
+           border:1px solid var(--line); border-radius:5px; overflow:hidden; }
+.sizeopt, .showopt { min-width:29px; height:calc(var(--ctl) - 2px); padding:0;
+           border:0; border-radius:0; background:none; color:var(--dim);
+           font-size:11px; font-weight:700; letter-spacing:.02em;
+           display:inline-flex; align-items:center; justify-content:center;
+           box-shadow:none; }
+.sizeopt + .sizeopt, .showopt + .showopt { border-left:1px solid var(--line); }
+.showopt { padding:0 7px; font-weight:600; }
+.sizeopt:hover:not(:disabled), .showopt:hover:not(:disabled) { color:var(--fg); background:#2f3745;
+                                border-color:var(--line); }
+/* The pressed one is a bed of accent rather than a fill of it: these sit in
+   the bar beside the filters, and a solid blue lozenge there would read as a
+   filter doing something rather than as which of three sizes is on. */
+.sizeopt[aria-pressed="true"], .showopt[aria-pressed="true"] { background:var(--accent-bed);
+                                color:var(--fg); }
+/* **It stays at the top of the screen for as long as you are in it.** Two
+   thousand thumbnails scroll past in a few seconds and they all look alike
+   from four feet away; without this the only thing saying which day you are
+   looking at is a line of text that left the screen a long time ago, and the
+   answer is to scroll back up until you find out — which loses the place you
+   were reading.
+
+   Under the bar rather than at the top of the window: `--bar` is what the
+   topbar currently measures, which is not a constant — the filters take a
+   second line when there are enough of them, and an installed app adds the
+   strip behind the clock. `_BAR_JS` keeps it honest; the value here is the
+   bar at its shortest, so the first frame is close and nothing jumps.
+
+   It needs a background of its own for the first time: a heading standing
+   over the section below it has photographs sliding underneath, and a
+   transparent one shows them through the words. */
+h3.group { position:sticky; top:var(--bar); z-index:4;
+           background:var(--bg);
+           /* The room under the words is `padding`, not `margin`. A margin
+              is outside the background, so every cell in the section rose
+              through a two-pixel strip of clear air below a heading that was
+              otherwise covering them. */
+           margin:18px 0 0; font-size:13px;
+           font-weight:600; display:flex; gap:8px; align-items:center;
+           padding-top:6px; padding-bottom:7px;
+           /* Fading out rather than ruled across: a line that stops where the
+              words do says *this heading* where a full-width rule says
+              *another table*. */
+           border-bottom:1px solid transparent;
+           border-image:linear-gradient(90deg,var(--accent),var(--line) 38%,
+                                        transparent) 1; }
+/* The first one on the page, which has the bar above it rather than a
+   section. It was `:first-child` when every heading was a child of the one
+   grid; each is the first child of its own section now, so the question has
+   to be asked of the section. */
+.sect:first-child h3.group { margin-top:0; }
+/* A section is what the heading is stuck inside, so it has to be a box — and
+   a box with nothing of its own to say. */
+.sect { display:block; }
+h3.group > span.dim { font-weight:400;
+                      font-variant-numeric:tabular-nums; }
+/* A path, so the last crumb — the one that actually changed — is the one
+   that reads loudest. */
+.crumbs { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+.crumb { display:inline-flex; align-items:center; }
+/* **Its own name, and it had to earn one.** This was a `.sep` too, which
+   elsewhere is a 1px vertical rule between two clusters of buttons — so the
+   chevron between two crumbs was drawn sitting on a one-pixel bar of
+   `--line`, all along. Nobody saw it while that colour was a shade off the
+   background; raising the contrast so a card had an edge gave the heading a
+   stray one. A divider and a piece of punctuation are not the same thing and
+   should never have shared a class. */
+.crumbsep { color:var(--dim); font-weight:400; }
+.crumb:not(:last-child) .grpname { color:var(--dim); font-weight:400; }
+/* The other way round on a shelf, where the last crumb is the name of the cut
+   rather than a value: *By event* is the same two words over every shelf on
+   the page, and *2025* is the one that says which shelf this is. */
+h3.group.shelf .crumb:not(:last-child) .grpname { color:var(--fg);
+                                                  font-weight:600; }
+h3.group.shelf .crumb:last-child .grpname { color:var(--dim);
+                                            font-weight:400; }
+/* **A heading is words, not a toolbar.** Three of these are buttons, and a
+   button here got a border, a gradient and a hairline of light along its top
+   when those were given to buttons generally — so the heading grew a line
+   above its own text and a box around its plus sign. They wear nothing until
+   they are pointed at; `box-shadow:none` is the part that is easy to forget,
+   because clearing the background and the border looks like it was enough. */
+.rmgrp { background:none; border:0; box-shadow:none; margin:0; padding:0 4px;
+         color:var(--dim);
+         font:inherit; cursor:pointer; opacity:0; transition:opacity .1s; }
+.crumb:hover .rmgrp, .rmgrp:focus { opacity:1; }
+.rmgrp:hover { color:#ffb4a2; }
+/* Back out of one event to the list of them. Reads as a way up rather than
+   as one more thing to pick, which is what it is. */
+/* The name is the control: click it to regroup, `+` to group within it. */
+.grpname { background:none; border:0; box-shadow:none; padding:0; margin:0;
+           color:inherit; font:inherit; cursor:pointer; }
+.grpname:hover { color:var(--accent); background:var(--tint);
+                 box-shadow:0 0 0 3px var(--tint); border-radius:2px; }
+/* Beside the name it belongs to, not marooned at the end of the row, where it
+   went unnoticed. Dim rather than hidden: a control you cannot see until you
+   hover the right thing is a control you never learn is there, and a page of
+   faint plus signs is quiet enough. */
+.addgrp { margin:0; padding:0 7px; line-height:1.3; font-size:14px;
+          background:none; border-color:transparent; box-shadow:none;
+          opacity:.3; transition:opacity .1s; }
+h3.group:hover .addgrp, .addgrp:focus { opacity:1; }
+.addgrp:hover { border-color:var(--accent); color:var(--accent); }
+/* Same three states as the menus: the whole section, part of it, none. */
+.grppick { margin:0; padding:0; width:16px; height:16px; flex:none;
+           border-radius:50%; background:transparent;
+           border:1.5px solid var(--dim); }
+h3.group[data-state="all"] .grppick { background:var(--accent);
+  border-color:var(--accent); }
+h3.group[data-state="some"] .grppick { background:var(--top);
+  border-color:var(--top); }
+/* The same control as a section heading's, for the same job one level up:
+   none, some, all. It replaces a *Select all* and a *Deselect* that were two
+   buttons for one question, and were in the top bar rather than beside the
+   count they were about. */
+.tick[hidden], .count[hidden] { display:none; }
+.tick { margin:0; padding:0; width:16px; height:16px; flex:none;
+        border-radius:50%; background:transparent;
+        border:1.5px solid var(--dim); }
+#actions[data-state="all"] .tick { background:var(--accent);
+  border-color:var(--accent); }
+#actions[data-state="some"] .tick { background:var(--top);
+  border-color:var(--top); }
+#actions .grp { display:flex; gap:9px; align-items:center; }
+/* The same trap `#menu` fell into, and the second time it has been paid for:
+   an id selector beats the user agent's `[hidden] { display:none }`, so the
+   rule above won and `hidden = true` set a flag that hid nothing. Every action
+   stayed on screen with nothing selected. Any rule that gives an element a
+   `display` has to say what `hidden` means for it too. */
+#actions .grp[hidden] { display:none; }
+/* The same trap once more: these are buttons, and `button` has no `display`
+   of its own here — but the flex container gives them one, so say what hidden
+   means for them too. */
+#actions button[hidden] { display:none; }
+/* And once more for the grid, which hides everything but the files being
+   stacked while a top is chosen. `.cell` sets no `display`, so the user agent
+   would cover this — but four rules in this file have needed saying and
+   relying on the absence of one is how the fifth gets written. */
+.cell[hidden], h3.group[hidden] { display:none; }
+#actions .grp b { font-weight:600; }
+/* Far enough down that closing the viewer does not leave the photograph you
+   were looking at under the bar and the heading standing on it. Only the
+   viewer scrolls the grid, and only to the cursor, so this is the one place
+   it matters — and it is a property rather than arithmetic in a handler. */
+.cell { position:relative; aspect-ratio:1; background:#0d0f12; overflow:hidden;
+        border-radius:3px; cursor:pointer;
+        scroll-margin-top:calc(var(--bar) + 44px); }
+.cell img { width:100%; height:100%; object-fit:cover; display:block; }
+/* The cursor is not drawn. It said *which one the keyboard is on*, and there
+   is no grid keyboard any more — so the dashed ring marked a position nothing
+   could use, and turned up unasked on whatever a delete happened to land on.
+   The cursor itself stays: it is how the viewer knows which file it is showing
+   and which way left and right go. It is simply not the curator's business. */
+.cell.picked { outline:3px solid var(--accent); outline-offset:-3px;
+               z-index:1; }
+.cell.picked img { opacity:.75; }
+.badge { background:#000a;
+         padding:1px 5px; border-radius:3px; font-size:11px; }
+/* Out of the way until wanted: 2,000 circles over 2,000 photographs is a page
+   about its own controls. Hover reveals it, and a made choice keeps it. */
+.pick { position:absolute; left:5px; top:5px; width:20px; height:20px; padding:0;
+        border-radius:50%; background:#000a; border:1.5px solid #fff9;
+        opacity:0; transition:opacity .08s; z-index:2; }
+.cell:hover .pick { opacity:1; }
+.cell.picked .pick { opacity:1; background:var(--accent); border-color:var(--accent); }
+/* Deleted, and only ever on screen because an administrator asked to see
+   them — so this does not need to be subtle, it needs to be unmistakable
+   beside a living file. The picture is drained and dimmed rather than merely
+   badged: at a glance down a grid the corner marks are what every other fact
+   already uses, and all four corners are taken.
+   The cross leads the fixed end of the top lane, beside the circle, so the
+   lane of facts flows up to it rather than under it. It was `"¹5"` in a
+   string that reads `¹` as an escape, and drew as a superscript one and a
+   five. */
+.cell.gone img { opacity:.32; filter:grayscale(1); }
+.cell.gone .ov.top .fix::before { content:"\2715"; order:-1;
+                    color:var(--gone); font-size:17px; font-weight:700;
+                    line-height:20px; text-shadow:0 1px 3px #000d;
+                    pointer-events:none; }
+.bin-link { color:var(--gone); font-weight:600; }
+.cell.picked .pick::after,
+.tile.picked .pick::after { content:"\2713"; color:#0d0f12; font-weight:700;
+                            font-size:13px; line-height:17px; }
+.tile.picked .pick { background:var(--accent); border-color:var(--accent); }
+/* Shared is the decided state, so it is what reads as finished; a file with no
+   audience is the work still to do and looks untouched. An inset ring, so it
+   can coexist with the selection outline — the two answer different questions
+   and a cull needs both at once. */
+.cell[data-audience]:not([data-audience=""]) {
+  box-shadow: inset 0 0 0 3px var(--keep); }
+/* The stack count, in the fixed end of the top lane beside the circle.
+   Reads as a depth — a card with cards behind it. */
+.stack { position:relative; z-index:3;
+         background:#000b; color:var(--fg); font-size:11px; font-weight:600;
+         padding:1px 6px; border-radius:3px;
+         box-shadow:2px -2px 0 -1px #000b, 4px -4px 0 -2px #000b; }
+.stack:hover { background:var(--accent); color:#0d0f12; box-shadow:none; }
+/* Nobody has confirmed this one. The same badge in the colour the app uses for
+   *this is the one that speaks* rather than the one it uses for a decision —
+   so a shelf of guesses reads as a shelf of guesses at a glance. */
+.stack.guessed { border-color:var(--top); color:var(--top); }
+.stack.guessed:hover { background:var(--top); color:#0d0f12; }
+/* Hidden while its files are on screen being chosen between. An anchor has no
+   display of its own, so the user agent would cover this — but five rules in
+   this file have needed saying, which is enough to stop calling it luck. */
+.stack[hidden] { display:none; }
+/* On the photograph, and only while one is being chosen. Out of the way until
+   the pointer is over it, like the select circle — a control that is always
+   there on every thumbnail is a page about its own controls. */
+.choose { position:absolute; left:50%; bottom:8px; transform:translateX(-50%);
+          z-index:4; opacity:0; transition:opacity .08s; white-space:nowrap;
+          background:var(--accent); color:#0d0f12; border-color:var(--accent);
+          font-weight:600; }
+.cell:hover .choose, .choose:focus { opacity:1; }
+/* Nothing to select while a top is being chosen, so nothing offers to. */
+.grid[data-choosing] .pick { display:none; }
+/* Inside an opened stack, the one that speaks. Everything in there looks
+   alike — that is why they were stacked — so without this there is nothing to
+   say which one the grid outside will show. */
+.top-mark { position:relative; z-index:3;
+            background:var(--accent); color:#0d0f12; font-size:10px;
+            font-weight:700; letter-spacing:.05em; text-transform:uppercase;
+            padding:2px 6px; border-radius:3px; }
+/* Cut from a video (spec/clips.md). In the fixed end of the top lane, left
+   of the stack badge: it is the same kind of fact about the file, and it has
+   no lane of its own to be moved to — only On or Off in Display. */
+dialog.choice { background:var(--panel); color:var(--fg);
+                border:1px solid var(--line); border-radius:8px;
+                max-width:min(440px, calc(100vw - 32px)); padding:16px; }
+dialog.choice::backdrop { background:#0009; }
+dialog.choice .choices { display:flex; flex-wrap:wrap; gap:8px;
+                         justify-content:flex-end; }
+dialog.choice button { min-height:40px; }
+dialog.choice button.primary { background:var(--accent); color:#0d0f12;
+                               border-color:var(--accent); font-weight:600; }
+.clip-mark { position:relative; z-index:1;
+             background:#000b; color:var(--fg); font-size:10px;
+             font-weight:700; letter-spacing:.05em; text-transform:uppercase;
+             padding:2px 6px; border-radius:3px; }
+/* **Two lanes, and what is always there holds the right-hand end of each.**
+   Every optional fact about a file — who is in it, who can see it, its tags,
+   which part of the event — goes in the top lane or the bottom one, as the
+   viewer chose in Display (`_INFO`), and flows left to right. A lane that
+   runs out of width wraps *from its own edge inward*: the top one downward,
+   the bottom one upward, so the middle of the photograph is the last thing
+   covered. Nothing is cut to an ellipsis to make it fit; past three lines
+   (two at the small size) the rest are counted in one `+N`.
+
+   The right-hand ends are not part of the flow. Top-right is the select
+   circle with the stack badge and the clip mark to its left; bottom-right is
+   a video's length. They were absolutely placed, each in a corner, and a
+   sub-event that grew pushed the duration up off its own corner. */
+.ov { position:absolute; left:4px; right:4px; display:flex; gap:4px;
+      pointer-events:none; z-index:2; }
+.ov.top { top:4px; align-items:flex-start; }
+.ov.bot { bottom:4px; align-items:flex-end; }
+.ov .lane { flex:1; min-width:0; display:flex; flex-wrap:wrap; gap:3px;
+            align-items:center; }
+.ov.bot .lane { flex-wrap:wrap-reverse; }
+.ov .fix { flex:none; display:flex; gap:4px; align-items:center; }
+/* Only the things in a lane take the pointer: a tooltip, a link, a circle.
+   The lane between them is the photograph, and a press there opens it. */
+.ov .lane > *, .ov .lane i, .ov .fix > * { pointer-events:auto; }
+/* A kind of fact is its chips, not a box around them, so the chips of two
+   kinds share one wrapping run instead of each starting a line. */
+.ov .who, .ov .tags, .ov .folk { display:contents; }
+.ov .pick { position:relative; left:auto; top:auto; }
+.ov .unshared { position:relative; left:auto; bottom:auto; flex:none;
+                margin:0 2px; }
+.ov .more { font-style:normal; padding:1px 5px; border-radius:3px;
+            background:#000b; color:var(--fg); font-size:10px;
+            font-weight:700; }
+.ov .cut { display:none; }
+/* Off, everywhere it is drawn: on the thumbnail and in a folder card's row. */
+html[data-info-people="off"] .ov .folk,
+html[data-info-people="off"] .spread i.people,
+html[data-info-access="off"] .ov .who,
+html[data-info-access="off"] .ov .unshared,
+html[data-info-access="off"] .spread i.audience,
+html[data-info-access="off"] .spread i.none,
+html[data-info-tags="off"] .ov .tags,
+html[data-info-tags="off"] .spread i.tags,
+html[data-info-subevent="off"] .ov .part,
+html[data-info-clip="off"] .ov .clip-mark,
+html[data-info-clip="off"] .ov .cuts { display:none; }
+/* An original's clips: the same lozenge as the stack badge, which it sits
+   beside and is the same kind of fact as — more of these, elsewhere. */
+.cuts { position:relative; z-index:3; background:#000b; color:var(--fg);
+        font-size:10px; font-weight:700; padding:2px 6px; border-radius:3px;
+        white-space:nowrap; text-decoration:none; box-shadow:none; }
+.cuts:hover { background:var(--accent); color:#0d0f12; box-shadow:none; }
+.who i, .tags i, .folk i { font-style:normal; max-width:100%; overflow:hidden;
+                  white-space:nowrap; text-overflow:ellipsis;
+                  padding:1px 5px; border-radius:3px; background:#000b;
+                  font-size:10px; font-weight:600; }
+.who i  { color:var(--keep); }
+.folk i { color:#a6c8ff; }
+/* Nobody can see this yet — quiet, because early on that is most of the
+   library, and unmistakable once it is not. */
+.unshared { position:absolute; left:6px; bottom:6px; width:8px; height:8px;
+            border-radius:50%; background:var(--top);
+            box-shadow:0 0 0 2px #000a; }
+/* The same violet a card gives a tag, kept legible over a photograph by
+   staying text on a dark lozenge rather than a tint. One colour for one kind
+   of thing, whichever surface it is written on. */
+.tags i { color:#cbb8ff; }
+/* Which part of the event this one is — the same lozenge a tag wears, in the
+   event's own colour, because it is the same kind of fact about the file and
+   not the same kind of thing. The part alone: *Taormina* is the news on a
+   150px thumbnail, and the whole name is in the tooltip. */
+.part { max-width:100%; box-sizing:border-box;
+        overflow:hidden; white-space:nowrap; text-overflow:ellipsis;
+        padding:1px 5px; border-radius:3px; background:#000b;
+        color:#f2a3ca; font-size:10px; font-weight:600; }
+
+/* Whose work to look at. Links rather than a control, because /history
+   carries no page script and because every filter in this app lives in the
+   URL — which is what makes a view something you can send to somebody and
+   back out of.
+
+   `aria-current` rather than a class, because *this is the one you are on* is
+   exactly what the attribute is for, and a link that is already where it goes
+   should say so to something that cannot see the colour. */
+.byline { display:flex; gap:7px; align-items:center; flex-wrap:wrap;
+          margin:0 0 16px; }
+.byline .dim { margin-right:2px; }
+.byline a { padding:3px 11px; border-radius:999px; color:var(--dim);
+            border:1px solid var(--line); font-size:13px;
+            /* The rounded outline is the hit area, so the halo every other
+               link in here wears would sit outside it as a second, squarer
+               edge. */
+            box-shadow:none; }
+.byline a:hover { color:var(--fg); border-color:var(--accent);
+                  background:var(--tint); box-shadow:none; }
+.byline a[aria-current="page"] { color:var(--fg); border-color:var(--accent);
+                                 background:var(--accent-bed); }
+/* A name in the table is the same filter, on the thing it is about — a
+   gesture you find by reading rather than by looking for a control first.
+   Dim until pointed at, like everything else in a column of them. */
+.acct td a:hover { box-shadow:0 0 0 2px var(--tint); }
+
+table { border-collapse:collapse; width:100%; max-width:900px; }
+th,td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line); }
+th { color:var(--dim); font-weight:500; font-size:12px;
+     text-transform:uppercase; letter-spacing:.06em; }
+td.num { text-align:right; font-variant-numeric:tabular-nums; }
+td.done { color:var(--keep); }
+h2.year { font-size:15px; margin:26px 0 8px; display:flex; gap:12px;
+          align-items:baseline; flex-wrap:wrap; }
+h2.year:first-of-type { margin-top:12px; }
+h2.year span { font-size:13px; font-weight:400; }
+.note { color:#ffb4a2; margin:8px 0 0; }
+.gate .note, main > .note { margin:8px 0; }
+.warn { color:#e3b341; }
+.who-link { margin-left:10px; display:inline-flex; align-items:center; }
+/* Everything about you, and everything you do rarely, under one control.
+
+   **It is a `<details>`.** So the trigger is a real button with a real
+   expanded state, Enter and Space work on it, and none of it needs a script
+   — which matters, because /history and /accounts carry no page script at
+   all, and a Sign out that worked only where the grid was loaded would be
+   missing from the page you are most likely to be stuck on.
+
+   It opened on hover before, and hover is not how a menu opens. It opens by
+   being walked past; it has no closed state to return to on a touchscreen,
+   where the first tap is the hover and the second lands on whatever the
+   panel has just put under your finger; and it told assistive technology
+   nothing, because a `tabindex` on a span is not a control and has no
+   expanded state to report. Click, Enter and Space open it now, Escape and a
+   click anywhere else close it, and the trigger says which of the two it is.
+   */
+.right { display:inline-flex; align-items:center; }
+.me { position:relative; display:inline-flex; align-items:center; }
+.me > summary { display:inline-flex; align-items:center; gap:5px;
+                margin-left:10px; padding:3px 6px; min-height:var(--ctl);
+                border-radius:5px; color:var(--fg); cursor:pointer;
+                /* Both spellings: one engine still draws the triangle from
+                   the list marker and the other from its own pseudo. */
+                list-style:none; }
+.me > summary::-webkit-details-marker { display:none; }
+.me > summary:hover { background:#2f3745; }
+/* Keyboard traversal has to be visible, or the menu is a list of rows you
+   cannot tell you are standing on. `:focus-visible` rather than `:focus`, so
+   a mouse click does not leave a ring behind it. */
+.me > summary:focus-visible,
+.memenu a:focus-visible, .memenu button:focus-visible {
+          outline:2px solid var(--accent); outline-offset:-2px; }
+/* The name is never *removed*, only taken off the screen — see the narrow
+   block. It is the accessible name of the control, and a gear whose label is
+   a drawing announces itself as a button called nothing. */
+.me .name { color:var(--fg); max-width:22ch; overflow:hidden;
+            white-space:nowrap; text-overflow:ellipsis; }
+/* The name where there is room, the gear where there is not. Both are in the
+   markup and the width picks, because the one that is hidden must not be a
+   second copy of anything. */
+.me .gearbtn { display:none; align-items:center; }
+/* What is waiting, on the control rather than beside it. A notification that
+   needs opening to be seen is not one. */
+.me .dot { display:none; position:absolute; right:-1px; top:1px;
+           width:7px; height:7px; border-radius:50%;
+           background:var(--gone); border:1.5px solid var(--chrome); }
+.me[data-any="1"] .dot { display:block; }
+/* One or the other: something to report, or the fact that there is nothing. */
+.me[data-any="1"] .memenu .quiet { display:none; }
+.memenu .quiet { color:var(--dim); padding:7px 10px; white-space:nowrap; }
+.me .caret { font-style:normal; font-size:9px; color:var(--dim);
+             transition:transform .12s; }
+.me[open] .caret { transform:rotate(180deg); }
+.memenu { position:absolute; right:0; top:100%; margin-top:6px; z-index:21;
+          min-width:212px;
+          /* Never wider than the screen it is pinned to the corner of, and
+             never taller than what is under it: a panel you cannot reach the
+             bottom of without dismissing it is the trap `#menu` fell into
+             twice. */
+          max-width:min(19rem,calc(100vw - 2*var(--gut)));
+          max-height:calc(100vh - 88px); overflow-y:auto;
+          overscroll-behavior:contain;
+          display:none; flex-direction:column;
+          background:var(--panel); border:1px solid var(--line);
+          border-radius:6px; padding:5px; box-shadow:0 14px 30px -10px #000e; }
+.me[open] > .memenu { display:flex; }
+/* It arrives from under its own trigger rather than appearing there. Twelve
+   hundredths of a second is not decoration: a panel that is simply *present*
+   on the next frame reads as the page having changed, and one that comes out
+   of the control reads as that control having opened — which is the whole
+   difference between a menu and a second page.
+
+   On the way in only. Going out would mean keeping the panel rendered after
+   it has been dismissed, which is `display` interpolation and a good deal
+   more machinery than a menu closing is worth. And not at all for somebody
+   who has said they do not want movement — on this page that setting is
+   about vestibular symptoms, not about taste. */
+@media (prefers-reduced-motion: no-preference) {
+  .me[open] > .memenu { animation:menuopen .12s ease-out; }
+  @keyframes menuopen { from { opacity:0; transform:translateY(-5px); } }
+}
+/* Who you are, at the top, at every width. The trigger says the name on a
+   desk and a gear on a phone, and neither says which *kind* of account it is
+   — which is the thing that goes wrong invisibly: this app is used as two
+   different people, and sharing a photograph as the wrong one is not noticed
+   until somebody else's household has it. */
+.memenu .whoami { display:flex; flex-direction:column; gap:1px;
+                  padding:6px 10px 8px; }
+.memenu .whoami b { font-weight:600; }
+.memenu .whoami .role { color:var(--dim); font-size:11px;
+                        text-transform:uppercase; letter-spacing:.07em; }
+/* Rules between the kinds of thing, not between every pair of rows. Eight
+   undifferentiated lines is a list; the breaks are what make it read as
+   *who you are*, *how you are looking*, *what you administer*, *what this
+   page holds* and *the way out*. */
+.memenu .group, .memenu .info, .memenu form {
+          border-top:1px solid var(--line); margin-top:5px; padding-top:5px; }
+.memenu .group { display:flex; flex-direction:column; }
+.memenu .bin-link { display:block; padding:7px 10px; border-radius:4px; }
+/* The dot on the name says *something in here wants you*, and this is the
+   something — so the row carries the same dot. Without it the menu opened on
+   a red mark with nothing in it pointing back at the mark. */
+.memenu .bin-link::before { content:""; display:inline-block; width:7px;
+            height:7px; border-radius:50%; background:var(--gone);
+            margin-right:8px; vertical-align:1px; }
+.memenu .bin-link:hover { background:#2f3745; box-shadow:none; }
+/* And it has to be able to go away again. Every rule above gives it a
+   `display`, and every one of them outranks the user agent's `[hidden]`, so
+   the row said *0 deleted* on top of *Nothing waiting* — the menu answering
+   its own question twice, in opposite directions. There was a guard for
+   exactly this, written as `.who-link[hidden]`, and the bin link stopped
+   being a `.who-link` at some point and walked out from under it. Named for
+   what it is this time, and heavier than anything that sets the other way,
+   so no later rule can take it back. */
+.memenu .bin-link[hidden] { display:none; }
+/* How you are looking, as against what you are looking at. Only ever on
+   screen where the bar has no room for the control itself — and the *group*
+   is what is hidden, not the row inside it: hiding the row left a section
+   divider and its padding standing over nothing. */
+.memenu .viewrow { display:none; }
+/* The size control keeps a whole row, and the row says what it is on — a
+   segmented control with no label is three letters in a box. */
+.memenu .sizerow { display:flex; align-items:center;
+                   justify-content:space-between; gap:12px; padding:5px 10px; }
+.memenu .rowlab { color:var(--dim); }
+/* A heading over the facts, so six rows read as a size and then a list. */
+.memenu .rowhead { display:block; padding:9px 10px 2px; color:var(--dim);
+                   font-size:11px; font-weight:700; letter-spacing:.06em;
+                   text-transform:uppercase; }
+/* The Display menu is the account menu's shape on the bar's side. */
+.disp .memenu { min-width:280px; }
+/* Every row but the segmented one, which is three buttons side by side and
+   is the one thing in here that must not be stretched to the width. */
+.memenu a, .memenu button:not(.sizeopt):not(.showopt) {
+          display:block; width:100%; text-align:left;
+          padding:7px 10px; border:0; background:none; color:var(--fg);
+          font:inherit; border-radius:4px; text-decoration:none;
+          cursor:pointer; box-shadow:none; }
+.memenu a:hover, .memenu button:not(.sizeopt):not(.showopt):hover {
+          background:#2f3745; box-shadow:none; border-color:transparent; }
+.memenu form { margin:0; }
+/* The way out is the one thing in here that is not navigation. */
+.memenu form button { color:var(--gone); }
+/* Another `display` that would outrank the user agent's `[hidden]`. The bin
+   count is hidden at zero and shown the moment something is deleted, without
+   a reload, so it has to be hideable. */
+.who-link[hidden] { display:none; }
+.who-link button { padding:3px 9px; margin:0; }
+.empty { color:var(--dim); padding:48px 0; font-size:15px;
+         text-align:center; }
+
+/* A write of hundreds of sidecars over SMB is seconds, and the only thing
+   that said so was a 12px note in the corner that appeared *after* the first
+   hundred had already been written. So the screen stops answering instead.
+   Above the viewer, because S starts a write from inside it. */
+#working { position:fixed; inset:0; z-index:40; background:#0d0f12ee;
+           display:none; flex-direction:column; align-items:center;
+           justify-content:center; gap:15px; }
+#working.on { display:flex; }
+#working .what { font-size:17px; }
+#working .what b { color:var(--accent); font-weight:600; }
+#working .bar { width:min(420px,70vw); height:6px; border-radius:3px;
+                background:#222833; overflow:hidden; }
+#working .bar i { display:block; height:100%; background:var(--accent);
+                  width:0; transition:width .12s linear; }
+#working .tally { color:var(--dim); font-size:13px;
+                  font-variant-numeric:tabular-nums; }
+#working button { margin-top:4px; }
+
+/* Nothing behind it moves. A full-screen overlay over a scrollable page
+   rubber-bands the grid underneath every time you drag on the photograph,
+   and on a phone that is most touches. `touch-action` rather than locking
+   the body: the viewer deliberately scrolls the grid behind it as you page,
+   so that closing it leaves you where you were looking, and a fixed body
+   would break that.
+
+   Pinch goes with it. It only ever zoomed the *page* — the photograph is as
+   big as it is — which left a fixed overlay panned half off the screen with
+   the way out somewhere past the edge. */
+#viewer { position:fixed; inset:0; background:#000e; display:none; z-index:30;
+          touch-action:none; overscroll-behavior:none; }
+#viewer.on { display:flex; }
+.stage { flex:1; min-width:0; display:flex; flex-direction:column;
+         align-items:center; justify-content:center; padding:12px; }
+.stage img, .stage video { max-width:100%; max-height:86vh;
+                           max-height:86dvh;
+                           object-fit:contain; display:none; }
+.stage img.on, .stage video.on { display:block; }
+.stage .meta { padding:10px; color:var(--dim); font-size:12px;
+               text-align:center; }
+/* A reserved column, not an overlay: metadata you have to summon and that
+   then covers the photograph is metadata nobody consults while looking. */
+#rail { touch-action:pan-y;
+        width:330px; flex:none; background:var(--panel); overflow-y:auto;
+        border-left:1px solid var(--line); padding:14px 16px 30px;
+        /* Clear of the row of controls that floats along the top of the
+           viewer, which runs over the top of this column. */
+        padding-top:calc(52px + env(safe-area-inset-top));
+        font-size:13px; }
+#viewer.norail #rail { display:none; }
+/* The viewer covers the whole screen, the status bar and the island
+   included, so its own controls are the one place in the app that has to
+   say so itself — everything else sits inside a bar that already has. */
+#railtoggle { position:absolute; top:calc(10px + env(safe-area-inset-top));
+              right:calc(12px + env(safe-area-inset-right)); z-index:2;
+              margin:0; opacity:.75; }
+#viewclose { position:absolute; top:calc(10px + env(safe-area-inset-top));
+             left:calc(12px + env(safe-area-inset-left)); z-index:2; margin:0;
+             opacity:.75; font-size:17px; line-height:1; padding:2px 10px; }
+/* Beside Details, because it is the same kind of thing: something you reach
+   for about the photograph you are looking at, rather than a way out of it. */
+/* One row of everything that acts on the photograph on show, left of
+   Details: what the bar does to a selection, done to this one. Icons alone —
+   the names are in the tooltips and the labels, and nine words would not fit
+   beside a photograph. */
+#viewacts { position:absolute; top:calc(10px + env(safe-area-inset-top));
+            right:calc(112px + env(safe-area-inset-right)); z-index:2;
+            display:flex; align-items:center; gap:6px; }
+#viewacts .vgrp { display:flex; gap:6px; }
+#viewacts .vgrp[hidden] { display:none; }
+#viewacts button[data-vact] { margin:0; opacity:.75; padding:3px 8px;
+            background:var(--chrome); display:inline-flex;
+            align-items:center; }
+#viewacts button[data-vact]:hover { opacity:1; border-color:var(--accent); }
+#viewacts button.danger[data-vact]:hover { border-color:#c2604f; }
+#viewacts .word { display:none; }
+/* A menu opened from the viewer has to be over it. */
+#menu.over { z-index:40; }
+#viewget { position:static; margin:0;
+           opacity:.75; border:1px solid var(--line); border-radius:3px;
+           padding:3px 10px; font-size:13px; background:var(--chrome);
+           color:var(--fg); }
+/* Answering from the photograph rather than from a memory of it. Blown up is
+   where the difference between two takes of one moment actually shows — which
+   eyes are open, which one is sharp — and the answer was five gestures away:
+   close, find the thumbnail you liked among seven that look alike, and hope
+   it was that one.
+
+   In the accent, because it is the one control in here that decides something
+   rather than fetching or dismissing. */
+#viewtop { position:static; margin:0; border:1px solid var(--accent); border-radius:3px;
+           padding:3px 10px; font-size:13px; font-weight:600;
+           background:var(--accent); color:#0d0f12; }
+#viewtop[hidden] { display:none; }
+#viewsplice { position:static; margin:0; opacity:.75; border:1px solid var(--line);
+              border-radius:3px; padding:3px 10px; background:var(--chrome);
+              color:var(--fg); }
+#viewsplice[hidden] { display:none; }
+#viewsplice:hover { opacity:1; border-color:var(--accent); }
+.cliplist { line-height:1.7; font-variant-numeric:tabular-nums; }
+#railtoggle:hover, #viewclose:hover, #viewget:hover { opacity:1; }
+#viewget:hover { border-color:var(--accent); background:var(--chrome);
+                 box-shadow:none; }
+.rail-h { color:var(--dim); font-size:11px; text-transform:uppercase;
+          letter-spacing:.07em; margin:16px 0 5px; }
+.rail-h:first-child { margin-top:0; }
+.kv { display:grid; grid-template-columns:104px 1fr; gap:2px 10px;
+      align-items:baseline; }
+.kv dt { color:var(--dim); }
+.kv dd { margin:0; overflow-wrap:anywhere; }
+.kv dd.was { color:var(--dim); text-decoration:line-through; }
+.kv dd .set { color:var(--top); }
+.pill { display:inline-block; background:#2a3340; border-radius:3px;
+        padding:0 6px; margin:0 4px 4px 0; font-size:12px; }
+#rail details { margin-top:14px; }
+#rail summary { cursor:pointer; color:var(--dim); }
+#rail details .kv { grid-template-columns:1fr; gap:0; margin-top:8px; }
+#rail details dt { margin-top:6px; font-size:11px; }
+
+/* --- a narrow screen ------------------------------------------------------
+   About width, not about fingers: a phone in landscape and a window dragged
+   narrow want the same layout, and a touchscreen laptop with a desk's worth
+   of glass does not. What the finger changes is in the block after this one.
+
+   Twenty pixels of gutter either side is a tenth of a phone, and the three
+   thumbnail sizes were 2, 1 and 1 columns — two of the three settings the
+   same, which is a control that does nothing two-thirds of the time. */
+@media (max-width: 720px) {
+  :root { --gut:10px; }
+  main { padding-top:12px; padding-bottom:16px; }
+  .cells { grid-template-columns:repeat(auto-fill,minmax(108px,1fr)); }
+  .grid[data-size="medium"] .cells {
+          grid-template-columns:repeat(auto-fill,minmax(165px,1fr)); }
+  .grid[data-size="large"] .cells { grid-template-columns:1fr; }
+  /* Above the footer rather than across it. */
+  .install { bottom:calc(46px + env(safe-area-inset-bottom)); }
+
+  /* The bar is for what you are looking at. Everything you reach for once in
+     a while goes behind the gear, and the name is read off the first line of
+     the menu it opens — one tap rather than none, which is what the room
+     costs. The three of them plus the filters had the bar at four rows and
+     nearly half the screen.
+
+     Clipped rather than `display:none`, because the name is the accessible
+     name of the trigger: hidden that way the control announces itself as a
+     button with no label at all, which is the one width where knowing who
+     you are signed in as is hardest to check. */
+  .me .name { position:absolute; width:1px; height:1px; margin:-1px;
+              padding:0; overflow:hidden; clip-path:inset(50%);
+              white-space:nowrap; }
+  .me .caret { display:none; }
+  .me .gearbtn { display:inline-flex; }
+  /* And the size control comes back inside, where it was before there was
+     room for it in the bar. Both copies are always rendered: which one
+     applies changes while the page is open, by turning the phone over. */
+  .memenu .viewrow { display:flex; }
+  .right .sizeset, .right > .disp { display:none; }
+  /* The corner stays. It was moved to the bottom when the bar was four rows
+     deep; the bar is the filters and a gear now, and a picture of the grid
+     under it earns the thirty pixels. */
+
+  /* The unused filters are ten glyphs, which fit across a desktop bar and
+     do not fit across a phone. Here the same list stays behind the `+`.
+     Both are always rendered, because which one applies can change while the
+     page is open by turning the phone over. */
+  .chips .spare { display:none; }
+  .chips .addchip { display:inline-flex; }
+
+  /* Eleven drawings and eleven words is two rows of bar on a screen with none
+     to give, and the drawings are the half that survives being small. The
+     word stays in the markup — the takeover reads it back, and it is the
+     button's `aria-label` besides. */
+  #actions .grp button .word { display:none; }
+  #actions .grp button { min-width:44px; justify-content:center; }
+  /* Said in words because it is a state rather than a control: the bar is
+     waiting for you to point at a photograph, and there is no drawing for
+     *now do that*. */
+  #actions .grp b { font-size:12px; }
+
+  /* The details rail was a 330px column, which on a 393px phone leaves sixty
+     pixels of photograph — the photograph being what the viewer is for. There
+     is not room for both, so it stops trying: details is a *tab*, and the
+     control that opened the column now switches between the two. */
+  #viewer { flex-direction:column; }
+  .stage { flex:1 1 auto; min-height:0; }
+  .stage img, .stage video { max-height:100%; }
+  #viewer:not(.norail) .stage { display:none; }
+  #rail { width:auto; flex:1 1 auto; max-height:none; border-left:0;
+          /* Clear of the row of controls that floats over the top of it. */
+          padding-top:calc(52px + env(safe-area-inset-top));
+          padding-bottom:calc(30px + env(safe-area-inset-bottom)); }
+  /* A row of its own under Close and Details, the whole width and
+     scrolling sideways if it must: nine controls do not fit between two on a
+     phone, and a second line of them would cover the photograph. */
+  #viewacts { top:calc(52px + env(safe-area-inset-top));
+              left:calc(12px + env(safe-area-inset-left));
+              right:calc(12px + env(safe-area-inset-right));
+              overflow-x:auto; scrollbar-width:none; }
+  #rail { padding-top:calc(96px + env(safe-area-inset-top)); }
+}
+
+/* Anything the page keeps out of sight until the pointer is over it is
+   unreachable where there is no pointer. Separate from the sizing block
+   below, because these are two different questions and a device can answer
+   them differently — a touchscreen laptop has a pointer and a phone plugged
+   into a trackpad has a coarse one. */
+/* --- where there is a pointer to rest on something ------------------------
+   A shelf heading reads *September 2026 › By event  +  2*, and only the
+   first of those says which shelf this is. The rest is the cut it was made
+   by, a control for making another, and a count — true, and not what you
+   are scanning a page of headings for.
+
+   So they wait to be pointed at. Faded rather than removed, so the row does
+   not change width when they arrive: a heading that reflows under the pointer
+   is a heading you cannot aim at.
+
+   **Only on a shelf.** The grid's headings end in a *value* — the name of
+   the section under them — and hiding that would hide what the heading is
+   for. `.shelf` is already the class that tells the two apart.
+
+   **And only where hovering is a thing.** Somewhere without it, all of this
+   stays on screen, which is what it did before and is the right answer there:
+   a control you cannot reveal is a control you do not have. */
+@media (hover: hover) {
+  h3.group.shelf .crumbsep,
+  h3.group.shelf .crumb:last-child:not(:first-child),
+  h3.group.shelf .addgrp,
+  h3.group.shelf > span.dim {
+    opacity:0; pointer-events:none; transition:opacity .12s; }
+  h3.group.shelf:hover .crumbsep,
+  h3.group.shelf:hover .crumb:last-child:not(:first-child),
+  h3.group.shelf:hover .addgrp,
+  h3.group.shelf:hover > span.dim,
+  h3.group.shelf:focus-within .crumbsep,
+  h3.group.shelf:focus-within .crumb:last-child:not(:first-child),
+  h3.group.shelf:focus-within .addgrp,
+  h3.group.shelf:focus-within > span.dim {
+    opacity:1; pointer-events:auto; }
+}
+
+/* **Anything that can be touched**, not only what says it cannot hover. An
+   iPad can report hover — with a keyboard case, or simply as iPadOS does —
+   while the finger is what taps, and Safari treats a tap that *reveals*
+   something on hover as the hover alone: the select circle faded in and the
+   folder card did not open, while a chip, which reveals nothing, did. So on
+   a touchscreen nothing waits for a hover to appear. */
+@media (hover: none), (any-pointer: coarse) {
+  /* Touch has no hover, so here the circle is the only way to select at all. */
+  .pick { opacity:.55; }
+  /* The shelf heading's controls, which `(hover: hover)` above fades out
+     until hovered — the same swallowed first tap, on a heading. */
+  h3.group.shelf .crumbsep,
+  h3.group.shelf .crumb:last-child:not(:first-child),
+  h3.group.shelf .addgrp,
+  h3.group.shelf > span.dim { opacity:1; pointer-events:auto; }
+  /* The only way to say which file a stack shows. It is on screen solely
+     while one is being chosen, so there is nothing for it to clutter. */
+  .choose { opacity:1; }
+  /* Removing a grouping level, and adding one. Dim rather than hidden, the
+     way the select circle already is here. */
+  .rmgrp { opacity:.55; }
+  .addgrp { opacity:1; }
+
+  /* A tap leaves `:hover` stuck on whatever was tapped until something else
+     is, so every link keeps a blue box and every folder card stays lit — the
+     page slowly fills with marks saying *you were here*, which is not a thing
+     it was ever trying to say. Said here rather than by wrapping forty rules
+     in `(hover: hover)`: this is the exception, and it should read like one.
+     `:active` below puts back the press feedback these were doing. */
+  a:hover { background:none; box-shadow:none; }
+  .tile:hover { border-color:var(--line); background:var(--panel); }
+  .grpname:hover { color:inherit; background:none; box-shadow:none; }
+  button:hover:not(:disabled), .chip:hover { border-color:var(--line); }
+  .stack:hover { background:#000b; color:var(--fg);
+                 box-shadow:2px -2px 0 -1px #000b, 4px -4px 0 -2px #000b; }
+}
+
+/* --- a finger ---------------------------------------------------------------
+   Apple asks for 44 points square and the page was drawn to 16, 20 and 31.
+   Nothing here changes what anything *looks* like where it can be helped:
+   the select circles keep their twenty pixels and grow an invisible slug
+   around them, because a page of 44px circles over the photographs would be
+   a page about its own controls. */
+@media (pointer: coarse) {
+  /* One number, and the rest follows. `--ctl` exists so that the height the
+     action row reserves and the height a button actually measures cannot
+     drift (see the note where it is declared) — so this is the whole of the
+     change to the bar, including `.row + .row`'s reserved height and the
+     brand and account at the ends of the top row. */
+  :root { --ctl:44px; }
+
+  /* Every button except the three that are circles. Those are excluded for
+     the reason set out above `.row + .row`: a `min-height` outranks their
+     `height` and would make an oval of every select circle in the grid.
+     `.chip` is in by name because two of them — the one saying which
+     operation you arrived from, and the one saying which stack you are in —
+     are spans rather than buttons, and a 31px chip in a 44px row is the
+     misalignment `--ctl` exists to prevent. */
+  /* **Size only. It must not touch `display`.** Three `:not()`s weigh three
+     classes, so this outranks almost anything that tries to hide one of these
+     later — and the filters a phone folds away are buttons. Giving them a
+     `display` here put every unused filter back on the bar, four rows of
+     them, while `.chips .spare { display:none }` sat two blocks above being
+     outweighed. A button centres its own text; nothing here needed to say so.
+     */
+  button:not(.tick):not(.grppick):not(.pick):not(.sizeopt):not(.showopt), .chip {
+    min-height:44px; padding:8px 12px; }
+  /* Rows in a dropdown are full width, so they stay blocks and simply get
+     taller. Carrying the same `:not()`s as the rule above, and not for
+     tidiness: each of those counts as a class, so `.memenu button` is the
+     lighter selector and loses — and Sign out shrink-wraps to its own text
+     under History and Accounts, which do not, because they are links and that
+     rule never touched them. Equal weight and later in the sheet is what
+     makes this the one that counts. */
+  .memenu a, .memenu .quiet, .memenu .bin-link,
+  .memenu button:not(.tick):not(.grppick):not(.pick):not(.sizeopt):not(.showopt) {
+    min-height:44px; display:flex; align-items:center; width:100%; }
+  /* `.sizeopt` is out of both, and out of them by name. It is three buttons
+     in one lozenge: stretched to the width there is one of them per line,
+     and given a 44px `min-height` inside a menu row that has its own it
+     simply grows the row. It gets the thumb-sized square it needs instead. */
+  .sizeopt, .showopt { min-width:46px; height:44px; }
+  .opt { min-height:44px; align-items:center; }
+  .me > summary { min-height:44px; }
+
+  /* The circles. An invisible slug either side, so twenty pixels on screen is
+     forty-four to a thumb. `.pick` is already positioned and already uses
+     `::after` for its tick; the other two are neither, so they are told to
+     be. */
+  .tick, .grppick { position:relative; }
+  .pick::before, .tick::before, .grppick::before {
+    content:""; position:absolute; inset:-12px; }
+  /* And now they must not poach their neighbours. A slug reaches twelve
+     pixels past a circle that had eight of clearance, so the gap has to grow
+     by more than the overhang — otherwise a tap on the left edge of a group's
+     name selects the group instead of regrouping by it. */
+  h3.group { gap:14px; }
+  #actions .grp { gap:14px; }
+  /* The cross that clears a filter, which was ten pixels of glyph inside a
+     button that does something else. Stretched to the chip's own height
+     rather than padded, so the chip does not grow to hold it. */
+  /* Padding for the hit area and a matching negative margin so the chip
+     does not grow to hold it. Not `align-self: stretch`, which would work
+     only for as long as every chip is a flex container — and one of them is
+     a span that is only one because the rule above made it one. */
+  .chip .x, .from-op .x { padding:12px 10px; margin:-12px -10px -12px 0; }
+  /* `text-overflow` needs a block box, and the chips are flex ones here. The
+     name of the operation is the part that can run long, so it is the part
+     that has to do the eliding. */
+  .from-op { overflow:hidden; }
+  .from-op b { overflow:hidden; text-overflow:ellipsis; min-width:0; }
+
+  /* Tapping twice quickly on two circles side by side is a double-tap, and a
+     double-tap zooms. */
+  .cell, button, .opt, .chip { touch-action:manipulation; }
+
+  /* iOS paints a grey box over anything tapped, which on a grid of
+     photographs reads as a rendering fault. Removing it without putting
+     something back leaves touch with no press feedback at all, so both
+     happen here or neither should. */
+  button, .chip, .opt, .cell, a { -webkit-tap-highlight-color:transparent; }
+  button:active:not(:disabled), .chip:active { background:#2f3745; }
+  .opt:active { background:#38424f; }
+  .cell:active img { opacity:.75; }
+
+  /* Long-pressing a thumbnail raises the system's own sheet, whose
+     *Save to Photos* saves the four-hundred-pixel thumbnail — and in the
+     viewer, the sixteen-hundred-pixel preview. Either way somebody walks off
+     believing they have the photograph. Save is how you get the photograph.
+     Scoped to coarse, because on a desk selecting a heading to copy it is
+     ordinary. */
+  .cell, .cell img, .stage img, .pick, .tick, .grppick, h3.group {
+    -webkit-touch-callout:none; -webkit-user-select:none; user-select:none;
+    -webkit-user-drag:none; }
+
+  /* Sixteen pixels, or the page zooms in on focus and does not zoom back —
+     which leaves the library at 130% with no way to say so. It is the exact
+     threshold, so this is the smallest these can be. */
+  #menu input, #menu .form input { font-size:16px; }
+}

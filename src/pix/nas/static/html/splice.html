@@ -1,0 +1,62 @@
+<div class="splice">
+<div class="sstage" id="stage"><video id="sv" playsinline preload="auto" src="{src}"></video></div>
+<div class="tlwrap" id="tlwrap"><div class="track" id="track">
+<div class="strip" id="strip"></div>
+<div class="keys" id="keys"></div>
+<div class="bars" id="bars"></div><div class="ph" id="ph"></div></div></div>
+<div class="sline"><span id="tcur">0:00.00</span><span class="dim">&nbsp;/&nbsp;</span>
+<span class="dim" id="tdur"></span></div>
+<div class="sctl sbar">
+<div class="sgrp">
+<button id="bplay" class="ic" title="Play (space)" aria-label="Play"><span class="i-play">@sp_play@</span><span class="i-pause">@sp_pause@</span></button>
+<button id="bfirstk" class="ic" title="To the first keyframe (Home)" aria-label="To the first keyframe">@sp_firstk@</button>
+<button id="bprevk" class="ic" title="Back to the last keyframe (shift+,)" aria-label="Back to the last keyframe">@sp_prevk@</button>
+<button id="bprevf" class="ic" title="Back a frame (,)" aria-label="Back a frame">@sp_prevf@</button>
+<button id="bnextf" class="ic" title="On a frame (.)" aria-label="On a frame">@sp_nextf@</button>
+<button id="bnextk" class="ic" title="On to the next keyframe (shift+.)" aria-label="On to the next keyframe">@sp_nextk@</button>
+<button id="blastk" class="ic" title="To the last keyframe (End)" aria-label="To the last keyframe">@sp_lastk@</button>
+<button id="bnew" class="primary ic" title="Make a new clip (N)" aria-label="New clip">@sp_marker@<span class="word">New clip</span></button>
+</div>
+<span class="spacer"></span>
+<div class="sgrp">
+<button id="bhide" class="ic" title="(H)" aria-label="Archive original"><span class="i-shown">@sp_eyeoff@</span><span class="i-hidden">@sp_eye@</span></button>
+<button id="bstill" class="ic" title="Take this frame as a photograph (P)" aria-label="Take photo">@sp_photo@</button>
+<select id="rate" class="rate" title="Speed ([ and ])" aria-label="Speed">
+<option value="0.5">0.5&times;</option><option value="1" selected>1&times;</option>
+<option value="1.5">1.5&times;</option><option value="2">2&times;</option>
+</select>
+<button id="zout" class="ic" aria-label="Zoom out" title="Zoom out">@sp_zout@</button>
+<button id="zin" class="ic" aria-label="Zoom in" title="Zoom in">@sp_zin@</button>
+</div>
+</div>
+<div class="sctl toolbar" id="newbar" hidden>
+<b>New clip</b><span class="dim" id="newsay">drag across the timeline, or set its start and end at the playhead</span>
+<span class="gap"></span>
+<button id="bnewin" title="Start it at the playhead (I)">Start here</button>
+<button id="bnewout" title="End it at the playhead (O)">End here</button>
+<button id="bnewcancel" title="(Esc)">Cancel</button>
+</div>
+<div class="sctl toolbar" id="selbar" hidden>
+<b id="selname"></b><span class="gap"></span>
+<button id="bstart" title="Start the clip at the playhead (I)">Start here</button>
+<button id="bend" title="End the clip at the playhead (O)">End here</button>
+<button id="bsplit" title="Cut this clip in two at the playhead (S)">Split here</button>
+<button id="bjoin" title="Join the next clip into this one (J)">Join next</button>
+<a id="bopen" class="btn" title="This clip in the grid">Open</a>
+<button id="bdel" class="danger" title="Delete this clip (Delete)">Delete</button>
+</div>
+<div class="sctl toolbar draftbar" id="draftbar" hidden>
+<b id="dirty"></b><span class="spacer"></span>
+<button id="bundo" title="Undo the last change (Ctrl+Z)">Undo</button>
+<button id="bdiscard" title="Throw away every unsaved change">Discard</button>
+<button id="bsave" class="primary" title="Save every change (Ctrl+S)">Save</button>
+</div>
+<p class="dim shelp"><b>New clip</b> makes one: drag across the timeline, or
+set its start and end at the playhead (I and O). <b>Click a clip</b> to edit
+it — drag its ends, set them at the playhead, split it, join the next one to
+it, or delete it. A clip made or moved over another trims it back, and asks
+before it removes or splits one. Nothing is saved until <b>Save</b>, and
+<b>Discard</b> throws the changes away. A clip starts on a keyframe (the faint
+ticks), where a lossless cut can begin. A dashed clip is still being cut; an
+amber one is not saved yet.</p>
+</div>

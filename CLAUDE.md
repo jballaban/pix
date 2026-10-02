@@ -13,6 +13,7 @@ Active codebase. The implementation lives in `src/pix/`; tests in `tests/`. **Co
 
 ## Dev workflow
 
+- **Web front end:** CSS, JS and HTML fragments live as files in `src/pix/nas/static/` (loaded by `pix.nas.assets`, inlined into each page by `web.py`); edit them there, not as Python strings. A change needs a server restart.
 - **Run tests:** `uv run pytest`. Type-check with `uv run pyright` (strict mode; see `pyproject.toml`).
 - **Version bump per commit:** bump the `__version__` patch in `src/pix/__init__.py` on every commit that changes runtime behavior. The CLI prints this as the first line of every run, so dev and tester stay aligned.
 - **Reinstall after commit:** run `uv tool install --reinstall --editable .` (from the repo root) so the installed `pix` reflects the latest code.

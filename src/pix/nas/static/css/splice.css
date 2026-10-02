@@ -1,0 +1,128 @@
+
+.splice { max-width:1100px; margin:0 auto; padding:8px 12px 24px; }
+.sstage { background:#000; border-radius:6px; overflow:hidden;
+          display:flex; justify-content:center; }
+.sstage video { width:100%; max-height:60vh; display:block; background:#000; }
+.tlwrap { margin-top:10px; overflow-x:auto; overflow-y:hidden;
+          border:1px solid var(--line); border-radius:6px;
+          background:var(--panel); touch-action:pan-x; }
+/* Its own contents clipped to it: the playhead is two pixels centred on its
+   time and a clip has a least width, so at the very end either stood a pixel
+   past the track — and at no zoom at all, the timeline grew a scrollbar with
+   one pixel in it, which came and went with where the playhead was. */
+.track { position:relative; height:56px; min-width:100%; cursor:pointer;
+         overflow:hidden; }
+.bars { position:absolute; inset:0; }
+/* A clip is a bar; the gaps between them are footage no clip holds. */
+.bar { position:absolute; top:10px; bottom:10px; min-width:3px;
+       background:var(--accent-bed); border:1.5px solid var(--accent);
+       border-radius:4px; box-sizing:border-box; }
+/* The one selected: filled, and outlined twice, so it reads at a glance
+   among clips that differ from it only in where they stand. */
+.bar.on { background:#6aa3ff66; border:2px solid var(--fg);
+          box-shadow:0 0 0 2px var(--accent); z-index:1; }
+/* No file of its own yet: the NAS is still cutting it. */
+.bar.uncut { border-style:dashed; }
+.keys { position:absolute; inset:0; pointer-events:none; }
+.keys i { position:absolute; bottom:0; width:1px; height:9px;
+          background:var(--dim); opacity:.55; }
+/* Handles wide enough to take a finger (44px) though drawn narrow. */
+.bar .h { position:absolute; top:-10px; bottom:-10px; width:44px;
+          touch-action:none; cursor:ew-resize; z-index:3; }
+.bar .h.l { left:-22px; } .bar .h.r { right:-22px; }
+.bar .h::after { content:""; position:absolute; top:12px; bottom:12px;
+                 left:19px; width:6px; border-radius:3px; background:var(--fg); }
+/* A still is a point, so a pin. */
+.pin { position:absolute; top:4px; bottom:4px; width:3px; margin-left:-1.5px;
+       background:var(--top); border-radius:2px; }
+.pin::before { content:""; position:absolute; top:-2px; left:-4px;
+               width:11px; height:11px; border-radius:50%; background:var(--top); }
+.pin.on { background:var(--fg); } .pin.on::before { background:var(--fg); }
+.ph { position:absolute; top:0; bottom:0; width:2px; margin-left:-1px;
+      background:var(--gone); pointer-events:none; z-index:4; }
+.sline { display:flex; align-items:center; gap:6px; margin:6px 2px;
+         font-variant-numeric:tabular-nums; }
+.sline .spacer { flex:1; }
+.sctl { display:flex; flex-wrap:wrap; align-items:center; gap:6px;
+        margin:8px 0; }
+.sctl .gap { width:8px; }
+.toolbar { padding:6px 8px; border:1px solid var(--line); border-radius:6px; }
+.toolbar[hidden] { display:none; }
+.draftbar { border-color:var(--top); }
+.draftbar b { color:var(--top); }
+/* Not saved yet: amber, whatever else it is. */
+.bar.draft { border-color:var(--top); background:var(--top-bed); }
+.bar.draft.on { background:#e3b34166; }
+.newrange { position:absolute; top:10px; bottom:10px; min-width:2px;
+            border:1.5px dashed var(--top); background:var(--top-bed);
+            border-radius:4px; box-sizing:border-box; pointer-events:none; }
+.newstart { position:absolute; top:4px; bottom:4px; width:2px; margin-left:-1px;
+            background:var(--top); pointer-events:none; }
+/* One row: playing and marking on the left, the rest to the right. On a
+   phone the right-hand group wraps under, and still keeps to the right. */
+.sbar .sgrp { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+.sbar .spacer { flex:1; }
+.sbar > .sgrp:last-child { justify-content:flex-end; margin-left:auto; }
+.sctl button, .sctl .btn, .sline button { min-height:40px; min-width:44px; }
+.sctl .btn { display:inline-flex; align-items:center; padding:0 12px;
+             border:1px solid var(--line); border-radius:6px;
+             color:var(--fg); text-decoration:none; }
+.sctl button.primary { background:var(--accent); color:#0d0f12;
+                       border-color:var(--accent); font-weight:600; }
+.sctl button.danger { color:var(--gone); }
+.sctl button#bhide.on { border-color:var(--top); color:var(--top); }
+/* Icons, with the word only where it earns the room. */
+.sctl button.ic { display:inline-flex; align-items:center; justify-content:center;
+                  gap:6px; padding:0 10px; }
+.sctl button.ic svg { display:block; }
+#bplay .i-pause, #bplay.playing .i-play { display:none; }
+#bplay.playing .i-pause { display:inline-flex; }
+#bhide .i-hidden, #bhide.on .i-shown { display:none; }
+#bhide.on .i-hidden { display:inline-flex; }
+.selbar { padding:6px 8px; border:1px solid var(--line); border-radius:6px; }
+.selbar[hidden] { display:none; }
+.shelp { font-size:13px; line-height:1.45; }
+/* The strip markers live in: click it to place one. */
+.track { height:74px; }
+.lane { position:absolute; left:0; right:0; top:0; height:22px;
+        border-bottom:1px solid var(--line); cursor:copy; z-index:2; }
+.track .bars { top:22px; }
+.track .keys { top:22px; }
+/* The filmstrip, under the clips: as many frames as fit at a readable width,
+   more of them the further in you zoom. */
+.strip { position:absolute; left:0; right:0; top:22px; bottom:0;
+         overflow:hidden; pointer-events:none; opacity:.55; }
+.strip > i { position:absolute; top:0; bottom:0; overflow:hidden; }
+.strip > i > b { position:absolute; top:0; bottom:0;
+                 background-repeat:no-repeat; }
+/* A marker: a line through the clips and a knob to take hold of. A cut —
+   the marker two touching clips share — is a diamond; an end is a circle. */
+.mk { position:absolute; top:0; bottom:0; width:0; z-index:6; }
+.mk::before { content:""; position:absolute; top:18px; bottom:4px; left:-1px;
+              width:2px; background:var(--top); pointer-events:none; }
+.mk .knob { position:absolute; top:0; left:-11px; width:22px; height:22px;
+            cursor:grab; touch-action:none; }
+.mk .knob::after { content:""; position:absolute; left:5px; top:5px;
+                   width:12px; height:12px; border-radius:50%;
+                   background:var(--top); }
+.mk.cut .knob::after { border-radius:2px; transform:rotate(45deg); }
+.mk.pending::before { background:none; border-left:2px dashed var(--top); }
+.mk.pending .knob::after { background:var(--panel);
+                           border:2px solid var(--top); box-sizing:border-box; }
+/* Marked and not yet made: amber and dashed, with a way to take it back. */
+.mark-range { position:absolute; top:10px; bottom:10px; min-width:3px;
+              background:var(--top-bed); border:1.5px dashed var(--top);
+              border-radius:4px; box-sizing:border-box; }
+.mark-range .x { position:absolute; right:-9px; top:-11px; width:22px;
+                 height:22px; border-radius:50%; background:var(--panel);
+                 border:1px solid var(--top); color:var(--top); font-size:13px;
+                 line-height:19px; text-align:center; cursor:pointer; z-index:5; }
+.mark-in { position:absolute; top:2px; bottom:2px; width:2px; margin-left:-1px;
+           background:var(--top); z-index:4; pointer-events:none; }
+.sctl button.mark { color:var(--top); border-color:var(--top); }
+/* The picture scrubs: dragging across it runs through the video. */
+.sstage video { touch-action:none; cursor:ew-resize; }
+/* Speed: the one it is at, and the others a tap away. */
+.sctl select.rate { min-height:40px; padding:0 8px; background:var(--panel);
+                    color:var(--fg); border:1px solid var(--line);
+                    border-radius:6px; font:inherit; }
