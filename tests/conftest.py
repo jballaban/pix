@@ -241,3 +241,18 @@ def client(app_env: dict[str, Path],
     from pix.nas import accounts
 
     return sign_in(accounts.ADMIN, "admin")
+
+
+# --- shared by the web app's tests ----------------------------------------
+
+@pytest.fixture
+def household(app_env: dict[str, Path], writable: Path, sign_in: Callable[[str, str], TestClient], add_user: Callable[..., None]) -> dict[str, object]:
+    """One shared photo and one that is not, with an admin and a viewer."""
+    from pix.nas import accounts
+
+    (writable / "b.mp4").write_bytes(b"fake")
+    add_user("kid", "pw")
+    admin = sign_in(accounts.ADMIN, "admin")
+    admin.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "add_audience": ["kid"]})
+    return {"admin": admin, "kid": sign_in("kid", "pw")}

@@ -94,3 +94,26 @@ def test_the_script_unpacks_exactly_what_the_page_is_handed() -> None:
     names = {re.sub(r"=.*", "", n).strip()
              for n in unpacked[len("const {"):].split(",") if n.strip()}
     assert names == set(pages.PageConfig.__annotations__)
+
+
+def test_has_rule_reads_rules_not_text() -> None:
+    """The stylesheet assertions stand on this, so it is checked both ways:
+    a `not has_rule(...)` that could never find anything would pass forever."""
+    from web_helpers import css_rules, has_rule
+
+    sheet = """/* a } in a comment */
+.a, .b  {  color:red ;display : none }
+@media (max-width: 720px) { .c { flex-wrap:nowrap; gap:3px } }"""
+    assert len(css_rules(sheet)) == 2       # one at the top, one in the block
+    assert has_rule(sheet, ".b, .a", "display:none; color:red")
+    assert has_rule(sheet, ".a, .b", "color")            # set, any value
+    assert not has_rule(sheet, ".a", "color:red")         # not the same list
+    assert not has_rule(sheet, ".a, .b", "color:blue")
+    assert has_rule(sheet, ".c", "flex-wrap:now")         # a prefix, like a cut literal
+    assert has_rule(sheet, ".c", "gap:3px", media="(max-width: 720px)")
+    assert not has_rule(sheet, ".c", "gap:3px", media="(hover: none)")
+    assert has_rule("<html><style>.d { x:1 }", ".d", "x:1"), "an unclosed page"
+    # And on the real thing: it finds hundreds, and a rule that is there.
+    from pix.nas.webapp import shell
+    assert len(css_rules(shell.STYLE)) > 300
+    assert has_rule(shell.STYLE, ".ov .fix", "flex:none")
