@@ -9,23 +9,14 @@ import sqlite3
 import threading
 import time
 from dataclasses import dataclass
-from fastapi import Depends
-from fastapi import FastAPI
-from fastapi import HTTPException
-from fastapi import Request
-from fastapi import status
-from fastapi.responses import JSONResponse
-from fastapi.responses import RedirectResponse
-from fastapi.responses import Response
-from fastapi.security import HTTPBasic
-from fastapi.security import HTTPBasicCredentials
-from pix.nas import accounts
-from pix.nas import index as ix
-from pix.nas import webroots
-from typing import Annotated
-from typing import Any
-from typing import cast
+from typing import Annotated, Any, cast
 from urllib.parse import quote
+
+from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.responses import JSONResponse, RedirectResponse, Response
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+
+from pix.nas import accounts, index as ix, webroots
 
 
 app: FastAPI = FastAPI(title="pix2", docs_url=None, redoc_url=None)

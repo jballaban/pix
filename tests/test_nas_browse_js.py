@@ -24,7 +24,9 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from pix.nas import web
+from pix.nas.webapp import pages as w_pages
+from pix.nas.webapp import pwa as w_pwa
+from pix.nas.webapp import shell as w_shell
 
 if TYPE_CHECKING:
     from fastapi.testclient import TestClient
@@ -39,7 +41,7 @@ def test_the_browse_script_runs_and_does_the_right_thing(
 ) -> None:
     """Select, open the Access menu, tick a name, and see what is sent."""
     script = tmp_path / "browse.js"
-    script.write_text(web._BROWSE_JS, encoding="utf-8")
+    script.write_text(w_pages.BROWSE_JS, encoding="utf-8")
 
     result = subprocess.run(
         ["node", str(JS_DIR / "drive.js"), str(script)],
@@ -62,7 +64,7 @@ def test_the_same_script_folds_and_refuses_the_apps_own_guesses(
     the two requests go out in, and where the photographs land afterwards.
     """
     script = tmp_path / "browse.js"
-    script.write_text(web._BROWSE_JS, encoding="utf-8")
+    script.write_text(w_pages.BROWSE_JS, encoding="utf-8")
 
     result = subprocess.run(
         ["node", str(JS_DIR / "review.js"), str(script)],
@@ -85,7 +87,7 @@ def test_the_same_script_says_which_stack_you_are_in_and_lets_you_leave(
     a photograph over the grid that nobody had asked to see.
     """
     script = tmp_path / "browse.js"
-    script.write_text(web._BROWSE_JS, encoding="utf-8")
+    script.write_text(w_pages.BROWSE_JS, encoding="utf-8")
 
     result = subprocess.run(
         ["node", str(JS_DIR / "stack.js"), str(script)],
@@ -113,7 +115,7 @@ def test_closing_a_date_goes_up_a_level_and_no_menu_offers_everything(
     apart — which is why they are driven rather than asserted on the HTML.
     """
     script = tmp_path / "browse.js"
-    script.write_text(web._BROWSE_JS, encoding="utf-8")
+    script.write_text(w_pages.BROWSE_JS, encoding="utf-8")
 
     result = subprocess.run(
         ["node", str(JS_DIR / "chips.js"), str(script), start, after],
@@ -140,7 +142,7 @@ def test_the_home_screen_offer_asks_once_and_only_where_it_can_be_taken_up(
     Nothing about the served HTML would ever reveal that it returns.
     """
     script = tmp_path / "install.js"
-    script.write_text(web._INSTALL_JS, encoding="utf-8")
+    script.write_text(w_shell.INSTALL_JS, encoding="utf-8")
 
     result = subprocess.run(
         ["node", str(JS_DIR / "install.js"), str(script), device],
@@ -164,7 +166,7 @@ def test_the_offline_page_finds_out_which_kind_of_failure_it_is(
     network*, which sent the diagnosis in the wrong direction for an afternoon.
     """
     script = tmp_path / "offline.js"
-    script.write_text(web._OFFLINE_JS, encoding="utf-8")
+    script.write_text(w_pwa.OFFLINE_JS, encoding="utf-8")
 
     result = subprocess.run(
         ["node", str(JS_DIR / "offline.js"), str(script), state],
@@ -204,7 +206,7 @@ def test_the_same_script_runs_the_landing_page(
     wires looks exactly like a page whose controls were never built.
     """
     script = tmp_path / "browse.js"
-    script.write_text(web._BROWSE_JS, encoding="utf-8")
+    script.write_text(w_pages.BROWSE_JS, encoding="utf-8")
     ids = tmp_path / "ids.json"
     ids.write_text(json.dumps(_element_ids(client.get("/").text)),
                    encoding="utf-8")
@@ -234,7 +236,7 @@ def test_the_same_script_hands_a_phone_its_files_rather_than_downloading(
     button that cannot work.
     """
     script = tmp_path / "browse.js"
-    script.write_text(web._BROWSE_JS, encoding="utf-8")
+    script.write_text(w_pages.BROWSE_JS, encoding="utf-8")
 
     result = subprocess.run(
         ["node", str(JS_DIR / "save.js"), str(script)],
@@ -248,7 +250,7 @@ def test_the_same_script_hands_a_phone_its_files_rather_than_downloading(
 def test_the_browse_script_parses(tmp_path: Path) -> None:
     """A syntax error is silent in a browser and total in its effect."""
     script = tmp_path / "browse.js"
-    script.write_text(web._BROWSE_JS, encoding="utf-8")
+    script.write_text(w_pages.BROWSE_JS, encoding="utf-8")
 
     result = subprocess.run(["node", "--check", str(script)],
                             capture_output=True, text=True, timeout=60)
@@ -265,7 +267,7 @@ def test_display_puts_each_fact_in_the_lane_it_was_asked_for(
     moves the facts on every cell and is remembered, and what is always there
     keeps the right-hand end of its lane."""
     script = tmp_path / "browse.js"
-    script.write_text(web._BROWSE_JS, encoding="utf-8")
+    script.write_text(w_pages.BROWSE_JS, encoding="utf-8")
 
     result = subprocess.run(
         ["node", str(JS_DIR / "display.js"), str(script)],
@@ -283,7 +285,7 @@ def test_an_action_in_the_viewer_is_about_the_photograph_on_show(
     in the viewer deletes the one on show; the bar still means the
     selection; and a binned file is offered Restore instead."""
     script = tmp_path / "browse.js"
-    script.write_text(web._BROWSE_JS, encoding="utf-8")
+    script.write_text(w_pages.BROWSE_JS, encoding="utf-8")
 
     result = subprocess.run(
         ["node", str(JS_DIR / "viewacts.js"), str(script)],

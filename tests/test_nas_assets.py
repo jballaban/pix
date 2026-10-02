@@ -13,7 +13,9 @@ from pathlib import Path
 
 import pytest
 
-from pix.nas import assets, web
+from pix.nas import assets
+from pix.nas.webapp import shell as w_shell
+from pix.nas.webapp import pages as w_pages
 
 JS = sorted(assets.STATIC.glob("js/**/*.js"))
 CSS = sorted(assets.STATIC.glob("css/*.css"))
@@ -43,19 +45,19 @@ def test_every_stylesheet_balances_its_braces(sheet: Path) -> None:
 
 def test_the_page_is_handed_exactly_what_is_on_disk() -> None:
     """Inlined as read, nothing between the file and the page."""
-    assert web._STYLE == assets.asset("css/app.css")  # pyright: ignore[reportPrivateUsage]
-    assert web._BROWSE_JS == "".join(  # pyright: ignore[reportPrivateUsage]
+    assert w_shell.STYLE == assets.asset("css/app.css")  # pyright: ignore[reportPrivateUsage]
+    assert w_pages.BROWSE_JS == "".join(  # pyright: ignore[reportPrivateUsage]
         assets.asset(f"js/browse/{p}")
-        for p in web._BROWSE_PARTS)  # pyright: ignore[reportPrivateUsage]
+        for p in w_pages.BROWSE_PARTS)  # pyright: ignore[reportPrivateUsage]
 
 
 def test_every_part_of_the_grid_script_is_read() -> None:
     """A part on disk and missing from the list is code that silently does
     not run; one in the list and not on disk fails to load at all."""
     on_disk = sorted(p.name for p in (assets.STATIC / "js/browse").glob("*.js"))
-    assert sorted(web._BROWSE_PARTS) == on_disk  # pyright: ignore[reportPrivateUsage]
+    assert sorted(w_pages.BROWSE_PARTS) == on_disk  # pyright: ignore[reportPrivateUsage]
     # Read in the order they are numbered, which is the order they were cut.
-    assert list(web._BROWSE_PARTS) == on_disk  # pyright: ignore[reportPrivateUsage]
+    assert list(w_pages.BROWSE_PARTS) == on_disk  # pyright: ignore[reportPrivateUsage]
 
 
 def test_no_asset_has_carriage_returns() -> None:

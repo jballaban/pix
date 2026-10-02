@@ -20,7 +20,8 @@ from pix.nas import clips
 from pix.nas import decisions
 from pix.nas import history
 from pix.nas import index as ix
-from pix.nas import web
+from pix.nas.webapp import pages as w_pages
+from pix.nas.webapp import clipping as w_clipping
 from pix.nas import webroots
 from pix.nas.decisions import Decision
 
@@ -396,7 +397,7 @@ def test_a_clip_with_no_source_is_not_indexed(
 
 
 def test_the_viewer_plays_a_clip_between_its_ends() -> None:
-    js = web._BROWSE_JS
+    js = w_pages.BROWSE_JS
     assert "#t=${clip[0]},${clip[1]}" in js
 
 
@@ -478,7 +479,7 @@ def _drive(tmp_path: Path, scenario: str,
     if shutil.which("node") is None:
         pytest.skip("node is not installed")
     script = tmp_path / "splice.js"
-    script.write_text(web._SPLICE_JS, encoding="utf-8")
+    script.write_text(w_clipping.SPLICE_JS, encoding="utf-8")
     state = tmp_path / "state.json"
     state.write_text(json.dumps({
         "folder": "init_2026", "source": "b.mp4", "duration": 75, "fps": 25,
@@ -596,12 +597,12 @@ def test_a_start_snaps_to_the_nearest_keyframe_it_may_use() -> None:
 
 
 def test_two_touching_ranges_stay_touching_when_they_snap() -> None:
-    got = web._snapped((0.0, 1.0, 2.0, 3.0), [(0, 1.4), (1.4, 4)], [])
+    got = w_clipping.snapped_ranges((0.0, 1.0, 2.0, 3.0), [(0, 1.4), (1.4, 4)], [])
     assert got == [(0.0, 1.0), (1.0, 4)]
 
 
 def test_a_snapped_start_never_overlaps_a_sibling() -> None:
-    got = web._snapped((0.0, 1.0, 2.0, 3.0), [(1.3, 4)], [(0, 1.3)])
+    got = w_clipping.snapped_ranges((0.0, 1.0, 2.0, 3.0), [(1.3, 4)], [(0, 1.3)])
     assert got == [(2.0, 4)]
 
 
@@ -635,7 +636,7 @@ def real(app_env: dict[str, Path], writable: Path,
                  "XMP:EventAuto": "Italy - Sicily"},
     }), encoding="utf-8")
     _rebuild(app_env)
-    monkeypatch.setattr(web._CUTS, "immediate", True)
+    monkeypatch.setattr(w_clipping.CUTS, "immediate", True)
     return writable
 
 
@@ -822,7 +823,7 @@ def test_the_splice_page_draws_the_filmstrip(
 
 
 def test_the_splice_page_offers_four_speeds() -> None:
-    js = web._SPLICE_JS
+    js = w_clipping.SPLICE_JS
     assert "const RATES=[0.5,1,1.5,2];" in js
     assert "v.playbackRate=r" in js
 
@@ -916,7 +917,7 @@ def test_cut_from_stays_in_the_view_it_was_opened_from(
 
 
 def test_a_link_can_open_the_preview_it_lands_on() -> None:
-    js = web._BROWSE_JS
+    js = w_pages.BROWSE_JS
     assert "want.startsWith('open:')" in js
     assert "window.addEventListener('hashchange',land)" in js
 
@@ -1127,7 +1128,7 @@ def hevc(app_env: dict[str, Path], writable: Path,
                  "EXIF:DateTimeOriginal": "2026:08:30 15:00:00"},
     }), encoding="utf-8")
     _rebuild(app_env)
-    monkeypatch.setattr(web._CUTS, "immediate", True)
+    monkeypatch.setattr(w_clipping.CUTS, "immediate", True)
     return writable
 
 
@@ -1327,10 +1328,10 @@ def test_new_clip_starts_at_the_playhead_and_the_ends_are_a_press_away(
     """What follows *New clip* is almost always *start it here*; and the
     first and last keyframe are the two ends of what a cut can start from."""
     _playable(app_env)
-    assert "function startNew(){ newMode=true; creating=ms(here());" in web._SPLICE_JS
+    assert "function startNew(){ newMode=true; creating=ms(here());" in w_clipping.SPLICE_JS
     html = client.get("/splice/init_2026/b.mp4").text
     assert 'id="bfirstk"' in html and 'id="blastk"' in html
-    assert "k==='Home'" in web._SPLICE_JS and "k==='End'" in web._SPLICE_JS
+    assert "k==='Home'" in w_clipping.SPLICE_JS and "k==='End'" in w_clipping.SPLICE_JS
 
 
 def test_the_timeline_has_nothing_to_scroll_until_it_is_zoomed(
@@ -1338,6 +1339,6 @@ def test_the_timeline_has_nothing_to_scroll_until_it_is_zoomed(
 ) -> None:
     """A pixel of playhead past the end gave an unzoomed timeline a
     scrollbar with nothing in it."""
-    assert "overflow:hidden; }" in web._SPLICE_CSS[
-        web._SPLICE_CSS.index(".track { position:relative;"):][:200]
-    assert "wrap.style.overflowX=zoom>1?'auto':'hidden';" in web._SPLICE_JS
+    assert "overflow:hidden; }" in w_clipping.SPLICE_CSS[
+        w_clipping.SPLICE_CSS.index(".track { position:relative;"):][:200]
+    assert "wrap.style.overflowX=zoom>1?'auto':'hidden';" in w_clipping.SPLICE_JS

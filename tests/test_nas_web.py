@@ -27,14 +27,20 @@ from pix.nas import decisions
 from pix.nas import derive
 from pix.nas import history
 from pix.nas import index as ix
+from pix import __version__ as PIX_VERSION
 from pix.nas import web
+from pix.nas.webapp import pages as w_pages
+from pix.nas.webapp import pwa as w_pwa
+from pix.nas.webapp import shell as w_shell
 from pix.nas.webapp import permissions as w_permissions
 from pix.nas.webapp import vocab as w_vocab
 from pix.nas.webapp import marks as w_marks
 from pix.nas.webapp import text as w_text
 from pix.nas import webroots
-from pix.nas.web import _split
+from pix.nas.webapp.text import split as _split
 from pix.nas.decisions import Decision
+from pix.nas.webapp import writes as w_writes
+from pix.nas.webapp import grid as w_grid
 
 
 # --- browse ------------------------------------------------------------------
@@ -406,7 +412,7 @@ def test_every_list_of_questions_is_in_the_same_order(
 
     others = {
         "the edit bar": _as_columns(re.findall(r'data-act="(\w+)"', html)),
-        "the grouping menu": [g for g, _ in web._GRID_GROUPS],
+        "the grouping menu": [g for g, _ in w_vocab.GRID_GROUPS],
         "the filterable columns": list(ix.Filters.NAMES),
     }
     for what, order in others.items():
@@ -569,7 +575,7 @@ def test_the_page_draws_the_same_badge_the_server_does(
     rather than fetched, and the two have to say the same thing — a badge
     written here that dropped the filters would put the curator back at the
     undivided library from one half of the app and not the other."""
-    js = web._BROWSE_JS
+    js = w_pages.BROWSE_JS
     at = js.index("function markStack(")
     body = js[at:js.index("\n}", at)]
 
@@ -817,7 +823,7 @@ def test_the_answer_can_be_given_from_the_photograph_itself(
     # shape of a stack has no business over an ordinary photograph.
     assert 'id="viewtop"' not in client.get("/browse").text
 
-    js = web._BROWSE_JS
+    js = w_pages.BROWSE_JS
     at = js.index("function drawTop(")
     body = js[at:js.index("\n}", at)]
     assert "viewTop.hidden=!c||!STACK||(here&&!guessed(c));" in body, body
@@ -1042,7 +1048,7 @@ def test_the_page_knows_it_is_inside_a_stack(
     # It is said on the write instead, which is the one place it changes
     # anything: with the members in front of the curator a cascade must not
     # follow them again.
-    js = web._BROWSE_JS
+    js = w_pages.BROWSE_JS
     at = js.index("await fetch('/api/decide/bulk?'")
     assert "if(STACK) p.set('within',STACK);" in js[at - 400:at], js[at - 400:at]
 
@@ -1061,7 +1067,7 @@ def test_agreeing_with_a_guess_leaves_the_stack_it_was_asked_in(
     page behind is the one that has just stopped being true. Going back and
     then reloading is what somebody had to do by hand for every suggestion
     they agreed with."""
-    js = web._BROWSE_JS
+    js = w_pages.BROWSE_JS
 
     assert "location.href=(BACK||'/')+'#'+encodeURIComponent(" in js
     # Standing on the photograph, not at the top of the page. Every other
@@ -1102,7 +1108,7 @@ def test_a_badge_stops_saying_guessed_once_it_has_been_decided(
     means *these look alike and nobody has said yet* over a number somebody
     has just decided — and the bar goes on offering to refuse a suggestion
     that is now a stack."""
-    js = web._BROWSE_JS
+    js = w_pages.BROWSE_JS
     at = js.index("function markStack(")
     body = js[at:js.index("\n}", at)]
 
@@ -1110,7 +1116,7 @@ def test_a_badge_stops_saying_guessed_once_it_has_been_decided(
     assert "badge.classList.remove('guessed');" in body, body
     # Which is the class the server draws it with, so the two agree about the
     # one word that distinguishes them.
-    assert '.stack.guessed { border-color:var(--top);' in web._STYLE
+    assert '.stack.guessed { border-color:var(--top);' in w_shell.STYLE
 
 
 def test_unstacking_takes_a_file_out_of_the_open_stack(
@@ -1372,13 +1378,13 @@ def test_the_bar_says_how_tall_it_is_rather_than_being_guessed_at(
     A `ResizeObserver`, because what matters is the bar *changing height* —
     which is what the filters wrapping does, and which neither `scroll` nor
     `resize` reports."""
-    js = web._BAR_JS
+    js = w_shell.BAR_JS
 
     assert "ResizeObserver" in js and ".topbar" in js
     assert "setProperty(" in js and "'--bar'" in js
     # The fallback is the bar at its shortest, so the first frame is close
     # rather than wrong.
-    assert "--bar:calc(49px + env(safe-area-inset-top,0px))" in web._STYLE
+    assert "--bar:calc(49px + env(safe-area-inset-top,0px))" in w_shell.STYLE
 
     # On every page that has a bar, which is every page.
     for url in ("/browse", "/", "/history", "/accounts"):
@@ -2184,7 +2190,7 @@ def test_a_month_known_and_no_day_is_its_own_filter(
 
 
 def test_the_chip_says_what_is_missing() -> None:
-    js = web._BROWSE_JS
+    js = w_pages.BROWSE_JS
     assert "', no month'" in js and "', no day'" in js
 
 
@@ -2785,7 +2791,7 @@ def test_an_empty_selection_is_not_an_error(client: TestClient,
 def test_an_oversized_batch_is_refused(client: TestClient,
                                        writable: Path) -> None:
     """Bounds one request so a 1,766-file event cannot hold the single worker."""
-    files = _targets(*[f"f{n}.jpg" for n in range(web.BULK_LIMIT + 1)])
+    files = _targets(*[f"f{n}.jpg" for n in range(w_vocab.BULK_LIMIT + 1)])
     r = client.post("/api/decide/bulk", json={"add_audience": ["private"], "files": files})
 
     assert r.status_code == 400
@@ -3243,12 +3249,12 @@ def test_too_many_files_are_refused_rather_than_started(
     """A selection runs to thousands, and a download nobody meant to start is
     one nobody can stop without noticing it is running."""
     many = json.dumps([{"folder": "init_2026", "name": "a.jpg"}]
-                      * (web.ZIP_LIMIT + 1))
+                      * (w_vocab.ZIP_LIMIT + 1))
 
     r = client.post("/download.zip", data={"files": many})
 
     assert r.status_code == 400
-    assert str(web.ZIP_LIMIT) in r.text
+    assert str(w_vocab.ZIP_LIMIT) in r.text
 
 
 def test_a_cell_says_whether_a_copy_of_it_exists(
@@ -3473,7 +3479,7 @@ def test_the_admin_is_never_offered_as_an_audience(
 ) -> None:
     """An administrator sees everything already, so sharing with one is a
     no-op dressed as a decision."""
-    assert accounts.ADMIN not in web._audience_names()
+    assert accounts.ADMIN not in w_vocab.audience_names()
 
 
 def test_an_action_asks_for_the_column_it_edits(client: TestClient) -> None:
@@ -3512,7 +3518,7 @@ def test_nothing_stands_along_the_bottom(client: TestClient) -> None:
     html = client.get("/browse").text
 
     assert "footbar" not in html
-    for moved in ("v" + web._PIX_VERSION, "indexed "):
+    for moved in ("v" + PIX_VERSION, "indexed "):
         assert moved in html, moved
 
 
@@ -3741,7 +3747,7 @@ def test_the_dot_follows_a_delete_without_a_reload(client: TestClient) -> None:
     whatever it was rendered with, and the assertion here — that a line
     mentioning it was present — went on passing for as long as the line was.
     """
-    js = web._BROWSE_JS
+    js = w_pages.BROWSE_JS
     at = js.index("function drawBin(")
     body = js[at:js.index("\n}", at)]
     found = re.search(r"getElementById\('([a-z]+)'\)", body)
@@ -3784,7 +3790,7 @@ def test_the_menu_can_be_dismissed_without_going_back_to_the_trigger(
 
     In the shell, so it is on /history, /accounts and the login screen too —
     the same reason the menu carries no page script of its own."""
-    js = web._MENU_JS
+    js = w_shell.MENU_JS
 
     assert "'Escape'" in js and "me.open = false" in js
     assert "!me.contains(e.target)" in js, "a click elsewhere leaves it open"
@@ -3842,7 +3848,7 @@ def test_the_name_is_clipped_on_a_phone_rather_than_dropped(
     the trigger is a gear whose only label is a drawing, which announces
     itself as a button called nothing — at the one width where checking who
     you are signed in as is hardest."""
-    coarse = _media_block(web._STYLE, "(max-width: 720px)")
+    coarse = _media_block(w_shell.STYLE, "(max-width: 720px)")
     at = coarse.index(".me .name {")
     rule = coarse[at:coarse.index("}", at)]
 
@@ -3888,7 +3894,7 @@ def test_a_filter_keeps_its_place_whether_or_not_it_is_set() -> None:
 
     Lit against dim is what tells them apart; position is what finds them.
     """
-    js = web._BROWSE_JS
+    js = w_pages.BROWSE_JS
     body = js[js.index("function drawChips()"):js.index("function filterMenu")]
 
     # One loop over every filter, rather than one over the set and one over
@@ -3901,12 +3907,12 @@ def test_the_ones_doing_nothing_fold_away_on_a_phone() -> None:
     """Ten glyphs fit across a desktop bar and do not fit across a phone. They
     are hidden rather than moved, so the ones that remain are still where they
     were — which is the whole point of the rule above."""
-    js = web._BROWSE_JS
+    js = w_pages.BROWSE_JS
     body = js[js.index("function drawChips()"):js.index("function filterMenu")]
 
     assert "'chip off spare'" in body
     assert "addchip" in js and "filterMenu" in js
-    narrow = _media_block(web._STYLE, "(max-width: 720px)")
+    narrow = _media_block(w_shell.STYLE, "(max-width: 720px)")
     assert ".chips .spare { display:none; }" in narrow
 
 
@@ -4224,14 +4230,14 @@ def test_one_column_is_not_grouped_on_twice(client: TestClient) -> None:
     other way round is a group of one every time. The menu stops offering it;
     this is the same rule where the state actually lives, because the grouping
     comes out of a URL that people type and edit by hand."""
-    assert web._groupings("event,subevent") == ["event"]
-    assert web._groupings("subevent,event") == ["subevent"]
+    assert w_vocab.groupings("event,subevent") == ["event"]
+    assert w_vocab.groupings("subevent,event") == ["subevent"]
     # The outer one wins, and what asks something else is untouched.
-    assert web._groupings("event,day,subevent") == ["event", "day"]
+    assert w_vocab.groupings("event,day,subevent") == ["event", "day"]
     # Day, month and year read one column too and are deliberately *not* in
     # this: a month inside a year is a real division, and it is the reason the
     # grouping is a list at all.
-    assert web._groupings("year,month,day") == ["year", "month", "day"]
+    assert w_vocab.groupings("year,month,day") == ["year", "month", "day"]
 
 
 def test_a_section_has_one_heading_reading_as_a_path(
@@ -4296,7 +4302,7 @@ def test_the_add_button_is_visible_without_hovering(
 ) -> None:
     """A control you cannot see until you hover the right thing is a control
     you never learn is there."""
-    css = web._STYLE
+    css = w_shell.STYLE
     # The whole rule, not the first hundred-odd characters of it: a property
     # is still declared when somebody adds one above it.
     rule = css[css.index(".addgrp {"):]
@@ -4533,7 +4539,7 @@ def test_the_offer_is_not_made_to_a_desktop_browser(client: TestClient) -> None:
     """Asserted on the snippet rather than on a rendered page, because the
     decision is the browser's to make at run time: the server sends the same
     HTML to every device."""
-    js = web._INSTALL_JS
+    js = w_shell.INSTALL_JS
 
     assert "iPhone|iPad|iPod" in js and "/Android/" in js
     assert "if (!ios && !android) return;" in js
@@ -4579,7 +4585,7 @@ def test_a_finger_gets_a_control_it_can_hit() -> None:
     height a button measures both come off it, so a block that raised the
     buttons without raising it would put a 44px control in a 31px hole.
     """
-    coarse = _media_block(web._STYLE, "(pointer: coarse)")
+    coarse = _media_block(w_shell.STYLE, "(pointer: coarse)")
 
     assert "--ctl:44px" in coarse
     assert "min-height:44px" in coarse
@@ -4590,7 +4596,7 @@ def test_the_three_circles_are_left_out_of_it() -> None:
     `min-height` outranks their fixed `height` and would make an oval of every
     select circle in the grid. They get an invisible slug instead, so twenty
     pixels on screen is forty-four to a thumb."""
-    coarse = _media_block(web._STYLE, "(pointer: coarse)")
+    coarse = _media_block(w_shell.STYLE, "(pointer: coarse)")
 
     assert "button:not(.tick):not(.grppick):not(.pick)" in coarse
     assert ".pick::before, .tick::before, .grppick::before" in coarse
@@ -4603,7 +4609,7 @@ def test_hiding_and_sizing_are_asked_as_two_questions() -> None:
     """A touchscreen laptop has a pointer and wants nothing revealed; a phone
     on a trackpad has a coarse one and wants nothing enlarged. Answering both
     with one query gets one of them wrong."""
-    hover = _media_block(web._STYLE, "(hover: none)")
+    hover = _media_block(w_shell.STYLE, "(hover: none)")
 
     # What hover hides is unreachable here, and only that.
     assert ".choose { opacity:1; }" in hover
@@ -4618,8 +4624,8 @@ def test_a_sign_in_field_does_not_zoom_the_page() -> None:
     *after* it: `.gate input { font:inherit }` is the same weight and the last
     one counts, so the rule would have been written and quietly lost.
     """
-    assert "font-size:16px" in _media_block(web._LOGIN_CSS, "(pointer: coarse)")
-    assert "font-size:16px" in _media_block(web._STYLE, "(pointer: coarse)")
+    assert "font-size:16px" in _media_block(w_shell.LOGIN_CSS, "(pointer: coarse)")
+    assert "font-size:16px" in _media_block(w_shell.STYLE, "(pointer: coarse)")
 
 
 def test_every_control_in_the_bar_grows_together() -> None:
@@ -4627,7 +4633,7 @@ def test_every_control_in_the_bar_grows_together() -> None:
     operation you arrived from, and the one saying which stack you are in — so
     a rule about buttons alone leaves 31px chips in a 44px row, which is the
     misalignment `--ctl` exists to prevent."""
-    coarse = _media_block(web._STYLE, "(pointer: coarse)")
+    coarse = _media_block(w_shell.STYLE, "(pointer: coarse)")
     rule = coarse[coarse.index("button:not(.tick)"):]
 
     assert rule.split("{")[0].strip().endswith(".chip")
@@ -4643,7 +4649,7 @@ def test_a_dropdown_row_outranks_the_rule_above_it() -> None:
     Locked down because it is invisible until somebody opens the account menu
     on a phone, and because the obvious tidy-up is to drop the `:not()`s.
     """
-    coarse = _media_block(web._STYLE, "(pointer: coarse)")
+    coarse = _media_block(w_shell.STYLE, "(pointer: coarse)")
     rows = coarse[coarse.index(".memenu a,"):].split("{")[0]
 
     assert ".memenu button:not(.tick):not(.grppick):not(.pick)" in rows
@@ -4674,7 +4680,7 @@ def test_a_drawing_takes_the_colour_of_whatever_it_is_in() -> None:
     """`currentColor` throughout, so a chip that is doing something and one
     that is not are the same drawing and not two of them — and the dim state,
     the hover and the accent all come free."""
-    svg = web._mark("event")
+    svg = w_marks.mark("event")
 
     assert 'stroke="currentColor"' in svg and "fill=\"none\"" in svg
     # The same grid and weight as the bell in the bar beside them, which is
@@ -4683,7 +4689,7 @@ def test_a_drawing_takes_the_colour_of_whatever_it_is_in() -> None:
 
 
 def test_an_unknown_name_draws_nothing_rather_than_a_broken_shape() -> None:
-    assert web._mark("nonesuch") == ""
+    assert w_marks.mark("nonesuch") == ""
 
 
 def test_the_page_carries_no_instructions(client: TestClient) -> None:
@@ -4714,7 +4720,7 @@ def test_details_is_a_tab_where_there_is_no_room_for_a_column() -> None:
     """330px of rail on a 393px phone leaves sixty pixels of photograph, which
     is the thing the viewer is for. So the two stop sharing: the control that
     opened the column switches between them instead."""
-    narrow = _media_block(web._STYLE, "(max-width: 720px)")
+    narrow = _media_block(w_shell.STYLE, "(max-width: 720px)")
 
     assert "#viewer:not(.norail) .stage { display:none; }" in narrow
     # And the rail takes the whole of it rather than a slice.
@@ -4726,12 +4732,12 @@ def test_the_unused_filters_fold_away_where_they_do_not_fit() -> None:
     the glyphs and the `+` are always rendered and the stylesheet picks, since
     which one applies can change while the page is open by turning the phone
     over."""
-    narrow = _media_block(web._STYLE, "(max-width: 720px)")
+    narrow = _media_block(w_shell.STYLE, "(max-width: 720px)")
 
     assert ".chips .spare { display:none; }" in narrow
     assert ".chips .addchip { display:inline-flex; }" in narrow
     # The other way round outside it.
-    assert ".chips .addchip { display:none; }" in web._STYLE
+    assert ".chips .addchip { display:none; }" in w_shell.STYLE
 
 
 def test_the_two_bars_wear_the_same_drawings() -> None:
@@ -4739,33 +4745,33 @@ def test_the_two_bars_wear_the_same_drawings() -> None:
     — once about what you are looking at, once about what it should become.
     The bars already ask them in the same order; a control that changes its
     face between them is a control you have to learn twice."""
-    assert web._ACT_MARKS["event"] == "event"
-    assert web._ACT_MARKS["tags"] == "tag"
-    assert web._ACT_MARKS["access"] == "audience"
-    assert web._ACT_MARKS["stack"] == "stacks"
-    assert web._ACT_MARKS["delete"] == "deleted"
+    assert w_marks.ACT_MARKS["event"] == "event"
+    assert w_marks.ACT_MARKS["tags"] == "tag"
+    assert w_marks.ACT_MARKS["access"] == "audience"
+    assert w_marks.ACT_MARKS["stack"] == "stacks"
+    assert w_marks.ACT_MARKS["delete"] == "deleted"
     # Which is the same pairing the script uses to decide what a menu writes,
     # and the two must not disagree about what an action is about.
     for act, col in (("tags", "tag"), ("access", "audience"),
                      ("event", "event")):
-        assert f"{act}:'{col}'" in web._BROWSE_JS
+        assert f"{act}:'{col}'" in w_pages.BROWSE_JS
 
 
 def test_every_action_is_drawn() -> None:
     """Eleven buttons in a row and four of them illustrated is not a style,
     it is an unfinished edit."""
-    html = web._actions(web.Principal(name="admin", is_admin=True))
+    html = w_grid.actions(web.Principal(name="admin", is_admin=True))
     acts = set(re.findall(r'data-act="(\w+)"', html))
 
     assert acts
-    undrawn = [a for a in acts if not web._mark(web._ACT_MARKS.get(a, ""))]
+    undrawn = [a for a in acts if not w_marks.mark(w_marks.ACT_MARKS.get(a, ""))]
     assert not undrawn, f"no drawing for: {', '.join(sorted(undrawn))}"
 
 
 def test_no_two_actions_are_drawn_the_same() -> None:
     """Delete and Purge are the nearest pair — both the bin — and the cross
     inside one of them is the whole difference between recoverable and not."""
-    marks = [web._mark(name) for name in web._ACT_MARKS.values()]
+    marks = [w_marks.mark(name) for name in w_marks.ACT_MARKS.values()]
 
     assert len(set(marks)) == len(marks)
 
@@ -4775,16 +4781,16 @@ def test_an_action_keeps_its_word_where_the_script_can_find_it() -> None:
     than keeping a second vocabulary for the same four words. With a drawing
     in there too, the word has to be its own element — `textContent` on the
     button would take the drawing with it, and one control already sets it."""
-    html = web._actions(web.Principal(name="admin", is_admin=True))
+    html = w_grid.actions(web.Principal(name="admin", is_admin=True))
 
     assert '<span class="word">Event&hellip;</span>' in html
-    assert "[data-act=\"'+act+'\"] .word" in web._BROWSE_JS
+    assert "[data-act=\"'+act+'\"] .word" in w_pages.BROWSE_JS
 
 
 def test_an_action_is_its_drawing_alone_on_a_phone() -> None:
     """Eleven drawings and eleven words is two rows of bar on a screen with
     none to give, and the drawing is the half that survives being small."""
-    narrow = _media_block(web._STYLE, "(max-width: 720px)")
+    narrow = _media_block(w_shell.STYLE, "(max-width: 720px)")
 
     assert "#actions .grp button .word { display:none; }" in narrow
     assert "min-width:44px" in narrow
@@ -4794,7 +4800,7 @@ def test_an_action_keeps_a_name_where_the_word_is_hidden() -> None:
     """A control whose only name is switched off by a media query has no name
     at all — not to a screen reader, and not to anyone hovering it on a
     desktop either. So the word is carried three times over."""
-    html = web._actions(web.Principal(name="admin", is_admin=True))
+    html = w_grid.actions(web.Principal(name="admin", is_admin=True))
 
     assert 'title="Make top" aria-label="Make top"' in html
     # The ellipsis says *this one asks something next*, which is a fact about
@@ -4908,7 +4914,7 @@ def test_a_person_is_painted_into_their_own_chips_not_the_access_ones(
     saying who can see it, and took away the mark saying nobody could.
 
     Three fields is one too many for *or else*."""
-    js = web._BROWSE_JS
+    js = w_pages.BROWSE_JS
 
     assert "const PAINTS={tags:'tags', people:'folk', audience:'who'};" in js
     assert "field==='tags'?'tags':'who'" not in js, "the ternary is back"
@@ -4927,7 +4933,7 @@ def test_a_half_written_people_change_is_put_back(
     really written the first part, so the cells it never reached go back to
     what they said. `people` was missing from the list of what to remember,
     so those cells were left claiming the name."""
-    js = web._BROWSE_JS
+    js = w_pages.BROWSE_JS
     at = js.index("const before=todo.map(")
     snapshot = js[at:js.index("}));", at)]
 
@@ -5001,9 +5007,9 @@ def test_people_are_asked_about_separately_from_access(
     """Two chips, two actions, two drawings — and the drawings must not be the
     same one, because telling these two apart is the whole point."""
     assert ("person", "People") in w_vocab.CHIPS
-    assert web._ACT_MARKS["people"] == "person"
-    assert web._ACT_MARKS["access"] == "audience"
-    assert web._mark("person") != web._mark("audience")
+    assert w_marks.ACT_MARKS["people"] == "person"
+    assert w_marks.ACT_MARKS["access"] == "audience"
+    assert w_marks.mark("person") != w_marks.mark("audience")
 
 
 # --- what the household may write ---------------------------------------------
@@ -5127,9 +5133,9 @@ def test_the_bar_and_the_endpoint_read_the_same_table() -> None:
     member is offered writes only fields they may write."""
     for act in w_permissions.HOUSEHOLD:
         for wrote in w_permissions.ACT_WRITES[act]:
-            assert wrote in web._HOUSEHOLD_FIELDS, f"{act} writes {wrote}"
+            assert wrote in w_permissions.HOUSEHOLD_FIELDS, f"{act} writes {wrote}"
     # And the two that are withheld are withheld for a field, not by omission.
-    assert "audience" not in web._HOUSEHOLD_FIELDS
+    assert "audience" not in w_permissions.HOUSEHOLD_FIELDS
     assert "access" not in w_permissions.HOUSEHOLD and "purge" not in w_permissions.HOUSEHOLD
 
 
@@ -5578,7 +5584,7 @@ def test_every_page_that_writes_can_say_it_is_writing(
 def test_the_takeover_is_written_once(client: TestClient) -> None:
     """Two copies is two things to keep in step, and the one that fell behind
     would be the page nobody was looking at."""
-    assert web._BROWSE_JS.count("getElementById('working')") == 1
+    assert w_pages.BROWSE_JS.count("getElementById('working')") == 1
     html = client.get("/browse").text
     assert html.count('id="working"') == 1
 
@@ -5594,7 +5600,7 @@ def test_what_is_left_to_do_is_not_the_colour_of_what_is_done() -> None:
     drew green for as long as it sat higher up the file — a rule that was
     correct and had no effect.
     """
-    css = web._STYLE
+    css = w_shell.STYLE
     rule = ".spread i.none { color:#f2d38a; background:var(--top-bed); }"
 
     assert rule in css
@@ -5605,7 +5611,7 @@ def test_what_is_left_to_do_is_not_the_colour_of_what_is_done() -> None:
 
 def test_the_plus_more_chip_is_gone_from_the_stylesheet() -> None:
     """Cards name every value they hold, so nothing renders it any more."""
-    assert ".spread .more" not in web._STYLE
+    assert ".spread .more" not in w_shell.STYLE
 
 
 def test_the_landing_page_opens_on_the_folders(client: TestClient) -> None:
@@ -5641,7 +5647,7 @@ def test_three_rarely_used_controls_became_one() -> None:
     Only on a phone, now. The size control is worth ninety pixels of a desktop
     bar — it is the one view control you reach for *while* looking at what it
     changes, and a trip into a menu to do that is a trip each way."""
-    coarse = _media_block(web._STYLE, "(max-width: 720px)")
+    coarse = _media_block(w_shell.STYLE, "(max-width: 720px)")
 
     # The name gives way to a gear; the gear is the only thing left.
     assert ".me .name { position:absolute;" in coarse
@@ -5651,7 +5657,7 @@ def test_three_rarely_used_controls_became_one() -> None:
     assert ".memenu .viewrow { display:flex; }" in coarse
     assert ".right .sizeset, .right > .disp { display:none; }" in coarse
     # Which is the off position everywhere else.
-    assert ".memenu .viewrow { display:none; }" in web._STYLE
+    assert ".memenu .viewrow { display:none; }" in w_shell.STYLE
 
 
 def test_the_size_control_stands_in_the_bar_where_there_is_room(
@@ -5703,7 +5709,7 @@ def test_the_corner_stays_where_it_can_be_read(client: TestClient) -> None:
     filters and a gear now, and a picture of the grid under it earns the
     thirty pixels — which is the whole reason the corner is a picture."""
     html = client.get("/browse?event=Italy%20-%20Sicily").text
-    coarse = _media_block(web._STYLE, "(max-width: 720px)")
+    coarse = _media_block(w_shell.STYLE, "(max-width: 720px)")
 
     assert 'class="brand"' in html
     assert ".topbar .brand { display:none; }" not in coarse
@@ -5712,7 +5718,7 @@ def test_the_corner_stays_where_it_can_be_read(client: TestClient) -> None:
 def test_a_filter_doing_nothing_is_not_on_a_phones_bar() -> None:
     """Ten glyphs fit across a desktop bar and do not fit across a phone —
     which was already true, and is the half of this the bar had right."""
-    coarse = _media_block(web._STYLE, "(max-width: 720px)")
+    coarse = _media_block(w_shell.STYLE, "(max-width: 720px)")
 
     assert ".chips .spare { display:none; }" in coarse
     assert ".chips .addchip { display:inline-flex; }" in coarse
@@ -5736,7 +5742,7 @@ def test_the_worker_fetches_a_page_rather_than_the_cached_one() -> None:
     """It claims navigations go to the network every time, and a plain `fetch`
     reads the HTTP cache — so it was handing back the very copy it thought it
     was avoiding."""
-    assert "fetch(req, { cache: 'no-store' })" in web._SERVICE_WORKER
+    assert "fetch(req, { cache: 'no-store' })" in w_pwa.SERVICE_WORKER
 
 
 def test_making_a_control_bigger_does_not_make_it_visible() -> None:
@@ -5750,7 +5756,7 @@ def test_making_a_control_bigger_does_not_make_it_visible() -> None:
     The fourth specificity tie this stylesheet has paid for, and the first
     that was visible from across the room.
     """
-    coarse = _media_block(web._STYLE, "(pointer: coarse)")
+    coarse = _media_block(w_shell.STYLE, "(pointer: coarse)")
     rule = coarse[coarse.index("button:not(.tick)"):]
     rule = rule[:rule.index("}")]
 
@@ -5774,7 +5780,7 @@ def _contrast(a: str, b: str) -> float:
 
 
 def _var(name: str) -> str:
-    found = re.search(re.escape(name) + r":\s*(#[0-9a-f]+)", web._STYLE)
+    found = re.search(re.escape(name) + r":\s*(#[0-9a-f]+)", w_shell.STYLE)
     assert found is not None, name
     return found.group(1)
 
@@ -5799,7 +5805,7 @@ def test_the_quiet_text_is_still_readable_on_it() -> None:
 def test_a_card_is_lifted_as_well_as_outlined() -> None:
     """An edge and a shadow say *this is on top of that* twice, which is what
     a card needs to say when there are forty of them."""
-    tile = web._STYLE[web._STYLE.index(".tile { display:flex"):]
+    tile = w_shell.STYLE[w_shell.STYLE.index(".tile { display:flex"):]
     tile = tile[:tile.index("}")]
 
     assert "box-shadow" in tile and "border:1px solid var(--line)" in tile
@@ -5817,14 +5823,14 @@ def test_every_page_says_which_build_it_is(client: TestClient) -> None:
     """
     for path in ("/browse", "/?date=2026&group=year", "/login"):
         html = client.get(path).text
-        assert f'<meta name="pix-version" content="{web._PIX_VERSION}">' in html, path
+        assert f'<meta name="pix-version" content="{PIX_VERSION}">' in html, path
 
 
 def test_and_says_it_where_somebody_can_read_it(client: TestClient) -> None:
     """Under the account where there is one, beside Sign in where there is
     not."""
-    assert f"v{web._PIX_VERSION}" in client.get("/browse").text
-    assert f"v{web._PIX_VERSION}" in client.get("/login").text
+    assert f"v{PIX_VERSION}" in client.get("/browse").text
+    assert f"v{PIX_VERSION}" in client.get("/login").text
 
 
 # --- getting back -------------------------------------------------------------
@@ -5848,7 +5854,7 @@ def test_the_way_back_is_part_of_the_app_everywhere(client: TestClient) -> None:
     app on a desktop too, and an app is self-contained: the way out of where
     you are belongs in the same place every time, not outside the window on
     one platform and inside it on another."""
-    css = web._STYLE
+    css = w_shell.STYLE
 
     assert ".back { display:inline-flex;" in css
     assert "html[data-inapp]" not in css
@@ -5862,7 +5868,7 @@ def test_the_way_back_is_as_tall_as_what_stands_beside_it(
     aligns to the top, which puts that difference at the bottom edge where it
     reads as a smaller button rather than a centred one. `--ctl` is the number
     they have to agree on."""
-    css = web._STYLE
+    css = w_shell.STYLE
 
     rule = css[css.index(".back {"):css.index("}", css.index(".back {"))]
     assert "min-height:var(--ctl)" in rule, rule
@@ -5930,7 +5936,7 @@ def test_nothing_draws_a_progress_bar_any_more() -> None:
     """It said how much of a group a card was, which the count says in words,
     and how much of it was done, which the chip beside it says by being there.
     A third telling of two things nobody asked twice about."""
-    assert ".tile .bar" not in web._STYLE
+    assert ".tile .bar" not in w_shell.STYLE
     assert not hasattr(web, "_bar")
 
 
@@ -5948,7 +5954,7 @@ def test_a_heading_is_words_rather_than_a_toolbar() -> None:
         # At the start of a line, or this finds the narrower rule that only
         # recolours one of them inside a shelf heading.
         found = re.search(r"^" + re.escape(control) + r"[^}]*}",
-                          web._STYLE, re.M)
+                          w_shell.STYLE, re.M)
         assert found is not None, control
         assert "box-shadow:none" in found.group(0), control
         assert "background:none" in found.group(0), control
@@ -6015,7 +6021,7 @@ def test_a_shelf_heading_leads_with_the_only_part_that_names_it() -> None:
     arrive — a heading that reflows under the pointer is one you cannot aim
     at.
     """
-    block = _media_block(web._STYLE, "(hover: hover)")
+    block = _media_block(w_shell.STYLE, "(hover: hover)")
 
     assert "h3.group.shelf .crumbsep" in block
     assert "opacity:0; pointer-events:none" in block
@@ -6028,7 +6034,7 @@ def test_the_grid_keeps_the_crumb_that_names_its_section() -> None:
     """A grid heading ends in a *value* — the name of the section under it —
     where a shelf heading ends in the name of the cut. Hiding the last crumb
     on both would hide what half of them are for."""
-    block = _media_block(web._STYLE, "(hover: hover)")
+    block = _media_block(w_shell.STYLE, "(hover: hover)")
 
     assert ".shelf" in block
     for line in block.splitlines():
@@ -6039,7 +6045,7 @@ def test_the_grid_keeps_the_crumb_that_names_its_section() -> None:
 def test_only_one_crumb_means_it_is_the_one_that_names_it() -> None:
     """Grouped one level deep the cut's name is the whole heading, and fading
     it leaves a blank row."""
-    block = _media_block(web._STYLE, "(hover: hover)")
+    block = _media_block(w_shell.STYLE, "(hover: hover)")
 
     assert ".crumb:last-child:not(:first-child)" in block
 
@@ -6049,7 +6055,7 @@ def test_nothing_hides_where_there_is_no_way_to_ask_for_it(
 ) -> None:
     """A control you cannot reveal is a control you do not have, so on a phone
     all of it stays on screen."""
-    hover = _media_block(web._STYLE, "(hover: none), (any-pointer: coarse)")
+    hover = _media_block(w_shell.STYLE, "(hover: none), (any-pointer: coarse)")
 
     assert "addgrp { opacity:0" not in hover
     # What `(hover: hover)` fades out is put back, for a touchscreen that
@@ -6062,7 +6068,7 @@ def test_a_touchscreen_that_claims_hover_reveals_nothing_on_hover() -> None:
     """An iPad can report hover, and Safari takes a tap that reveals something
     as the hover alone — the folder card did not open. So the rules that keep
     controls on screen ask about any coarse pointer, not just about hover."""
-    hover = _media_block(web._STYLE, "(hover: none), (any-pointer: coarse)")
+    hover = _media_block(w_shell.STYLE, "(hover: none), (any-pointer: coarse)")
 
     assert ".pick { opacity:.55; }" in hover
 
@@ -6406,8 +6412,8 @@ def test_a_sub_event_is_not_a_filter_of_its_own() -> None:
     # But it is a way to cut the library up, and drilling one sets the event.
     # And it is named for grouping on the whole name — events with no
     # sub-event stand as themselves rather than dropping out of the view.
-    assert ("subevent", "By event and sub-event") in web._GRID_GROUPS
-    assert web._DRILL["subevent"] == "event"
+    assert ("subevent", "By event and sub-event") in w_vocab.GRID_GROUPS
+    assert w_vocab.DRILL["subevent"] == "event"
 
 
 def test_a_household_member_may_name_one_but_not_smuggle_a_share(
@@ -6491,7 +6497,7 @@ def test_video_cannot_be_stacked_yet(
 
 
 def test_the_bar_does_not_offer_to_stack_video() -> None:
-    js = web._BROWSE_JS
+    js = w_pages.BROWSE_JS
     assert "show('stack', stackable &&" in js
     assert "show('top', stackable &&" in js
 
@@ -6509,10 +6515,10 @@ def test_archiving_is_said_as_archiving_in_history() -> None:
     """It is written as an audience, but *gave archived access to 3* is not
     how anybody says it."""
     arch = (decisions.ARCHIVED,)
-    assert web._summary(web._Change(add_audience=arch)) == "archived {n}"  # pyright: ignore[reportPrivateUsage]
-    assert (web._summary(web._Change(remove_audience=arch))  # pyright: ignore[reportPrivateUsage]
+    assert w_writes.summary(w_writes.Change(add_audience=arch)) == "archived {n}"  # pyright: ignore[reportPrivateUsage]
+    assert (w_writes.summary(w_writes.Change(remove_audience=arch))  # pyright: ignore[reportPrivateUsage]
             == "took {n} out of the archive")
-    assert (web._summary(web._Change(add_audience=("family",)))  # pyright: ignore[reportPrivateUsage]
+    assert (w_writes.summary(w_writes.Change(add_audience=("family",)))  # pyright: ignore[reportPrivateUsage]
             == "gave family access to {n}")
 
 
@@ -6619,7 +6625,7 @@ def test_the_grid_comes_a_page_at_a_time(
 ) -> None:
     """The first page with the grid, the rest from `/api/page` as it is
     scrolled towards; a heading counts its whole section either way."""
-    monkeypatch.setattr(web, "FIRST_PAGE", 1)
+    monkeypatch.setattr(w_pages, "FIRST_PAGE", 1)
     html = client.get("/browse?group=none").text
     assert 'data-total="2" data-served="1"' in html
     assert 'id="more"' in html
@@ -6647,6 +6653,6 @@ def test_a_page_is_the_filtered_view(client: TestClient, writable: Path) -> None
 def test_the_row_the_dot_is_about_carries_the_dot(client: TestClient) -> None:
     """A red mark on the name with nothing in the menu pointing back at it
     left you looking for what it meant."""
-    assert ".memenu .bin-link::before" in web._STYLE
-    assert "background:var(--gone)" in web._STYLE[
-        web._STYLE.index(".memenu .bin-link::before"):][:200]
+    assert ".memenu .bin-link::before" in w_shell.STYLE
+    assert "background:var(--gone)" in w_shell.STYLE[
+        w_shell.STYLE.index(".memenu .bin-link::before"):][:200]

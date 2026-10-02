@@ -36,7 +36,14 @@ TESTS = ROOT / "tests"
 BUILTINS = set(dir(builtins)) | {"__name__", "__file__", "__doc__"}
 
 
+#: Public names asked for by `--as`, where dropping the underscore would
+#: collide with something already in use.
+AS: dict[str, str] = {}
+
+
 def public(name: str) -> str:
+    if name in AS:
+        return AS[name]
     return name[1:] if name.startswith("_") and not name.startswith("__") else name
 
 
@@ -199,7 +206,12 @@ def main() -> int:
     ap.add_argument("names", nargs="+")
     ap.add_argument("--doc", default="")
     ap.add_argument("--dry", action="store_true")
+    ap.add_argument("--as", dest="as_", nargs="*", default=[],
+                    help="old=new public names, for a name that would collide")
     args = ap.parse_args()
+    for pair in args.as_:
+        old, _, new = pair.partition("=")
+        AS[old] = new
 
     src = WEB.read_text(encoding="utf-8")
     lines = src.split("\n")
@@ -228,6 +240,10 @@ def main() -> int:
         print(f"refused: the moved code still needs {behind} from web.py")
         return 2
 
+    if args.module in imports or args.module in defined:
+        print(f"refused: '{args.module}' is already a name in web.py — "
+              "importing the new module would shadow it")
+        return 4
     mod = f"pix.nas.webapp.{args.module}"
     # Names that come from other webapp modules arrive under their public
     # names in the new module.
@@ -247,7 +263,29 @@ def main() -> int:
             assert orig is not None
             import_lines[n] = (f"from {module} import {orig}" +
                                (f" as {n}" if n != orig else ""))
-    clash = [p for n, p in rename.items() if p != n and p in needed]
+    # A public name that is also a local somewhere in the moved code would
+    # turn `usual = _usual()` into `usual = usual()`.
+    local_names: set[str] = set()
+    for node, _ in moving:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            t = tables.get((node.name, node.lineno))
+            stack = [t] if t is not None else []
+            while stack:
+                cur = stack.pop()
+                local_names |= {s.get_name() for s in cur.get_symbols()
+                                if s.is_local() or s.is_parameter()}
+                stack.extend(cur.get_children())
+    # A helper the moved code imports from another webapp module keeps its
+    # old alias where its public name would collide (`h as _h` beside a
+    # local `h`); only the moved names have to be named afresh.
+    for n in list(rename):
+        p = rename[n]
+        if n not in moved_names and p != n and (p in needed or p in local_names):
+            kind, module, orig = imports[n]
+            import_lines[n] = f"from {module} import {orig} as {n}"
+            del rename[n]
+    clash = [p for n, p in rename.items()
+             if p != n and (p in needed or p in local_names)]
     if clash:
         print("refused: a public name would collide with one in use:", clash)
         return 3
@@ -303,6 +341,33 @@ def main() -> int:
         anchor = "from pix.nas import webroots\n"
         assert anchor in rest
         rest = rest.replace(anchor, anchor + line + "\n", 1)
+
+    # Routes register by being imported. A module of them that web.py has no
+    # other use for is still imported, and named in `_ROUTES` so the import
+    # is a use rather than an unused line.
+    has_routes = any(
+        isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute)
+        and isinstance(d.func.value, ast.Name) and d.func.value.id == "app"
+        for node, _ in moving for d in getattr(node, "decorator_list", []))
+    if has_routes:
+        reg = f"from pix.nas.webapp import {args.module}"
+        if reg + "\n" not in rest:
+            anchor = "from pix.nas import webroots\n"
+            rest = rest.replace(anchor, anchor + reg + "\n", 1)
+        m = re.search(r"^_ROUTES: tuple\[object, \.\.\.\] = \(([^)]*)\)", rest, re.M)
+        if m:
+            names = [x.strip() for x in m.group(1).split(",") if x.strip()]
+            if args.module not in names:
+                names.append(args.module)
+            rest = (rest[:m.start()] + "_ROUTES: tuple[object, ...] = ("
+                    + ", ".join(names) + ("," if len(names) == 1 else "")
+                    + ")" + rest[m.end():])
+        else:
+            rest = (rest.rstrip("\n") + "\n\n\n"
+                    "#: The modules whose routes this app serves. Imported for\n"
+                    "#: what importing them does — each registers its routes on\n"
+                    "#: `app` — and named here so that is plainly a use.\n"
+                    f"_ROUTES: tuple[object, ...] = ({args.module},)\n")
 
     rest = prune_imports(rest)
 

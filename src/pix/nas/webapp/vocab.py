@@ -6,12 +6,9 @@ serves, and the limits on a page, a bulk edit and a download.
 from __future__ import annotations
 
 from pathlib import Path
-from pix.nas import accounts
-from pix.nas import decisions
-from pix.nas import index as ix
-from pix.nas import paths
-from pix.nas.webapp.app import Principal
-from pix.nas.webapp.app import store
+
+from pix.nas import accounts, decisions, index as ix, paths
+from pix.nas.webapp.app import Principal, store
 
 
 #: Thumbnail size: three values, all three on show, the one you are in
