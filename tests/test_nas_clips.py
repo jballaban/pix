@@ -1222,3 +1222,48 @@ def test_the_index_carries_a_clips_hashes(
     row = _have(app_env, clip)
     assert (row["content_hash"], row["render_hash"]) == ("m:cut", "m:play")
     assert row["clip_of"] == "b.mp4", "the note became a row of its own"
+
+
+# --- what Type says about clips and stills ------------------------------------
+
+def _kinds(app_env: dict[str, Path], view: ix.Filters) -> set[str]:
+    """The names a Type filter matches, asked of the clause itself — what it
+    answers, apart from everything else a listing leaves out."""
+    sql, params = ix._clauses(view)["kind"]  # pyright: ignore[reportPrivateUsage]
+    conn = ix.connect(app_env["db"])
+    return {str(r[0]) for r in conn.execute(
+        f"SELECT name FROM files WHERE {sql}", params)}
+
+
+def test_type_tells_a_clip_from_its_video_and_a_still_from_a_photo(
+    client: TestClient, video: Path, app_env: dict[str, Path]
+) -> None:
+    """Four that do not overlap, so *videos but not clips* is just Videos."""
+    clip, still = _make(client, (10.0, 20.0), (30.0, 30.0))
+
+    assert _kinds(app_env, ix.Filters(kind="clip")) == {clip}
+    assert _kinds(app_env, ix.Filters(kind="still")) == {still}
+    assert _kinds(app_env, ix.Filters(kind="video")) == {"b.mp4"}
+    assert "a.jpg" in _kinds(app_env, ix.Filters(kind="photo"))
+    assert still not in _kinds(app_env, ix.Filters(kind="photo"))
+    # The old halves are still understood, and are both of their parts.
+    assert _kinds(app_env, ix.Filters(kind="video")) | {clip} == _kinds(
+        app_env, ix.Filters(kind=("video", "clip")))
+
+
+def test_to_a_viewer_who_may_not_see_the_source_a_clip_is_a_video(
+    client: TestClient, video: Path, app_env: dict[str, Path]
+) -> None:
+    """Filtering on Clip must not say there is more footage than they were
+    given — the same rule the clip badge keeps."""
+    (clip,) = _make(client, (10.0, 20.0))
+    kid = frozenset({"kid"})
+
+    assert clip in _kinds(app_env, ix.Filters(kind="video", viewer=kid))
+    assert clip not in _kinds(app_env, ix.Filters(kind="clip", viewer=kid))
+
+
+def test_an_old_link_to_a_type_opens_both_halves(client: TestClient) -> None:
+    html = client.get("/browse?kind=video").text
+    view = html[html.index("const VIEW="):html.index("const VIEW=") + 300]
+    assert '"kind": ["video", "clip"]' in view, view

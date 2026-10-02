@@ -1554,7 +1554,27 @@ def _clauses(filters: Filters) -> dict[str, tuple[str, dict[str, Any]]]:
     any_of("tag", tag)
     any_of("person", person)
     any_of("audience", audience)
-    any_of("kind", column("files.kind"))
+    # What a file is, finer than its kind: a still is a photograph cut from
+    # a video and a clip is a piece of one. Four that do not overlap, so
+    # *videos but not clips* is simply *Videos* — any of, with nothing to
+    # exclude. A clip is one only to somebody who may see what it was cut
+    # from (`_source_seen`); to anyone else it is a video like any other, and
+    # a filter that answered otherwise would say there is more footage than
+    # they were given. `image` and `video` are still understood: they are the
+    # two halves, and what a folder of a grouping by type links to.
+    seen, seen_params = _source_seen(filters)
+    cut = f"(files.clip_of IS NOT NULL AND {seen})"
+    kinds = {"photo": f"(files.kind = 'image' AND NOT {cut})",
+             "still": f"(files.kind = 'image' AND {cut})",
+             "video": f"(files.kind = 'video' AND NOT {cut})",
+             "clip": f"(files.kind = 'video' AND {cut})"}
+
+    def kind(value: str, k: str) -> tuple[str, dict[str, Any]]:
+        if value in kinds:
+            return kinds[value], dict(seen_params)
+        return column("files.kind")(value, k)
+
+    any_of("kind", kind)
     any_of("band", column("files.band"))
     any_of("source", column("COALESCE(files.source, '(unknown)')"))
     any_of("camera", column("COALESCE(files.camera, '(unknown)')"))

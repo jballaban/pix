@@ -102,6 +102,9 @@ const VIEW = { event: null, date: null, tag: null, audience: null, kind: null,
                band: null, deleted: null, stacks: null, within: null };
 globalThis.ARCHIVED = 'archived';
 globalThis.ARCHIVED_LABEL = 'Hidden';
+// The Type checklist's headings, as the page is handed them.
+globalThis.FIXED_GROUPS = { kind: [['All photos', ['photo', 'still']],
+                                   ['All videos', ['video', 'clip']]] };
 
 const laneOf = (c, where) => {
   const ov = c.children.find(k => k._classes.has('ov') && k._classes.has(where));
@@ -120,7 +123,10 @@ try {
     'USUAL', 'GRID_GROUPS', 'ONE_FIELD', 'GROUPING', 'PAGE', 'TIERS',
     'UNREVIEWED', 'EVENT_SEP', 'NO_EVENT', 'STACK', 'BACK', 'setTimeout', js,
   )(document, window, fetch, localStorage, location, history, () => true,
-    VIEW, [['event', 'Event']], {}, {}, true, ['family'], ['family'], 'family',
+    VIEW, [['event', 'Event'], ['kind', 'Type']],
+    { kind: [['photo', 'Photos'], ['still', 'Stills'], ['video', 'Videos'],
+             ['clip', 'Clips'], ['other', 'Other']] },
+    {}, true, ['family'], ['family'], 'family',
     [['day', 'By day']], { event: 'event', subevent: 'event' }, ['day'],
     '/browse', [['/thumb/', 400]], 'new', ' > ', '(none)', '', '', fn => fn());
 } catch (e) {
@@ -173,6 +179,32 @@ opt('clip', 'off').click();
 check('a fixed fact is turned off, not moved',
       root.getAttribute('data-info-clip') === 'off'
       && holds(fixOf(c, 'top'), 'clip-mark'));
+
+// --- a heading ticks everything under it --------------------------------------
+{
+  const menu = document.byId.menu;
+  const chip = document.byId.chips.children.find(b => b.title === 'Type');
+  chip.click();
+  const rows = () => menu.querySelectorAll('.opt');
+  const row = label => rows().find(
+    o => new RegExp('<span>' + label + '</span>').test(o.innerHTML));
+  const state = label => row(label) && row(label).dataset.state;
+  check('the Type checklist has a heading for the videos', !!row('All videos'),
+        rows().map(o => o.innerHTML).join(' | '));
+  row('All videos').click();
+  check('ticking it ticks Videos and Clips',
+        state('Videos') === 'all' && state('Clips') === 'all'
+        && state('All videos') === 'all');
+  check('and nothing else', state('Photos') === 'none');
+  row('Clips').click();
+  check('one of the two ticked is a dot on the heading',
+        state('All videos') === 'some');
+  row('All videos').click();
+  check('a part-ticked heading ticks the rest', state('Clips') === 'all');
+  row('All videos').click();
+  check('a full one unticks them both',
+        state('Videos') === 'none' && state('Clips') === 'none');
+}
 
 if (failures.length) {
   failures.forEach(f => console.log('FAIL ' + f));

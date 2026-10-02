@@ -539,6 +539,8 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
    screen at once — an event divided into three is three rows under it, not a
    second panel you have to open the event to find. */
 .opt.sub { padding-left:27px; }
+/* A heading that ticks the values under it, e.g. *All videos*. */
+.opt.grouphead { font-weight:600; }
 /* Naming a part of an event, under the event it is part of and after the
    parts it already has. A word until it is wanted: dividing an event up is
    done once and picked from ever after, so a box standing open under every
@@ -2409,10 +2411,17 @@ def filters(
                       stacks=picked,
                       apart=apart == "1" or legacy_apart,
                       unfold="stack" in _groupings(group),
-                      kind=_pick(kind), band=_pick(band),
+                      kind=_pick([k for v in kind or []
+                                  for k in _KIND_HALVES.get(v, (v,))]),
+                      band=_pick(band),
                       camera=_pick(camera), source=_pick(source),
                       viewer=user.scope,
                       deleted=_both_sides(deleted, op, user))
+
+
+#: The two kinds an address used to say, as the boxes they are now.
+_KIND_HALVES: dict[str, tuple[str, ...]] = {
+    "image": ("photo", "still"), "video": ("video", "clip")}
 
 
 def _pick(values: list[str] | None) -> ix.Pick:
@@ -3109,6 +3118,7 @@ def _view_script(user: Principal, view: ix.Filters, groups: list[str], *,
     return (
         f"<script>const VIEW={_js(_view_dict(view))},"
         f"CHIPS={_js(_chips(user))},FIXED={_js(_FIXED)},"
+        f"FIXED_GROUPS={_js(_FIXED_GROUPS)},"
         f"EXTRA={_js(_EXTRA)},ADMIN={_js(user.is_admin)},"
         f"USERS={_js(_audience_names())},GROUPS={_js(_group_names())},"
         f"MARKS={_js({c: _mark(c) for c, _ in _chips(user)})},"
@@ -4080,7 +4090,8 @@ def _mark(name: str, size: int = 17) -> str:
 
 #: Complete vocabularies — these columns cannot hold anything else.
 _FIXED: dict[str, tuple[tuple[str, str], ...]] = {
-    "kind": (("image", "Photos"), ("video", "Video"), ("other", "Other")),
+    "kind": (("photo", "Photos"), ("still", "Stills"), ("video", "Videos"),
+             ("clip", "Clips"), ("other", "Other")),
     "band": (("small", "Small / short"), ("medium", "Medium"),
              ("large", "Large / long")),
     # Off is the third value and has no entry: clearing the chip is what says
@@ -4093,6 +4104,14 @@ _FIXED: dict[str, tuple[tuple[str, str], ...]] = {
     # something of its own; folding is the default now, so it does not.
     "stacks": (("stacked", "Stacked"), ("suggested", "Suggested"),
                ("single", "Not in a stack")),
+}
+
+#: Headings in a fixed filter's checklist, each standing for the values
+#: under it: ticking one ticks them all. Not a submenu — a row like any
+#: other, which is what lets a finger use it.
+_FIXED_GROUPS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
+    "kind": (("All photos", ("photo", "still")),
+             ("All videos", ("video", "clip"))),
 }
 
 #: How the grid can be cut up, and what to call each choice.
@@ -4528,6 +4547,8 @@ function url(patch){
 // would otherwise be a button with nothing in it, which is invisible — so an
 // undrawn filter falls back to being a word, the way all of them used to be.
 const MARK=(typeof MARKS!=='undefined')?MARKS:{};
+// A fixed filter's headings (`_FIXED_GROUPS`), where it has any.
+const HEADS=(typeof FIXED_GROUPS!=='undefined')?FIXED_GROUPS:{};
 function markOf(col,label){return MARK[col]||esc(label);}
 
 function drawChips(){
@@ -5104,6 +5125,32 @@ async function openMenu(anchorEl,ctx){
                                      &&USERS.includes(o.value)));
       group('No longer an account',
             named.filter(o=>!USERS.includes(o.value)));
+    }else if(picks&&HEADS[ctx.column]){
+      // A heading for each family, ticking everything under it — *all
+      // videos* is Videos and Clips — then the family, then what belongs to
+      // none. Tri-state, like every box here: some of them ticked is a dot.
+      const inGroup=new Set();
+      for(const [title,vals] of HEADS[ctx.column]){
+        const kids=vals.map(v=>left.find(o=>o.value===v)).filter(Boolean);
+        if(!kids.length) continue;
+        kids.forEach(o=>inGroup.add(o.value));
+        const head=opt({label:title,n:null},null,true);
+        head.classList.add('grouphead');
+        const on=kids.filter(o=>picks.has(o.value)).length;
+        mark(head,on===0?'none':on===kids.length?'all':'some');
+        head.onclick=e=>{
+          e.stopPropagation();
+          const all=kids.every(o=>picks.has(o.value));
+          kids.forEach(o=>all?picks.delete(o.value):picks.add(o.value));
+          const q=document.getElementById('menuq'); render(q?q.value:'');
+        };
+        list.appendChild(head);
+        kids.forEach(o=>{
+          const d=opt(o,()=>choose(o.value),true);
+          d.classList.add('sub'); list.appendChild(d);
+        });
+      }
+      left.filter(o=>!inGroup.has(o.value)).forEach(o=>place(o,list));
     }else{
       // Three bands, most relevant first: values already used by what you
       // are looking at, then by anything one filter away, then the rest.
