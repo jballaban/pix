@@ -28,6 +28,10 @@ from pix.nas import derive
 from pix.nas import history
 from pix.nas import index as ix
 from pix.nas import web
+from pix.nas.webapp import permissions as w_permissions
+from pix.nas.webapp import vocab as w_vocab
+from pix.nas.webapp import marks as w_marks
+from pix.nas.webapp import text as w_text
 from pix.nas import webroots
 from pix.nas.web import _split
 from pix.nas.decisions import Decision
@@ -398,7 +402,7 @@ def test_every_list_of_questions_is_in_the_same_order(
     and no filter is displaced by it.
     """
     html = client.get("/browse?event=Italy%20-%20Sicily").text
-    bar = [col for col, _ in web._CHIPS]
+    bar = [col for col, _ in w_vocab.CHIPS]
 
     others = {
         "the edit bar": _as_columns(re.findall(r'data-act="(\w+)"', html)),
@@ -420,7 +424,7 @@ def test_the_two_bars_ask_the_same_questions_first(client: TestClient) -> None:
     acts = _as_columns(re.findall(r'data-act="(\w+)"', html))
 
     assert acts[:5] == ["event", "tag", "person", "date", "audience"]
-    assert [c for c, _ in web._CHIPS][:5] == acts[:5]
+    assert [c for c, _ in w_vocab.CHIPS][:5] == acts[:5]
 
 
 def test_one_bar_separates_what_it_is_from_what_happens_to_it(
@@ -736,7 +740,7 @@ def test_a_stack_is_no_longer_somewhere_the_library_can_be_narrowed_to(
     rebuilds its own address out of. What is left is the query the stack page
     runs, and the one thing a write has to say about where it was made."""
     assert "within" not in ix.Filters.NAMES
-    assert "within" not in [name for name, _ in web._CHIPS]
+    assert "within" not in [name for name, _ in w_vocab.CHIPS]
 
     _two_files(writable, app_env)
     client.post("/api/decide/bulk", json={
@@ -2530,15 +2534,15 @@ def test_home_shows_when_the_index_was_built(client: TestClient) -> None:
 def test_age_is_rendered_in_words() -> None:
     import time as _t
 
-    assert web._age(_t.time()) == "just now"
-    assert web._age(_t.time() - 600) == "10m ago"
-    assert web._age(_t.time() - 7200) == "2h ago"
-    assert web._age(_t.time() - 86400 * 3) == "3d ago"
+    assert w_text.age(_t.time()) == "just now"
+    assert w_text.age(_t.time() - 600) == "10m ago"
+    assert w_text.age(_t.time() - 7200) == "2h ago"
+    assert w_text.age(_t.time() - 86400 * 3) == "3d ago"
 
 
 def test_an_index_without_a_timestamp_still_renders() -> None:
     """Older index files predate the built_at row; they must not 500."""
-    assert web._age(None) == "at an unknown time"
+    assert w_text.age(None) == "at an unknown time"
 
 
 # --- curation ----------------------------------------------------------------
@@ -4654,14 +4658,14 @@ def test_every_filter_has_a_drawing() -> None:
     added to `_CHIPS` without a mark is a button with nothing in it. The page
     falls back to the name rather than rendering an empty control — this is
     what stops that fallback from being the thing anybody actually sees."""
-    missing = [col for col, _ in web._CHIPS if col not in web._MARKS]
+    missing = [col for col, _ in w_vocab.CHIPS if col not in w_marks.MARKS]
 
     assert not missing, f"no drawing for: {', '.join(missing)}"
 
 
 def test_no_two_filters_are_drawn_the_same() -> None:
     """They are told apart at seventeen pixels and only by their shape."""
-    marks = [web._MARKS[col] for col, _ in web._CHIPS]
+    marks = [w_marks.MARKS[col] for col, _ in w_vocab.CHIPS]
 
     assert len(set(marks)) == len(marks)
 
@@ -4996,7 +5000,7 @@ def test_people_are_asked_about_separately_from_access(
 ) -> None:
     """Two chips, two actions, two drawings — and the drawings must not be the
     same one, because telling these two apart is the whole point."""
-    assert ("person", "People") in web._CHIPS
+    assert ("person", "People") in w_vocab.CHIPS
     assert web._ACT_MARKS["people"] == "person"
     assert web._ACT_MARKS["access"] == "audience"
     assert web._mark("person") != web._mark("audience")
@@ -5121,12 +5125,12 @@ def test_a_bulk_edit_cannot_share_either(
 def test_the_bar_and_the_endpoint_read_the_same_table() -> None:
     """Two lists would be two things to forget. Every action a household
     member is offered writes only fields they may write."""
-    for act in web.HOUSEHOLD:
-        for wrote in web._ACT_WRITES[act]:
+    for act in w_permissions.HOUSEHOLD:
+        for wrote in w_permissions.ACT_WRITES[act]:
             assert wrote in web._HOUSEHOLD_FIELDS, f"{act} writes {wrote}"
     # And the two that are withheld are withheld for a field, not by omission.
     assert "audience" not in web._HOUSEHOLD_FIELDS
-    assert "access" not in web.HOUSEHOLD and "purge" not in web.HOUSEHOLD
+    assert "access" not in w_permissions.HOUSEHOLD and "purge" not in w_permissions.HOUSEHOLD
 
 
 def test_a_household_member_can_see_inside_a_stack(
@@ -5409,7 +5413,7 @@ def test_the_landing_page_asks_the_actions_in_the_bar_order(
     keeps are in the order the grid puts them in."""
     html = client.get("/?date=2026&group=month,event").text
     acts = _as_columns(re.findall(r'data-act="(\w+)"', html))
-    bar = [col for col, _ in web._CHIPS]
+    bar = [col for col, _ in w_vocab.CHIPS]
     assert acts[:4] == ["event", "tag", "audience", "download"], acts
     shared = set(bar) & set(acts)
 
@@ -6397,7 +6401,7 @@ def test_a_sub_event_is_not_a_filter_of_its_own() -> None:
     """One field at two widths means one filter at two widths. A second
     parameter would be a second thing that could disagree with the first about
     which files are in an event."""
-    assert "subevent" not in dict(web._CHIPS)
+    assert "subevent" not in dict(w_vocab.CHIPS)
     assert "subevent" not in ix.Filters.NAMES
     # But it is a way to cut the library up, and drilling one sets the event.
     # And it is named for grouping on the whole name — events with no

@@ -41,7 +41,6 @@ from fastapi.responses import (
     FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response,
     StreamingResponse,
 )
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
 
 from pix import __version__ as _PIX_VERSION
@@ -57,6 +56,72 @@ from pix.nas import destroy as destroy_mod
 from pix.nas import history
 from pix.nas import index as ix
 from pix.nas import webroots
+from pix.nas.webapp.permissions import (
+    HOUSEHOLD_FIELDS as _HOUSEHOLD_FIELDS,
+    may,
+)
+from pix.nas.webapp.vocab import (
+    BULK_LIMIT,
+    FIRST_PAGE,
+    HOME_GROUPING,
+    META_READERS,
+    NEXT_PAGE,
+    PAGE_LIMIT,
+    ZIP_LIMIT,
+    ARCHIVED_LABEL as _ARCHIVED_LABEL,
+    DRILL as _DRILL,
+    EXTRA as _EXTRA,
+    FIXED as _FIXED,
+    FIXED_GROUPS as _FIXED_GROUPS,
+    GRID_GROUPS as _GRID_GROUPS,
+    INFO as _INFO,
+    KIND_HALVES as _KIND_HALVES,
+    KIND_WORDS as _KIND_WORDS,
+    OLD_KINDS as _OLD_KINDS,
+    ONE_FIELD as _ONE_FIELD,
+    SIZES as _SIZES,
+    SPREAD_FILTER as _SPREAD_FILTER,
+    SPREAD_LABEL as _SPREAD_LABEL,
+    TIERS as _TIERS,
+    audience_names as _audience_names,
+    chips as _chips,
+    group_names as _group_names,
+    groupings as _groupings,
+    mime as _mime,
+    pick as _pick,
+)
+from pix.nas.webapp.marks import (
+    ACT_MARKS as _ACT_MARKS,
+    BACK as _BACK,
+    FAVICON as _FAVICON,
+    FILES_MARK as _FILES_MARK,
+    FOLDERS_MARK as _FOLDERS_MARK,
+    GEAR as _GEAR,
+    ICONS as _ICONS,
+    logo_mark as _logo_mark,
+    mark as _mark,
+)
+from pix.nas.webapp.app import (
+    Principal,
+    usual as _usual,
+    write_lock as _write_lock,
+    app,
+    db,
+    require_admin,
+    require_user,
+    signed_in,
+    store,
+)
+from pix.nas.webapp.text import (
+    age as _age,
+    dur as _dur,
+    h as _h,
+    js as _js,
+    q as _q,
+    split as _split,
+    under as _under,
+    when as _when,
+)
 from pix.nas.decisions import Decision, Unset
 
 
@@ -68,155 +133,15 @@ async def _lifespan(_: FastAPI) -> AsyncGenerator[None]:
     yield
 
 
-app: FastAPI = FastAPI(title="pix2", docs_url=None, redoc_url=None,
-                       lifespan=_lifespan)
-
-
-@app.exception_handler(status.HTTP_401_UNAUTHORIZED)
-async def _unauthenticated(  # pyright: ignore[reportUnusedFunction]
-        request: Request,
-                           exc: Exception) -> Response:
-    """Send a browser to the form; tell a script the truth.
-
-    Deliberately **no** `WWW-Authenticate` header: it would make the browser
-    pop its own credential box and start caching, which is the behaviour the
-    cookie exists to replace.
-    """
-    if "text/html" in request.headers.get("accept", ""):
-        nxt = quote(str(request.url.path or "/"), safe="")
-        return RedirectResponse(f"/login?next={nxt}", status_code=303)
-    return JSONResponse({"detail": "sign in"}, status_code=401)
-_security = HTTPBasic(auto_error=False)
-
-#: Serializes decision writes. Spec §8 makes last-write-wins the conflict policy
-#: and leans on exactly this to keep it a *policy* question: two people tiering
-#: the same photo pick a winner, they never interleave into a corrupt sidecar.
-_write_lock: threading.Lock = threading.Lock()
+# Attached here rather than when the app is made: what it starts belongs to
+# the clips, which are assembled after the app they serve.
+app.router.lifespan_context = _lifespan
 
 
 # --- auth --------------------------------------------------------------------
 
-def store() -> accounts.Store:
-    """The account store, read per request.
-
-    Re-read rather than cached because it is small and changes rarely, and a
-    stale cache here means a removed account still works — the one kind of
-    staleness an access system cannot have.
-    """
-    return accounts.load()
-
-
-_USUAL: dict[str, Any] = {"key": None, "value": None, "checked": 0.0,
-                          "path": None}
-
-
-def _usual() -> str | None:
-    """The household's usual audience, read again only when the file changes.
-
-    Not `store()`: that is read fresh on every request on purpose, because a
-    stale copy is a removed account that still works. This is the one value
-    a thumbnail needs — whether its audience is the ordinary one — and it is
-    display, not access. Read per thumbnail it was one file read over SMB for
-    every cell: 1,583 of them to draw 2,000 thumbnails, most of the time
-    spent drawing the grid.
-    """
-    # Looked at no more than every two seconds: a grid draws two thousand
-    # thumbnails in one go, and asking the share two thousand times whether
-    # the file changed costs what reading it did.
-    now = time.monotonic()
-    path = accounts.ACCOUNTS_FILE
-    if (_USUAL["key"] is not None and _USUAL["path"] == path
-            and now - float(_USUAL["checked"]) < 2.0):
-        return cast("str | None", _USUAL["value"])
-    _USUAL["checked"] = now
-    _USUAL["path"] = path
-    try:
-        st = path.stat()
-        key: object = (str(path), st.st_mtime_ns, st.st_size)
-    except OSError:
-        key = None
-    if key is None or key != _USUAL["key"]:
-        _USUAL["value"] = store().usual
-        _USUAL["key"] = key
-    return cast("str | None", _USUAL["value"])
-
-
-@dataclass(frozen=True)
-class Principal:
-    """Who is asking, and what that entitles them to.
-
-    `scope` is derived here, once, from the credentials — never from anything
-    the request can influence.
-    """
-
-    name: str
-    is_admin: bool
-
-    #: Every name this person's access can be granted to — themselves, and the
-    #: roles they hold. A share names one or the other and the check cannot
-    #: tell them apart, which is what keeps roles from being a second mechanism.
-    grants: frozenset[str] = frozenset()
-
-    @property
-    def scope(self) -> frozenset[str] | None:
-        """What to restrict queries to, or None for an admin (no restriction)."""
-        return None if self.is_admin else (self.grants | {self.name})
-
-
-def _principal(book: accounts.Store, name: str) -> Principal:
-    return Principal(name, is_admin=(name == accounts.ADMIN),
-                     grants=book.grants(name))
-
-
-def signed_in(
-    request: Request,
-    credentials: Annotated[HTTPBasicCredentials | None, Depends(_security)],
-) -> Principal | None:
-    """Who this request is, or None.
-
-    Two ways in. The **cookie** is what a browser uses, because HTTP Basic
-    cannot log out — browsers cache the credentials and offer no way to clear
-    them, which makes *switch to admin and back* impossible. **Basic** is still
-    accepted for scripting, but never challenged for: with no
-    `WWW-Authenticate` header a browser will not start caching one, so the
-    cookie stays the only thing it holds.
-    """
-    book = store()
-    name = accounts.identify(book, request.cookies.get(accounts.COOKIE))
-    if name and (name == accounts.ADMIN or name in book.users):
-        return _principal(book, name)
-    if credentials and accounts.check(book, credentials.username,
-                                      credentials.password):
-        return _principal(book, accounts.canonical(credentials.username))
-    return None
-
-
-def require_user(
-    user: Annotated[Principal | None, Depends(signed_in)],
-) -> Principal:
-    """Refuse anyone who is not signed in."""
-    if user is None:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "sign in")
-    return user
-
-
-def require_admin(user: Annotated[Principal, Depends(require_user)]) -> Principal:
-    """Only an administrator may change who can see what."""
-    if not user.is_admin:
-        raise HTTPException(status.HTTP_403_FORBIDDEN,
-                            "only an administrator can change decisions")
-    return user
-
 
 # --- data --------------------------------------------------------------------
-
-def db() -> sqlite3.Connection:
-    """A connection to the index, or a clear error if it has not been built."""
-    if not webroots.DB_PATH.is_file():
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            f"index not built — run `pix2 index` (expected at {webroots.DB_PATH})")
-    return ix.open_ro(webroots.DB_PATH)
 
 
 @app.exception_handler(ix.StaleIndex)
@@ -261,85 +186,6 @@ async def shapes_disagree(request: Request, exc: Exception) -> Response:
 # --- pages -------------------------------------------------------------------
 
 _STYLE: str = asset("css/app.css")
-
-
-def _folder_path(x: float, y: float, w: float = 16, h: float = 12.4,
-                 r: float = 2.4) -> str:
-    """One folder outline, drawn exactly where a card of the same size sits.
-
-    Same box as the cards in `_FILES_MARK`, so the two marks are the same
-    three shapes at the same three offsets and only their *kind* differs —
-    which is the whole point of a toggle you read at a glance.
-    """
-    # `:g` throughout: plain arithmetic on these puts 20.400000000000002 into
-    # the markup, which renders identically and reads like a mistake.
-    return (f"M{x + r:g} {y:g}h5.2l1.4 1.8H{x + w - r:g}"
-            f"a{r:g} {r:g} 0 0 1 {r:g} {r:g}V{y + h - r:g}"
-            f"a{r:g} {r:g} 0 0 1 {-r:g} {r:g}H{x + r:g}"
-            f"a{r:g} {r:g} 0 0 1 {-r:g} {-r:g}V{y + r:g}"
-            f"a{r:g} {r:g} 0 0 1 {r:g} {-r:g}z")
-
-
-#: The library as files: three photographs, the front one showing.
-_FILES_MARK = (
-    '<svg viewBox="0 0 28 28" width="26" height="26" aria-hidden="true">'
-    '<rect x="9" y="3.6" width="16" height="12.4" rx="2.4" fill="none" '
-    'stroke="var(--dim)" stroke-width="1.4" opacity=".45"/>'
-    '<rect x="6" y="7" width="16" height="12.4" rx="2.4" fill="none" '
-    'stroke="var(--dim)" stroke-width="1.4" opacity=".75"/>'
-    '<rect class="front" x="3" y="10.4" width="16" height="12.4" rx="2.4" '
-    'fill="var(--panel)" stroke="var(--fg)" stroke-width="1.5"/>'
-    '<circle cx="7.6" cy="14.4" r="1.5" fill="var(--top)"/>'
-    '<path d="M4.4 20.6 L8.6 16.6 L11.4 19.2 L13.6 17.2 L17.6 20.8" '
-    'fill="none" stroke="var(--accent)" stroke-width="1.5" '
-    'stroke-linecap="round" stroke-linejoin="round"/></svg>')
-
-#: The same library as folders: the same three shapes, with tabs.
-_FOLDERS_MARK = (
-    '<svg viewBox="0 0 28 28" width="26" height="26" aria-hidden="true">'
-    f'<path d="{_folder_path(9, 3.6)}" fill="none" stroke="var(--dim)" '
-    'stroke-width="1.4" opacity=".45"/>'
-    f'<path d="{_folder_path(6, 7)}" fill="none" stroke="var(--dim)" '
-    'stroke-width="1.4" opacity=".75"/>'
-    f'<path class="front" d="{_folder_path(3, 10.4)}" fill="var(--panel)" '
-    'stroke="var(--fg)" stroke-width="1.5" stroke-linejoin="round"/>'
-    '<path d="M6.4 17.6H13.2" stroke="var(--accent)" stroke-width="1.5" '
-    'stroke-linecap="round"/>'
-    '<path d="M6.4 20.2H10.6" stroke="var(--dim)" stroke-width="1.5" '
-    'stroke-linecap="round"/></svg>')
-
-
-def _logo_mark(size: int) -> str:
-    """The logo: one photograph, on its own.
-
-    Deliberately *not* the three-shape marks above. Those became a control the
-    moment the corner started toggling between files and folders, and a control
-    that changes under you cannot also be what the app is called. This is what
-    stays still — the favicon and the sign-in page — and one card reads at 16
-    pixels where a stack of three is mush.
-    """
-    return (f'<svg viewBox="0 0 28 28" width="{size}" height="{size}" '
-            'aria-hidden="true">'
-            '<rect x="4" y="6" width="20" height="16" rx="3" '
-            'fill="var(--panel)" stroke="var(--fg)" stroke-width="1.6"/>'
-            '<circle cx="9.2" cy="11" r="1.8" fill="var(--top)"/>'
-            '<path d="M5.6 20.4 L11 14.6 L14.4 18.2 L17.2 15.4 L22.4 20.8" '
-            'fill="none" stroke="var(--accent)" stroke-width="1.6" '
-            'stroke-linecap="round" stroke-linejoin="round"/></svg>')
-
-
-#: The same mark with the colours written out, because a favicon is a document
-#: of its own and never sees this page's variables. On a tile, because that is
-#: what a browser puts in a tab strip and a bookmark bar.
-_FAVICON = "data:image/svg+xml," + quote(
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 28 28">'
-    '<rect width="28" height="28" rx="6" fill="#14161a"/>'
-    '<rect x="4" y="6" width="20" height="16" rx="3" fill="#1b1e24" '
-    'stroke="#e7e9ee" stroke-width="1.6"/>'
-    '<circle cx="9.2" cy="11" r="1.8" fill="#e3b341"/>'
-    '<path d="M5.6 20.4 L11 14.6 L14.4 18.2 L17.2 15.4 L22.4 20.8" '
-    'fill="none" stroke="#6aa3ff" stroke-width="1.6" '
-    'stroke-linecap="round" stroke-linejoin="round"/></svg>', safe="")
 
 
 def _zoom(page: str, query: str) -> str:
@@ -566,39 +412,6 @@ window.addEventListener('pageshow', function (e) {{
 </body></html>""")
 
 
-#: Back, on every page and every platform.
-#:
-#: Installed on a phone the app owns the whole window and there is no chrome
-#: around it at all — every filter, every grouping and every folder opened is
-#: a navigation, so the history is right there and nothing could reach it.
-#: It is drawn in a tab as well, beside the browser's own: this is an app on a
-#: desktop too, and the way out of where you are belongs inside it rather than
-#: somewhere you reach for outside the window on one platform and inside it on
-#: another.
-_BACK: str = (
-    '<svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true" '
-    'fill="none" stroke="currentColor" stroke-width="2" '
-    'stroke-linecap="round" stroke-linejoin="round">'
-    '<path d="M15 5.5 8.5 12l6.5 6.5"/></svg>')
-
-
-#: The gear, for when there is no room to spell any of it out.
-_GEAR: str = (
-    '<svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true" '
-    'fill="none" stroke="currentColor" stroke-width="1.7" '
-    'stroke-linecap="round" stroke-linejoin="round">'
-    '<circle cx="12" cy="12" r="3.1"/>'
-    '<path d="M19.1 14.6a1.5 1.5 0 0 0 .3 1.7l.1.1a1.8 1.8 0 1 1-2.6 2.6l-.1-.1'
-    'a1.5 1.5 0 0 0-1.7-.3 1.5 1.5 0 0 0-.9 1.4v.2a1.8 1.8 0 1 1-3.6 0v-.1'
-    'a1.5 1.5 0 0 0-1-1.4 1.5 1.5 0 0 0-1.7.3l-.1.1a1.8 1.8 0 1 1-2.6-2.6l.1-.1'
-    'a1.5 1.5 0 0 0 .3-1.7 1.5 1.5 0 0 0-1.4-.9h-.2a1.8 1.8 0 1 1 0-3.6h.1'
-    'a1.5 1.5 0 0 0 1.4-1 1.5 1.5 0 0 0-.3-1.7l-.1-.1a1.8 1.8 0 1 1 2.6-2.6'
-    'l.1.1a1.5 1.5 0 0 0 1.7.3h.1a1.5 1.5 0 0 0 .9-1.4v-.2a1.8 1.8 0 1 1 3.6 0'
-    'v.1a1.5 1.5 0 0 0 .9 1.4 1.5 1.5 0 0 0 1.7-.3l.1-.1a1.8 1.8 0 1 1 2.6 2.6'
-    'l-.1.1a1.5 1.5 0 0 0-.3 1.7v.1a1.5 1.5 0 0 0 1.4.9h.2a1.8 1.8 0 1 1 0 3.6'
-    'h-.1a1.5 1.5 0 0 0-1.4.9z"/></svg>')
-
-
 def _whoami(user: Principal | None, extra: str = "",
             info: str = "") -> str:
     """Who you are, what is waiting, and everything you do rarely — one
@@ -667,51 +480,6 @@ def _whoami(user: Principal | None, extra: str = "",
         f'<span class="line ver">v{_PIX_VERSION}</span></span>'
         f'<form method="post" action="/logout">'
         f'<button>Sign out</button></form></div></details>')
-
-
-#: Thumbnail size: three values, all three on show, the one you are in
-#: pressed.
-#:
-#: It was one button that cycled, carrying a single letter which said what you
-#: would get *next* — so the size you were in was written nowhere, the third
-#: setting was only reachable by pressing twice to find out it existed, and
-#: going back to the one you liked meant going round. Three values is exactly
-#: the number a segmented control is for.
-#:
-#: **Rendered twice, and that is deliberate.** Where there is room it stands
-#: in the bar, because it is the one view control that is worth a glance while
-#: you are looking rather than a trip into a menu; where there is not it is a
-#: row of the menu, which is where it has lived since the bar was four rows
-#: deep on a phone. Both are always in the markup, because which one applies
-#: changes while the page is open — by turning the phone over — and the page
-#: script drives every copy it finds rather than the first.
-_SIZES: tuple[tuple[str, str, str], ...] = (
-    ("small", "S", "Small thumbnails"),
-    ("medium", "M", "Medium thumbnails"),
-    ("large", "L", "Large thumbnails"))
-
-
-#: What a thumbnail can say about itself, in the order the Display menu lists
-#: it and a lane draws it: `(key, label, where it goes by default)`.
-#:
-#: **Which of them, and where, is the viewer's.** A grid being culled wants
-#: access and nothing else; one being browsed wants none of it. A lane is
-#: `top` or `bot`; `on` is a fact with a place of its own — the clip mark sits
-#: by the stack badge, because it is the same kind of fact about the file.
-#:
-#: What is *not* here cannot be turned off: the stack badge, the duration, the
-#: select circle and the deleted cross. Each is either a control or the one
-#: thing that says the photograph is not what it looks like.
-#:
-#: The defaults are the arrangement before there was a choice, so nothing
-#: moves for anybody who never opens the menu.
-_INFO: tuple[tuple[str, str, str], ...] = (
-    ("people", "People", "bot"),
-    ("access", "Access", "bot"),
-    ("tags", "Tags", "top"),
-    ("subevent", "Sub-event", "bot"),
-    ("clip", "Clip / Still", "on"),
-)
 
 
 def _infoset(key: str, label: str, default: str) -> str:
@@ -996,39 +764,6 @@ def filters(
                       deleted=_both_sides(deleted, op, user))
 
 
-#: A file's `kind` column, as the Type boxes that make it up — what a folder
-#: of a grouping by type stands for: a By-type folder of videos holds the
-#: clips too.
-_KIND_HALVES: dict[str, tuple[str, ...]] = {
-    "image": ("photo", "still"), "video": ("video", "clip")}
-
-#: The words an address used to say for a type and no longer does. Only
-#: `image`: `video` is a box of its own now — videos that are not clips — and
-#: reading it as both halves was why ticking Videos alone came back as
-#: Videos and Clips.
-_OLD_KINDS: dict[str, tuple[str, ...]] = {"image": _KIND_HALVES["image"]}
-
-
-def _pick(values: list[str] | None) -> ix.Pick:
-    """Repeated parameters as a filter: none, one, or several.
-
-    One stays a plain string — *the view is about exactly this* — and
-    repeats collapse, so `?tag=a&tag=a` is the same question as `?tag=a`.
-    """
-    got = tuple(dict.fromkeys(v for v in values or [] if v != ""))
-    if not got:
-        return None
-    return got[0] if len(got) == 1 else got
-
-
-#: What the front door opens on: this year, by month and then by event.
-#: Applied as a **redirect from a bare `/`** rather than as a default inside
-#: the page, so that everything after it is in the URL where the rest of the
-#: view already lives. A default applied invisibly could not be cleared —
-#: taking the year off would put the year straight back on.
-HOME_GROUPING: str = "month,event"
-
-
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request,
          user: Annotated[Principal, Depends(require_user)],
@@ -1154,23 +889,6 @@ def _shelves(rows: list[sqlite3.Row], groups: list[str], view: ix.Filters,
             "".join(_folder(r, groups, view, user, whole or {}, spread)
                     for r in shelf)))
     return "".join(out)
-
-
-#: Which filter each kind of chip narrows by, so a chip on a card can open
-#: the folder already cut down to itself.
-_SPREAD_FILTER: dict[str, str] = {
-    "audience": "audience", "people": "person", "tags": "tag",
-}
-
-#: What kind of thing a chip names, in the words the filter bar uses for it.
-#:
-#: The chip says `family` and its colour says which kind of `family` that is
-#: — which works once the colours are learnt and not before. The name of the
-#: kind is the thing a tooltip should carry, not the value, which is already
-#: the word being pointed at.
-_SPREAD_LABEL: dict[str, str] = {
-    "audience": "Access", "people": "People", "tags": "Tag",
-}
 
 
 def _spread_chips(kind: str, values: list[tuple[str, int]], n: int,
@@ -1352,17 +1070,6 @@ def _span(first: object, last: object) -> str:
     return f"{start.day} {start:%b %Y} – {end.day} {end:%b %Y}"
 
 
-#: What each grouping means as a filter, which is what makes a folder openable.
-#: `camera` is here because of this page: it could cut the library by camera
-#: and then had nowhere to send you.
-_DRILL: dict[str, str] = {
-    "day": "date", "month": "date", "year": "date", "event": "event",
-    "subevent": "event",
-    "camera": "camera", "source": "source", "kind": "kind",
-    "stack": "within",
-}
-
-
 def _imprecise(row: sqlite3.Row, name: str) -> str | None:
     """The date filter holding exactly a section with no `name` key, or None.
 
@@ -1458,30 +1165,6 @@ def _browse_url(view: ix.Filters,
              for x in (v if isinstance(v, list) else [v])]
     return "/browse" + (
         "?" + "&".join(f"{k}={_q(str(x))}" for k, x in pairs) if pairs else "")
-
-
-#: The derived tiers a thumbnail can be drawn from, smallest first, with what
-#: each one is capped at. Sent to the page so that *which tier is big enough*
-#: is arithmetic there rather than a second copy of these numbers — they are
-#: `derive`'s to choose and have already changed once.
-_TIERS: tuple[tuple[str, int], ...] = (
-    ("/thumb/", paths.THUMB_PX),
-    ("/large/", paths.LARGE_PX),
-    ("/preview/", paths.PREVIEW_PX),
-)
-
-#: How many files one grid renders. Enough to hold the largest seeded event
-#: (1,766) in a single page, because paging through a cull loses your place.
-PAGE_LIMIT: int = 2000
-
-#: How many thumbnails come with the grid, and how many each later page
-#: brings. Enough to fill a large screen at the small size twice over, so
-#: the first scroll has something under it; small enough that a view of the
-#: whole library answers in a quarter of a second rather than in ten. The
-#: rest arrive as they are scrolled towards — a file nobody scrolls to is
-#: never queried, drawn or sent.
-FIRST_PAGE: int = 240
-NEXT_PAGE: int = 240
 
 
 def _totals(conn: sqlite3.Connection, view: ix.Filters,
@@ -1813,51 +1496,6 @@ def _cuts_badge(row: sqlite3.Row) -> str:
             f'{_h(" · ".join(words))}</a>')
 
 
-_ACT_WRITES: dict[str, tuple[str, ...]] = {
-    "event": ("event",),
-    "tags": ("tags",),
-    "people": ("people",),
-    "date": ("date_override",),
-    "access": ("audience",),
-    "stack": ("stacked_under",),
-    "top": ("stacked_under",),
-    "unstack": ("stacked_under",),
-    "nostack": ("no_stack", "stacked_under"),
-    "delete": ("deleted",),
-    "restore": ("deleted",),
-    # Takes a copy away and decides nothing, so it writes no field — and is
-    # listed anyway, because a table of actions with one missing is a table
-    # nobody can read as complete.
-    "download": (),
-    "purge": (),
-    # Opens a page rather than writing anything here; the clips it makes are
-    # written through their own routes, which are an administrator's.
-    "splice": (),
-}
-
-#: What a household member gets.
-#:
-#: The family curates (§8) — *tagging and ranking are the whole point of the
-#: app* — and the whole edit bar being an administrator's is the opposite of
-#: that. What they do not get is the two that cannot be taken back by somebody
-#: else noticing: **access**, which is the only control that can show a
-#: photograph to a person who should not see it, and **purge**, which ends the
-#: file. **Restore** is absent because `/history` is, and the deleted are not
-#: in anybody else's view to find: deleting is theirs, undeleting is not.
-HOUSEHOLD: frozenset[str] = frozenset(_ACT_WRITES) - {"access", "purge",
-                                                      "restore", "splice"}
-
-#: The decision fields a household member may write, derived rather than
-#: listed — a second list is a second thing to forget.
-_HOUSEHOLD_FIELDS: frozenset[str] = frozenset(
-    f for act in HOUSEHOLD for f in _ACT_WRITES[act])
-
-
-def may(user: Principal, act: str) -> bool:
-    """Whether this person gets this action."""
-    return user.is_admin or act in HOUSEHOLD
-
-
 def _writable(user: Principal, change: _Change) -> None:
     """Refuse a decision that touches a field this person may not write.
 
@@ -2006,25 +1644,6 @@ def _chips_html(cls: str, values: list[str]) -> str:
         return ""
     chips = "".join(f'<i title="{_h(v)}">{_h(v)}</i>' for v in values)
     return f'<span class="{cls}" title="{_h(", ".join(values))}">{chips}</span>'
-
-
-def _groupings(raw: str) -> list[str]:
-    """The grouping levels, outermost first.
-
-    A list rather than one key, so a day inside an event is expressible.
-    Unknown and repeated names are dropped rather than refused: this comes
-    out of a URL, which people type and edit by hand.
-    """
-    if raw.strip() == "none":
-        return []
-    out: list[str] = []
-    for name in raw.split(","):
-        name = name.strip()
-        if name in ix.GROUPINGS and name != "none" and name not in out                 and not any(_same_field(name, had) for had in out):
-            out.append(name)
-    # Nothing recognisable is a typo, not a request to stop grouping — `none`
-    # says that, and says it on purpose.
-    return out[:3] or ["day"]
 
 
 def _sections(rows: list[sqlite3.Row], groups: list[str],
@@ -2486,228 +2105,6 @@ def _view_dict(view: ix.Filters) -> dict[str, str | list[str] | None]:
     return out
 
 
-def _chips(user: Principal) -> tuple[tuple[str, str], ...]:
-    """The filters this person gets.
-
-    Access is an administrator's control. Everyone else sees only what has
-    been shared with them, so filtering by who else can see it offers a
-    choice between their whole world and nothing.
-
-    The bin is an administrator's too, and for a household member it is not
-    merely hidden but empty by definition: the deleted are in nobody else's
-    view to be found, which is what makes deleting safe to hand over and
-    restoring not.
-
-    **Stacks are everyone's**, because the stack actions are. A thousand
-    suggestions is shared work, and *Not a stack* cannot be reached without
-    the filter that makes a suggestion fold into one — see `_stacks`, which
-    still leaves the default the safe way round for a household member.
-    """
-    return tuple((col, label) for col, label in _CHIPS
-                 if col not in ("audience", "deleted")
-                 or user.is_admin)
-
-
-def _group_names() -> list[str]:
-    """The groups, so the access menu can put them before the individuals."""
-    book = store()
-    return sorted(set(book.groups) - accounts.RESERVED)
-
-
-def _audience_names() -> list[str]:
-    """Who access can be given to: **groups first, then people.**
-
-    In that order because a group is almost always the right answer — sharing
-    with `family` keeps working as the family changes, where naming four
-    people does not. Both are offered, because sometimes one person really is
-    the audience.
-
-    Listed at all because sharing has to be possible on the very first file,
-    before any decision exists to draw a suggestion from. The administrator is
-    never here — it sees everything already, so granting it access is a no-op
-    dressed as a decision.
-    """
-    book = store()
-    groups = sorted(set(book.groups) - accounts.RESERVED)
-    people = sorted(set(book.users) - accounts.RESERVED - set(groups))
-    return [*groups, *people]
-
-
-#: Labels for the filter chips and the fixed vocabularies. Kept server-side so
-#: the tier and band words are defined once, next to the columns they describe.
-_CHIPS: tuple[tuple[str, str], ...] = (
-    # The same order as the actions, because they are the same questions:
-    # what it is, then what it is for. `kind`, `band` and `deleted` come last
-    # as a group of their own — they are facts about the file rather than
-    # judgements about it, and nobody reaches for them mid-cull.
-    ("event", "Event"), ("tag", "Tag"), ("person", "People"),
-    ("date", "Date"), ("audience", "Access"),
-    ("kind", "Type"), ("band", "Size"), ("source", "Source"),
-    ("camera", "Camera"),
-    ("stacks", "Stacks"), ("deleted", "Deleted"),
-)
-
-#: One drawing per filter, so the bar can say which question a chip asks
-#: without spending a word on it.
-#:
-#: **Drawn here rather than taken from a set.** An icon font is a second
-#: typeface to load for ten glyphs, and none of the general-purpose sets has a
-#: mark for *stacks of near-identical photographs* or for *which import this
-#: came off* — so the two that matter most in this app would have been the two
-#: approximated. These are the same twenty-four unit grid, the same 1.7 stroke
-#: and the same round ends as the bell in the bar, which is what makes them
-#: read as one family rather than as clip art.
-#:
-#: Each is chosen against its neighbours as much as for itself: the set has to
-#: be told apart at seventeen pixels, so no two share a silhouette.
-_MARKS: dict[str, str] = {
-    # An occasion — planted somewhere and named. Not a calendar: that is the
-    # date, and an event here is *which occasion*, not when.
-    "event": '<path d="M6 21V3.6"/>'
-             '<path d="M6 4.4h10.8l-2.6 3.6 2.6 3.6H6"/>',
-    # The one shape nothing else uses, eyelet and all.
-    "tag": '<path d="M3.6 11.9V5.3a1.7 1.7 0 0 1 1.7-1.7h6.6a1.7 1.7 0 0 1 '
-           '1.2.5l7.1 7.1a1.7 1.7 0 0 1 0 2.4l-6.6 6.6a1.7 1.7 0 0 1-2.4 '
-           '0l-7.1-7.1a1.7 1.7 0 0 1-.5-1.2z"/>'
-           '<circle cx="8.1" cy="8.1" r="1.4"/>',
-    "date": '<rect x="3.4" y="5" width="17.2" height="15.6" rx="2.2"/>'
-            '<path d="M3.4 10h17.2"/><path d="M8 3.2v3.5"/>'
-            '<path d="M16 3.2v3.5"/>',
-    # Who is **in** the photograph. A head and shoulders, because that is
-    # what a person is, and inside a frame because the question is who is in
-    # *this* — which is also where a detected face will one day be drawn.
-    "person": '<rect x="3.3" y="3.3" width="17.4" height="17.4" rx="3"/>'
-              '<circle cx="12" cy="10" r="2.9"/>'
-              '<path d="M6.9 19.4a5.6 5.6 0 0 1 10.2 0"/>',
-    # Who may **see** it, which is the opposite question and had the person
-    # shape until People needed it more. An eye: the thing this decides is
-    # whether somebody can look, and nothing else in the set is round.
-    "audience": '<path d="M2.2 12s3.6-6.4 9.8-6.4S21.8 12 21.8 12s-3.6 6.4-9.8 '
-                '6.4S2.2 12 2.2 12z"/><circle cx="12" cy="12" r="2.9"/>',
-    # Photographs, video, and whatever else — so, kinds of thing. A play
-    # triangle would have named one of the three values rather than the
-    # question.
-    "kind": '<rect x="3.4" y="3.4" width="9.4" height="9.4" rx="1.8"/>'
-            '<circle cx="15.8" cy="15.8" r="4.8"/>',
-    # Its three values are small, medium and large, and this is that sentence
-    # with no words in it.
-    "band": '<path d="M5 19.8v-3.4"/><path d="M12 19.8v-7.6"/>'
-            '<path d="M19 19.8v-11.6"/>',
-    # Which import it came off. A card rather than a phone, because the camera
-    # filter next to it is already a device and two devices side by side is
-    # two silhouettes to tell apart at seventeen pixels.
-    "source": '<path d="M6 3.5h8.6L19 7.9V20a1.6 1.6 0 0 1-1.6 1.6H6A1.6 1.6 '
-              '0 0 1 4.4 20V5.1A1.6 1.6 0 0 1 6 3.5z"/>'
-              '<path d="M8.4 3.6v3.2"/><path d="M11.4 3.6v3.2"/>'
-              '<path d="M14.4 4.2v2.6"/>',
-    "camera": '<path d="M3.5 8.6a1.8 1.8 0 0 1 1.8-1.8h2.5l1.5-2.3h5.4l1.5 '
-              '2.3h2.5a1.8 1.8 0 0 1 1.8 1.8v9a1.8 1.8 0 0 1-1.8 '
-              '1.8H5.3a1.8 1.8 0 0 1-1.8-1.8z"/>'
-              '<circle cx="12" cy="13" r="3.5"/>',
-    # A card with cards behind it — the same depth the stack badge on a
-    # thumbnail is drawn with, so the filter and the thing it filters on look
-    # like the same idea.
-    "stacks": '<rect x="3.4" y="9.2" width="12.6" height="11.4" rx="2"/>'
-              '<path d="M6.9 6.4h9.5a2 2 0 0 1 2 2v9.2"/>'
-              '<path d="M10.4 3.6h8.2a2 2 0 0 1 2 2v8.4"/>',
-    # The bin, because that is what every other part of the app calls it.
-    "deleted": '<path d="M4 6.4h16"/>'
-               '<path d="M6.6 6.4l.9 12a1.8 1.8 0 0 0 1.8 1.7h5.4a1.8 1.8 0 0 '
-               '0 1.8-1.7l.9-12"/>'
-               '<path d="M9.6 6.4V4.7a1.3 1.3 0 0 1 1.3-1.3h2.2a1.3 1.3 0 0 1 '
-               '1.3 1.3v1.7"/>',
-    # --- and the things you *do*, which are not filters ----------------
-    # The edit bar asks the same questions in the same order as the filter bar
-    # — that is deliberate, and it is why most of these reuse a drawing from
-    # above rather than get one of their own. These five are the actions with
-    # no question above them to borrow from.
-
-    # Taking a copy away is the same gesture on every platform and has the
-    # same mark everywhere: into something, downwards.
-    "get": '<path d="M12 3.6v11"/><path d="M7.8 10.4 12 14.6l4.2-4.2"/>'
-           '<path d="M4.4 16.2v2.4a1.8 1.8 0 0 0 1.8 1.8h11.6a1.8 1.8 0 0 0 '
-           '1.8-1.8v-2.4"/>',
-    # Which one of a stack speaks for the rest: raise this to the top, drawn
-    # as an arrow meeting a ceiling it cannot go past.
-    "top": '<path d="M4.6 3.9h14.8"/><path d="M12 20.4V8.4"/>'
-           '<path d="M7.2 13.2 12 8.4l4.8 4.8"/>',
-    # Cards side by side and not touching — the same two shapes the stack mark
-    # overlaps, which is the whole of what the action does to them.
-    "unstack": '<rect x="2.9" y="7.5" width="8.2" height="10.6" rx="1.8"/>'
-               '<rect x="12.9" y="7.5" width="8.2" height="10.6" rx="1.8"/>',
-    # Refusing the app's guess, so: a stack, struck through. Two cards rather
-    # than the filter's three, because a slash across three is mush at
-    # seventeen pixels.
-    "nostack": '<rect x="3.2" y="9" width="11.6" height="11.6" rx="2"/>'
-               '<path d="M7 6.2h9a2 2 0 0 1 2 2v9"/>'
-               '<path d="M3.6 20.6 20.6 3.6"/>',
-    # Cutting a video into clips: scissors, which is what it is called
-    # everywhere else too.
-    "splice": '<circle cx="6.3" cy="6.8" r="2.7"/>'
-              '<circle cx="6.3" cy="17.2" r="2.7"/>'
-              '<path d="M8.4 8.5 20 17.6"/><path d="M8.4 15.5 20 6.4"/>',
-    # The splice page's controls. Transport in the shapes every player uses;
-    # a keyframe is the diamond the timeline draws a cut as, so stepping to
-    # one is a chevron at a diamond.
-    # Play and pause solid, as every player draws them — the two controls
-    # read by shape alone, before anything else on the bar.
-    "sp_play": '<path d="M8 5.2v13.6L18.8 12z" fill="currentColor"/>',
-    "sp_pause": '<rect x="6.8" y="5.2" width="3.8" height="13.6" rx="1" '
-                'fill="currentColor"/><rect x="13.4" y="5.2" width="3.8" '
-                'height="13.6" rx="1" fill="currentColor"/>',
-    "sp_prevf": '<path d="M7 6v12"/><path d="M17 6.5 10.5 12l6.5 5.5"/>',
-    "sp_nextf": '<path d="M17 6v12"/><path d="M7 6.5l6.5 5.5L7 17.5"/>',
-    "sp_prevk": '<path d="M3.5 12 7 8.5l3.5 3.5L7 15.5z"/>'
-                '<path d="M19.5 6.5 14 12l5.5 5.5"/>',
-    "sp_nextk": '<path d="M20.5 12 17 8.5l-3.5 3.5 3.5 3.5z"/>'
-                '<path d="M4.5 6.5 10 12l-5.5 5.5"/>',
-    # A keyframe against a wall: as far as it goes, that way.
-    "sp_firstk": '<path d="M4 5.5v13"/>'
-                 '<path d="M11 12l3.5-3.5L18 12l-3.5 3.5z"/>',
-    "sp_lastk": '<path d="M20 5.5v13"/>'
-                '<path d="M13 12 9.5 8.5 6 12l3.5 3.5z"/>',
-    # A marker as the timeline draws one: a knob on a line.
-    "sp_marker": '<circle cx="12" cy="6.5" r="3"/><path d="M12 9.5V21"/>',
-    "sp_photo": '<rect x="3" y="7" width="18" height="13" rx="2.2"/>'
-                '<path d="M8.5 7l1.6-2.6h3.8L15.5 7"/>'
-                '<circle cx="12" cy="13.5" r="3.6"/>',
-    "sp_eye": '<path d="M2.8 12s3.4-6 9.2-6 9.2 6 9.2 6-3.4 6-9.2 6-9.2-6-9.2-6z"/>'
-              '<circle cx="12" cy="12" r="2.8"/>',
-    "sp_eyeoff": '<path d="M2.8 12s3.4-6 9.2-6 9.2 6 9.2 6-3.4 6-9.2 6-9.2-6-9.2-6z"/>'
-                 '<circle cx="12" cy="12" r="2.8"/><path d="M4 20 20 4"/>',
-    "sp_zin": '<circle cx="10.5" cy="10.5" r="6.3"/><path d="M15.2 15.2 20.5 20.5"/>'
-              '<path d="M10.5 7.8v5.4"/><path d="M7.8 10.5h5.4"/>',
-    "sp_zout": '<circle cx="10.5" cy="10.5" r="6.3"/><path d="M15.2 15.2 20.5 20.5"/>'
-               '<path d="M7.8 10.5h5.4"/>',
-    # Back out of the bin. A circle turned the other way is *undo* everywhere.
-    "restore": '<path d="M3.5 12a8.5 8.5 0 1 0 2.5-6"/>'
-               '<path d="M3.4 4.3v5.4h5.4"/>',
-    # The end of the file rather than a decision about it. The bin it shares
-    # with Delete, and the cross that says this one is not coming back.
-    "purge": '<path d="M4 6.4h16"/>'
-             '<path d="M6.6 6.4l.9 12a1.8 1.8 0 0 0 1.8 1.7h5.4a1.8 1.8 0 0 0 '
-             '1.8-1.7l.9-12"/>'
-             '<path d="M9.6 6.4V4.7a1.3 1.3 0 0 1 1.3-1.3h2.2a1.3 1.3 0 0 1 '
-             '1.3 1.3v1.7"/>'
-             '<path d="M10.4 11.5 13.6 15.3"/><path d="M13.6 11.5 10.4 15.3"/>',
-}
-
-#: Which drawing each action wears.
-#:
-#: Most of them point back into the filter marks above, and that is the point:
-#: *Event* the filter and *Event* the action are the same question asked twice,
-#: once about what you are looking at and once about what it should become.
-#: Two bars that read the same way — a control that changes its face between
-#: them is a control you have to learn twice.
-_ACT_MARKS: dict[str, str] = {
-    "event": "event", "tags": "tag", "people": "person", "date": "date",
-    "access": "audience",
-    "stack": "stacks", "top": "top", "unstack": "unstack",
-    "nostack": "nostack", "download": "get", "delete": "deleted",
-    "restore": "restore", "purge": "purge", "splice": "splice",
-}
-
-
 def _act(act: str, word: str, cls: str = "", *,
          user: Principal | None = None, attr: str = "data-act") -> str:
     """One button in the edit bar: its drawing, and its name beside it.
@@ -2737,100 +2134,6 @@ def _act(act: str, word: str, cls: str = "", *,
             f'aria-label="{name}">{_mark(_ACT_MARKS.get(act, ""))}'
             f'<span class="word">{word}</span></button>')
 
-
-def _mark(name: str, size: int = 17) -> str:
-    """One glyph, as the bar draws it.
-
-    Same attributes as the bell beside it: `currentColor`, so a mark takes the
-    colour of whatever state its chip is in and nothing has to be drawn twice.
-    """
-    body = _MARKS.get(name)
-    if not body:
-        return ""
-    return (f'<svg viewBox="0 0 24 24" width="{size}" height="{size}" '
-            'aria-hidden="true" fill="none" stroke="currentColor" '
-            'stroke-width="1.7" stroke-linecap="round" '
-            f'stroke-linejoin="round">{body}</svg>')
-
-
-#: Complete vocabularies — these columns cannot hold anything else.
-_FIXED: dict[str, tuple[tuple[str, str], ...]] = {
-    "kind": (("photo", "Photos"), ("still", "Stills"), ("video", "Videos"),
-             ("clip", "Clips"), ("other", "Other")),
-    "band": (("small", "Small / short"), ("medium", "Medium"),
-             ("large", "Large / long")),
-    # Off is the third value and has no entry: clearing the chip is what says
-    # *the living*, the same gesture as clearing any other filter.
-    "deleted": (("gone", "Deleted"), ("live", "Not deleted")),
-    # No entry for the ordinary view, the same as every other chip: *not
-    # filtering on this* is what the cross says, and a value that only clears
-    # the filter is a second way to say it — which is one more thing to read
-    # in the list of the ones that do something. It was named while off meant
-    # something of its own; folding is the default now, so it does not.
-    "stacks": (("stacked", "Stacked"), ("suggested", "Suggested"),
-               ("single", "Not in a stack")),
-}
-
-#: Headings in a fixed filter's checklist, each standing for the values
-#: under it: ticking one ticks them all. Not a submenu — a row like any
-#: other, which is what lets a finger use it.
-_FIXED_GROUPS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
-    "kind": (("All photos", ("photo", "still")),
-             ("All videos", ("video", "clip"))),
-}
-
-#: How the grid can be cut up, and what to call each choice.
-_GRID_GROUPS: tuple[tuple[str, str], ...] = (
-    # Day, month and year lead because grouping by time is how the library is
-    # mostly read and `day` is the default — an ordering by use, which is
-    # allowed to win. Everything after them follows the filter bar, because
-    # there it is the same set of questions and there is no reason for it to
-    # be a second arrangement to learn: `kind` sat after `camera` here and
-    # before `source` there, for no reason anybody chose.
-    ("day", "By day"), ("month", "By month"), ("year", "By year"),
-    # Named for what it actually does. It groups on the whole event name, so
-    # an event with no sub-event stands as itself and one with a sub-event
-    # stands under its own full name — *By sub-event* read as though it were
-    # about the sub-events alone and left you wondering where the rest had
-    # gone, and it is the only choice here that has to say two things.
-    ("event", "By event"), ("subevent", "By event and sub-event"),
-    ("kind", "By type"), ("source", "By source"),
-    ("camera", "By camera"),
-    ("stack", "By stack"), ("none", "Ungrouped"),
-)
-
-#: Which column each grouping reads, for the ones that share.
-#:
-#: *Event* and *sub-event* are one field at two widths — the head of the name
-#: and the whole of it. Nesting either inside the other cuts by a question the
-#: outer level has already answered: *Sicily* holding *Sicily › Taormina* is a
-#: heading and no new information, and *Sicily › Taormina* holding *Sicily* is
-#: a group of one, every time. So picking one takes the other off the menu.
-#:
-#: Day, month and year are deliberately **not** in here. They read the same
-#: column too, but a month inside a year is a real division and the reason the
-#: grouping is a list in the first place.
-_ONE_FIELD: dict[str, str] = {"event": "event", "subevent": "event"}
-
-
-def _same_field(a: str, b: str) -> bool:
-    """Two groupings that read one column, so only one of them can be on."""
-    return a != b and _ONE_FIELD.get(a, a) == _ONE_FIELD.get(b, b)
-
-
-#: Offered *in addition* to whatever already exists. Audience names are free
-#: text, but "nobody yet" is a state rather than a name, and it is the single
-#: most useful thing to filter on — it is the pile of work.
-#: What `archived` is called wherever it is offered. Said as what it does
-#: as well as what it is, because it is the one value in the access menu that
-#: is not somebody: it takes the file out of every view, the curator's own
-#: included.
-_ARCHIVED_LABEL: str = "Archived — out of every view"
-
-_EXTRA: dict[str, tuple[tuple[str, str], ...]] = {
-    "audience": ((ix.UNREVIEWED, "Nobody — not shared yet"),
-                 (decisions.ARCHIVED, _ARCHIVED_LABEL)),
-}
 
 #: The grid's script, in the order its parts are read. One top-level scope,
 #: so the order is load-bearing: a part uses what the parts before it define
@@ -3042,33 +2345,6 @@ def _to_send(folder: str, name: str, original: bool) -> tuple[Path, str]:
     return media, name
 
 
-#: What a file is, by the only thing a URL knows about it.
-#:
-#: Not a guess the app acts on — it serves the same bytes either way. It is what
-#: lets a phone put a photograph in Photos: iOS will only offer *Save Image* for
-#: something it has been told is an image, and a file handed over as
-#: `application/octet-stream` is a file the share sheet can only put in Files.
-_MIME: dict[str, str] = {
-    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
-    ".gif": "image/gif", ".webp": "image/webp", ".heic": "image/heic",
-    ".heif": "image/heif", ".avif": "image/avif", ".tif": "image/tiff",
-    ".tiff": "image/tiff", ".dng": "image/x-adobe-dng",
-    ".mp4": "video/mp4", ".m4v": "video/x-m4v", ".mov": "video/quicktime",
-    ".avi": "video/x-msvideo", ".mkv": "video/x-matroska",
-    ".webm": "video/webm", ".mts": "video/mp2t", ".m2ts": "video/mp2t",
-    ".3gp": "video/3gpp",
-}
-
-
-def _mime(name: str) -> str:
-    """What to call this kind of file, or nothing useful if we do not know.
-
-    Octet-stream for anything unlisted — an `.insv` is not a type any phone has
-    an opinion about, and claiming one would be worse than admitting it.
-    """
-    return _MIME.get(Path(name).suffix.lower(), "application/octet-stream")
-
-
 @app.get("/download/{folder}/{name}")
 def download(folder: str, name: str,
              user: Annotated[Principal, Depends(require_user)],
@@ -3089,20 +2365,6 @@ def download(folder: str, name: str,
     if not target.is_file():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such file")
     return FileResponse(target, filename=called, media_type=_mime(called))
-
-
-#: How many meta records to fetch at once.
-#:
-#: Each is 5KB of JSON behind an 11ms round trip to the NAS, and the wait is
-#: latency rather than bandwidth — so the cure is having several in flight,
-#: not asking for less. Eight because the archive runs on a four-core Atom and
-#: the point is to keep its network busy, not its processor.
-META_READERS: int = 8
-
-
-#: What each kind is called where a refusal has to name it.
-_KIND_WORDS: dict[str, str] = {
-    "image": "photographs", "video": "video", "other": "other files"}
 
 
 def _one_kind(conn: sqlite3.Connection | None, change: _Change,
@@ -3235,13 +2497,6 @@ def _records_for(targets: Sequence[Target]
             if record is not None:
                 out[(folder, name)] = record
     return out
-
-
-#: How many files one zip will hold. Not a technical limit — the stream is
-#: constant-memory whatever goes through it — but a selection can run to
-#: thousands, and a download nobody meant to start is a download nobody can
-#: stop without noticing it is running.
-ZIP_LIMIT: int = 500
 
 
 @app.post("/download.zip")
@@ -3622,16 +2877,6 @@ def _clip_from(user: Principal, row: sqlite3.Row,
         "splice": (f"/splice/{_q(folder)}/{_q(str(source))}#{_q(str(row['name']))}"
                    if user.is_admin else None),
     }
-
-
-def _split(value: object) -> list[str]:
-    """A `group_concat` column back into a list."""
-    return str(value).split(chr(10)) if value else []
-
-
-def _under(root: Path, target: Path) -> bool:
-    """Whether `target` really sits inside `root`, after resolving `..`."""
-    return root.resolve() in target.resolve().parents
 
 
 @app.get("/api/behind/{folder}/{name}")
@@ -4885,12 +4130,6 @@ class DecideBulkBody(BaseModel):
     no_stack: bool | None = None
 
 
-#: Bounds one request rather than the whole gesture. Finishing a 1,766-file
-#: event is chunked by the client, which keeps each request short enough not to
-#: hold the single worker and gives a progress reading for free.
-BULK_LIMIT: int = 500
-
-
 @app.post("/api/decide/bulk")
 def api_decide_bulk(user: Annotated[Principal, Depends(require_user)],
                     view: Annotated[ix.Filters, Depends(filters)],
@@ -5473,10 +4712,6 @@ def _is_clip_path(target: Path, *, creating: bool = False) -> bool:
 # an icon say nothing about the library, and a login wall in front of them would
 # only mean the install prompt never appears.
 
-#: Pre-rendered, and committed, because the container has no Pillow in it: the
-#: app never decodes anything, which is what keeps it viable on the Atom.
-#: `tools/make_icons.py` re-emits them from the same geometry as `_logo_mark`.
-_ICONS: Path = Path(__file__).parent / "icons"
 
 _MANIFEST: dict[str, object] = {
     "id": "/",
@@ -5600,54 +4835,6 @@ def healthz() -> dict[str, Any]:
 
 
 # --- helpers -----------------------------------------------------------------
-
-def _h(text: object) -> str:
-    """Escape for HTML text and attributes."""
-    return (str(text).replace("&", "&amp;").replace("<", "&lt;")
-            .replace(">", "&gt;").replace('"', "&quot;"))
-
-
-def _js(value: object) -> str:
-    """Embed a value in a <script> block.
-
-    `<` is escaped because an event named with a literal `</script>` would
-    otherwise close the block and run whatever followed as markup — and event
-    names are typed by whoever is curating.
-    """
-    return json.dumps(value).replace("<", "\\u003c")
-
-
-def _q(text: object) -> str:
-    return quote(str(text), safe="")
-
-
-def _age(timestamp: float | None) -> str:
-    """How long ago the index was built, in words.
-
-    Nothing watches the share, so an index predating the last `process` run
-    simply does not know about the files it made. Showing the age is how that
-    gets noticed, rather than experienced as photos mysteriously missing.
-    """
-    if timestamp is None:
-        return "at an unknown time"
-    seconds = max(time.time() - timestamp, 0)
-    if seconds < 90:
-        return "just now"
-    minutes = seconds / 60
-    if minutes < 90:
-        return f"{int(minutes)}m ago"
-    hours = minutes / 60
-    if hours < 36:
-        return f"{int(hours)}h ago"
-    return f"{int(hours / 24)}d ago"
-
-
-def _dur(seconds: object) -> str:
-    try:
-        total = int(float(str(seconds)))
-    except (TypeError, ValueError):
-        return "video"
-    return f"{total // 60}:{total % 60:02d}"
 
 
 # --- signing in ---------------------------------------------------------------
@@ -6113,6 +5300,3 @@ async def history_revert(
                             status_code=303)
 
 
-def _when(moment: float) -> str:
-    """A timestamp as a person reads it."""
-    return time.strftime("%Y-%m-%d %H:%M", time.localtime(moment))
