@@ -15,13 +15,14 @@ import pytest
 
 from pix.nas import assets, web
 
-JS = sorted(assets.STATIC.glob("js/*.js"))
+JS = sorted(assets.STATIC.glob("js/**/*.js"))
 CSS = sorted(assets.STATIC.glob("css/*.css"))
 
 
 @pytest.mark.skipif(shutil.which("node") is None,
                     reason="node is not installed")
-@pytest.mark.parametrize("script", JS, ids=[p.name for p in JS])
+@pytest.mark.parametrize("script", JS,
+                         ids=[p.relative_to(assets.STATIC).as_posix() for p in JS])
 def test_every_script_parses(script: Path) -> None:
     result = subprocess.run(["node", "--check", str(script)],
                             capture_output=True, text=True, timeout=60)
@@ -43,7 +44,18 @@ def test_every_stylesheet_balances_its_braces(sheet: Path) -> None:
 def test_the_page_is_handed_exactly_what_is_on_disk() -> None:
     """Inlined as read, nothing between the file and the page."""
     assert web._STYLE == assets.asset("css/app.css")  # pyright: ignore[reportPrivateUsage]
-    assert web._BROWSE_JS == assets.asset("js/browse.js")  # pyright: ignore[reportPrivateUsage]
+    assert web._BROWSE_JS == "".join(  # pyright: ignore[reportPrivateUsage]
+        assets.asset(f"js/browse/{p}")
+        for p in web._BROWSE_PARTS)  # pyright: ignore[reportPrivateUsage]
+
+
+def test_every_part_of_the_grid_script_is_read() -> None:
+    """A part on disk and missing from the list is code that silently does
+    not run; one in the list and not on disk fails to load at all."""
+    on_disk = sorted(p.name for p in (assets.STATIC / "js/browse").glob("*.js"))
+    assert sorted(web._BROWSE_PARTS) == on_disk  # pyright: ignore[reportPrivateUsage]
+    # Read in the order they are numbered, which is the order they were cut.
+    assert list(web._BROWSE_PARTS) == on_disk  # pyright: ignore[reportPrivateUsage]
 
 
 def test_no_asset_has_carriage_returns() -> None:

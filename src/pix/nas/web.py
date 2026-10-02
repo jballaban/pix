@@ -2837,7 +2837,29 @@ _EXTRA: dict[str, tuple[tuple[str, str], ...]] = {
                  (decisions.ARCHIVED, _ARCHIVED_LABEL)),
 }
 
-_BROWSE_JS: str = asset("js/browse.js")
+#: The grid's script, in the order its parts are read. One top-level scope,
+#: so the order is load-bearing: a part uses what the parts before it define
+#: (`cells`, `say`, `targets` …) — which is why this is a list and not a glob.
+_BROWSE_PARTS: tuple[str, ...] = (
+    "00-page.js",
+    "01-device.js",
+    "02-size.js",
+    "03-display.js",
+    "04-chips.js",
+    "05-menu.js",
+    "06-selection.js",
+    "07-viewer.js",
+    "08-swipe.js",
+    "09-writing.js",
+    "10-folders.js",
+    "11-stacks.js",
+    "12-download.js",
+    "13-takeover.js",
+    "14-keyboard.js",
+    "15-grouping.js",
+    "16-paging.js",
+)
+_BROWSE_JS: str = "".join(asset(f"js/browse/{p}") for p in _BROWSE_PARTS)
 
 
 # --- media -------------------------------------------------------------------
