@@ -348,6 +348,12 @@ class Filters:
     #: anything shared with either, and a share is just a name either way.
     viewer: frozenset[str] | None = None
 
+    #: The clips and stills cut from one video, by its `folder/name` — the
+    #: view its *5 clips* pill opens. Not a filter in the bar, for the same
+    #: reason `within` is not: you arrive in it from a photograph, there is no
+    #: list of originals to pick one from.
+    cuts: str | None = None
+
     #: One stack, opened: the file named and everything stacked behind it.
     #: Without it a listing shows only what speaks for itself — the tops of
     #: stacks and everything unstacked — which is the whole point of stacking.
@@ -1482,6 +1488,11 @@ def _clauses(filters: Filters) -> dict[str, tuple[str, dict[str, Any]]]:
     asked = [kinds[s] for s in picks(filters.stacks) if s in kinds]
     if asked and len(asked) < len(kinds):
         out["stacks"] = ("(" + " OR ".join(asked) + ")", {})
+    if filters.cuts:
+        folder, _, name = filters.cuts.partition("/")
+        out["cuts"] = ("(files.folder = :f_cuts_folder "
+                       "AND files.clip_of = :f_cuts_name)",
+                       {"f_cuts_folder": folder, "f_cuts_name": name})
     if filters.chosen is not None:
         # One parameter rather than one per file: a single event edit can run
         # to seventeen hundred files, and a placeholder each would be an
@@ -1839,6 +1850,8 @@ def files(conn: sqlite3.Connection, filters: Filters | None = None, *,
     # matches — all ten thousand — before it sorts and keeps the first
     # hundred: 1.3s for a page of 100, 9s for 2,000. So the page is chosen on
     # the sort keys alone, and only the rows on it are filled in.
+    cuts_sql, cuts_params = _cuts_cols(view)
+    params.update(cuts_params)
     inner_keys = "".join(f", {key} AS grp{i}" for i, key in enumerate(keys))
     outer_keys = ("".join(f", page.grp{i} AS grp{i}" for i in range(len(keys)))
                   or ", NULL AS grp0")
@@ -1848,7 +1861,7 @@ def files(conn: sqlite3.Connection, filters: Filters | None = None, *,
         + "ORDER BY " + order + " LIMIT :limit OFFSET :offset) "
         "SELECT files.*, " + _TAGS_COL + ", " + _PEOPLE_COL + ", "
         + _AUDIENCE_COL + ", " + _BEHIND_COL + ", " + _AHEAD_COL + ", "
-        + _CLIPS_COL + outer_keys + f", {seen} AS source_seen "
+        + _CLIPS_COL + cuts_sql + outer_keys + f", {seen} AS source_seen "
         "FROM page JOIN files ON files.rowid = page.rid "
         "ORDER BY " + order, params
     ))
@@ -1867,6 +1880,32 @@ _BEHIND_COL: str = (
 #: How many living clips were cut from this file. Read per row for the same
 #: reason as `behind`: binning a source with clips has a question to ask
 #: first (spec/clips.md §5), and the page has to know before it asks.
+def _cuts_cols(view: Filters) -> tuple[str, dict[str, Any]]:
+    """How many clips and stills cut from each row this viewer would see.
+
+    For the pill on an original. Counted the way the view the pill opens
+    lists them — living, not archived, and for anyone but an administrator
+    only what is shared with them and has a file of its own — so the number
+    on the photograph is the number that opens.
+    """
+    params: dict[str, Any] = {}
+    seen = ""
+    if view.viewer is not None:
+        names = {f"cv{i}": who for i, who in enumerate(sorted(view.viewer))}
+        params.update(names)
+        holes = ",".join(f":{k}" for k in names) or "NULL"
+        seen = ("AND c.size IS NOT NULL AND EXISTS (SELECT 1 FROM "
+                "file_audience cva WHERE cva.folder = c.folder "
+                f"AND cva.name = c.name AND cva.who IN ({holes})) ")
+    base = ("(SELECT COUNT(*) FROM files c WHERE c.folder = files.folder "
+            "AND c.clip_of = files.name AND c.deleted = 0 "
+            "AND NOT EXISTS (SELECT 1 FROM file_audience cx "
+            "WHERE cx.folder = c.folder AND cx.name = c.name "
+            f"AND cx.who = '{decisions.ARCHIVED}') " + seen)
+    return (f", {base} AND c.kind = 'video') AS cut_clips"
+            f", {base} AND c.kind = 'image') AS cut_stills", params)
+
+
 _CLIPS_COL: str = (
     "(SELECT COUNT(*) FROM files c WHERE c.folder = files.folder "
     " AND c.clip_of = files.name AND c.deleted = 0) AS clips")

@@ -6637,3 +6637,11 @@ def test_a_page_is_the_filtered_view(client: TestClient, writable: Path) -> None
         "folder": "init_2026", "name": "a.jpg", "add_tags": ["beach"]})
     got = client.get("/api/page?group=none&tag=beach&offset=0").json()
     assert got["total"] == 1 and 'data-name="a.jpg"' in got["html"]
+
+
+def test_the_row_the_dot_is_about_carries_the_dot(client: TestClient) -> None:
+    """A red mark on the name with nothing in the menu pointing back at it
+    left you looking for what it meant."""
+    assert ".memenu .bin-link::before" in web._STYLE
+    assert "background:var(--gone)" in web._STYLE[
+        web._STYLE.index(".memenu .bin-link::before"):][:200]

@@ -1283,3 +1283,60 @@ def test_a_type_folder_opens_every_box_its_kind_is_made_of(
     html = client.get("/?group=kind").text
     assert "kind=video&amp;kind=clip" in html
     assert "kind=photo&amp;kind=still" in html
+
+
+# --- an original says what was cut from it ------------------------------------
+
+def test_an_original_says_how_many_clips_and_stills_it_has(
+    client: TestClient, video: Path, app_env: dict[str, Path]
+) -> None:
+    _make(client, (10.0, 20.0), (30.0, 30.0))
+    html = client.get("/browse?group=none").text
+    cell = html[html.index('data-name="b.mp4"'):]
+    cell = cell[:cell.index('data-name=', 20)] if 'data-name=' in cell[20:] else cell
+
+    assert 'class="cuts"' in cell
+    assert "1 clip · 1 still" in cell
+    assert "cuts=init_2026%2Fb.mp4" in cell
+
+
+def test_the_pill_opens_just_what_was_cut_from_it(
+    client: TestClient, video: Path, app_env: dict[str, Path]
+) -> None:
+    clip, still = _make(client, (10.0, 20.0), (30.0, 30.0))
+    html = client.get("/browse?cuts=init_2026%2Fb.mp4&group=none").text
+
+    grid = html[html.index('id="grid"'):]
+    assert f'data-name="{clip}"' in grid and f'data-name="{still}"' in grid
+    assert 'data-name="b.mp4"' not in grid and 'data-name="a.jpg"' not in grid
+    # It says what it is, and there is a way back out.
+    assert "cut from <b>b.mp4</b>" in html
+
+
+def test_a_video_with_nothing_cut_from_it_has_no_pill(
+    client: TestClient, video: Path
+) -> None:
+    html = client.get("/browse?group=none").text
+    assert 'class="cuts"' not in html
+
+
+def test_new_clip_starts_at_the_playhead_and_the_ends_are_a_press_away(
+    client: TestClient, video: Path, app_env: dict[str, Path]
+) -> None:
+    """What follows *New clip* is almost always *start it here*; and the
+    first and last keyframe are the two ends of what a cut can start from."""
+    _playable(app_env)
+    assert "function startNew(){ newMode=true; creating=ms(here());" in web._SPLICE_JS
+    html = client.get("/splice/init_2026/b.mp4").text
+    assert 'id="bfirstk"' in html and 'id="blastk"' in html
+    assert "k==='Home'" in web._SPLICE_JS and "k==='End'" in web._SPLICE_JS
+
+
+def test_the_timeline_has_nothing_to_scroll_until_it_is_zoomed(
+    client: TestClient, video: Path
+) -> None:
+    """A pixel of playhead past the end gave an unzoomed timeline a
+    scrollbar with nothing in it."""
+    assert "overflow:hidden; }" in web._SPLICE_CSS[
+        web._SPLICE_CSS.index(".track { position:relative;"):][:200]
+    assert "wrap.style.overflowX=zoom>1?'auto':'hidden';" in web._SPLICE_JS

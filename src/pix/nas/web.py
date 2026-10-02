@@ -996,7 +996,14 @@ html[data-info-access="off"] .spread i.none,
 html[data-info-tags="off"] .ov .tags,
 html[data-info-tags="off"] .spread i.tags,
 html[data-info-subevent="off"] .ov .part,
-html[data-info-clip="off"] .ov .clip-mark { display:none; }
+html[data-info-clip="off"] .ov .clip-mark,
+html[data-info-clip="off"] .ov .cuts { display:none; }
+/* An original's clips: the same lozenge as the stack badge, which it sits
+   beside and is the same kind of fact as — more of these, elsewhere. */
+.cuts { position:relative; z-index:3; background:#000b; color:var(--fg);
+        font-size:10px; font-weight:700; padding:2px 6px; border-radius:3px;
+        white-space:nowrap; text-decoration:none; box-shadow:none; }
+.cuts:hover { background:var(--accent); color:#0d0f12; box-shadow:none; }
 .who i, .tags i, .folk i { font-style:normal; max-width:100%; overflow:hidden;
                   white-space:nowrap; text-overflow:ellipsis;
                   padding:1px 5px; border-radius:3px; background:#000b;
@@ -1160,6 +1167,12 @@ h2.year span { font-size:13px; font-weight:400; }
           border-top:1px solid var(--line); margin-top:5px; padding-top:5px; }
 .memenu .group { display:flex; flex-direction:column; }
 .memenu .bin-link { display:block; padding:7px 10px; border-radius:4px; }
+/* The dot on the name says *something in here wants you*, and this is the
+   something — so the row carries the same dot. Without it the menu opened on
+   a red mark with nothing in it pointing back at the mark. */
+.memenu .bin-link::before { content:""; display:inline-block; width:7px;
+            height:7px; border-radius:50%; background:var(--gone);
+            margin-right:8px; vertical-align:1px; }
 .memenu .bin-link:hover { background:#2f3745; box-shadow:none; }
 /* And it has to be able to go away again. Every rule above gives it a
    `display`, and every one of them outranks the user agent's `[hidden]`, so
@@ -2400,6 +2413,7 @@ def filters(
     stale: Annotated[str | None, Query()] = None,
     within: Annotated[str | None, Query()] = None,
     apart: Annotated[str | None, Query()] = None,
+    cuts: Annotated[str | None, Query()] = None,
     stacks: Annotated[list[str] | None, Query()] = None,
     group: Annotated[str, Query()] = "day",
 ) -> ix.Filters:
@@ -2442,7 +2456,7 @@ def filters(
                       tag=_pick(tag), person=_pick(person),
                       audience=_pick(audience),
                       chosen=_from_operation(op, stale),
-                      within=within,
+                      within=within, cuts=cuts or None,
                       stacks=picked,
                       apart=apart == "1" or legacy_apart,
                       unfold="stack" in _groupings(group),
@@ -3141,7 +3155,8 @@ def browse(request: Request,
 <div id="menu" hidden></div>
 {_WORKING}""",
         tools=('<div class="chips" id="chips"></div>'
-               + _from_link(op, stale, len(rows))),
+               + _from_link(op, stale, len(rows))
+               + _cuts_link(view, total)),
         # Away from the filters, at the end of the row with the account. It is
         # a view control rather than a filter — nothing it does changes which
         # photographs are here — and standing among the chips it read as one
@@ -3236,6 +3251,40 @@ def _from_link(op_id: str | None, stale: str | None, shown: int) -> str:
 #: accepts are the same question and must not be able to disagree. Hiding a
 #: control is not access control — anyone can post to `/api/decide` — so this
 #: drives the refusal first and the bar second.
+def _cuts_link(view: ix.Filters, shown: int) -> str:
+    """What the grid is showing when an original's pill opened it, and the
+    way back out — said like an operation, for the same reason: there is no
+    list of originals to pick one from."""
+    if not view.cuts:
+        return ""
+    name = view.cuts.partition("/")[2]
+    return (f'<span class="chip on from-op">cut from <b>{_h(name)}</b>'
+            f'<span class="val">{shown:,}</span>'
+            f'<a class="x" href="{_h(_browse_url(view, {}))}" '
+            f'title="Back to the library">&times;</a></span>')
+
+
+def _cuts_badge(row: sqlite3.Row) -> str:
+    """*5 clips · 1 still* on a video that has them, opening just those.
+
+    Beside the stack badge, because it is the same kind of fact: there are
+    more of these, somewhere else, and this is the way to them. Only what
+    this viewer would see when it opens (`ix._cuts_cols`).
+    """
+    keys = row.keys()
+    clips_n = int(row["cut_clips"] or 0) if "cut_clips" in keys else 0
+    stills_n = int(row["cut_stills"] or 0) if "cut_stills" in keys else 0
+    if not clips_n and not stills_n:
+        return ""
+    words = [f"{n} {word}{'' if n == 1 else 's'}"
+             for n, word in ((clips_n, "clip"), (stills_n, "still")) if n]
+    key = f'{row["folder"]}/{row["name"]}'
+    href = f"/browse?cuts={_q(key)}&group=none"
+    return (f'<a class="cuts" href="{_h(href)}" '
+            f'title="The clips and stills cut from this video">'
+            f'{_h(" · ".join(words))}</a>')
+
+
 _ACT_WRITES: dict[str, tuple[str, ...]] = {
     "event": ("event",),
     "tags": ("tags",),
@@ -3718,7 +3767,8 @@ def _cell(row: sqlite3.Row, view: ix.Filters | None = None, *,
         # there. Drawn in the default arrangement (`_INFO`); the page script
         # moves each fact to the lane the viewer chose (`placeInfo`).
         + _lane("top", _chips_html("tags", tags),
-                _clip_badge(row, view or ix.Filters()) + mark
+                _cuts_badge(row) + _clip_badge(row, view or ix.Filters())
+                + mark
                 + '<button class="pick" aria-label="select"></button>')
         + _lane("bot",
                 _people_html(_split(row["people"]), view or ix.Filters())
@@ -4083,6 +4133,11 @@ _MARKS: dict[str, str] = {
                 '<path d="M19.5 6.5 14 12l5.5 5.5"/>',
     "sp_nextk": '<path d="M20.5 12 17 8.5l-3.5 3.5 3.5 3.5z"/>'
                 '<path d="M4.5 6.5 10 12l-5.5 5.5"/>',
+    # A keyframe against a wall: as far as it goes, that way.
+    "sp_firstk": '<path d="M4 5.5v13"/>'
+                 '<path d="M11 12l3.5-3.5L18 12l-3.5 3.5z"/>',
+    "sp_lastk": '<path d="M20 5.5v13"/>'
+                '<path d="M13 12 9.5 8.5 6 12l3.5 3.5z"/>',
     # A marker as the timeline draws one: a knob on a line.
     "sp_marker": '<circle cx="12" cy="6.5" r="3"/><path d="M12 9.5V21"/>',
     "sp_photo": '<rect x="3" y="7" width="18" height="13" rx="2.2"/>'
@@ -4472,7 +4527,7 @@ function placeInfo(c){
       if(el) into.appendChild(el);
     }
   }
-  for(const sel of ['.clip-mark','.stack','.top-mark','.pick']){
+  for(const sel of ['.cuts','.clip-mark','.stack','.top-mark','.pick']){
     const el=c.querySelector(sel);
     if(el) top.fix.appendChild(el);
   }
@@ -9879,10 +9934,12 @@ _SPLICE_HTML: str = """<div class="splice">
 <div class="sctl sbar">
 <div class="sgrp">
 <button id="bplay" class="ic" title="Play (space)" aria-label="Play"><span class="i-play">@sp_play@</span><span class="i-pause">@sp_pause@</span></button>
+<button id="bfirstk" class="ic" title="To the first keyframe (Home)" aria-label="To the first keyframe">@sp_firstk@</button>
 <button id="bprevk" class="ic" title="Back to the last keyframe (shift+,)" aria-label="Back to the last keyframe">@sp_prevk@</button>
 <button id="bprevf" class="ic" title="Back a frame (,)" aria-label="Back a frame">@sp_prevf@</button>
 <button id="bnextf" class="ic" title="On a frame (.)" aria-label="On a frame">@sp_nextf@</button>
 <button id="bnextk" class="ic" title="On to the next keyframe (shift+.)" aria-label="On to the next keyframe">@sp_nextk@</button>
+<button id="blastk" class="ic" title="To the last keyframe (End)" aria-label="To the last keyframe">@sp_lastk@</button>
 <button id="bnew" class="primary ic" title="Make a new clip (N)" aria-label="New clip">@sp_marker@<span class="word">New clip</span></button>
 </div>
 <span class="spacer"></span>
@@ -9947,7 +10004,12 @@ _SPLICE_CSS: str = """
 .tlwrap { margin-top:10px; overflow-x:auto; overflow-y:hidden;
           border:1px solid var(--line); border-radius:6px;
           background:var(--panel); touch-action:pan-x; }
-.track { position:relative; height:56px; min-width:100%; cursor:pointer; }
+/* Its own contents clipped to it: the playhead is two pixels centred on its
+   time and a clip has a least width, so at the very end either stood a pixel
+   past the track — and at no zoom at all, the timeline grew a scrollbar with
+   one pixel in it, which came and went with where the playhead was. */
+.track { position:relative; height:56px; min-width:100%; cursor:pointer;
+         overflow:hidden; }
 .bars { position:absolute; inset:0; }
 /* A clip is a bar; the gaps between them are footage no clip holds. */
 .bar { position:absolute; top:10px; bottom:10px; min-width:3px;
@@ -10179,6 +10241,8 @@ async function fetchSaved(){
 // --- drawing ----------------------------------------------------------------
 function draw(){
   track.style.width=(zoom*100)+'%';
+  // Nothing to scroll to until it is wider than its box.
+  wrap.style.overflowX=zoom>1?'auto':'hidden';
   bars.innerHTML='';
   for(const c of ranges()){
     const b=document.createElement('div');
@@ -10280,6 +10344,12 @@ function snapStart(t,lo,hi){
   }
   return best===null?t:best;
 }
+// The first keyframe or the last one: the two ends of the footage a cut can
+// start from.
+function toKeyEnd(dir){
+  const ends=keys&&keys.length?keys:[0,v.duration||0];
+  v.pause(); v.currentTime=dir>0?ends[ends.length-1]:ends[0];
+}
 function toKey(dir){
   if(!keys||!keys.length){step(dir*1);return;}
   const t=v.currentTime||0;
@@ -10358,7 +10428,9 @@ function drop(c){
 
 // --- New clip ---------------------------------------------------------------
 let newMode=false;
-function startNew(){ newMode=true; creating=null; sel=null; draw(); }
+// Started at the playhead: the next thing done after *New clip* is almost
+// always *start it here*, and a drag across the timeline still replaces it.
+function startNew(){ newMode=true; creating=ms(here()); sel=null; draw(); }
 function cancelNew(){ newMode=false; creating=null; draw(); }
 function newStart(t){ if(!newMode) startNew(); creating=ms(t); draw(); }
 function newEnd(t){
@@ -10626,6 +10698,7 @@ function zoomBy(f,cx){
   const x=cx==null?r.width/2:cx-r.left;
   const frac=(wrap.scrollLeft+x)/(track.offsetWidth||1);
   track.style.width=(zoom*100)+'%';
+  wrap.style.overflowX=zoom>1?'auto':'hidden';
   wrap.scrollLeft=frac*track.offsetWidth-x;
   drawStrip(); playhead(false);
 }
@@ -10670,6 +10743,7 @@ on('bnewin',()=>newStart(here())); on('bnewout',()=>newEnd(here()));
 on('bnewcancel',cancelNew);
 on('bprevf',()=>step(-frame)); on('bnextf',()=>step(frame));
 on('bprevk',()=>toKey(-1)); on('bnextk',()=>toKey(1));
+on('bfirstk',()=>toKeyEnd(-1)); on('blastk',()=>toKeyEnd(1));
 on('bstart',markIn); on('bend',markOut);
 on('bsplit',split); on('bjoin',join); on('bdel',del);
 on('bundo',undo); on('bdiscard',discard); on('bsave',save);
@@ -10688,6 +10762,8 @@ document.addEventListener('keydown',e=>{
   else if(k==='s'||k==='S') split();
   else if(k==='j'||k==='J') join();
   else if(k==='p'||k==='P') still();
+  else if(k==='Home'){e.preventDefault(); toKeyEnd(-1);}
+  else if(k==='End'){e.preventDefault(); toKeyEnd(1);}
   else if(k===','&&!e.shiftKey) step(-frame);
   else if(k==='.'&&!e.shiftKey) step(frame);
   else if(k==='<'||k===',') toKey(-1);
