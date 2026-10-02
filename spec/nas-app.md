@@ -686,6 +686,13 @@ thumbnails down is losing your place. Picking an event on the landing page is
 that page with `?event=`, so there is one surface to learn rather than a
 browser and a separate editor.
 
+**A filter is any of several values** — `?tag=beach&tag=sunset` is *beach or
+sunset* — and different filters narrow each other. A filter's menu is a
+checklist: ticking stages a value, Clear unticks them all, and the view
+changes when the menu closes (Show, or a click elsewhere); Escape leaves it as
+it was. Any of, never all of: *photos tagged both* is a question a family
+library almost never asks, where *either* is asked daily.
+
 **The landing page is the same grid at a coarser zoom.** It was a fixed table
 of years and their events, which answered two questions well and every other
 one not at all: *which cameras is this library from*, *what is still undecided
@@ -1602,10 +1609,14 @@ It reaches the curator as two controls that already existed, which is why there
 is no review page:
 
 - **The `Stacks` filter**, which is about stacks in general, a guess being one
-  the app made rather than you: *everything* (the default — every stack folded
-  behind the photograph that speaks for it, guesses included), *only stacks*,
-  *only suggested* (the shelf of what is still to answer), *no suggestions*
-  (the stacks a person made, and nothing else).
+  the app made rather than you: tick any of *Stacked*, *Suggested* (the shelf
+  of what is still to answer) and *Not in a stack*; nothing ticked is
+  everything, every stack folded behind the photograph that speaks for it,
+  guesses included. **Suggestions: Fold / Apart** is in Display rather than
+  here, because it is how the view is drawn and not which files it holds —
+  it was the *No suggestions* value of this filter until the filters took
+  several values (`?apart=1`; the old `stacks=only|guesses|firm` still
+  open the same views).
 - **Grouping by stack** — sections are stacks, and their members come out from
   behind what speaks for them. With *only suggested* that is the whole review:
   every guess, open, one section each, answered by scrolling.

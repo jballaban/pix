@@ -457,7 +457,7 @@ def test_the_page_is_handed_every_filter_it_is_showing(
 
     for name in ("event", "tag", "date", "audience", "kind", "band", "deleted"):
         assert f'"{name}"' in view, f"{name} missing from {view}"
-    assert '"deleted": "only"' in view, view
+    assert '"deleted": "gone"' in view, view
 
 
 def test_the_bars_are_not_the_colour_of_the_page(client: TestClient) -> None:
@@ -1588,8 +1588,11 @@ def test_the_stacks_chip_offers_only_what_narrows_the_view(
     fixed = html[html.index("FIXED="):html.index("EXTRA=")]
     stacks = fixed[fixed.index('"stacks"'):]
 
-    for label in ("Only stacks", "Only suggested", "No suggestions"):
+    for label in ("Stacked", "Suggested", "Not in a stack"):
         assert label in stacks, stacks
+    # Folding is how a view is drawn, not which files it holds, so it is in
+    # Display rather than among these.
+    assert "No suggestions" not in stacks
     assert '[""' not in stacks and '""]' not in stacks, "a value that clears"
     assert "Including suggestions" not in fixed, "the long way round"
 
@@ -6164,10 +6167,10 @@ def test_grouping_by_event_puts_a_sub_event_under_it(
     conn = ix.open_ro(app_env["db"])
     try:
         by_event = {r["grp0"]: r["n"] for r in
-                    ix.sections(conn, ix.Filters(stacks="firm"),
+                    ix.sections(conn, ix.Filters(apart=True),
                                 groups=["event"])}
         by_sub = {r["grp0"]: r["n"] for r in
-                  ix.sections(conn, ix.Filters(stacks="firm"),
+                  ix.sections(conn, ix.Filters(apart=True),
                               groups=["subevent"])}
     finally:
         conn.close()
@@ -6528,3 +6531,56 @@ def test_a_household_member_gets_the_viewer_actions_they_get_in_the_bar(
 
     assert 'data-vact="tags"' in row
     assert 'data-vact="access"' not in row and 'data-vact="purge"' not in row
+
+
+# --- several values in one filter, by address ---------------------------------
+
+def test_a_filter_repeated_in_the_address_is_any_of_them(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    _three_files(writable, app_env)
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "a.jpg", "add_tags": ["beach"]})
+    client.post("/api/decide", json={
+        "folder": "init_2026", "name": "c.jpg", "add_tags": ["sunset"]})
+
+    html = client.get("/browse?tag=beach&tag=sunset").text
+    assert 'data-name="a.jpg"' in html and 'data-name="c.jpg"' in html
+    # And the page is told both, as a list.
+    view = html[html.index("const VIEW="):]
+    assert '"tag": ["beach", "sunset"]' in view[:400], view[:400]
+
+
+def test_the_old_stacks_words_still_open_the_same_view(
+    client: TestClient
+) -> None:
+    """Links from before the checkboxes keep working."""
+    def view(url: str) -> str:
+        html = client.get(url).text
+        return html[html.index("const VIEW="):html.index("const VIEW=") + 400]
+
+    assert '"stacks": ["stacked", "suggested"]' in view("/browse?stacks=only")
+    assert '"stacks": "suggested"' in view("/browse?stacks=guesses")
+    # *No suggestions* was never a set of files; it is shown apart now.
+    firm = view("/browse?stacks=firm")
+    assert '"stacks": null' in firm and '"apart": "1"' in firm
+
+
+def test_both_sides_of_the_bin_are_two_boxes(client: TestClient) -> None:
+    def deleted(url: str) -> str:
+        html = client.get(url).text
+        at = html.index('"deleted": ')
+        return html[at:at + 30]
+
+    assert deleted("/browse?deleted=gone").startswith('"deleted": "gone"')
+    assert deleted("/browse?deleted=gone&deleted=live").startswith(
+        '"deleted": ["gone", "live"]')
+    assert deleted("/browse?deleted=with").startswith(
+        '"deleted": ["gone", "live"]')
+    assert deleted("/browse?deleted=live").startswith('"deleted": null')
+
+
+def test_suggestions_apart_is_offered_in_display(client: TestClient) -> None:
+    html = client.get("/browse").text
+    menu = html[html.index('class="me disp"'):html.index('id="me"')]
+    assert 'class="showopt apartopt" data-at="apart"' in menu

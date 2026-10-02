@@ -1411,7 +1411,7 @@ def _rows(tree: dict[str, Path]) -> list[sqlite3.Row]:
     itself is handed. Feeding it the folded view would be circular: the rows
     it is asked to find groups in would already have the groups taken out."""
     _build(tree)
-    return ix.files(ix.connect(tree["db"]), ix.Filters(stacks="firm"),
+    return ix.files(ix.connect(tree["db"]), ix.Filters(apart=True),
                     limit=1000)
 
 
@@ -1794,3 +1794,51 @@ def test_a_rebuild_publishes_under_an_open_reader(
     finally:
         reader.close()
     assert names == {"a.jpg", "b.jpg"}
+
+
+# --- several values in one filter ----------------------------------------------
+
+def _tagged(tree: dict[str, Path]) -> sqlite3.Connection:
+    for name, tags in (("a.jpg", ("beach",)), ("b.jpg", ("sunset",)),
+                       ("c.jpg", ("kids",)), ("d.mp4", ("beach",))):
+        _record(tree, "f", name, {"EXIF:DateTimeOriginal":
+                                  f"2026:08:0{len(name)} 10:00:00"})
+        _decide(tree, "f", name, Decision(tags=tags))
+    _build(tree)
+    return ix.connect(tree["db"])
+
+
+def _names_in(conn: sqlite3.Connection, view: ix.Filters) -> set[str]:
+    """Every file the view holds, suggestions apart — so what is tested is
+    the filter, not the guess that three photographs of one hour are a
+    burst."""
+    from dataclasses import replace
+    return {str(r["name"]) for r in ix.files(conn, replace(view, apart=True))}
+
+
+def test_two_values_in_one_filter_are_either(tree: dict[str, Path]) -> None:
+    """Any of, not all of: *beach or sunset*."""
+    conn = _tagged(tree)
+    assert _names_in(conn, ix.Filters(tag=("beach", "sunset"))) == {
+        "a.jpg", "b.jpg", "d.mp4"}
+
+
+def test_filters_still_narrow_each_other(tree: dict[str, Path]) -> None:
+    """Several values within a filter widen it; a second filter narrows."""
+    conn = _tagged(tree)
+    assert _names_in(conn, ix.Filters(tag=("beach", "sunset"),
+                                      kind="image")) == {"a.jpg", "b.jpg"}
+
+
+def test_one_value_and_a_tuple_of_one_are_the_same(
+        tree: dict[str, Path]) -> None:
+    conn = _tagged(tree)
+    assert (_names_in(conn, ix.Filters(tag="kids"))
+            == _names_in(conn, ix.Filters(tag=("kids",))) == {"c.jpg"})
+
+
+def test_picks_and_only() -> None:
+    assert ix.picks(None) == () and ix.picks("a") == ("a",)
+    assert ix.picks(("a", "b")) == ("a", "b")
+    assert ix.only("a") == "a" and ix.only(("a", "b")) is None
+    assert ix.only(None) is None

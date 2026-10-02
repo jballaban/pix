@@ -510,6 +510,14 @@ button.danger:hover:not(:disabled) { border-color:#c2604f; color:#ffd9d2; }
    rule above quietly won and `hidden = true` set a flag that hid nothing —
    the menu could be opened and never dismissed. */
 #menu[hidden] { display:none; }
+/* A filter's own row: how many are ticked, and the two ways out of that. */
+#menu .fbar { display:flex; align-items:center; gap:6px; padding:6px 8px;
+              border-bottom:1px solid var(--line); position:sticky; top:0;
+              background:var(--panel); z-index:1; }
+#menu .fbar .dim { flex:1; font-size:12px; }
+#menu .fbar button { padding:2px 10px; min-height:26px; }
+#menu .fbar .primary { background:var(--accent); color:#0d0f12;
+                       border-color:var(--accent); font-weight:600; }
 #menu input { background:#14161a; color:var(--fg); border:0;
               border-bottom:1px solid var(--line); padding:9px 11px; font:inherit;
               border-radius:6px 6px 0 0; outline:none; width:100%; }
@@ -2148,11 +2156,21 @@ def _display_rows(user: Principal) -> str:
     else sees only what was shared with them, so who else can see it is not a
     fact their grid has any use for.
     """
+    apart = ('<span class="rowhead">Stacks</span>'
+             '<span class="sizerow"><span class="rowlab">Suggestions</span>'
+             '<span class="sizeset" role="group" aria-label="Suggestions">'
+             '<button type="button" class="showopt apartopt" data-at="fold" '
+             'aria-pressed="true" title="Folded behind the one each would '
+             'show">Fold</button>'
+             '<button type="button" class="showopt apartopt" data-at="apart" '
+             'aria-pressed="false" title="Each photograph on its own">'
+             'Apart</button></span></span>')
     return ('<span class="sizerow"><span class="rowlab">Thumbnail size'
             f'</span>{_sizeset()}</span>'
             '<span class="rowhead">Info</span>'
             + "".join(_infoset(*i) for i in _INFO
-                      if i[0] != "access" or user.is_admin))
+                      if i[0] != "access" or user.is_admin)
+            + apart)
 
 
 def _display_menu(user: Principal) -> str:
@@ -2179,31 +2197,33 @@ def _sizeset() -> str:
             f'aria-label="Thumbnail size">{opts}</span>')
 
 
-def _stacks(stacks: str | None, user: Principal) -> str | None:
-    """What this person's view does with stacks.
+def _stacks_asked(stacks: list[str] | None, user: Principal
+                  ) -> tuple[ix.Pick, bool]:
+    """Which stacks to show, and whether the address still says `firm`.
 
-    **Folding is the off position, for everybody.** A suggestion is the app
-    saying *these eight look like one photograph*, and reading them as one is
-    what makes a thousand of them reviewable at all — so it is what the
-    library does until somebody says otherwise, and `firm` is the way to say
-    otherwise.
+    The values became three checkboxes — `stacked`, `suggested`, `single` —
+    when the filters took several values; the old words are read as the
+    boxes they meant, so a link from before still opens the same view.
+    `firm` was never a set of files: it is *suggestions shown apart*, which is
+    `apart` now, and is handed back as that.
 
-    It was not always. A household member was pinned to `firm` on the grounds
-    that folding hides photographs on the app's own evidence and somebody who
-    could not accept or refuse a guess should not have it done to them. They
-    can accept and refuse now, which took the ground out from under it —
-    and what was left was a filter whose cleared state and whose *No
-    suggestions* value did the same thing, so it read as stuck rather than as
-    careful. A control with an off position that is also one of its values is
-    a control that appears broken, and was.
-
-    Anything unrecognised reads as the default rather than as some fifth
-    thing.
+    Everybody's, as it was: a household member can accept and refuse a
+    suggestion now, which is what took the ground out from under keeping
+    them from looking at one.
     """
-    return stacks if stacks in ("only", "guesses", "firm") else None
+    del user
+    old = {"only": ("stacked", "suggested"), "guesses": ("suggested",)}
+    got: list[str] = []
+    apart = False
+    for v in stacks or []:
+        if v == "firm":
+            apart = True
+        got.extend(old.get(v, (v,) if v in ("stacked", "suggested", "single")
+                           else ()))
+    return _pick(got), apart
 
 
-def _both_sides(deleted: str | None, op_id: str | None,
+def _both_sides(deleted: list[str] | None, op_id: str | None,
                 user: Principal) -> str | None:
     """Which side of the deletion line to show — and *both*, following a link
     from the log.
@@ -2220,9 +2240,17 @@ def _both_sides(deleted: str | None, op_id: str | None,
     """
     if not user.is_admin:
         return None
-    if deleted in ("only", "with"):
-        return deleted
-    return "with" if op_id else None
+    # Two boxes: the binned, and the living. The address may still say the
+    # old `only` and `with`, which are the same two answers.
+    sides: set[str] = set()
+    for v in deleted or []:
+        sides |= {"only": {"gone"}, "with": {"gone", "live"},
+                  "gone": {"gone"}, "live": {"live"}}.get(v, set())
+    if sides == {"gone"}:
+        return "only"
+    if sides == {"gone", "live"}:
+        return "with"
+    return "with" if op_id and not sides else None
 
 
 def _from_operation(op_id: str | None,
@@ -2321,20 +2349,21 @@ def bin_link_html(n: int) -> str:
 
 def filters(
     user: Annotated[Principal, Depends(require_user)],
-    event: Annotated[str | None, Query()] = None,
-    date: Annotated[str | None, Query()] = None,
-    tag: Annotated[str | None, Query()] = None,
-    person: Annotated[str | None, Query()] = None,
-    audience: Annotated[str | None, Query()] = None,
-    kind: Annotated[str | None, Query()] = None,
-    band: Annotated[str | None, Query()] = None,
-    camera: Annotated[str | None, Query()] = None,
-    source: Annotated[str | None, Query()] = None,
-    deleted: Annotated[str | None, Query()] = None,
+    event: Annotated[list[str] | None, Query()] = None,
+    date: Annotated[list[str] | None, Query()] = None,
+    tag: Annotated[list[str] | None, Query()] = None,
+    person: Annotated[list[str] | None, Query()] = None,
+    audience: Annotated[list[str] | None, Query()] = None,
+    kind: Annotated[list[str] | None, Query()] = None,
+    band: Annotated[list[str] | None, Query()] = None,
+    camera: Annotated[list[str] | None, Query()] = None,
+    source: Annotated[list[str] | None, Query()] = None,
+    deleted: Annotated[list[str] | None, Query()] = None,
     op: Annotated[str | None, Query()] = None,
     stale: Annotated[str | None, Query()] = None,
     within: Annotated[str | None, Query()] = None,
-    stacks: Annotated[str | None, Query()] = None,
+    apart: Annotated[str | None, Query()] = None,
+    stacks: Annotated[list[str] | None, Query()] = None,
     group: Annotated[str, Query()] = "day",
 ) -> ix.Filters:
     """The current view, read off the query string.
@@ -2369,15 +2398,33 @@ def filters(
     but the two known words is dropped too, so a typo reads as the default
     rather than as some third thing.
     """
-    return ix.Filters(event=event, date=ix.date_prefix(date), tag=tag,
-                      person=person,
-                      audience=audience, chosen=_from_operation(op, stale),
+    picked, legacy_apart = _stacks_asked(stacks, user)
+    return ix.Filters(event=_pick(event),
+                      date=_pick([d for d in (ix.date_prefix(v)
+                                              for v in date or []) if d]),
+                      tag=_pick(tag), person=_pick(person),
+                      audience=_pick(audience),
+                      chosen=_from_operation(op, stale),
                       within=within,
-                      stacks=_stacks(stacks, user),
+                      stacks=picked,
+                      apart=apart == "1" or legacy_apart,
                       unfold="stack" in _groupings(group),
-                      kind=kind, band=band, camera=camera, source=source,
+                      kind=_pick(kind), band=_pick(band),
+                      camera=_pick(camera), source=_pick(source),
                       viewer=user.scope,
                       deleted=_both_sides(deleted, op, user))
+
+
+def _pick(values: list[str] | None) -> ix.Pick:
+    """Repeated parameters as a filter: none, one, or several.
+
+    One stays a plain string — *the view is about exactly this* — and
+    repeats collapse, so `?tag=a&tag=a` is the same question as `?tag=a`.
+    """
+    got = tuple(dict.fromkeys(v for v in values or [] if v != ""))
+    if not got:
+        return None
+    return got[0] if len(got) == 1 else got
 
 
 #: What the front door opens on: this year, by month and then by event.
@@ -2809,9 +2856,10 @@ def _browse_url(view: ix.Filters, patch: dict[str, str | None]) -> str:
     # Joined with a bare `&`: this is a URL, and the one place it becomes
     # markup escapes it. Building it pre-escaped produced `&amp;amp;` and a
     # link that carried its second filter as part of the first one's value.
+    pairs = [(k, x) for k, v in query.items() if v
+             for x in (v if isinstance(v, list) else [v])]
     return "/browse" + (
-        "?" + "&".join(f"{k}={_q(str(v))}" for k, v in query.items() if v)
-        if any(query.values()) else "")
+        "?" + "&".join(f"{k}={_q(str(x))}" for k, x in pairs) if pairs else "")
 
 
 #: The derived tiers a thumbnail can be drawn from, smallest first, with what
@@ -2912,8 +2960,7 @@ def stack_page(folder: str, name: str,
     """
     conn = db()
     key = f"{folder}/{name}"
-    view = ix.Filters(within=key, viewer=user.scope,
-                      stacks=_stacks(None, user))
+    view = ix.Filters(within=key, viewer=user.scope)
     rows = ix.files(conn, view, limit=PAGE_LIMIT)
     # Not a stack, or not one this person may see — the same answer either
     # way, and deliberately: which of the two it is would say whether a
@@ -3750,8 +3797,23 @@ def _count(row: sqlite3.Row, column: str) -> int:
         return 0
 
 
-def _view_dict(view: ix.Filters) -> dict[str, str | None]:
-    return {name: getattr(view, name) for name in ix.Filters.NAMES}
+def _view_dict(view: ix.Filters) -> dict[str, str | list[str] | None]:
+    """The view as the address spells it — and as the page script reads it.
+
+    Several values are a list; one is a string, as it always was. `deleted`
+    is turned back into the boxes the bar offers rather than the two modes
+    the index works in, so the page and the address say the same thing.
+    """
+    out: dict[str, str | list[str] | None] = {}
+    for name in ix.Filters.NAMES:
+        got = ix.picks(cast("ix.Pick", getattr(view, name)))
+        out[name] = (None if not got else got[0] if len(got) == 1
+                     else list(got))
+    sides: dict[str, str | list[str]] = {"only": "gone",
+                                         "with": ["gone", "live"]}
+    out["deleted"] = sides.get(str(view.deleted))
+    out["apart"] = "1" if view.apart else None
+    return out
 
 
 def _chips(user: Principal) -> tuple[tuple[str, str], ...]:
@@ -4023,14 +4085,14 @@ _FIXED: dict[str, tuple[tuple[str, str], ...]] = {
              ("large", "Large / long")),
     # Off is the third value and has no entry: clearing the chip is what says
     # *the living*, the same gesture as clearing any other filter.
-    "deleted": (("only", "Only deleted"), ("with", "Including deleted")),
+    "deleted": (("gone", "Deleted"), ("live", "Not deleted")),
     # No entry for the ordinary view, the same as every other chip: *not
     # filtering on this* is what the cross says, and a value that only clears
     # the filter is a second way to say it — which is one more thing to read
     # in the list of the ones that do something. It was named while off meant
     # something of its own; folding is the default now, so it does not.
-    "stacks": (("only", "Only stacks"), ("guesses", "Only suggested"),
-               ("firm", "No suggestions")),
+    "stacks": (("stacked", "Stacked"), ("suggested", "Suggested"),
+               ("single", "Not in a stack")),
 }
 
 #: How the grid can be cut up, and what to call each choice.
@@ -4271,8 +4333,9 @@ try{
   for(const k of Object.keys(INFO_DEFAULT))
     if(saved&&INFO_ALLOWED[k].includes(saved[k])) info[k]=saved[k];
 }catch(e){}
+// The facts' switches; the stacks row beside them has a wiring of its own.
 const showOpts=Array.prototype.slice.call(
-  document.querySelectorAll('.showopt'));
+  document.querySelectorAll('.showopt')).filter(b=>b.dataset.info);
 
 // One edge of a cell, made if the cell came without one — a cell built by
 // hand, or by markup from before there were lanes.
@@ -4413,6 +4476,18 @@ if(typeof MutationObserver!=='undefined'&&grid){
     });
   }).observe(grid,{childList:true,subtree:true});
 }
+// Suggested stacks folded behind the one each would show, or apart as the
+// separate photographs they are. In the address, because it changes what
+// the server sends; offered here, because it is how you look, not what at.
+document.querySelectorAll('.apartopt').forEach(b=>{
+  b.setAttribute('aria-pressed',
+    (b.dataset.at==='apart')===(VIEW.apart==='1')?'true':'false');
+  b.onclick=e=>{
+    e.stopPropagation();
+    const want=b.dataset.at==='apart'?'1':null;
+    if((VIEW.apart||null)!==want) location.href=url({apart:want});
+  };
+});
 let infoTimer=null;
 window.addEventListener('resize',()=>{
   clearTimeout(infoTimer);
@@ -4421,9 +4496,18 @@ window.addEventListener('resize',()=>{
 drawInfo();
 
 // --- filter chips ------------------------------------------------------------
+// A filter's values, however many: none, one, or a list of them.
+function asList(v){
+  return v===null||v===undefined||v===''?[]:Array.isArray(v)?v:[v];
+}
+// The view into a query string. Several values are the same name repeated,
+// which is how a form would send them and how the server reads them.
+function putView(q,view){
+  for(const [k,v] of Object.entries(view)) for(const x of asList(v)) q.append(k,x);
+}
 function url(patch){
   const q=new URLSearchParams();
-  for(const [k,v] of Object.entries({...VIEW,...patch})) if(v!==null&&v!=='') q.set(k,v);
+  putView(q,{...VIEW,...patch});
   // Keep the grouping across a filter change: it is how you are reading the
   // library, not what you are reading.
   q.set('group',GROUPING.join(',')||'none');
@@ -4471,18 +4555,24 @@ function drawChips(){
   // for finding things.
   const spare=CHIPS.filter(([col])=>!VIEW[col]);
   for(const [col,label] of CHIPS){
-    const v=VIEW[col];
+    const vs=asList(VIEW[col]);
+    const v=vs.length?vs[0]:null;
     const b=document.createElement('button');
-    const up=v?wider(col,v):null;
+    // The cross climbs a level only from one value; from several it clears.
+    const up=vs.length===1?wider(col,v):null;
     // The name is the drawing now. It stays in `title` for a pointer and in
     // `aria-label` for everything else — a glyph with no name anywhere is a
     // control only the person who drew it can read.
     b.title=label;
     if(v){
       b.className='chip on';
-      b.setAttribute('aria-label',label+': '+labelFor(col,v));
+      // The first, and how many more: the whole list is in the menu, and
+      // four names in a chip would push the rest of the bar off a phone.
+      const said=labelFor(col,v)+(vs.length>1?' +'+(vs.length-1):'');
+      b.setAttribute('aria-label',
+                     label+': '+vs.map(x=>labelFor(col,x)).join(', '));
       b.innerHTML=markOf(col,label)
-                 +`<span class="val">${esc(labelFor(col,v))}</span>`
+                 +`<span class="val">${esc(said)}</span>`
                  +`<span class="x" title="${up?'Up to '+esc(up):'Clear'}">`
                  +'&times;</span>';
     }else{
@@ -4608,14 +4698,23 @@ function esc(s){return String(s).replace(/[&<>"]/g,c=>(
 
 // --- the shared menu ---------------------------------------------------------
 let menuCtx=null;
-function closeMenu(){menu.hidden=true;menuCtx=null;}
+function closeMenu(){
+  const then=menuCtx&&menuCtx.onclose;
+  menu.hidden=true; menuCtx=null;
+  if(then) then();
+}
 // Anywhere outside dismisses. The opener stops propagation and toggles,
 // so clicking the same label again closes rather than reopening — a menu
 // you cannot dismiss with the control that opened it feels stuck.
 document.addEventListener('click',e=>{
   if(!menu.hidden&&!menu.contains(e.target)) closeMenu();
 });
-window.addEventListener('resize',closeMenu);
+// Not a filter's checklist: on a phone the keyboard coming up is a resize,
+// and closing would show what was ticked while it was still being ticked.
+window.addEventListener('resize',()=>{
+  if(menuCtx&&menuCtx.onclose) return;
+  closeMenu();
+});
 // Closing on a scroll means *you have moved on*. On a phone it meant the
 // keyboard: focusing a field makes the browser scroll the document to bring
 // it into view, so the menu shut the instant it became usable — every Event,
@@ -4656,7 +4755,8 @@ async function openMenu(anchorEl,ctx){
        &&q.value.trim()){
       choose(q.value.trim()); e.preventDefault();
     }
-    if(e.key==='Escape'){closeMenu();}
+    // Escape is *never mind*: what was ticked is not shown.
+    if(e.key==='Escape'){ctx.onclose=null; closeMenu();}
     e.stopPropagation();
   };
   // Not on a phone. There the keyboard is half the screen, and it would come
@@ -4670,7 +4770,7 @@ async function openMenu(anchorEl,ctx){
     opts=fixed.map(f=>({value:f[0],label:f[1],n:null,scope:'all'}));
   }else{
     const p=new URLSearchParams();
-    for(const [k,v] of Object.entries(VIEW)) if(v) p.set(k,v);
+    putView(p,VIEW);
     p.set('column',ctx.column);
     // What the selection spans, which only the page knows. Undated files are
     // left out rather than counted as some smallest date — one of those would
@@ -4713,8 +4813,8 @@ async function openMenu(anchorEl,ctx){
   // the panel up and redraws it: naming an event is half a gesture, and the
   // parts of that event are in the list directly under it.
   async function choose(value,act,stay){
+    if(ctx.mode==='filter'){flip(value);return;}
     if(!stay) closeMenu();
-    if(ctx.mode==='filter'){location.href=url({[ctx.column]:value});return;}
     const cs=await acting();
     if(!cs) return;
     if(!cs.length){workClose();say('nothing selected');return;}
@@ -4746,7 +4846,26 @@ async function openMenu(anchorEl,ctx){
   // *do these files say this?* — so it is one control either way.
   const FIELD=MULTI[ctx.as]?MULTI[ctx.as][0]:(ctx.as==='event'?'event':null);
 
+  // **A filter is any of several.** Ticking stages a value rather than
+  // going there, so a second and a third can be ticked in the same visit;
+  // what is ticked is shown when the menu closes — a click elsewhere, the
+  // chip again, or Show — and Escape leaves the view as it was. Clear unticks
+  // everything at once, which is the short way from several to one.
+  const picks=ctx.mode==='filter'?new Set(asList(VIEW[ctx.column])):null;
+  const was=picks?JSON.stringify([...picks].sort()):'';
+  function flip(value){
+    if(picks.has(value)) picks.delete(value); else picks.add(value);
+    const q=document.getElementById('menuq');
+    render(q?q.value:'');
+  }
+  if(picks) ctx.onclose=()=>{
+    const now=[...picks];
+    if(JSON.stringify(now.slice().sort())===was) return;
+    location.href=url({[ctx.column]:now.length?now:null});
+  };
+
   async function toggle(o,row){
+    if(picks){flip(o.value);return;}
     // On the landing page this is every file the chosen folders hold, read
     // once and kept: the tri-state has to be able to say *some of them*, and
     // there is no way to know that about a folder without asking.
@@ -4804,6 +4923,7 @@ async function openMenu(anchorEl,ctx){
   // against the whole name either way, which left one or the other unticked
   // with the answer on the screen behind it.
   function stateOf(o){
+    if(picks) return picks.has(o.value)?'all':'none';
     const cs=targets();
     if(!nested) return shareState(cs,FIELD,o.value);
     const n=cs.filter(c=>{
@@ -4853,9 +4973,29 @@ async function openMenu(anchorEl,ctx){
 
   function render(text){
     const t=(text||'').toLowerCase();
-    const checkable=ctx.mode==='set'&&!!FIELD;
+    const checkable=(ctx.mode==='set'&&!!FIELD)||!!picks;
     const list=document.createElement('div');
     list.id='menulist';
+    if(picks){
+      const bar=document.createElement('div');
+      bar.className='fbar';
+      const n=picks.size;
+      const said=document.createElement('span');
+      said.className='dim';
+      said.textContent=n?n+' ticked':'Any';
+      const clear=document.createElement('button');
+      clear.type='button'; clear.className='fclear'; clear.textContent='Clear';
+      clear.disabled=!n;
+      clear.onclick=e=>{
+        e.stopPropagation(); picks.clear();
+        const q=document.getElementById('menuq'); render(q?q.value:'');
+      };
+      const go=document.createElement('button');
+      go.type='button'; go.className='fshow primary'; go.textContent='Show';
+      go.onclick=e=>{e.stopPropagation(); closeMenu();};
+      bar.appendChild(said); bar.appendChild(clear); bar.appendChild(go);
+      list.appendChild(bar);
+    }
     const typed=(text||'').trim();
     // An event matches on its own name or on any of its parts. A match on
     // the event keeps all of them: you are looking for the event, and its
@@ -5023,6 +5163,9 @@ async function openMenu(anchorEl,ctx){
     return row;
   }
   function opt(o,fn,checkable){
+    // Every row of a filter is a box: the states, the sentinels and the
+    // leftovers of an event are values to tick like any other.
+    if(picks) checkable=true;
     const d=document.createElement('div');
     d.className='opt';
     d.innerHTML=(checkable?'<span class="box"></span>':'')
@@ -5443,7 +5586,7 @@ async function fill(c){
     try{
       // With the view, so where a clip came from can be answered inside it.
       const p=new URLSearchParams();
-      for(const [k,v] of Object.entries(VIEW)) if(v) p.set(k,v);
+      putView(p,VIEW);
       const r=await fetch(`/api/file/${encodeURIComponent(c.dataset.folder)}`
                          +`/${encodeURIComponent(c.dataset.name)}?`+p);
       if(!r.ok) throw new Error(await r.text());
@@ -6992,7 +7135,7 @@ async function send(cs,body,label,sharedBatch){
       // The filters ride along so the server can say which files left the
       // view; it owns the matching rules, and a second copy here would drift.
       const p=new URLSearchParams();
-      for(const [k,v] of Object.entries(VIEW)) if(v) p.set(k,v);
+      putView(p,VIEW);
       // Which stack this was decided in. Not one of the filters, and the one
       // thing about *where* a write was made that changes what it does: with
       // the members in front of the curator a cascade must not follow them
@@ -7195,7 +7338,7 @@ async function purgeSelection(){
       if(stopping) break;
       const chunk=cs.slice(s0,s0+CHUNK);
       const p=new URLSearchParams();
-      for(const [k,v] of Object.entries(VIEW)) if(v) p.set(k,v);
+      putView(p,VIEW);
       if(STACK) p.set('within',STACK);
       const r=await fetch('/api/purge?'+p,{method:'POST',
         headers:{'Content-Type':'application/json'},
@@ -7270,7 +7413,7 @@ document.addEventListener('keydown',e=>{
 // is a row of photographs pushed off the screen.
 function groupUrl(levels){
   const q=new URLSearchParams();
-  for(const [k,v] of Object.entries(VIEW)) if(v) q.set(k,v);
+  putView(q,VIEW);
   q.set('group',levels.join(',')||'none');
   return PAGE+'?'+q;
 }
@@ -8246,7 +8389,7 @@ def api_decide(user: Annotated[Principal, Depends(require_user)],
     # ordinary view would fold, which is the only reading available.
     conn = ix.open_rw(DB_PATH) if DB_PATH.is_file() else None
     try:
-        view = ix.Filters(stacks=_stacks(None, user))
+        view = ix.Filters()
         named = Target(folder=body.folder, name=body.name)
         targets = _mine(user, conn, _behind(
             conn, view, [named],

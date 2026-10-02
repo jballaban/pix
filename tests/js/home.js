@@ -247,7 +247,10 @@ const press = key => (keys.keydown || []).forEach(fn => fn(
         asked[0] && asked[0].url);
   const opts = menu.querySelectorAll('.opt');
   check('the values come back', opts.length > 0, String(opts.length));
+  // Ticked, then shown: a filter is any of several.
   opts[0].click();
+  const show = menu.querySelector('.fshow');
+  if (show) show.click();
   check('picking one goes to a view that carries both',
         !!went && went.includes('event=Sicily') && went.includes('date=2026'),
         String(went));

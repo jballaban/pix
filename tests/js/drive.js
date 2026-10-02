@@ -1856,12 +1856,58 @@ function arrow(key, opts) {
           rows().filter(r => r === 'No sub-event').length === 1,
           rows().join(','));
 
+    // Ticked, not gone to: a filter is any of several, so the view changes
+    // once you say you are done.
     if (rest) rest.click();
+    check('ticking a value stays in the menu', went === null, String(went));
+    const show = document.byId.menu.querySelector('.fshow');
+    check('which says Show', !!show);
+    if (show) show.click();
     check('and it asks for the event with nothing on the end',
           decodeURIComponent(location.href.replace(/\+/g, ' '))
             === '/browse?event=Sicily > (none)&group=day', location.href);
     location.href = '/browse';
     deselect();
+  }
+
+  // --- several at once ------------------------------------------------------
+  // Any of: ticking a second value adds it to the first, Clear takes them all
+  // off, and Escape leaves the view as it was.
+  {
+    const menu = document.byId.menu;
+    const open = async () => {
+      document.byId.chips.children.find(c => c._classes.has('chip')).click();
+      await settle(); await settle();
+    };
+    const row = name => menu.querySelectorAll('.opt').find(
+      o => new RegExp('<span>' + name + '</span>').test(o.innerHTML));
+    const ticked = name => row(name) && row(name).dataset.state === 'all';
+
+    went = null;
+    await open();
+    row('Sicily').click();
+    row('Cornwall').click();
+    check('two ticked at once', ticked('Sicily') && ticked('Cornwall'));
+    check('and nothing shown yet', went === null, String(went));
+    menu.querySelector('.fshow').click();
+    const both = decodeURIComponent(String(went).replace(/\+/g, ' '));
+    check('Show asks for either',
+          both.includes('event=Sicily') && both.includes('event=Cornwall'),
+          both);
+
+    went = null;
+    await open();
+    row('Sicily').click();
+    menu.querySelector('.fclear').click();
+    check('Clear unticks everything', !ticked('Sicily'));
+
+    went = null;
+    row('Cornwall').click();
+    const q = document.byId.menuq;
+    if (q && q.onkeydown) q.onkeydown({ key: 'Escape', preventDefault() {},
+                                        stopPropagation() {} });
+    check('Escape leaves the view as it was', went === null, String(went));
+    location.href = '/browse';
   }
 
   // --- an event and the parts of it are one list ----------------------------

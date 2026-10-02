@@ -91,6 +91,23 @@ def under(event: str) -> str:
     return f"{safe}{EVENT_SEP}%"
 
 
+#: A filter's value: nothing, one, or several of which any will do.
+Pick = str | tuple[str, ...] | None
+
+
+def picks(value: Pick) -> tuple[str, ...]:
+    """A filter's values, however many — none for no filter at all."""
+    if value is None:
+        return ()
+    return (value,) if isinstance(value, str) else tuple(value)
+
+
+def only(value: Pick) -> str | None:
+    """The one value a filter is set to, or None for none or several."""
+    got = picks(value)
+    return got[0] if len(got) == 1 else None
+
+
 #: `audience` filter value meaning *nobody yet* — the "New" chip in the UI.
 #: A sentinel rather than a separate reviewed flag: a file with no audience
 #: has had no decision made about it, and modelling that twice invites the
@@ -285,33 +302,42 @@ class Filters:
     Every field is independent and ANDed. `None` means *not filtering on this*,
     which is distinct from filtering on an empty value — `event=""` would be a
     filter nothing matches, where `event=None` is no filter at all.
+
+    **A field is one value or several** (`Pick`), and several are ORed:
+    *Sicily or Denmark*, *photos or videos*. Any of, never all of — a filter
+    is a question about which files to look at, and *the files tagged both
+    beach and sunset* is a question almost nobody asks of a family library,
+    where *either* is the one asked daily. One value stays a plain string,
+    so everything that asks *is the view about exactly this?* — the rules that
+    leave a chip off a thumbnail because the view already says it — keeps
+    asking the same question and gets no for several.
     """
 
-    event: str | None = None
+    event: Pick = None
     #: A **prefix** of the effective date, not a year: `2026`, `2026-08` or
     #: `2026-08-30`. One filter for three questions, because they are the same
     #: question asked at three widths, and a library is narrowed down in
     #: exactly that order. `UNDATED` is the fourth value it takes, and is a
     #: state rather than a date — *the ones nobody could place* is real work.
-    date: str | None = None
-    tag: str | None = None
+    date: Pick = None
+    tag: Pick = None
     #: Who is **in** the file, which is not `audience` and never collapses
     #: into it: *pictures of Mum* and *pictures Mum may see* are opposite
     #: questions that happen to take the same kind of word, and a household
     #: asks the first one far more often.
-    person: str | None = None
-    audience: str | None = None
-    kind: str | None = None
-    band: str | None = None
+    person: Pick = None
+    audience: Pick = None
+    kind: Pick = None
+    band: Pick = None
     #: Which camera took it. A grouping before it was a filter, which meant the
     #: landing page could cut the library by camera and then had nowhere to send
     #: you when you clicked one.
-    camera: str | None = None
+    camera: Pick = None
     #: The name the import was given — `james`, `alina`, the folder tree that
     #: seeded the library. A device is replaced every few years and a camera
     #: model says which one it was; this says whose it was, which is the
     #: question people actually ask of a library.
-    source: str | None = None
+    source: Pick = None
 
     #: Restricts every query to what this person may see. **Not a filter** —
     #: it is never read from a URL and cannot be cleared from one. A filter is
@@ -349,20 +375,22 @@ class Filters:
     #: talked into showing what somebody said should be gone.
     deleted: str | None = None
 
-    #: What to do with stacks — the ones somebody made and the ones the app
-    #: proposes, which are the same thing decided by different parties.
-    #:
-    #: `None`, the default, folds every stack behind the photograph that
-    #: speaks for it, guesses included: most of a burst is one photograph shot
-    #: eight times, and a library showing all eight is the pile you started
-    #: with. `only` narrows to what is in a stack at all; `guesses` to the
-    #: ones nobody has answered yet, which is the shelf of work; `firm` counts
-    #: only the stacks a person made.
+    #: Which files, by the stack they are in: `stacked` — one somebody made;
+    #: `suggested` — one the app proposes and nobody has answered; `single` —
+    #: neither. Any of them, like every other filter.
     #:
     #: Administrators only, like `deleted` and for the same reason: folding on
     #: a guess hides photographs from a viewer, and only the person who can
     #: accept or refuse one should be able to change what it does.
-    stacks: str | None = None
+    stacks: Pick = None
+
+    #: Suggestions shown as the separate photographs they are, rather than
+    #: folded behind the one each would speak for. **Not a filter**: it does
+    #: not choose files, it chooses how they are drawn — so it is in Display,
+    #: not in the bar. It used to be the `firm` value of `stacks`, which made
+    #: one control answer two different questions. In the address all the
+    #: same, so a link keeps the way it was looked at.
+    apart: bool = False
 
     @property
     def folds_guesses(self) -> bool:
@@ -373,7 +401,7 @@ class Filters:
         grid once answered this differently from the badge, and the result was
         a photograph with no mark on it that opened into somebody else's.
         """
-        return self.stacks != "firm"
+        return not self.apart
 
 
     #: **Not a filter** — a consequence of grouping by stack, which opens every
@@ -401,6 +429,10 @@ class Filters:
     NAMES: ClassVar[tuple[str, ...]] = ("event", "tag", "person", "date",
                                        "audience", "kind", "band", "source",
                                        "camera", "stacks", "deleted")
+
+    #: What is carried in the address besides the filters: how the view is
+    #: drawn rather than which files it holds.
+    DRAWN: ClassVar[tuple[str, ...]] = ("apart",)
 
 
 @dataclass(frozen=True)
@@ -1443,10 +1475,13 @@ def _clauses(filters: Filters) -> dict[str, tuple[str, dict[str, Any]]]:
     decided = ("files.stacked_under IS NOT NULL OR EXISTS ("
                " SELECT 1 FROM files m"
                " WHERE m.stacked_under = files.folder || '/' || files.name)")
-    if filters.stacks == "guesses":
-        out["stacks"] = (f"({guessed})", {})
-    elif filters.stacks == "only":
-        out["stacks"] = (f"({decided} OR {guessed})", {})
+    # Any of the three. *Not in a stack* is neither of the other two, and
+    # nothing at all is every file — the same as not filtering.
+    kinds = {"stacked": f"({decided})", "suggested": f"({guessed})",
+             "single": f"(NOT ({decided}) AND NOT ({guessed}))"}
+    asked = [kinds[s] for s in picks(filters.stacks) if s in kinds]
+    if asked and len(asked) < len(kinds):
+        out["stacks"] = ("(" + " OR ".join(asked) + ")", {})
     if filters.chosen is not None:
         # One parameter rather than one per file: a single event edit can run
         # to seventeen hundred files, and a placeholder each would be an
@@ -1456,86 +1491,73 @@ def _clauses(filters: Filters) -> dict[str, tuple[str, dict[str, Any]]]:
             "(SELECT value FROM json_each(:f_chosen))",
             {"f_chosen": json.dumps(
                 [f + chr(10) + n for f, n in filters.chosen])})
-    if filters.event is not None:
-        head, leaf = decisions.split_event(filters.event)
+    def any_of(name: str, one: Callable[[str, str], tuple[str,
+                                                         dict[str, Any]]]
+               ) -> None:
+        """A filter with several values is any of them: each value's clause,
+        ORed, with parameters numbered so two values cannot share one."""
+        parts = [one(v, f"{name}{i}")
+                 for i, v in enumerate(picks(getattr(filters, name)))]
+        if not parts:
+            return
+        params: dict[str, Any] = {}
+        for _, p in parts:
+            params.update(p)
+        sql = parts[0][0] if len(parts) == 1 else (
+            "(" + " OR ".join(s for s, _ in parts) + ")")
+        out[name] = (sql, params)
+
+    def event(value: str, k: str) -> tuple[str, dict[str, Any]]:
+        head, leaf = decisions.split_event(value)
         if leaf == NO_EVENT and head:
-            # **This event and no part of it.** The sub-event grouping makes a
-            # folder for the files that are directly in an event, beside one
-            # per part of it, and that folder has to open on the files it
-            # counted — `event=Sicily` would open on the whole trip, which is
-            # more than the folder said was in it.
-            #
-            # Spelled as the event with `(none)` where a part would go, which
-            # is the same two conventions the grouping itself uses: the
-            # separator, and `(none)` for a column that has nothing in it.
-            out["event"] = ("COALESCE(files.event, '(none)') = :f_event",
-                            {"f_event": head})
-        else:
-            # This one **and everything below it**, the way a date filter
-            # answers a year with every day in it. `event=Sicily` is the trip;
-            # picking `Sicily > Taormina` narrows to the afternoon, and no
-            # second filter had to be invented for it.
-            out["event"] = (
-                "(COALESCE(files.event, '(none)') = :f_event "
-                " OR files.event LIKE :f_event_under ESCAPE '\\')",
-                {"f_event": filters.event,
-                 "f_event_under": under(filters.event)})
-    if filters.date == UNDATED:
-        # Undated is *no date at all*, not *not to that precision*. A file
-        # known to be from August is not undated, and answering a day filter
-        # with it would be the same invention grouping used to make.
-        out["date"] = ("files.effective_date IS NULL", {})
-    elif filters.date is not None and filters.date.endswith("-*"):
-        # Known to exactly this width and no further. `precision` is the
-        # width that is true, so it is compared for equality: a file known to
-        # the day is in 2025, but it is not *dated only to 2025*.
-        known = filters.date[:-2]
+            return (f"COALESCE(files.event, '(none)') = :f_{k}",
+                    {f"f_{k}": head})
+        return (f"(COALESCE(files.event, '(none)') = :f_{k} "
+                f" OR files.event LIKE :f_{k}_under ESCAPE '\\')",
+                {f"f_{k}": value, f"f_{k}_under": under(value)})
+
+    def date(value: str, k: str) -> tuple[str, dict[str, Any]]:
+        if value == UNDATED:
+            return ("files.effective_date IS NULL", {})
+        # Dated to the year (or month) and no finer: the precision is exactly
+        # the known part's width. Otherwise at least that width — a day's
+        # photographs are in its month and its year.
+        exact = value.endswith("-*")
+        known = value[:-2] if exact else value
         width = len(known)
-        out["date"] = (
-            f"(files.precision = {width} "
-            f"AND substr(files.effective_date, 1, {width}) = :f_date)",
-            {"f_date": known})
-    elif filters.date is not None:
-        # Matched by prefix, at whatever width the value was given in, so one
-        # clause answers year, month and day — and only where the date is known
-        # to that width. `files.year` is left alone: it is the landing page's
-        # index, and is no longer what this filters on.
-        width = len(filters.date)
-        out["date"] = (
-            f"(files.precision >= {width} "
-            f"AND substr(files.effective_date, 1, {width}) = :f_date)",
-            {"f_date": filters.date})
-    if filters.tag is not None:
-        out["tag"] = (
-            "EXISTS (SELECT 1 FROM file_tags ft WHERE ft.folder = files.folder "
-            "AND ft.name = files.name AND ft.tag = :f_tag)",
-            {"f_tag": filters.tag})
-    if filters.person is not None:
-        out["person"] = (
-            "EXISTS (SELECT 1 FROM file_people fp WHERE fp.folder = files.folder "
-            "AND fp.name = files.name AND fp.who = :f_person)",
-            {"f_person": filters.person})
-    if filters.audience is not None:
+        return (f"(files.precision {'=' if exact else '>='} {width} "
+                f"AND substr(files.effective_date, 1, {width}) = :f_{k})",
+                {f"f_{k}": known})
+
+    def tag(value: str, k: str) -> tuple[str, dict[str, Any]]:
+        return ("EXISTS (SELECT 1 FROM file_tags ft "
+                "WHERE ft.folder = files.folder AND ft.name = files.name "
+                f"AND ft.tag = :f_{k})", {f"f_{k}": value})
+
+    def person(value: str, k: str) -> tuple[str, dict[str, Any]]:
+        return ("EXISTS (SELECT 1 FROM file_people fp "
+                "WHERE fp.folder = files.folder AND fp.name = files.name "
+                f"AND fp.who = :f_{k})", {f"f_{k}": value})
+
+    def audience(value: str, k: str) -> tuple[str, dict[str, Any]]:
         shared = ("EXISTS (SELECT 1 FROM file_audience fa "
                   "WHERE fa.folder = files.folder AND fa.name = files.name")
-        out["audience"] = (
-            (f"NOT {shared})" if filters.audience == UNREVIEWED
-             else f"{shared} AND fa.who = :f_audience)"),
-            {} if filters.audience == UNREVIEWED
-            else {"f_audience": filters.audience})
-    if filters.kind is not None:
-        out["kind"] = ("files.kind = :f_kind", {"f_kind": filters.kind})
-    if filters.band is not None:
-        out["band"] = ("files.band = :f_band", {"f_band": filters.band})
-    if filters.source is not None:
-        out["source"] = ("COALESCE(files.source, '(unknown)') = :f_source",
-                         {"f_source": filters.source})
-    if filters.camera is not None:
-        # Through the same placeholder the grouping uses, so *the ones whose
-        # camera nobody recorded* is a section you can click into rather than a
-        # heading over a pile with no address.
-        out["camera"] = ("COALESCE(files.camera, '(unknown)') = :f_camera",
-                         {"f_camera": filters.camera})
+        if value == UNREVIEWED:
+            return (f"NOT {shared})", {})
+        return (f"{shared} AND fa.who = :f_{k})", {f"f_{k}": value})
+
+    def column(sql: str) -> Callable[[str, str], tuple[str, dict[str, Any]]]:
+        return lambda value, k: (f"{sql} = :f_{k}", {f"f_{k}": value})
+
+    any_of("event", event)
+    any_of("date", date)
+    any_of("tag", tag)
+    any_of("person", person)
+    any_of("audience", audience)
+    any_of("kind", column("files.kind"))
+    any_of("band", column("files.band"))
+    any_of("source", column("COALESCE(files.source, '(unknown)')"))
+    any_of("camera", column("COALESCE(files.camera, '(unknown)')"))
     return out
 
 
@@ -1612,7 +1634,8 @@ def _always(filters: Filters) -> list[str]:
     # and only for an administrator. A viewer's scope already excludes a file
     # whose one audience is `hidden`, but a sidecar written by something else
     # can say hidden *and* shared, and hidden has to win that too.
-    if filters.audience != decisions.ARCHIVED or filters.viewer is not None:
+    if (decisions.ARCHIVED not in picks(filters.audience)
+            or filters.viewer is not None):
         out.append(_NOT_ARCHIVED)
     # A clip reaches a viewer only once it has a file of its own
     # (spec/clips.md §7) — which is what its size records. Until then it can
@@ -2432,7 +2455,9 @@ def suggest(conn: sqlite3.Connection, column: str,
         # value already filtered on; here the value already filtered on is what
         # says which months are even worth listing.
         params["undated"] = UNDATED
-        level, parent = _date_level(view.date)
+        # With several dates picked there is no one level to open at, so
+        # the list starts again from the years.
+        level, parent = _date_level(only(view.date))
         if parent:
             params["f_parent"] = parent
             clauses["date"] = (
