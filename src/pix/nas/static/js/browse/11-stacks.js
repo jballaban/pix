@@ -102,7 +102,7 @@ async function stackSelection(){
   // `endChoosing` clears, and a refused press left the chooser's controls
   // scattered over the grid behind it.
   cs.forEach(c=>offerChoice(c));
-  document.querySelectorAll('.group').forEach(h=>{h.hidden=true;});
+  headings().forEach(h=>{h.hidden=true;});
   // Nothing is selected while a top is being chosen. The question is *which
   // one of these*, and leaving the files you arrived with ringed while the
   // ones fetched out of a stack are not says they are two kinds of candidate.

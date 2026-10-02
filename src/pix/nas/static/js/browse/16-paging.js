@@ -75,7 +75,8 @@ function appendPage(html){
     if(i===0&&last&&keyOfSection(sec)===keyOfSection(last)){
       const into=last.querySelector('.cells');
       const kids=[...(sec.querySelector('.cells')||sec).children];
-      const n=last.querySelector('.group .dim');
+      const h=[...last.querySelectorAll('.group')].find(x=>x.tagName==='H3');
+      const n=h&&h.querySelector('.dim');
       kids.forEach(c=>{ into.appendChild(c); fresh.push(c); });
       // Arrived, and already counted by the heading.
       if(n&&n.dataset.seen!==undefined)
@@ -83,7 +84,7 @@ function appendPage(html){
       return;
     }
     grid.appendChild(sec);
-    const h=sec.querySelector('.group');
+    const h=[...sec.querySelectorAll('.group')].find(x=>x.tagName==='H3');
     if(h) wireHeading(h);
     sec.querySelectorAll('.cell').forEach(c=>fresh.push(c));
   });

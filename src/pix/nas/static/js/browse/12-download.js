@@ -202,7 +202,7 @@ function endChoosing(restore){
   wereTops.forEach(m=>m.remove());
   wereTops=[];
   cells.forEach(c=>{c.hidden=false;});
-  document.querySelectorAll('.group').forEach(h=>{h.hidden=false;});
+  headings().forEach(h=>{h.hidden=false;});
   // The page is tall again, so the position it was holding means something
   // again. Whatever leaves the grid next is anchored from here.
   window.scrollTo(0,wasScrolled);

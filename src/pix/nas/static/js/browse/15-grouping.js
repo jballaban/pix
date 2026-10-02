@@ -65,8 +65,20 @@ function sectionCells(h){
 // grid is one render with nothing lazily loaded, so the cells present *are*
 // the section — a running tally would be a second account of the same thing,
 // free to drift from it.
+// The grid's section headings — the h3 headings over each run of
+// thumbnails. Only those: the account menu has `.group` rows of its own, and
+// asking for `.group` alone counted them as empty sections and removed the
+// menu's whole panel with them.
+function headings(){
+  return [...document.querySelectorAll('.group')].filter(h=>h.tagName==='H3');
+}
+
 function resection(){
-  document.querySelectorAll('.group').forEach(h=>{
+  // Thumbnails only. A folder page's sections hold folders, which are not
+  // cells — counted as cells every section is empty, and removed: the
+  // landing page drew its folders and then took every one of them away.
+  if(FOLDERS) return;
+  headings().forEach(h=>{
     const mine=sectionCells(h);
     // The whole box, not the heading out of it: what would be left is an
     // empty section holding the gap where a section used to be.
@@ -88,7 +100,7 @@ function resection(){
 }
 
 function drawGroupPicks(){
-  document.querySelectorAll('.group').forEach(h=>{
+  headings().forEach(h=>{
     const mine=sectionCells(h);
     const n=mine.filter(c=>picked.has(c)).length;
     h.dataset.state=n===0?'none':(n===mine.length?'all':'some');
@@ -132,6 +144,6 @@ function wireHeading(h){
     else pick();
   };
 }
-document.querySelectorAll('.group').forEach(wireHeading);
+headings().forEach(wireHeading);
 resection();
 
