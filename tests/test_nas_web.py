@@ -3442,7 +3442,14 @@ def test_audience_values_can_be_suggested(client: TestClient,
                                      "add_audience": ["family"]})
 
     got = client.get("/api/suggest?column=audience").json()
-    assert [s["value"] for s in got] == ["family"]
+    assert [s["value"] for s in got if s["value"] != ix.UNREVIEWED] == [
+        "family"]
+    # *Nobody yet* is a state, counted like the names: the video has no
+    # audience, so it is offered with its count — and Archived, which
+    # nothing is, is not offered at all.
+    nobody = [s for s in got if s["value"] == ix.UNREVIEWED]
+    assert nobody and nobody[0]["n"] == 1
+    assert decisions.ARCHIVED not in [s["value"] for s in got]
 
 
 def test_the_access_list_is_seeded_from_the_accounts(app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient], add_user: Callable[..., None]) -> None:
@@ -6584,3 +6591,16 @@ def test_suggestions_apart_is_offered_in_display(client: TestClient) -> None:
     html = client.get("/browse").text
     menu = html[html.index('class="me disp"'):html.index('id="me"')]
     assert 'class="showopt apartopt" data-at="apart"' in menu
+
+
+def test_a_fixed_filter_offers_only_what_is_there(client: TestClient) -> None:
+    """Type offered *Other* to a library with none, and picking it was an
+    empty grid. The list is fixed; what is worth offering from it is not."""
+    got = {s["value"]: s["n"]
+           for s in client.get("/api/suggest?column=kind").json()}
+    assert got["photo"] == 1 and got["video"] == 1
+    assert got["other"] == 0 and got["clip"] == 0
+    # The bin, counted the same way: nothing is in it.
+    gone = {s["value"]: s["n"]
+            for s in client.get("/api/suggest?column=deleted").json()}
+    assert gone == {"gone": 0, "live": 2}

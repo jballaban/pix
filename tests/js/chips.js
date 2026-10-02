@@ -53,9 +53,14 @@ document.querySelectorAll = sel => (sel === '.cell' ? []
 document.querySelector = sel => document.querySelectorAll(sel)[0] || null;
 
 const asked = [];
+// A fixed filter's values, counted the way the server counts them: every one
+// has files, so every one is offered.
 const fetch = async (url) => {
   asked.push(url);
-  return { ok: true, json: async () => [] };
+  const col = (String(url).match(/[?&]column=([^&]+)/) || [])[1];
+  const fixed = (FIXED[col]) || [];
+  return { ok: true,
+           json: async () => fixed.map(([value]) => ({ value, n: 3, scope: 'all' })) };
 };
 const stored = {};
 const localStorage = {
@@ -155,8 +160,10 @@ const optionLabels = () => document.byId.menu.querySelectorAll('.opt')
   chipFor('Type').click();
   await settle();
   const labels = optionLabels();
+  // Each with how many files carry it, which is what the label runs into.
+  const named = labels.map(l => l.replace(/\d+$/, ''));
   check('the menu offers the values that narrow',
-        labels.includes('Photos') && labels.includes('Video'), labels.join('|'));
+        named.includes('Photos') && named.includes('Video'), labels.join('|'));
   check('and nothing that means everything',
         !labels.some(l => /^(any|all|everything)$/i.test(l)), labels.join('|'));
 

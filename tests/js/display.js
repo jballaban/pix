@@ -95,7 +95,16 @@ const window = {
   innerWidth: 1400, scrollY: 0, devicePixelRatio: 1,
   scrollBy: () => {}, scrollTo: () => {}, addEventListener: () => {},
 };
-const fetch = async () => ({ ok: true, json: async () => ({}) });
+// Every fixed value counted as present, as the server would for a library
+// that has some of each.
+const fetch = async (url) => {
+  const col = (String(url).match(/[?&]column=([^&]+)/) || [])[1];
+  if (col === 'kind') {
+    return { ok: true, json: async () => ['photo', 'still', 'video', 'clip',
+      'other'].map(value => ({ value, n: 2, scope: 'all' })) };
+  }
+  return { ok: true, json: async () => ({}) };
+};
 const location = { href: '/browse', reload: () => {} };
 const history = { back: () => {} };
 const VIEW = { event: null, date: null, tag: null, audience: null, kind: null,
@@ -181,10 +190,12 @@ check('a fixed fact is turned off, not moved',
       && holds(fixOf(c, 'top'), 'clip-mark'));
 
 // --- a heading ticks everything under it --------------------------------------
-{
+(async () => {
   const menu = document.byId.menu;
   const chip = document.byId.chips.children.find(b => b.title === 'Type');
   chip.click();
+  // The menu asks the server what is there before it draws.
+  for (let i = 0; i < 4; i++) await new Promise(r => setImmediate(r));
   const rows = () => menu.querySelectorAll('.opt');
   const row = label => rows().find(
     o => new RegExp('<span>' + label + '</span>').test(o.innerHTML));
@@ -204,10 +215,10 @@ check('a fixed fact is turned off, not moved',
   row('All videos').click();
   check('a full one unticks them both',
         state('Videos') === 'none' && state('Clips') === 'none');
-}
 
-if (failures.length) {
-  failures.forEach(f => console.log('FAIL ' + f));
-  process.exit(1);
-}
-console.log('ok');
+  if (failures.length) {
+    failures.forEach(f => console.log('FAIL ' + f));
+    process.exit(1);
+  }
+  console.log('ok');
+})();

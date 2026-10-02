@@ -4788,7 +4788,19 @@ async function openMenu(anchorEl,ctx){
 
   let opts=[];
   if(fixed && ctx.mode!=='set'){
-    opts=fixed.map(f=>({value:f[0],label:f[1],n:null,scope:'all'}));
+    // A fixed list, but only what is there: the server counts each value,
+    // and the label is the one the bar uses for it.
+    let counted=[];
+    try{
+      const p=new URLSearchParams();
+      putView(p,VIEW);
+      p.set('column',ctx.column);
+      counted=await (await fetch('/api/suggest?'+p)).json();
+    }catch(e){counted=[];}
+    const n=new Map((Array.isArray(counted)?counted:[]).map(o=>[o.value,o]));
+    opts=fixed.map(f=>({value:f[0],label:f[1],
+                        n:n.has(f[0])?n.get(f[0]).n:null,
+                        scope:n.has(f[0])?n.get(f[0]).scope:'all'}));
   }else{
     const p=new URLSearchParams();
     putView(p,VIEW);
@@ -4818,13 +4830,26 @@ async function openMenu(anchorEl,ctx){
     // Hiding is offered with the grants rather than as a button of its own:
     // it answers the same question — who may see this — with *nobody, me
     // included*. Only when acting, because the filter has it in `extra`.
-    const seed=ctx.column!=='audience' ? []
-      : [...(ctx.mode==='filter'?[]:[[ARCHIVED,ARCHIVED_LABEL]]),
-         ...USERS.map(u=>[u,u])];
+    // Only when acting. A filter asks which files to look at, and a name
+    // nothing is shared with answers *none* — so it is not offered there;
+    // granting access is the one place a name nobody has yet is the point.
+    const seed=ctx.column!=='audience'||ctx.mode==='filter' ? []
+      : [[ARCHIVED,ARCHIVED_LABEL],...USERS.map(u=>[u,u])];
     const have=new Set(opts.map(o=>o.value));
+    // A state the server counted keeps the words the bar has for it.
+    const named=new Map(extra.map(e=>[e[0],e[1]]));
+    opts.forEach(o=>{if(named.has(o.value)) o.label=named.get(o.value);});
     opts=[...extra,...seed].filter(e=>!have.has(e[0]))
       .map(e=>({value:e[0],label:e[1],n:null,scope:'all'}))
       .concat(opts);
+  }
+  // A filter offers only what some file in the library has — except what is
+  // already ticked, which has to stay where it can be unticked.
+  if(ctx.mode==='filter'){
+    const ticked=new Set(asList(VIEW[ctx.column]));
+    opts=opts.filter(o=>o.n===null||o.n===undefined
+                        ? ticked.has(o.value)
+                        : o.n>0||ticked.has(o.value));
   }
   if(menuCtx!==ctx) return;   // a later menu opened while this was loading
 
@@ -8164,13 +8189,51 @@ def api_suggest(user: Annotated[Principal, Depends(require_user)],
     and guessing the missing end would propose events on evidence nobody gave.
     """
     if column not in ("event", "tag", "person", "audience", "date", "kind",
-                      "band", "camera", "source"):
+                      "band", "camera", "source", "stacks", "deleted"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             f"cannot suggest values for {column!r}")
+    conn = db()
+    if column in _FIXED:
+        return JSONResponse(_fixed_counts(conn, column, view))
     near = (near_from, near_to) if near_from and near_to else None
-    return JSONResponse([
-        {"value": s.value, "n": s.n, "scope": s.scope}
-        for s in ix.suggest(db(), column, view, near=near)])
+    out = [{"value": s.value, "n": s.n, "scope": s.scope}
+           for s in ix.suggest(conn, column, view, near=near)]
+    if column == "audience":
+        # The two that are states rather than names, which no row of
+        # `file_audience` carries — so they are counted, not listed.
+        have = {o["value"] for o in out}
+        for value in (ix.UNREVIEWED, decisions.ARCHIVED):
+            if value not in have:
+                out.extend(o for o in _fixed_counts(conn, column, view,
+                                                    (value,)) if o["n"])
+    return JSONResponse(out)
+
+
+def _fixed_counts(conn: sqlite3.Connection, column: str, view: ix.Filters,
+                  values: Sequence[str] | None = None) -> list[dict[str, Any]]:
+    """How many files carry each value of a filter whose values are a fixed
+    list — across the library, and whether any are in the view as it stands.
+
+    A filter offers only what is there. Type offered *Other* to a library
+    with none, and picking it was an empty grid; the list is fixed, but what
+    is worth offering from it is not. Counted the way the grid counts, so
+    `_always` and the viewer's scope hold here too.
+    """
+    out: list[dict[str, Any]] = []
+    base = ix.Filters(viewer=view.viewer, apart=view.apart)
+    for value in values or [v for v, _ in _FIXED[column]]:
+        if column == "deleted":
+            change: dict[str, Any] = {
+                "deleted": "only" if value == "gone" else None}
+        else:
+            change = {column: value}
+        n = ix.count(conn, replace(base, **change))
+        if not n:
+            out.append({"value": value, "n": 0, "scope": "other"})
+            continue
+        here = ix.count(conn, replace(view, **change))
+        out.append({"value": value, "n": n, "scope": "all" if here else "other"})
+    return out
 
 
 #: The readings worth surfacing, in the order a person asks for them. The full
