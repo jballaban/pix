@@ -110,6 +110,41 @@ def store() -> accounts.Store:
     return accounts.load()
 
 
+_USUAL: dict[str, Any] = {"key": None, "value": None, "checked": 0.0,
+                          "path": None}
+
+
+def _usual() -> str | None:
+    """The household's usual audience, read again only when the file changes.
+
+    Not `store()`: that is read fresh on every request on purpose, because a
+    stale copy is a removed account that still works. This is the one value
+    a thumbnail needs — whether its audience is the ordinary one — and it is
+    display, not access. Read per thumbnail it was one file read over SMB for
+    every cell: 1,583 of them to draw 2,000 thumbnails, most of the time
+    spent drawing the grid.
+    """
+    # Looked at no more than every two seconds: a grid draws two thousand
+    # thumbnails in one go, and asking the share two thousand times whether
+    # the file changed costs what reading it did.
+    now = time.monotonic()
+    path = accounts.ACCOUNTS_FILE
+    if (_USUAL["key"] is not None and _USUAL["path"] == path
+            and now - float(_USUAL["checked"]) < 2.0):
+        return cast("str | None", _USUAL["value"])
+    _USUAL["checked"] = now
+    _USUAL["path"] = path
+    try:
+        st = path.stat()
+        key: object = (str(path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        key = None
+    if key is None or key != _USUAL["key"]:
+        _USUAL["value"] = store().usual
+        _USUAL["key"] = key
+    return cast("str | None", _USUAL["value"])
+
+
 @dataclass(frozen=True)
 class Principal:
     """Who is asking, and what that entitles them to.
@@ -2412,16 +2447,24 @@ def filters(
                       apart=apart == "1" or legacy_apart,
                       unfold="stack" in _groupings(group),
                       kind=_pick([k for v in kind or []
-                                  for k in _KIND_HALVES.get(v, (v,))]),
+                                  for k in _OLD_KINDS.get(v, (v,))]),
                       band=_pick(band),
                       camera=_pick(camera), source=_pick(source),
                       viewer=user.scope,
                       deleted=_both_sides(deleted, op, user))
 
 
-#: The two kinds an address used to say, as the boxes they are now.
+#: A file's `kind` column, as the Type boxes that make it up — what a folder
+#: of a grouping by type stands for: a By-type folder of videos holds the
+#: clips too.
 _KIND_HALVES: dict[str, tuple[str, ...]] = {
     "image": ("photo", "still"), "video": ("video", "clip")}
+
+#: The words an address used to say for a type and no longer does. Only
+#: `image`: `video` is a box of its own now — videos that are not clips — and
+#: reading it as both halves was why ticking Videos alone came back as
+#: Videos and Clips.
+_OLD_KINDS: dict[str, tuple[str, ...]] = {"image": _KIND_HALVES["image"]}
 
 
 def _pick(values: list[str] | None) -> ix.Pick:
@@ -2813,7 +2856,7 @@ def _drill(row: sqlite3.Row, groups: list[str],
     folder with more in it than the one that was clicked, which is worse than
     a folder that does not open.
     """
-    patch: dict[str, str | None] = {}
+    patch: dict[str, str | list[str] | None] = {}
     for i, name in enumerate(groups):
         key = row[f"grp{i}"]
         column = _DRILL.get(name)
@@ -2832,6 +2875,9 @@ def _drill(row: sqlite3.Row, groups: list[str],
             patch["date"] = exact
             continue
         patch[column] = str(key)
+        # A type folder is every box its kind is made of.
+        if name == "kind":
+            patch[column] = list(_KIND_HALVES.get(str(key), (str(key),)))
         # A folder of an event *itself*, made beside one folder per part of
         # it: the files directly in the event and no others. Asking for the
         # event plainly would open the whole trip, which is more than the
@@ -2859,7 +2905,8 @@ def _stack_url(key: str, back: str = "") -> str:
     return out + (f"?back={_q(back)}" if back else "")
 
 
-def _browse_url(view: ix.Filters, patch: dict[str, str | None]) -> str:
+def _browse_url(view: ix.Filters,
+                patch: dict[str, str | list[str] | None]) -> str:
     """The grid, at this view plus `patch`. The page's own `url()` in Python."""
     query = {**_view_dict(view), **patch}
     # Joined with a bare `&`: this is a URL, and the one place it becomes
@@ -3546,7 +3593,7 @@ def _access_html(shared: list[str]) -> str:
     if not shared:
         return ('<span class="unshared" title="Nobody has access yet">'
                 '</span>')
-    usual = store().usual
+    usual = _usual()
     unusual = [a for a in shared if a != usual]
     return _chips_html("who", unusual)
 

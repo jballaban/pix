@@ -1803,10 +1803,8 @@ def files(conn: sqlite3.Connection, filters: Filters | None = None, *,
     where, bound = _where(view)
     keys = [GROUPINGS[g] for g in groups if GROUPINGS.get(g)]
     params: dict[str, Any] = {**bound, "limit": limit, "offset": offset}
-    selected = "".join(f", {key} AS grp{i} " for i, key in enumerate(keys))
     seen, seen_params = _source_seen(view)
     params.update(seen_params)
-    selected += f", {seen} AS source_seen "
     ordered = _ordering(groups)
     # **With a stack open, the photograph that speaks for it comes first.**
     #
@@ -1828,20 +1826,31 @@ def files(conn: sqlite3.Connection, filters: Filters | None = None, *,
     lead = ("(files.stacked_under IS NOT NULL "
             "OR files.suggested_under IS NOT NULL), "
             if view.within or view.unfold else "")
+    # After the groupings, which are the structure of the page: a stack cut
+    # by day is two sections, and the one that speaks leads whichever of them
+    # it is in rather than jumping out of its own section. Undated last
+    # either way: they are a work item of their own, not a date that happens
+    # to be small — or large.
+    order = (ordered + lead
+             + "effective_date IS NULL, effective_date DESC, name")
+    # **Which rows first, then what they say.** The tags, the counts behind
+    # each stack and the rest are a subquery a row, and asked in one query
+    # with the sort, SQLite works every one of them out for every file that
+    # matches — all ten thousand — before it sorts and keeps the first
+    # hundred: 1.3s for a page of 100, 9s for 2,000. So the page is chosen on
+    # the sort keys alone, and only the rows on it are filled in.
+    inner_keys = "".join(f", {key} AS grp{i}" for i, key in enumerate(keys))
+    outer_keys = ("".join(f", page.grp{i} AS grp{i}" for i in range(len(keys)))
+                  or ", NULL AS grp0")
     return list(conn.execute(
-        "SELECT files.*, " + _TAGS_COL + ", " + _PEOPLE_COL + ", " + _AUDIENCE_COL
-        + ", " + _BEHIND_COL + ", " + _AHEAD_COL + ", " + _CLIPS_COL
-        + (selected or ", NULL AS grp0 ")
-        + "FROM files "
-        + (f"WHERE {where} " if where else "")
-        # After the groupings, which are the structure of the page: a stack
-        # cut by day is two sections, and the one that speaks leads whichever
-        # of them it is in rather than jumping out of its own section.
-        + "ORDER BY " + ordered + lead
-        # Undated last either way: they are a work item of their own, not a
-        # date that happens to be small — or large.
-        + "effective_date IS NULL, effective_date DESC, name "
-        "LIMIT :limit OFFSET :offset", params
+        "WITH page AS (SELECT files.rowid AS rid" + inner_keys
+        + " FROM files " + (f"WHERE {where} " if where else "")
+        + "ORDER BY " + order + " LIMIT :limit OFFSET :offset) "
+        "SELECT files.*, " + _TAGS_COL + ", " + _PEOPLE_COL + ", "
+        + _AUDIENCE_COL + ", " + _BEHIND_COL + ", " + _AHEAD_COL + ", "
+        + _CLIPS_COL + outer_keys + f", {seen} AS source_seen "
+        "FROM page JOIN files ON files.rowid = page.rid "
+        "ORDER BY " + order, params
     ))
 
 
