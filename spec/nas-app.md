@@ -1,13 +1,22 @@
 # NAS-hosted app — architecture directive
 
-**Status: designed in discussion, nothing built.** This document supersedes the
-architecture the rest of `spec/` describes. It is a directive, not an
-implementation plan: it records *what was decided and why*, so the decisions
-don't have to be re-derived. Where it conflicts with another spec file, this
-file is the newer intent — but the **code** still reflects the old architecture,
-and remains the source of truth for what exists today.
+**Status: built and deployed, alongside the old CLI.** Ingest (`pix2 import
+device|folder`, `upload`), `process` (thumbnails and previews), `index`, the web
+app ([§8](#8-the-app) — accounts, browsing, curation written to sidecars,
+history, [clips](clips.md)), identity and round trips ([§15](#15-identity--when-two-files-are-the-same-photograph))
+and the container ([`deploy/`](../deploy/README.md)) all exist in `src/pix/nas/`.
+**Not built:** renders ([§5](#5-renders)), distributions ([§7](#7-distributions)),
+resolving duplicates, near-duplicate grouping, and the amputation of the old
+architecture ([§12](#12-what-this-deletes)) — until then the original `pix` CLI
+ships untouched beside `pix2` ([§9](#9-ingest--the-desktop-cli)).
 
-Recorded 2026-09-10.
+This document supersedes the architecture the rest of `spec/` describes. It is a
+directive, not an implementation plan: it records *what was decided and why*, so
+the decisions don't have to be re-derived. Where it conflicts with another spec
+file, this file is the newer intent; the **code** remains the source of truth
+for what exists today.
+
+Recorded 2026-09-10; status updated 2026-10-04.
 
 ---
 
