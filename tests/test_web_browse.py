@@ -3010,3 +3010,21 @@ def test_the_row_the_dot_is_about_carries_the_dot(client: TestClient) -> None:
     assert ".memenu .bin-link::before" in w_shell.STYLE
     assert "background:var(--gone)" in w_shell.STYLE[
         w_shell.STYLE.index(".memenu .bin-link::before"):][:200]
+
+
+def test_the_actions_stay_on_one_line_and_fold_the_rest_behind_a_plus() -> None:
+    """Which actions are on the bar is the selection's business; whether they
+    fit is the bar's. Once the selection has picked them, the ones that do not
+    fit on the line fold away from the end behind a `+` — the bar sits over
+    the grid, and a second line moves every thumbnail the moment you tick
+    one. Both selections — files and folders — re-fit when they redraw."""
+    js = w_pages.BROWSE_JS
+
+    assert "function fitActions()" in js and "function spillMenu()" in js
+    draw = js[js.index("function drawSel()"):]
+    assert "fitActions();" in draw[:draw.index("\n}\n")]
+    folders = js[js.index("function drawFolderSel()"):]
+    assert "fitActions();" in folders[:folders.index("\n}\n")]
+    # Folded away, and weighed past the rule that gives every action a display.
+    assert has_rule(w_shell.STYLE, '#actions .grp .spill, #actions .spill',
+                    'display:none')

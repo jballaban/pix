@@ -589,6 +589,10 @@ h3.group[data-state="some"] .grppick { background:var(--top);
    stayed on screen with nothing selected. Any rule that gives an element a
    `display` has to say what `hidden` means for it too. */
 #actions .grp[hidden] { display:none; }
+/* Folded away behind the `+` because the line is full (`fitActions`). */
+/* Weighed past `#actions .grp button`, which gives every action a display. */
+#actions .grp .spill, #actions .spill { display:none; }
+#actions .spillbtn[hidden] { display:none; }
 /* The same trap once more: these are buttons, and `button` has no `display`
    of its own here — but the flex container gives them one, so say what hidden
    means for them too. */

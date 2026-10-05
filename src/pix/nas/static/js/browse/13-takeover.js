@@ -203,14 +203,18 @@ function runAct(act,b){
       ? {mode:'date'}
       : {column:ACT_COLUMN[act]||act, mode:'set', as:act});
 }
+// An action from the bar, done to the selection. `anchor` is what a menu it
+// opens hangs from: the button itself, or the `+` when the button is one of
+// the ones folded away behind it.
+function barAct(act,anchor){
+  if(vActing){vActing=null; closeMenu();}
+  if(menu) menu.classList.remove('over');
+  runAct(act,anchor);
+}
 (actions?[...actions.querySelectorAll('[data-act]')]:[]).forEach(b=>{
-  b.onclick=e=>{
-    e.stopPropagation();
-    if(vActing){vActing=null; closeMenu();}
-    if(menu) menu.classList.remove('over');
-    runAct(b.dataset.act,b);
-  };
+  b.onclick=e=>{e.stopPropagation(); barAct(b.dataset.act,b);};
 });
+
 // The same actions from the viewer, done to the photograph on show and to
 // nothing else — whatever happens to be selected in the grid behind it.
 function viewAct(act,b){
