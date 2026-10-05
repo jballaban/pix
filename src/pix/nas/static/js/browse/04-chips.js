@@ -70,6 +70,9 @@ function drawChips(){
     // control only the person who drew it can read.
     b.title=label;
     if(v){
+      // At the narrowest fit the value is folded away and the glyph is all
+      // that shows, so the pointer's name says what it is set to as well.
+      b.title=label+': '+vs.map(x=>labelFor(col,x)).join(', ');
       b.className='chip on';
       // The first, and how many more: the whole list is in the menu, and
       // four names in a chip would push the rest of the bar off a phone.
@@ -105,12 +108,91 @@ function drawChips(){
     add.onclick=e=>{e.stopPropagation();filterMenu(add,spare);};
     chips.appendChild(add);
   }
+  // The way to the values when there is room only for the glyphs. Always
+  // drawn, and shown only at that fit (see `fitChips`): at the others every
+  // value is already on the bar.
+  if(spare.length<CHIPS.length){
+    const more=document.createElement('button');
+    more.className='chip more';
+    more.innerHTML=CHEVRON;
+    const say=()=>{
+      const open=chips.classList.contains('open');
+      more.title=open?'Show less':'Show what each filter is set to';
+      more.setAttribute('aria-label',more.title);
+      more.setAttribute('aria-expanded',String(open));
+    };
+    say();
+    more.onclick=e=>{
+      e.stopPropagation();
+      const open=chips.classList.toggle('open');
+      try{ localStorage.setItem(OPEN_KEY,open?'1':''); }catch(_){}
+      say();
+    };
+    chips.appendChild(more);
+  }
+  fitChips();
   // An opened stack, said the way an operation is: not a chip, because a chip
   // is a value picked from a list and there is no list of stacks to pick from
   // — you arrive inside one by opening it. But it has to say where you are
   // and be dismissable for the same reason the chips are, because a filter
   // you cannot see is a library that looks smaller than it is. Until this,
   // the only way out of a stack was the browser's own back button.
+}
+
+// **One line of bar, and the most that fits on it.** Three fits, tried in
+// order until one does:
+//
+//   all    every filter — the ones in use with their values, the rest dim
+//   spare  only the ones in use, with their values, and a `+` for the rest
+//   icons  only the ones in use, as glyphs, a `+`, and a chevron that opens
+//          the values out onto as many lines as they need
+//
+// Measured rather than set by screen width, because what fits depends on what
+// is set: two filters fit across a phone and six do not, and an event called
+// *Italy - Sicily - Day 3* takes the room of three dates. A width breakpoint
+// either wasted the bar or, with long values, wrapped it onto three lines —
+// header taken from the photographs to say what the filters already said.
+//
+// The chevron is the one fit that asks for more than a line, and only when
+// asked: opened, it stays open from page to page (a filter changed is a page
+// loaded), until it is closed again.
+const OPEN_KEY='pix.chipsOpen';
+const FITS=['all','spare','icons'];
+const CHEVRON='<svg width="14" height="14" viewBox="0 0 14 14" fill="none" '
+  +'stroke="currentColor" stroke-width="1.8" stroke-linecap="round" '
+  +'stroke-linejoin="round" aria-hidden="true"><path d="M3 5.5l4 4 4-4"/></svg>';
+try{ if(chips&&localStorage.getItem(OPEN_KEY)) chips.classList.add('open'); }catch(_){}
+// Whether everything on show sits on the first line. An element that takes no
+// room is not on the bar at all, whichever line it would have been.
+function oneLine(el){
+  let first=null;
+  for(const k of el.children){
+    const r=k.getBoundingClientRect();
+    if(!r.width&&!r.height) continue;
+    if(!first){ first=r; continue; }
+    if(r.top>=first.bottom-1) return false;
+  }
+  return true;
+}
+function fitChips(){
+  if(!chips) return;
+  for(const f of FITS){
+    chips.dataset.fit=f;
+    if(f===FITS[FITS.length-1]||oneLine(chips)) break;
+  }
+}
+// The width the bar is given changes with the window and with a phone turned
+// over; nothing else about the page changes it. Height is ignored, because
+// opening the values out changes the height and is not a reason to re-fit.
+if(chips&&typeof ResizeObserver!=='undefined'&&chips.parentElement){
+  let wide=-1;
+  new ResizeObserver(es=>{
+    const w=Math.round(es[0].contentRect.width);
+    // On the next frame, not in here: a re-fit changes the bar's height,
+    // and a size change inside the observer's own callback is the loop the
+    // browser reports as an error — which this page puts on screen.
+    if(w!==wide){ wide=w; requestAnimationFrame(fitChips); }
+  }).observe(chips.parentElement);
 }
 
 // Which question to ask, and then what to answer — two steps, because the

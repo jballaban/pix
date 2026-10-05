@@ -438,16 +438,29 @@ def test_details_is_a_tab_where_there_is_no_room_for_a_column() -> None:
 
 
 def test_the_unused_filters_fold_away_where_they_do_not_fit() -> None:
-    """Ten glyphs fit across a desktop bar and do not fit across a phone. Both
-    the glyphs and the `+` are always rendered and the stylesheet picks, since
-    which one applies can change while the page is open by turning the phone
-    over."""
-    narrow = media_block(w_shell.STYLE, "(max-width: 720px)")
+    """The bar is one line, and what is on it is what fits — measured, not
+    guessed from the width of the screen, since two filters fit across a
+    phone and six long ones do not fit across a laptop. Every control is
+    always rendered; the script names the fit and the stylesheet picks."""
+    css = w_shell.STYLE
+    js = w_pages.BROWSE_JS
 
-    assert has_rule(narrow, '.chips .spare', 'display:none')
-    assert has_rule(narrow, '.chips .addchip', 'display:inline-flex')
-    # The other way round outside it.
-    assert has_rule(w_shell.STYLE, '.chips .addchip', 'display:none')
+    assert "const FITS=['all','spare','icons'];" in js
+    assert "chips.dataset.fit=f" in js and "oneLine(chips)" in js
+    # Everything at the widest; the `+` and the chevron are only for the
+    # fits that need them.
+    assert has_rule(css, '.chips .addchip, .chips .more', 'display:none')
+    assert has_rule(css, '.chips[data-fit="spare"] .spare, '
+                         '.chips[data-fit="icons"] .spare', 'display:none')
+    assert has_rule(css, '.chips[data-fit="icons"] .more',
+                    'display:inline-flex')
+    # At the narrowest the values fold away until the chevron opens them.
+    assert has_rule(css, '.chips[data-fit="icons"]:not(.open) .chip.on .val, '
+                         '.chips[data-fit="icons"]:not(.open) .chip.on .x',
+                    'display:none')
+    # Not a breakpoint any more: a width rule would fight the measurement.
+    narrow = media_block(css, "(max-width: 720px)")
+    assert ".chips .spare" not in narrow and ".chips .addchip" not in narrow
 
 
 def test_the_two_bars_wear_the_same_drawings() -> None:

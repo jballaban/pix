@@ -333,12 +333,12 @@ def test_the_corner_stays_where_it_can_be_read(client: TestClient) -> None:
 
 
 def test_a_filter_doing_nothing_is_not_on_a_phones_bar() -> None:
-    """Ten glyphs fit across a desktop bar and do not fit across a phone —
-    which was already true, and is the half of this the bar had right."""
-    coarse = media_block(w_shell.STYLE, "(max-width: 720px)")
-
-    assert has_rule(coarse, '.chips .spare', 'display:none')
-    assert has_rule(coarse, '.chips .addchip', 'display:inline-flex')
+    """Ten glyphs do not fit across a phone. Which fit applies is measured
+    (see `test_the_unused_filters_fold_away_where_they_do_not_fit`); this is
+    that the fold-away still outweighs the thumb-sized buttons' rule."""
+    assert has_rule(w_shell.STYLE, '.chips[data-fit="spare"] .spare, '
+                                   '.chips[data-fit="icons"] .spare',
+                    'display:none')
 
 
 def test_a_page_is_never_served_from_a_cache(client: TestClient) -> None:

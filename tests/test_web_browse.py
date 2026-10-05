@@ -2295,8 +2295,9 @@ def test_the_ones_doing_nothing_fold_away_on_a_phone() -> None:
 
     assert "'chip off spare'" in body
     assert "addchip" in js and "filterMenu" in js
-    narrow = media_block(w_shell.STYLE, "(max-width: 720px)")
-    assert has_rule(narrow, '.chips .spare', 'display:none')
+    assert has_rule(w_shell.STYLE, '.chips[data-fit="spare"] .spare, '
+                                   '.chips[data-fit="icons"] .spare',
+                    'display:none')
 
 
 def test_select_all_is_reachable_with_nothing_selected(

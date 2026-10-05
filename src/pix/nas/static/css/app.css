@@ -170,7 +170,19 @@ main { padding:16px max(var(--gut),env(safe-area-inset-right)) 20px
 /* The filters you are not using are a list of everything the app can ask,
    which is not a thing to read past on the way to the ones you are. The same
    `+` the grouping heading uses, for the same gesture: one more of these. */
-.chips .addchip { display:none; }
+/* Which of them is on the bar is the fit the script measured (`fitChips`),
+   not the width of the screen: two filters fit across a phone and six long
+   ones do not fit across a laptop. */
+.chips .addchip, .chips .more { display:none; }
+.chips[data-fit="spare"] .spare, .chips[data-fit="icons"] .spare { display:none; }
+.chips[data-fit="spare"] .addchip,
+.chips[data-fit="icons"] .addchip { display:inline-flex; }
+/* The narrowest: the glyphs, and a chevron to open the values out. Closed it
+   is one line; open, the values wrap onto as many as they need. */
+.chips[data-fit="icons"] .more { display:inline-flex; color:var(--dim); }
+.chips[data-fit="icons"]:not(.open) .chip.on .val,
+.chips[data-fit="icons"]:not(.open) .chip.on .x { display:none; }
+.chips.open .more svg { transform:rotate(180deg); }
 .addchip { padding:3px 9px; font-weight:600; color:var(--dim); }
 .addchip:hover { color:var(--fg); border-color:var(--dim); }
 /* The install offer, above the footer rather than over the photographs. It is
@@ -1112,13 +1124,6 @@ h2.year span { font-size:13px; font-weight:400; }
   /* The corner stays. It was moved to the bottom when the bar was four rows
      deep; the bar is the filters and a gear now, and a picture of the grid
      under it earns the thirty pixels. */
-
-  /* The unused filters are ten glyphs, which fit across a desktop bar and
-     do not fit across a phone. Here the same list stays behind the `+`.
-     Both are always rendered, because which one applies can change while the
-     page is open by turning the phone over. */
-  .chips .spare { display:none; }
-  .chips .addchip { display:inline-flex; }
 
   /* Eleven drawings and eleven words is two rows of bar on a screen with none
      to give, and the drawings are the half that survives being small. The
