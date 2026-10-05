@@ -13,16 +13,22 @@ from typing import Annotated, Any, cast
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from pix.nas import accounts, index as ix, webroots
 from pix.nas.webapp.compress import Compress
+from pix.nas.webapp.logs import Activity, refused
 
 
 app: FastAPI = FastAPI(title="pix2", docs_url=None, redoc_url=None)
 # Pages and JSON leave gzipped; nothing else does. See `compress`.
 app.add_middleware(Compress)  # pyright: ignore[reportArgumentType]
+# Outermost, so its time is the whole request's. See `logs`.
+app.add_middleware(Activity)  # pyright: ignore[reportArgumentType]
+app.add_exception_handler(HTTPException, refused)
+app.add_exception_handler(RequestValidationError, refused)
 
 
 @app.exception_handler(status.HTTP_401_UNAUTHORIZED)
@@ -137,12 +143,16 @@ def signed_in(
     """
     book = store()
     name = accounts.identify(book, request.cookies.get(accounts.COOKIE))
+    who: Principal | None = None
     if name and (name == accounts.ADMIN or name in book.users):
-        return principal(book, name)
-    if credentials and accounts.check(book, credentials.username,
-                                      credentials.password):
-        return principal(book, accounts.canonical(credentials.username))
-    return None
+        who = principal(book, name)
+    elif credentials and accounts.check(book, credentials.username,
+                                        credentials.password):
+        who = principal(book, accounts.canonical(credentials.username))
+    # For the activity log, which reads it once the response is sent.
+    if who is not None:
+        request.state.user = who.name
+    return who
 
 
 def require_user(

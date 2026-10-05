@@ -90,6 +90,8 @@ ACCOUNTS_FILE: Path = MASTER_SHARE / "app" / "users.json"
 #: lives in the `.xmp` beside its file, so losing this costs the ability to
 #: undo, not a fact about a photograph.
 OPERATIONS_FILE: Path = MASTER_SHARE / "app" / "operations.jsonl"
+#: The web app's own logs — activity and errors, rotating (`webapp.logs`).
+LOG_DIR: Path = MASTER_SHARE / "app" / "logs"
 
 #: Per-folder download ledger, written during upload. Its first line is a
 #: header describing the source, which is what makes the known-device registry

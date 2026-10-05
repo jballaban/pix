@@ -1374,3 +1374,17 @@ def test_the_timeline_has_nothing_to_scroll_until_it_is_zoomed(
     assert "overflow:hidden; }" in w_clipping.SPLICE_CSS[
         w_clipping.SPLICE_CSS.index(".track { position:relative;"):][:200]
     assert "wrap.style.overflowX=zoom>1?'auto':'hidden';" in w_clipping.SPLICE_JS
+
+
+def test_a_video_with_only_a_photo_can_keep_it_as_a_file(
+    client: TestClient, real: Path, app_env: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch
+) -> None:
+    [still] = _make(client, (3.5, 3.5))
+    _process_clip(real / still, monkeypatch)
+    r = client.post("/api/clips/free", json={"folder": "init_2026",
+                                             "source": "b.mp4"})
+    assert r.status_code == 200, r.text
+    assert r.json()["freed"] == [still + ".jpg"]
+    assert _have(app_env, still + ".jpg")["kind"] == "image"
+    assert decisions.read(real / "b.mp4") == Decision(deleted=True)
