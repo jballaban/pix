@@ -550,6 +550,38 @@ def test_a_still_is_taken_at_the_millisecond(tmp_path: Path) -> None:
         (12.346, 12.346)]
 
 
+def test_one_clip_is_saved_by_itself_and_the_rest_wait(tmp_path: Path) -> None:
+    """Each clip in the list has its own Save. It sends the clips as they are
+    saved with this one beside them — so the other new clip is not sent —
+    and Save all afterwards sends that one under the name the first was
+    given, not as a second copy of it."""
+    sent = _drive(tmp_path, "save-one", [_clip("b.mp4~aaaa", 0, 5)])
+    first, second = (s["body"] for s in sent)
+    assert first["clips"] == [
+        {"id": "b.mp4~aaaa", "start": 0, "end": 5, "copy_of": None,
+         "absorbs": []},
+        {"id": "new1", "start": 10, "end": 20, "copy_of": None, "absorbs": []}]
+    assert first["deleted"] == []
+    assert [c["id"] for c in second["clips"]] == [
+        "b.mp4~aaaa", "b.mp4~mnew1", "new2"]
+
+
+def test_one_clip_is_discarded_by_itself(tmp_path: Path) -> None:
+    body = _saved(_drive(tmp_path, "discard-one", []))
+    assert [(c["id"], c["start"], c["end"]) for c in body["clips"]] == [
+        ("new2", 30, 40)]
+
+
+def test_a_deletion_is_taken_back_from_its_row(tmp_path: Path) -> None:
+    assert _drive(tmp_path, "keep-one", [_clip("b.mp4~aaaa", 0, 10)]) == []
+
+
+def test_a_clip_tied_to_another_saves_only_with_it(tmp_path: Path) -> None:
+    """A new clip laid over a saved one deletes it: two clips changed, and
+    saving one of them alone would send a set the server must refuse."""
+    assert _drive(tmp_path, "tied", [_clip("b.mp4~bbbb", 12, 15)]) == []
+
+
 def test_hiding_the_original_is_the_hidden_audience(tmp_path: Path) -> None:
     [sent] = _drive(tmp_path, "hide", [])
     assert sent == {"url": "/api/decide",

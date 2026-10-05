@@ -22,6 +22,7 @@ function element(id) {
     addEventListener(type, fn) { (listeners[type] = listeners[type] || []).push(fn); },
     removeEventListener() {},
     appendChild(child) { this.children.push(child); return child; },
+    append(...kids) { kids.forEach(k => this.children.push(k)); },
     querySelectorAll() { return []; },
     setAttribute(k, v) { this[k] = v; },
     remove() {},
@@ -37,6 +38,10 @@ const document = {
   addEventListener(type, fn) { (document.listeners[type] = document.listeners[type] || []).push(fn); },
   listeners: {},
 };
+// The clip list is redrawn whole, as a browser would: emptying it empties it.
+// (The timeline's bars are left to pile up — `pickAt` reads the last drawn.)
+Object.defineProperty(document.getElementById('cliplist'), 'innerHTML', {
+  get() { return ''; }, set() { this.children = []; } });
 const video = document.getElementById('sv');
 Object.assign(video, {
   currentTime: 0, duration: SPLICE.duration, paused: true, seeking: false,
@@ -45,18 +50,30 @@ Object.assign(video, {
 });
 
 const sent = [];
+// The clips as the server holds them, kept the way a save leaves them — so a
+// page that saves one clip and then the rest reads back what it would.
+let held = SPLICE.clips.slice();
 function fetch(url, opts) {
   if (opts && opts.method === 'POST') {
     const body = JSON.parse(opts.body);
     sent.push({ url, body });
     const made = (body.clips || []).map((_, i) => 'b.mp4~new' + i);
-    const reply = url.endsWith('/make') ? { made }
+    let names = {};
+    if (url.endsWith('/clips/save')) {
+      held = body.clips.map(c => {
+        const name = c.id.startsWith('new') ? 'b.mp4~m' + c.id : c.id;
+        names[c.id] = name;
+        return { name, start: c.start, end: c.end, deleted: false };
+      });
+    }
+    const reply = url.endsWith('/clips/save') ? { names }
+      : url.endsWith('/make') ? { made }
       : url.endsWith('/split') ? { first: body.name, second: 'b.mp4~half' }
       : url.endsWith('/merge') ? { name: body.first } : {};
     return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(JSON.stringify(reply)) });
   }
   const answer = url.startsWith('/api/keyframes/') ? { keys: SPLICE.keys || null }
-    : SPLICE.clips;
+    : held;
   return Promise.resolve({ ok: true, json: () => Promise.resolve(answer) });
 }
 const window = { addEventListener() {} };
@@ -85,7 +102,22 @@ const settle = () => new Promise(r => setImmediate(r));
     video.currentTime = a; key('i');
     video.currentTime = b; key('o');
   };
-  if (scenario === 'new-keys') {
+  // A row of the clip list, in play order, and one of its buttons by its word.
+  const row = i => els.cliplist.children[i];
+  const press = (i, word) => row(i).children
+    .find(c => c.textContent === word).onclick({ stopPropagation() {} });
+  if (scenario === 'save-one') {
+    newClip(10, 20); newClip(30, 40);
+    press(1, 'Save'); await settle(); await settle();
+    click('bsave');
+  } else if (scenario === 'discard-one') {
+    newClip(10, 20); newClip(30, 40);
+    press(0, 'Discard'); click('bsave');
+  } else if (scenario === 'keep-one') {
+    pickAt(5); click('bdel'); press(0, 'Discard'); click('bsave');
+  } else if (scenario === 'tied') {
+    newClip(10, 20); press(0, 'Save');
+  } else if (scenario === 'new-keys') {
     newClip(10, 20); click('bsave');
   } else if (scenario === 'nothing') {
     click('bsave');

@@ -148,7 +148,7 @@ function draw(){
     bars.appendChild(l);
   }
   $('tdur').textContent=fmt(dur);
-  drawStrip(); drawKeys(); playhead(false); drawBars();
+  drawStrip(); drawKeys(); playhead(false); drawBars(); drawList();
 }
 function drawBars(){
   const c=selected(), n=changes();
@@ -165,16 +165,155 @@ function drawBars(){
     $('bjoin').hidden=still||!nextOf(c);
     const was=savedOf(c.id);
     $('bopen').hidden=!was;
-    if(was){
-      const day=(was.date||'').slice(0,10);
-      $('bopen').href='/browse'+(day?'?date='+encodeURIComponent(day):'')
-        +'#open:'+encodeURIComponent(S.folder+'/'+c.id);
-    }
+    if(was) $('bopen').href=openHref(was);
   }
   $('draftbar').hidden=!n;
   $('dirty').textContent=n+' unsaved change'+(n===1?'':'s');
   $('bundo').hidden=!undos.length;
 }
+// A saved clip in the grid, on the day it is filed under.
+function openHref(was){
+  const day=(was.date||'').slice(0,10);
+  return '/browse'+(day?'?date='+encodeURIComponent(day):'')
+    +'#open:'+encodeURIComponent(S.folder+'/'+was.name);
+}
+const what=c=>c.end===c.start?'Photo at '+fmt(c.start)
+                              :'Clip '+fmt(c.start)+' – '+fmt(c.end);
+
+// --- the clips, one row each ---------------------------------------------------
+// **Every clip is a row of its own, saved or not.** The timeline says where
+// they are; this says what each one is and what is pending on it — and an
+// unsaved one can be kept or thrown away by itself, rather than only along
+// with everything else made since the last Save. A clip that is to be
+// deleted keeps its row until then, struck through, so the deletion can be
+// taken back like any other change.
+function drawList(){
+  const box=$('cliplist');
+  if(!box) return;
+  const rows=[...draft.map(c=>({c,gone:false})),
+              ...deleted.map(id=>savedOf(id)).filter(Boolean)
+                .map(w=>({c:{id:w.name,start:w.start,end:w.end,absorbs:[]},
+                          gone:true}))]
+    .sort((x,y)=>x.c.start-y.c.start||x.c.end-y.c.end);
+  box.innerHTML='';
+  box.hidden=!rows.length;
+  for(const {c,gone} of rows){
+    const was=savedOf(c.id), dirty=gone||changed(c);
+    const r=document.createElement('div');
+    r.className='crow sctl'+(c.id===sel&&!gone?' on':'')+(dirty?' draft':'')
+      +(gone?' gone':'');
+    const name=document.createElement('span');
+    name.className='cwhat'; name.textContent=what(c);
+    const state=document.createElement('span');
+    state.className='cstate';
+    state.textContent=gone?'to be deleted':!was?'new'
+      :dirty?'changed':was.cut===false?'cutting…':'saved';
+    const gap=document.createElement('span'); gap.className='spacer';
+    r.append(name,state,gap);
+    if(dirty){
+      const why=gone?null:alone(c);
+      const d=document.createElement('button');
+      d.textContent='Discard';
+      d.title=gone?'Keep this clip':'Throw away the changes to this clip';
+      d.onclick=e=>{e.stopPropagation(); gone?keepOne(c.id):discardOne(c);};
+      const k=document.createElement('button');
+      k.className='primary'; k.textContent='Save';
+      k.disabled=!!why;
+      k.title=why||(gone?'Delete this clip now':'Save this clip now');
+      k.onclick=e=>{e.stopPropagation(); saveOne(c,gone);};
+      r.append(d,k);
+    }else if(was){
+      const a=document.createElement('a');
+      a.className='btn'; a.textContent='Open'; a.href=openHref(was);
+      a.title='This clip in the grid';
+      a.onclick=e=>e.stopPropagation();
+      r.append(a);
+    }
+    if(!gone) r.onclick=()=>pick(c.id);
+    box.appendChild(r);
+  }
+}
+// Whether a clip's change can be saved by itself, or `null` if it can. The
+// server takes the clips as they end, every saved one accounted for, so one
+// clip is saved by sending the rest *as they are saved* beside it. That is
+// only a valid set of clips when this one's change runs into none of them —
+// a split, a join, or a new clip laid over a saved one changes two clips,
+// and the two go together.
+function alone(c){
+  if(c.absorbs.length) return 'Joined with another clip — Save all saves both';
+  if(c.copy_of) return 'Split from another clip — Save all saves both';
+  if(c.end===c.start) return null;
+  const hit=saved.find(o=>o.name!==c.id&&o.end>o.start
+                       &&c.start<o.end-EPS&&o.start<c.end-EPS);
+  return hit?'Changes '+what(hit)+' too — save that first, or Save all':null;
+}
+async function saveOne(c,gone){
+  if(!gone&&alone(c)) return;
+  const rest=saved.filter(o=>o.name!==c.id)
+    .map(o=>({id:o.name,start:o.start,end:o.end,copy_of:null,absorbs:[]}));
+  if(!gone) rest.push({id:c.id,start:c.start,end:c.end,copy_of:null,
+                       absorbs:[]});
+  const out=await send('/api/clips/save',{folder:S.folder,source:S.source,
+    clips:rest,deleted:gone?[c.id]:[]});
+  if(!out) return;
+  // The rest of the draft stays as it was: only this clip is now saved, under
+  // the name the server gave it if it was new.
+  const named=out.names&&out.names[c.id];
+  const list=await fetchSaved();
+  if(list) saved=list.filter(x=>!x.deleted);
+  if(gone) deleted=deleted.filter(id=>id!==c.id);
+  else if(named&&named!==c.id){
+    if(sel===c.id) sel=named;
+    c.id=named;
+  }
+  // Undo steps name clips as they were before this save, and replaying one
+  // would make this clip again.
+  undos=[];
+  draw(); say('saved');
+}
+// Back to how it is saved — or, for a new one, gone. Not where that would
+// lay it over a clip in the draft: Undo can take that apart, this cannot.
+function discardOne(c){
+  const was=savedOf(c.id);
+  if(!was){
+    remember();
+    draft=draft.filter(x=>x!==c);
+    if(sel===c.id) sel=null;
+    draw(); say('discarded');
+    return;
+  }
+  const back=[{id:c.id,start:was.start,end:was.end},
+              ...c.absorbs.map(savedOf).filter(Boolean)
+                .map(w=>({id:w.name,start:w.start,end:w.end}))];
+  if(!fits(back,[c])) return;
+  remember();
+  c.start=was.start; c.end=was.end;
+  for(const b of back.slice(1))
+    draft.push({id:b.id,start:b.start,end:b.end,copy_of:null,absorbs:[]});
+  c.absorbs=[];
+  draw(); say('discarded');
+}
+function keepOne(id){
+  const was=savedOf(id);
+  if(!was||!fits([{id,start:was.start,end:was.end}],[])) return;
+  remember();
+  deleted=deleted.filter(x=>x!==id);
+  draft.push({id,start:was.start,end:was.end,copy_of:null,absorbs:[]});
+  draw(); say('kept');
+}
+function fits(back,except){
+  for(const b of back){
+    if(b.end===b.start) continue;
+    const hit=ranges().find(o=>!except.includes(o)&&o.start<b.end-EPS
+                            &&b.start<o.end-EPS);
+    if(hit){
+      say('that would lie over '+what(hit)+' — use Undo instead',true);
+      return false;
+    }
+  }
+  return true;
+}
+
 function drawStrip(){
   const box=$('strip'), st=S.strip;
   if(!box) return;

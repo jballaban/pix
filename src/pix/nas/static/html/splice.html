@@ -45,18 +45,20 @@
 <a id="bopen" class="btn" title="This clip in the grid">Open</a>
 <button id="bdel" class="danger" title="Delete this clip (Delete)">Delete</button>
 </div>
+<div class="cliplist" id="cliplist" hidden></div>
 <div class="sctl toolbar draftbar" id="draftbar" hidden>
 <b id="dirty"></b><span class="spacer"></span>
 <button id="bundo" title="Undo the last change (Ctrl+Z)">Undo</button>
-<button id="bdiscard" title="Throw away every unsaved change">Discard</button>
-<button id="bsave" class="primary" title="Save every change (Ctrl+S)">Save</button>
+<button id="bdiscard" title="Throw away every unsaved change">Discard all</button>
+<button id="bsave" class="primary" title="Save every change (Ctrl+S)">Save all</button>
 </div>
 <p class="dim shelp"><b>New clip</b> makes one: drag across the timeline, or
 set its start and end at the playhead (I and O). <b>Click a clip</b> to edit
 it — drag its ends, set them at the playhead, split it, join the next one to
 it, or delete it. A clip made or moved over another trims it back, and asks
-before it removes or splits one. Nothing is saved until <b>Save</b>, and
-<b>Discard</b> throws the changes away. A clip starts on a keyframe (the faint
+before it removes or splits one. Nothing is saved until you save it: each
+clip in the list has its own <b>Save</b> and <b>Discard</b>, and <b>Save all</b>
+and <b>Discard all</b> do every one at once. A clip starts on a keyframe (the faint
 ticks), where a lossless cut can begin. A dashed clip is still being cut; an
 amber one is not saved yet.</p>
 </div>
