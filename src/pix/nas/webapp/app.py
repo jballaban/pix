@@ -17,9 +17,12 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from pix.nas import accounts, index as ix, webroots
+from pix.nas.webapp.compress import Compress
 
 
 app: FastAPI = FastAPI(title="pix2", docs_url=None, redoc_url=None)
+# Pages and JSON leave gzipped; nothing else does. See `compress`.
+app.add_middleware(Compress)  # pyright: ignore[reportArgumentType]
 
 
 @app.exception_handler(status.HTTP_401_UNAUTHORIZED)
