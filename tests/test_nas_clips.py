@@ -1388,3 +1388,12 @@ def test_a_video_with_only_a_photo_can_keep_it_as_a_file(
     assert r.json()["freed"] == [still + ".jpg"]
     assert _have(app_env, still + ".jpg")["kind"] == "image"
     assert decisions.read(real / "b.mp4") == Decision(deleted=True)
+
+
+def test_the_number_row_sets_the_speed() -> None:
+    """1–4 are the four speeds the menu offers, slowest first; space plays
+    and pauses."""
+    js = w_clipping.SPLICE_JS
+    assert "const SPEED_KEYS={'1':0.5,'2':1,'3':1.5,'4':2};" in js
+    assert "else if(k in SPEED_KEYS) setRate(SPEED_KEYS[k]);" in js
+    assert "if(k===' ') toggle();" in js

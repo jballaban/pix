@@ -663,6 +663,7 @@ function toggle(){ if(v.paused) v.play().catch(()=>{}); else v.pause(); }
 
 const RATES=[0.5,1,1.5,2];
 let rate=1;
+const SPEED_KEYS={'1':0.5,'2':1,'3':1.5,'4':2};
 function setRate(r){
   rate=r; v.playbackRate=r;
   const box=$('rate');
@@ -779,6 +780,8 @@ document.addEventListener('keydown',e=>{
   else if(k==='<'||k===',') toKey(-1);
   else if(k==='>'||k==='.') toKey(1);
   else if(k==='['||k===']') nudgeRate(k===']'?1:-1);
+  // A speed straight off the number row, slowest first, as the menu lists them.
+  else if(k in SPEED_KEYS) setRate(SPEED_KEYS[k]);
   else if(k==='Delete'||k==='Backspace') del();
   else if(k==='h'||k==='H') hide();
   else if(k==='Escape'){ if(newMode) cancelNew(); else {sel=null; draw();} }
