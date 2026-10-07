@@ -1,4 +1,4 @@
-"""`pix2 import folder` — the folder source adapter (spec/nas-app.md §9).
+"""`pix import folder` — the folder source adapter (spec/nas-app.md §9).
 
 Stages a folder tree for upload: SD cards, a shared folder someone sent you, or
 the legacy library during seeding. It is one of two permanent source adapters —

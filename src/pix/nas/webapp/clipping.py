@@ -188,7 +188,7 @@ def api_clips_make(user: Annotated[Principal, Depends(require_admin)],
         row = ix.one(conn, body.folder, body.source)
         if row is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND,
-                                "not indexed yet — run pix2 index")
+                                "not indexed yet — run pix index")
         why = clips.can_splice(body.source, row["kind"])
         if why is None and (row["stacked_under"]
                             or ix.members(conn, f"{body.folder}/{body.source}")):
@@ -648,7 +648,7 @@ def api_clips_free(user: Annotated[Principal, Depends(require_admin)],
                 if not file.is_file():
                     raise HTTPException(
                         status.HTTP_409_CONFLICT,
-                        "its photos have no files yet — pix2 process makes "
+                        "its photos have no files yet — pix process makes "
                         "them. Archive the video instead for now.")
             else:
                 file = paths.cut_path(clip_media, webroots.RENDER_DIR,
@@ -762,7 +762,7 @@ def splice(folder: str, name: str,
     title = f"Splice — {name}"
     if row is None:
         return page(title, '<p class="empty">Not indexed yet — run '
-                     '<code>pix2 index</code>.</p>', user=user)
+                     '<code>pix index</code>.</p>', user=user)
     why = clips.can_splice(name, str(row["kind"]))
     if why is None and stacked:
         why = ("this video is in a stack — take it out first. Video "
@@ -776,7 +776,7 @@ def splice(folder: str, name: str,
                 or codec in paths.PLAYABLE_CODECS)
     if why is None and not playable:
         why = ("waiting for processing — this video will not play in a "
-               "browser until pix2 process has made its playable copy.")
+               "browser until pix process has made its playable copy.")
     if why is not None:
         return page(title, f'<p class="empty">{_h(why)}</p>', user=user)
     try:

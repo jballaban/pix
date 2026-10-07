@@ -1,4 +1,4 @@
-"""`pix2 import device` — the NAS plumbing around the reused import loop.
+"""`pix import device` — the NAS plumbing around the reused import loop.
 
 The loop itself is covered by `test_import.py`; what is new here is where the
 two halves of the skip manifest come from, and how a device gets its name

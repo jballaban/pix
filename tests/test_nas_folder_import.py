@@ -1,4 +1,4 @@
-"""`pix2 import folder` — staging, skip semantics, and resume (spec/nas-app.md §9)."""
+"""`pix import folder` — staging, skip semantics, and resume (spec/nas-app.md §9)."""
 
 from __future__ import annotations
 

@@ -85,10 +85,10 @@ async def shapes_disagree(request: Request, exc: Exception) -> Response:
     else:
         what = ("The index was built by an older pix than the one serving this "
                 "page, so it does not have the shape this build reads.")
-        fix = ("Rebuild it from the desktop: <code>pix2 index</code>. Nothing "
+        fix = ("Rebuild it from the desktop: <code>pix index</code>. Nothing "
                "is lost — the index is a projection, and every decision it "
                "holds lives in master.")
-    return _page("pix2 — out of step", f"""<div class="gate">
+    return _page("pix — out of step", f"""<div class="gate">
 <h2>Out of step</h2>
 <p class="dim">{h(what)}</p>
 <p class="dim">{fix}</p>
@@ -162,7 +162,7 @@ def home(request: Request,
     # The same filters against the other page: the corner is a zoom control, and
     # a zoom that dropped the filters would be a different library rather than
     # the same one seen closer. The grouping is left behind (`_zoom`).
-    return _page("pix2",
+    return _page("pix",
                  # The shared menu, which every filter and the grouping open
                  # into. Left out, the script threw looking for it the moment
                  # it loaded, and a page whose chips never drew and whose
@@ -272,7 +272,7 @@ def stack_page(folder: str, name: str,
     # way, and deliberately: which of the two it is would say whether a
     # photograph they cannot see exists.
     if len(rows) < 2:
-        return _page("pix2", '<p class="empty">There is no stack here.</p>',
+        return _page("pix", '<p class="empty">There is no stack here.</p>',
                      user=user, status_code=404)
 
     lead = rows[0]
@@ -280,7 +280,7 @@ def stack_page(folder: str, name: str,
     guess = not decided
     where = safe_back(back)
     when = stack_when(lead)
-    return _page("pix2 stack", f"""<div class="grid" id="grid">
+    return _page("pix stack", f"""<div class="grid" id="grid">
 <div class="cells">{"".join(cell(r, view) for r in rows)}</div></div>
 <div id="viewer">
   <div class="stage"><img id="vimg">
@@ -358,7 +358,7 @@ def browse(request: Request,
             f'data-served="{len(rows)}">{cells}</div>'
             '<div id="more" aria-hidden="true"></div>' if rows else
             '<p class="empty">Nothing matches these filters.</p>')
-    return _page("pix2 browse", f"""{body}
+    return _page("pix browse", f"""{body}
 <div id="viewer">
   <div class="stage"><img id="vimg">
   <video id="vvid" controls playsinline></video>

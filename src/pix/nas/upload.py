@@ -1,4 +1,4 @@
-"""`pix2 upload` — staging to master over SMB (spec/nas-app.md §9).
+"""`pix upload` — staging to master over SMB (spec/nas-app.md §9).
 
 Takes every pending staging folder and lands it in master as one folder per
 upload, `{name}_{upload-time}`, flattening each file's relative path into its

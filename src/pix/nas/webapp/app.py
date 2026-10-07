@@ -22,7 +22,7 @@ from pix.nas.webapp.compress import Compress
 from pix.nas.webapp.logs import Activity, refused
 
 
-app: FastAPI = FastAPI(title="pix2", docs_url=None, redoc_url=None)
+app: FastAPI = FastAPI(title="pix", docs_url=None, redoc_url=None)
 # Pages and JSON leave gzipped; nothing else does. See `compress`.
 app.add_middleware(Compress)  # pyright: ignore[reportArgumentType]
 # Outermost, so its time is the whole request's. See `logs`.
@@ -177,5 +177,5 @@ def db() -> sqlite3.Connection:
     if not webroots.DB_PATH.is_file():
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
-            f"index not built — run `pix2 index` (expected at {webroots.DB_PATH})")
+            f"index not built — run `pix index` (expected at {webroots.DB_PATH})")
     return ix.open_ro(webroots.DB_PATH)

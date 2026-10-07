@@ -1,4 +1,4 @@
-"""`pix2 process` — thumbnails and previews from master (spec/nas-app.md §9).
+"""`pix process` — thumbnails and previews from master (spec/nas-app.md §9).
 
 Two derived tiers, both disposable and never backed up:
 

@@ -1,45 +1,33 @@
 # pix
 
-A command-line tool for wrangling a large, personal photo and video library —
-normalizing formats, giving every file a consistent date-based name, organizing
-folders by date and event, and de-duplicating — at terabyte scale.
+A personal photo and video library hosted on a Synology NAS: an archive of
+original files that are never rewritten, the decisions about them kept in
+`.xmp` sidecars beside them, and a web app to browse, curate, share and clip
+them.
 
-> **Status: pre-1.0, and developed in the open.** pix has been built and used
-> against a single multi-terabyte personal library. It's careful by design
-> (destructive operations conserve what they replace — see *Safety* below), but
-> it is young, opinionated, and primarily exercised on **Windows 11**. Behavior
-> and on-disk formats may still change before 1.0. **Keep backups of anything
-> you point it at.**
+> **Status: pre-1.0, and developed in the open.** pix is built for and used on
+> one multi-terabyte family library, on one NAS, from one Windows desktop. Paths
+> are build constants in `src/pix/nas/const.py`, not configuration.
 
-## What it does
+## How it fits together
 
-You point pix at a folder of media; it normalizes each file **in place**:
+- **The desktop** runs the `pix` CLI: it pulls from phones and folders
+  (`pix import`), copies to the NAS (`pix upload`), and makes everything the app
+  shows — thumbnails, previews, playable renders, stills — because the NAS's CPU
+  cannot (`pix process`).
+- **The NAS** holds the archive (`master/`, sacred originals plus sidecars) and
+  the derived tiers beside it, and runs the web app in a container. The app is
+  the only thing that writes decisions, and it never touches an original.
 
-- **Canonical names** — every file is renamed from its capture date, e.g.
-  `2023-08-15_143205.jpg`, derived from EXIF/QuickTime metadata (falling back to
-  the original filename/folder when that's all there is).
-- **Format normalization** — a built-in policy decides per extension: keep
-  (`.jpg`/`.mp4`/…), convert (`.heic`→`.jpg`, camcorder/`.mov`/`.dng`→ their
-  archival form), or drop junk (`Thumbs.db`, …). Video converges on **HEVC** for
-  space; raw photos develop to JPG where possible.
-- **Organize** — rearrange the whole library into a folder shape you choose,
-  e.g. `{year}/{event}/{month}`.
-- **Hash + dedupe** — content-hash every file and collapse duplicates, merging
-  the metadata you've invested onto the survivor.
-- **360 media** — Insta360 `.insv`/`.insp` are kept verbatim (their proprietary
-  reframe data is preserved) but still tagged and organized.
-
-Everything is plan-first: each command shows you what it will do and waits for
-confirmation before touching anything.
+The design and its reasons are in [`spec/nas-app.md`](spec/nas-app.md); start
+with [`spec/README.md`](spec/README.md).
 
 ## Requirements
 
 - **Python 3.12+** and [uv](https://docs.astral.sh/uv/)
 - **[ExifTool](https://exiftool.org/)** and **[ffmpeg](https://ffmpeg.org/)**
   (`ffmpeg` + `ffprobe`) on your `PATH`
-- Developed and tested on **Windows 11**. Other platforms aren't verified yet.
-  A library and the folders it migrates are assumed to be on the **same volume**
-  (pix relies on fast same-volume renames).
+- Windows 11 for the desktop side (device import uses WPD/MTP)
 
 ## Install
 
@@ -48,57 +36,19 @@ git clone https://github.com/jballaban/pix
 uv tool install --editable ./pix
 ```
 
-This puts a `pix` executable on your `PATH`.
+This puts a `pix` executable on your `PATH`. Deploying the app to the NAS is in
+[`deploy/README.md`](deploy/README.md).
 
-## Quick start
-
-```sh
-pix init D:\photos              # establish a library root (creates .pix\)
-pix sync D:\photos\imports      # migrate → hash → dedupe → organize, in one go
-```
-
-`sync` is the non-interactive pipeline. To run the steps yourself (each prompts
-before applying):
+## Use
 
 ```sh
-pix migrate D:\photos\imports                 # normalize files in place
-pix hash D:\photos                            # populate the content-hash cache
-pix dedupe D:\photos                          # collapse duplicates
-pix organize D:\photos "{year}/{event}/{month}"   # reshape the library
+pix import device                     # pull new photos off a connected phone
+pix import folder E:\DCIM --name sd   # or from a folder
+pix upload                            # staging -> master on the NAS
+pix process                           # thumbnails, previews, renders, index
 ```
 
-`pix info meta <file>` shows what date sources and tags pix sees for one file.
-Tag edits on specific files live under `pix tag` (`set` / `clear` / `rotate` /
-`checkout`); read-only inspection lives under `pix info` (`meta` / `events`).
-
-## Settings (`.pix/pix.yaml`)
-
-A small, optional, hand-editable file holding library-specific settings:
-
-```yaml
-runs_dir: 'E:\pix-runs'                  # put run folders / conserved originals on another volume
-organize:
-  template: '{year}/{event}/{month}'     # the library's default shape (set by `pix organize`)
-```
-
-The **format policy is not configurable per library** — it's built into pix, so
-updating the tool updates the policy everywhere.
-
-## Safety
-
-pix never destroys data without conserving it first. Every migrate run writes
-the originals it replaces (converted/deleted files) into
-`.pix/runs/<run-id>/data/`, so a run is reversible in principle. **Those run
-folders accumulate** and are yours to delete when you're confident — `runs_dir`
-lets you park them on a roomier drive. Note that some conversions (e.g. HEVC
-re-encode) are **lossy**, and HEVC playback needs the Windows HEVC Video
-Extension.
-
-## Design docs
-
-The [`spec/`](spec/) directory documents the design and rationale of each
-operation — start with [`spec/README.md`](spec/README.md). Code is the source of
-truth; the specs explain *why*.
+Everything else — tagging, events, people, sharing, clips — happens in the app.
 
 ## License
 

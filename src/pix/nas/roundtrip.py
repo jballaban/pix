@@ -23,7 +23,7 @@ and hashing each one there would read the whole source — all of the old
 library, when seeding — so it checks the stamp, which reads a file's head,
 and leaves the hash to `upload`, which reads every file anyway to copy it.
 
-**Only as current as the index.** A file uploaded since the last `pix2 index`
+**Only as current as the index.** A file uploaded since the last `pix index`
 is not in it, so a copy of that is an import like any other; the stamp is
 what does not wait.
 

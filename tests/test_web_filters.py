@@ -329,7 +329,7 @@ def test_an_app_older_than_the_index_says_so_rather_than_breaking(
     assert r.status_code == 503, r.status_code
     assert "Out of step" in r.text
     assert "needs updating" in r.text, "told the wrong side to move"
-    assert "pix2 index" not in r.text, "rebuilding cannot fix a newer index"
+    assert "pix index" not in r.text, "rebuilding cannot fix a newer index"
 
 
 def test_an_index_older_than_the_app_asks_for_a_rebuild(
@@ -342,7 +342,7 @@ def test_an_index_older_than_the_app_asks_for_a_rebuild(
     r = client.get("/browse", follow_redirects=False)
 
     assert r.status_code == 503
-    assert "pix2 index" in r.text
+    assert "pix index" in r.text
     assert "needs updating" not in r.text
 
 

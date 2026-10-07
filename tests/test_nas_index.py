@@ -224,7 +224,7 @@ def test_empty_meta_tier_builds_an_empty_index(tree: dict[str, Path]) -> None:
 
 
 def test_open_ro_cannot_write(tree: dict[str, Path]) -> None:
-    """The app is a reader; only `pix2 index` builds.
+    """The app is a reader; only `pix index` builds.
 
     `connect` creates schema and a version row, which fails on a read-only mount
     and — where the mount is writable — would let the app quietly mutate a cache
@@ -769,7 +769,7 @@ def test_the_library_can_be_cut_by_source(tree: dict[str, Path]) -> None:
 
 def test_an_old_schema_is_dropped_not_migrated(tree: dict[str, Path]) -> None:
     """The index is a cache; a migration path is machinery to maintain for
-    something `pix2 index` reproduces exactly."""
+    something `pix index` reproduces exactly."""
     conn = ix.connect(tree["db"])
     conn.execute("INSERT OR REPLACE INTO meta VALUES ('schema', '1')")
     conn.execute("INSERT INTO files (folder, name) VALUES ('old', 'stale.jpg')")

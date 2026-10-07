@@ -1,4 +1,4 @@
-# Deploying the pix2 app to Synology Container Manager
+# Deploying the pix app to Synology Container Manager
 
 See [`spec/nas-app.md` §8](../spec/nas-app.md) for why it is shaped this way.
 The short version: the app reads the index and serves the **derived** tiers, and
@@ -64,10 +64,10 @@ mounted source, whether it is the right directory.
 ## 4. Build the index, from the desktop
 
 ```
-pix2 index
+pix index
 ```
 
-It reads the meta tier that `process` writes, so run `pix2 process` first if
+It reads the meta tier that `process` writes, so run `pix process` first if
 anything has been uploaded since.
 
 ---
@@ -228,10 +228,10 @@ curl http://<nas>:8000/healthz
 
 - **The index is disposable.** It lives in the share so it survives container
   rebuilds — 62k rows take minutes to rebuild and there is no reason to pay that
-  for an image swap — but losing it costs only a `pix2 index`.
+  for an image swap — but losing it costs only a `pix index`.
 - **The app never *builds* the index.** Browsing opens it read-only. A curation
   write updates the single row whose decision changed — sidecar first, index
-  follows — and that is the only write it makes. Rebuilding stays `pix2 index`,
+  follows — and that is the only write it makes. Rebuilding stays `pix index`,
   on the desktop, where reading 62k records is not blocking anyone's page load.
 - **One uvicorn worker.** SQLite is opened per request and the index is
   read-mostly, so concurrency buys nothing and costs memory the NAS has not got

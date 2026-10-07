@@ -1,4 +1,4 @@
-"""`pix2 upload` — staging to master, and the one destructive step (spec §9)."""
+"""`pix upload` — staging to master, and the one destructive step (spec §9)."""
 
 from __future__ import annotations
 

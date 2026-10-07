@@ -14,7 +14,7 @@ person, rather than a mis-click away from the grid everyone curates in.
 
 **Derived tiers first, master last.** If this is interrupted half way, what
 survives is the original and its sidecar — the two things that cannot be
-recomputed — and the leftovers are regenerable files that `pix2 process` would
+recomputed — and the leftovers are regenerable files that `pix process` would
 rebuild anyway. Done in the other order, a crash would leave the archive
 holding thumbnails of a photograph it no longer has.
 

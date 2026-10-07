@@ -1,4 +1,4 @@
-"""`pix2 import device` — the MTP source adapter (spec/nas-app.md §9).
+"""`pix import device` — the MTP source adapter (spec/nas-app.md §9).
 
 Reuses `importer.import_loop` unchanged: ~200 lines of drain-as-you-go DFS and
 recovery-ladder logic validated against a physical iPhone. Only the plumbing

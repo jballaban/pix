@@ -371,7 +371,7 @@ def api_decide(user: Annotated[Principal, Depends(require_user)],
 
     **Sidecar first, index follows** (§4). If the sidecar write fails nothing
     happened; if the index update fails the decision still stands and a
-    `pix2 index` catches up — drift is only ever "the index is behind", never
+    `pix index` catches up — drift is only ever "the index is behind", never
     "the record is wrong". `indexed` in the response says which happened.
     """
     # Both halves, and in this order: what this person may write at all, then
@@ -571,7 +571,7 @@ def api_decide_bulk(user: Annotated[Principal, Depends(require_user)],
     #
     # The sidecars are written outside it and stay written whatever happens
     # here. If this transaction never commits the index is *behind*, which is
-    # the one direction drift is allowed to go and what `pix2 index` is for —
+    # the one direction drift is allowed to go and what `pix index` is for —
     # the opposite bargain, a committed row for a sidecar that failed, is the
     # one the whole design refuses.
     rows = conn if conn is not None else nullcontext()

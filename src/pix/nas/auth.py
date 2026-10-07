@@ -1,7 +1,7 @@
 """Credential hashing for the app (spec/nas-app.md §8).
 
 Just the hashing. Who exists and what they may see lives in `accounts`; this
-is separate so `pix2 passwd` can mint a hash without importing the web stack,
+is separate so `pix passwd` can mint a hash without importing the web stack,
 in an environment that has never heard of FastAPI.
 
 **Hashed, never plaintext.** A credentials file on a share reachable over SMB is

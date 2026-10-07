@@ -385,7 +385,7 @@ def decide(folder: str, name: str, change: Change,
 
     **Sidecar first, index follows** (§4). If the sidecar write fails nothing
     happened; if the index update fails the decision still stands and a
-    `pix2 index` catches up — drift is only ever "the index is behind", never
+    `pix index` catches up — drift is only ever "the index is behind", never
     "the record is wrong".
 
     The lock is taken per file, not per batch. Finishing a large event would

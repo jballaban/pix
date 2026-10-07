@@ -1,4 +1,4 @@
-"""Cancelling and restarting `pix2 process` (spec/nas-app.md §9).
+"""Cancelling and restarting `pix process` (spec/nas-app.md §9).
 
 Resumable by construction: it makes what is missing, and missing is recomputed
 every run — so there is no state to corrupt and nothing to resume *from*.

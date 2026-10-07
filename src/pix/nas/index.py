@@ -25,7 +25,7 @@ Built from the **meta tier** rather than the media, which is the whole reason
 `process` writes it: rebuilding reads small JSON instead of opening every file.
 
 Two ways in, and the difference matters. `build` replaces everything, and is what
-`pix2 index` and the tail of `pix2 process` run: the file *set* changes only when
+`pix index` and the tail of `pix process` run: the file *set* changes only when
 ingest runs, so recomputing it wholesale is both correct and rare. `refresh`
 rewrites a single row, and is what a curation write runs — because reading 62k
 records to record one decision is not a UI anyone uses twice.
@@ -53,7 +53,7 @@ from pix.nas.decisions import Decision
 
 #: Bumped whenever the shape changes. A mismatch drops and rebuilds rather than
 #: migrating: the index is disposable by design, and a migration path is
-#: machinery to maintain for something a `pix2 index` reproduces exactly.
+#: machinery to maintain for something a `pix index` reproduces exactly.
 SCHEMA_VERSION: int = 12
 
 #: What separates an event from a sub-event inside one name.
@@ -458,7 +458,7 @@ def connect(db_path: Path) -> sqlite3.Connection:
 
     A schema mismatch drops everything and starts over. That is safe precisely
     because this file is a cache: the decisions live in master, and the only
-    cost of throwing it away is the `pix2 index` that follows.
+    cost of throwing it away is the `pix index` that follows.
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path, check_same_thread=False)
@@ -547,7 +547,7 @@ class StaleIndex(RuntimeError):
                     f"v{self.wanted} — it was written by a newer pix, so this "
                     "one needs updating")
         return (f"index is shape v{self.found}, this build reads "
-                f"v{self.wanted} — run `pix2 index` to rebuild it")
+                f"v{self.wanted} — run `pix index` to rebuild it")
 
 
 def _require_current(conn: sqlite3.Connection) -> None:
@@ -908,7 +908,7 @@ def refresh(conn: sqlite3.Connection, folder: str, name: str, *,
 
     Returns False when there are no probed facts for the file, which means it
     has not been processed and has no row to catch up. The sidecar is still the
-    record; `pix2 index` picks it up once `process` has run.
+    record; `pix index` picks it up once `process` has run.
 
     **`decision` and `record` are what the caller already had in its hand.**
     A decision write has just read the sidecar, changed it and written it

@@ -20,22 +20,14 @@ Active codebase. The implementation lives in `src/pix/`; tests in `tests/`. **Co
 
 ## Spec map
 
-- [`spec/README.md`](spec/README.md) — overview, cross-cutting invariants, ops table, open decisions
-- [`spec/library.md`](spec/library.md) — library root, file layout, canonical filenames, original source path
-- [`spec/tags.md`](spec/tags.md) — tag model, metadata mapping, template grammar
-- [`spec/migrate.md`](spec/migrate.md) — migrate (implemented)
-- [`spec/hash.md`](spec/hash.md) — `pix hash` command (implemented)
-- [`spec/dedupe.md`](spec/dedupe.md) — dedupe (implemented)
-- [`spec/organize.md`](spec/organize.md) — organize (implemented)
-- [`spec/sync.md`](spec/sync.md) — sync: migrate→hash→dedupe→organize wrapper + shared `--no-prompt` (implemented)
-- [`spec/tag-editing.md`](spec/tag-editing.md) — checkout/commit (assign implemented; removal/blank/face planned)
-- [`spec/export.md`](spec/export.md) — export (sketched, not implemented)
-- [`spec/implementation.md`](spec/implementation.md) — language, libs, env, perf notes, sync-client interaction
+- [`spec/README.md`](spec/README.md) — overview and command table
+- [`spec/nas-app.md`](spec/nas-app.md) — the architecture: sacred originals, sidecars, derived tiers, the app, ingest, identity
+- [`spec/clips.md`](spec/clips.md) — clips: video splitting + stills from video, `archived` audience (built; distributions pending)
+- [`spec/import.md`](spec/import.md) — the device import loop `pix import` runs on (written for the removed CLI; read with nas-app §9)
 - [`spec/roadmap.md`](spec/roadmap.md) — designed-but-unbuilt features
 - [`spec/perf-backlog.md`](spec/perf-backlog.md) — performance ideas against already-implemented code
-- [`spec/video-redesign.md`](spec/video-redesign.md) — directive: drop video transcode → remux-only (full problem catalog; not yet designed)
-- [`spec/nas-app.md`](spec/nas-app.md) — **directive: NAS-hosted app + sacred originals.** Supersedes the CLI-pipeline architecture above (largely built, `src/pix/nas/` + `pix2`; status line lists what isn't)
-- [`spec/clips.md`](spec/clips.md) — clips: video splitting + stills from video, `archived` audience (built; distributions pending)
+
+The old CLI-pipeline (`migrate`/`organize`/`dedupe`/`export`…) and its specs were removed 2026-10-07; commit `e1f3853` has them.
 
 ## Environment
 

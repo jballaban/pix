@@ -1,5 +1,12 @@
 # Import — `pix import`
 
+> **Read with [nas-app.md §9](nas-app.md#9-ingest--the-desktop-cli).** This was
+> written for the old CLI, which landed imports in a library's `.pix/` and handed
+> them to `migrate`. That CLI is gone; `pix import` now stages into `G:\pix2` for
+> `pix upload`. The device loop below — enumeration, the per-object ladder,
+> skip and resume — is what it still runs on. Links marked *removed* point at
+> specs deleted with the old CLI (commit `e1f3853` has them).
+
 > **Status.** The **device→disk import and the ingest seam are both built**
 > (WPD/iOS validated against a real iPhone, serial `M2DF33MY06`, via `comtypes` —
 > see [Validation results](#validation-results); several original assumptions were
@@ -182,7 +189,7 @@ outlives the folder rather than the other way round.
 **Path safety.** `ORIGINAL_FILE_NAME` from the device is untrusted: sanitize for
 NTFS (strip/replace invalid chars, reserved names `CON`/`AUX`/…, trailing dots and
 spaces), and open all paths `\\?\`-prefixed for length (per
-[implementation.md](implementation.md)). Two distinct device objects can sanitize
+implementation.md (removed)). Two distinct device objects can sanitize
 to the **same** landing path — detect the collision and disambiguate with a short
 PUID-derived suffix, so object B is never mistaken for object A's straggler. The
 `.importinfo` sidecar is itself written **temp-then-rename**, so a crash mid-write
@@ -799,10 +806,10 @@ building.
 ## Cross-references
 
 - [README.md](README.md#operations) — ops table (import is the new front-end op).
-- [migrate.md](migrate.md) — the import-ingest pre-pass seam (sidecar → in-file
+- migrate.md (removed) — the import-ingest pre-pass seam (sidecar → in-file
   tags); mirrors the existing `errors`/`stash` restore passes.
-- [library.md](library.md) — `.pix/local/import/` landing; `pix:ImportId` /
+- library.md (removed) — `.pix/local/import/` landing; `pix:ImportId` /
   `pix:OriginalPath` provenance.
-- [implementation.md](implementation.md#sync-client-interaction) — `.pix/local`
+- implementation.md (removed) — `.pix/local`
   is already sync-excluded, so pending imports don't sync.
-- [tags.md](tags.md) — add `pix:ImportId` to the tag model + `metadata_filter`.
+- tags.md (removed) — add `pix:ImportId` to the tag model + `metadata_filter`.

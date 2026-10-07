@@ -1,4 +1,4 @@
-"""`pix2 process` — thumbnails and previews (spec/nas-app.md §6, §9)."""
+"""`pix process` — thumbnails and previews (spec/nas-app.md §6, §9)."""
 
 from __future__ import annotations
 

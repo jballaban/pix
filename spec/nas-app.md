@@ -1,14 +1,15 @@
 # NAS-hosted app — architecture directive
 
-**Status: built and deployed, alongside the old CLI.** Ingest (`pix2 import
+**Status: built and deployed — this is pix.** Ingest (`pix import
 device|folder`, `upload`), `process` (thumbnails and previews), `index`, the web
 app ([§8](#8-the-app) — accounts, browsing, curation written to sidecars,
 history, [clips](clips.md)), identity and round trips ([§15](#15-identity--when-two-files-are-the-same-photograph))
 and the container ([`deploy/`](../deploy/README.md)) all exist in `src/pix/nas/`.
 **Not built:** renders ([§5](#5-renders)), distributions ([§7](#7-distributions)),
-resolving duplicates, near-duplicate grouping, and the amputation of the old
-architecture ([§12](#12-what-this-deletes)) — until then the original `pix` CLI
-ships untouched beside `pix2` ([§9](#9-ingest--the-desktop-cli)).
+resolving duplicates and near-duplicate grouping. The old CLI-pipeline
+architecture ([§12](#12-what-this-deletes)) was removed on 2026-10-07 and `pix2`
+became `pix`; its specs went with it, and are at commit `e1f3853` for anyone
+who needs them (links to them below are marked *removed*).
 
 This document supersedes the architecture the rest of `spec/` describes. It is a
 directive, not an implementation plan: it records *what was decided and why*, so
@@ -200,8 +201,7 @@ field is what made the old library's event names drift into ad-hoc labels.
 **The date override may pin only some components.** It is
 `YYYY-MM-DD-HH:MM:SS` with `*` in any slot, and the effective date is the
 probed capture date with each non-`*` component replaced — the grammar
-[tags.md](tags.md) already defines, now shared by both architectures in
-`pix.datestr`. *This scan is from 1987* is a complete answer, and one that
+`pix.datestr` defines. *This scan is from 1987* is a complete answer, and one that
 does not require inventing a month, a day and a time. Fabricating them is
 not a harmless default: a made-up `1987-01-01 00:00:00` is indistinguishable
 from a real one a year later.
@@ -320,11 +320,11 @@ It recreates the single database this architecture exists to avoid, and breaks
   success update the index. Drift then only ever means "the index is behind,"
   which a rescan fixes — never "the record is wrong."
 - **Two write paths, and the difference is the file set.** A *rebuild* is what
-  discovers which files exist from nothing, so it is wholesale — `pix2 index`,
+  discovers which files exist from nothing, so it is wholesale — `pix index`,
   or `process` finding no index of the current shape. It builds in a local file
   and publishes into the live one in a single transaction, so the app keeps
   answering throughout, and re-lists sidecars before and after to pick up
-  decisions made while it ran. The tail of `pix2 process` is an *update*: the
+  decisions made while it ran. The tail of `pix process` is an *update*: the
   files that run touched, plus any meta record with no row, so a run with
   nothing to do costs a listing and `process` can sit on a timer. A *refresh* rewrites the single
   row whose decision just changed, and is what the app runs: reading 62k records
@@ -544,7 +544,7 @@ televisions, `/book` for print.
 | content changed | never happens; master is immutable |
 
 The last two used to be the expensive cases, because moves re-uploaded through
-Synology Drive ([implementation.md](implementation.md#sync-client-interaction)).
+Synology Drive (implementation.md (removed)).
 On the NAS they are local.
 
 **Cost.** Distributions are the only unbounded number in the design:
@@ -818,12 +818,11 @@ state that exists anywhere is a per-machine config holding two of them.
 | `pix upload` | every pending staging folder → master; appends the ledger; clears staging |
 | `pix process` | master → thumbnails, previews, renders for anything missing them |
 
-**Transitional note.** This is built as a fresh module (`src/pix/nas/`) behind a
-second console script — `pix2` — so the existing CLI keeps working untouched until
-seeding is proven. It reuses what [§13](#13-what-survives) lists rather than
-duplicating it. When the old architecture is amputated, `nas/` is promoted to
-`src/pix/` and the second entry point disappears, so the temporary name never
-outlives its purpose.
+**Where it lives.** It was built as a fresh module (`src/pix/nas/`) behind a
+second console script, `pix2`, so the old CLI kept working until seeding was
+proven. The old CLI is gone and the script is `pix` again; the package stays at
+`src/pix/nas/` because the container image starts `pix.nas.web`, and it still
+reuses the import plumbing in `src/pix/` ([§13](#13-what-survives)).
 
 **No config, and no library root.** Paths are build constants in one module, the
 way `EXTENSION_POLICY` already is:
@@ -1051,7 +1050,7 @@ small-file throughput is 11-20 MB/s, against 28-34 MB/s at 32 threads. Sequentia
 transfer of ~62k files would take over a day, so a worker pool is a correctness
 concern for the schedule rather than a later optimisation. The same applies to
 `upload`. Open UNC paths with the `\\?\UNC\` prefix
-([implementation.md](implementation.md)) — flattened names plus deep folders will
+(implementation.md (removed)) — flattened names plus deep folders will
 find the 260-character limit.
 
 The app operates on the **ready set** and shows the rest as a visible backlog
@@ -1156,21 +1155,26 @@ rather than anything pix builds ([§3](#3-master)):
   competing CLI invocations
 - **Stable collision suffixes** ([roadmap.md](roadmap.md)) — names are assigned
   at copy creation and never changed
-- **Sync-client re-upload avoidance** ([implementation.md](implementation.md#sync-client-interaction))
+- **Sync-client re-upload avoidance** (implementation.md (removed))
   — the master no longer travels through Synology Drive
 
 ## 13. What survives
 
+Written before the old CLI was removed. The import loop and content hashing
+carried over into this code; the export reconcile engine, the tag filter and
+perceptual dedupe were deleted with that CLI, and are at commit `e1f3853` for
+the distributions work to take back.
+
 - **`pix import`** ([import.md](import.md)) — becomes phase 1, and shrinks
 - **Format-aware content hashing** — identity that ignores metadata, so a tag-only
   edit doesn't read as a different file
-- **The export reconcile engine** ([export.md](export.md)) — desired-set diff,
+- **The export reconcile engine** (export.md (removed)) — desired-set diff,
   per-tree manifest, target validation, drift-stops-rather-than-guesses. It was
   designed for exactly this job.
-- **The tag-filter and template grammar** ([tags.md](tags.md))
-- **Perceptual dedupe** ([dedupe.md](dedupe.md)) — as *detection*, recording that
+- **The tag-filter and template grammar** (tags.md (removed))
+- **Perceptual dedupe** (dedupe.md (removed)) — as *detection*, recording that
   two files are the same rather than deleting one
-- **The H.264 delivery requirement** ([export.md](export.md#big-todo--video-must-ship-as-h264-compatibility-rendition))
+- **The H.264 delivery requirement** (export.md (removed))
   — and it stops being contentious: transcoding was only ever risky because it
   destroyed the original, and now the original is preserved forever
 

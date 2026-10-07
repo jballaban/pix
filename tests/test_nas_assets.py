@@ -74,7 +74,8 @@ def test_the_web_apps_roots_are_never_the_real_share() -> None:
 
     from pix.nas import webroots
 
-    real = Path(os.environ.get("PIX2_SHARE") or r"\nas\pix2")
+    real = Path(os.environ.get("PIX_SHARE") or os.environ.get("PIX2_SHARE")
+                or r"\\nas\pix2")
     for name in ("DB_PATH", "MASTER_DIR", "META_DIR", "THUMB_DIR",
                  "PREVIEW_DIR", "LARGE_DIR", "RENDER_DIR", "STRIP_DIR"):
         value: Path = getattr(webroots, name)

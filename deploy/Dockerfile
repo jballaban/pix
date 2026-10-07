@@ -1,4 +1,4 @@
-# The pix2 app image (spec/nas-app.md §8).
+# The pix app image (spec/nas-app.md §8).
 #
 # **Self-contained.** The application source is baked in, so importing the image
 # into Container Manager and creating a container is enough — no copying source
@@ -42,10 +42,10 @@ COPY src /app/baked
 # `/app/src` first so a bind mount shadows the baked copy; `/app/baked` is the
 # fallback that makes the image work on its own.
 #
-# `PIX2_SHARE` is not optional. The default in `const.py` is a Windows UNC path,
+# `PIX_SHARE` is not optional. The default in `const.py` is a Windows UNC path,
 # which on Linux is a relative filename rather than a network path — the
 # container sees the same share as a bind mount, so it is told so directly.
-ENV PIX2_SHARE=/volume1/pix2 \
+ENV PIX_SHARE=/volume1/pix2 \
     PYTHONPATH=/app/src:/app/baked \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1

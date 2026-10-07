@@ -1,7 +1,7 @@
 [project]
 name = "pix"
 dynamic = ["version"]
-description = "CLI tooling for personal media library management at terabyte scale"
+description = "A NAS-hosted photo and video library: ingest, process, and a web app to curate it"
 requires-python = ">=3.12"
 dependencies = [
     "typer>=0.12",
@@ -16,10 +16,7 @@ dependencies = [
 ]
 
 [project.scripts]
-pix = "pix.cli:main"
-# Transitional second entry point for the NAS architecture (spec/nas-app.md).
-# Removed when src/pix/nas/ is promoted to src/pix/.
-pix2 = "pix.nas.cli:main"
+pix = "pix.nas.cli:main"
 
 [build-system]
 requires = ["hatchling"]

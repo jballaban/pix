@@ -73,7 +73,7 @@ def brand(zoom: str) -> str:
     the page would be worse than no picture.
     """
     if not zoom:
-        return (f'<a class="brand" href="/" title="pix2" aria-label="pix2">'
+        return (f'<a class="brand" href="/" title="pix" aria-label="pix">'
                 f'{logo_mark(26)}</a>')
     folders = zoom.startswith("/browse")
     say = "Show the files" if folders else "Show the folders"

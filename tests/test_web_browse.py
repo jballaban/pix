@@ -1784,7 +1784,7 @@ def test_a_missing_index_says_what_to_run(tmp_path: Path, monkeypatch: pytest.Mo
     r = sign_in(accounts.ADMIN, "admin").get("/")
 
     assert r.status_code == 503
-    assert "pix2 index" in r.text
+    assert "pix index" in r.text
 
 
 # --- video playback -------------------------------------------------------
@@ -1988,7 +1988,7 @@ def test_the_page_has_a_mark_of_its_own(client: TestClient) -> None:
     assert 'rel="icon"' in html and "data:image/svg+xml" in html
     bar = corner(html)
     assert "<svg" in bar, "the brand is still text"
-    assert ">pix2<" not in bar, "the word is still there beside the mark"
+    assert ">pix<" not in bar, "the word is still there beside the mark"
     assert "aria-label=" in bar, "a mark nothing can read out"
 
 

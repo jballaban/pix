@@ -1,80 +1,41 @@
 # pix spec — overview
 
-This folder holds the design spec for `pix`. Each file covers one scope; cross-references between files are explicit.
+This folder holds the design spec for `pix`. Each file covers one scope;
+cross-references between files are explicit. Code is the source of truth: where a
+spec and the code disagree, the code wins.
 
-## What we're building
+## What pix is
 
-> **A whole-system redesign is underway.** [`nas-app.md`](nas-app.md) records the
-> architecture that supersedes most of what this file describes — a Synology-hosted app
-> over an immutable archive of sacred originals. Much of it is built and deployed
-> (`src/pix/nas/`, the `pix2` entry point); see its status line for what is not.
-> Everything below still reflects the original `pix` CLI, which ships alongside it.
+A personal media library hosted on a Synology NAS: an immutable archive of
+original photos and videos, with every human decision kept in an `.xmp` sidecar
+beside the file, and a web app to browse and curate it. The architecture and its
+rationale are in [nas-app.md](nas-app.md).
 
-CLI tooling to manage a personal media library (photos + videos) at terabyte scale. The library is currently scattered; the tools aggregate, dedupe, normalize, tag, and reorganize it — without losing data.
+Until 2026-10-07 this repo also held an earlier design — a desktop CLI that
+normalized a library in place (`migrate`, `hash`, `dedupe`, `organize`, `sync`,
+`export`, tag checkout). That code and its specs were removed, and the NAS
+architecture's `pix2` command became `pix`. Commit `e1f3853` has the old
+code and specs.
 
-The tool is named `pix`. The CLI is invoked as `pix <op> ...`.
+## Commands
 
-## Operations
+The desktop CLI (`pix`) moves files in and makes what the app shows; the app,
+running in a container on the NAS, does everything else.
 
-Ten top-level operations. `init`, `migrate`, `hash`, `dedupe`, `organize`, and `sync` are implemented; the rest are designed-pending-build, sketched, or deferred.
+| Command | What it does |
+|---|---|
+| `pix import device` / `pix import folder <source> --name <n>` | Pull from a phone or a folder into local staging ([import.md](import.md), [nas-app.md §9](nas-app.md#9-ingest--the-desktop-cli)) |
+| `pix upload` | Staging → master on the NAS, over SMB |
+| `pix process` | Master → thumbnails, previews, renders, filmstrips, stills, and the index |
+| `pix index` | Rebuild the app's index from the meta tier and the sidecars |
+| `pix passwd` | Hash a password for an account |
+| `pix where` | Show where the library lives |
 
-| Op | What it does | Spec | Status |
-|---|---|---|---|
-| `init [<path>]` | Establish a library root by creating `<path>\.pix\` with default config. | [library.md](library.md#establishing-a-root) | **v1 implemented** |
-| `import` | Pull **new** photos/videos off a connected phone (iPhone/Android, USB) into `.pix/local/import/`; isolated front-end that hands off to migrate. | [import.md](import.md) | **Designed; assumptions pending validation** |
-| `migrate <folder>` | Per-file **in-place** normalization: convert formats, rename, re-derive `_auto` tags, write tags into files. | [migrate.md](migrate.md) | **v1 implemented** (face detection deferred — see [Open decisions](#open-decisions)) |
-| `hash <library-root>` | Populate the content-hash cache (a column in the shared SQLite store `.pix/local/cache.db` — see [implementation.md → Cache store](implementation.md#cache-store)) for every file missing or stale. Decoupled from migrate so migrate's hot path stays fast. | [hash.md](hash.md) | **v1 implemented** |
-| `dedupe` | Find duplicates by content hash across the library and remove redundant copies. | [dedupe.md](dedupe.md) | **v1 implemented** |
-| `merge <src> <dst>` | Combine two already-migrated trees; reuses `dedupe`. | — | Deferred (after dedupe) |
-| `organize [<template>]` | Physically rearrange files per a template (bare = re-apply the stored default). Single-valued tags only. | [organize.md](organize.md) | **v1 implemented** |
-| `sync <path> [<template>]` | Run migrate → hash → dedupe → organize back-to-back, non-interactively (auto-apply, stop on first error). | [sync.md](sync.md) | **v1 implemented** |
-| `tag checkout <path> <template>` / `tag checkout --commit` / `tag checkout --reset` | Tag editing via folder-shuffle, scoped to `<path>` (like migrate). Compound single-valued templates; commit writes tags only. | [tag-editing.md](tag-editing.md) | **Designed (pending build)** |
-| `info config` | Show the library's resolved `pix.yaml` — effective settings (with defaults marked), each export distribution, template validity, and provisioning state. Read-only. | [export.md](export.md) | **v1 implemented** |
-| `export [<name>]` | Reconcile named delivery **distributions** (rating-filtered subsets) to separate paths — copy-only, delta sync. Read-only w.r.t. the library. | [export.md](export.md) | **v1 implemented** (H.264 rendition pending) |
+## Specs
 
-The plan-applying ops (`migrate`, `hash`, `dedupe`, `organize`) share a `--no-prompt` flag that skips the `Apply?` / `Proceed?` confirmation and applies the generated plan directly — the plan is still written to the run folder. `sync` is the composition of all four under `--no-prompt`.
-
-## Cross-cutting invariants
-
-These hold across all operations. Each spec reinforces the invariants relevant to it.
-
-- **Atomicity / no data loss.** Every action is transactional. Multi-step operations stage to temp paths and validate before committing. Partial failure rolls back cleanly. Same-volume operations exploit atomic rename.
-- **Soft delete only (conservation).** Every destructive operation captures the data it replaces into the current run's folder under `.pix/runs/<run-id>/`. User performs the final hard-delete manually by removing old run folders. The one exception is `pix hash`, whose writes are purely additive into the recomputable `.pix/local/cache.db` store (no source data is replaced) — see [hash.md → Conservation invariant](hash.md#conservation-invariant).
-- **CONVERT preserves source metadata.** Any CONVERT action carries forward all non-format-specific metadata (EXIF, XMP including face regions, IPTC, container-level metadata) from the source into the output file. CONVERT changes only the encoding/container, never the metadata payload.
-- **TAG writes preserve untouched fields.** A TAG action modifies only the pix:* fields named in the plan line. All other metadata on the file — other pix:* fields, EXIF, XMP, IPTC, face regions — is preserved bit-for-bit. This is what makes incremental migrate runs and re-derivation passes safe.
-- **Same-volume constraint.** Library root, `.pix/`, and source folders being migrated are assumed on the same volume so atomic rename and hard links are available.
-- **Idempotence.** Re-running an op with no input changes produces no work. Every metadata write compares new value to current; equal → no write, no plan line.
-- **CLI + folder-as-UI only.** No GUI. Bulk tag editing via folder-shuffle in checkouts; migrate plans via text editor.
-- **Performance at scale.** Library is terabytes. Use parallelism where it helps; bulk operations preferred when atomicity still holds.
-- **Single active operation per library.** Enforced by a library-wide lock — see [Concurrency](#concurrency) below.
-
-## Concurrency
-
-pix is single-user, but the operations are long-running enough that the user might (intentionally or by accident) start a second `pix` command while the first is still going. Multiple writers can corrupt the library: both might mutate the same file, both might update the persistent metadata cache for the same path, both might allocate overlapping run-ids.
-
-**Solution: a library-wide lock at `<library>\.pix\local\lock`.** A single sentinel file contains the PID, the op name, and the start timestamp:
-
-```
-12345
-migrate
-2026-05-23T15:32:01
-```
-
-Acquired at the start of any write-mode op (migrate, organize, dedupe, hash). Released on clean exit. If the file already exists when a new op starts:
-
-- **PID is live** (the process exists and is a `pix` invocation) → refuse with `another pix process is running: PID 12345, op 'migrate', started 2026-05-23T15:32:01. Wait or kill it before retrying.` Exit non-zero before doing any work.
-- **PID is dead** (process gone — crashed or killed) → assume stale, log `cleaning stale lock from PID 12345`, take the lock, proceed.
-
-The lock lives at `.pix/local/lock`, so it's excluded from sync clients alongside the rest of the machine-local `.pix/local/` state (see [implementation.md → Sync client interaction](implementation.md#sync-client-interaction)) — and its machine-local PID payload never travels to another machine.
-
-`pix init` does not acquire the lock — it creates `.pix/` from scratch and has nothing to conflict with. Read-only future operations (e.g. `pix list`, if it lands) won't acquire the lock either. Anything that writes does.
-
-This is intentionally a coarse lock: one operation at a time, library-wide. Finer-grained locking (e.g., letting `pix hash` run concurrently with `pix migrate` on disjoint subtrees) is a future-work concession, not a v1 design goal.
-
-**Checkout freeze.** Separately from the per-invocation lock, an **open tag-editing checkout freezes the whole library**: while `<library>\.pix\local\checkout\` exists, every command except `pix tag checkout --commit` and `pix tag checkout --reset` refuses up front. A checkout materializes hard links whose identity commit relies on (NTFS file-ID); migrate/dedupe/organize would all invalidate that identity if they ran mid-session. The freeze is enforced by folder presence (a checkout session spans many invocations, so the lock can't cover it). See [tag-editing.md → The freeze](tag-editing.md#the-freeze--an-open-checkout-locks-the-library).
-
-## Open decisions
-
-- **Merge design** — workflow, plan format, reuse of `dedupe`. Deferred (dedupe is now v1-implemented, so this is unblocked).
-- **Apply-phase parallelism for migrate** — currently sequential. Lines are independent; a worker pool is a future perf-pass, not a v1 concern.
-- **Face detection — deferred to last.** Migrate v1 *does not* detect faces or write `XMP-mwg-rs:RegionList`. The spec covers face workflow in [tag-editing.md](tag-editing.md) and the writing protocol in [tags.md](tags.md#structured-metadata-face-regions), but the migrate-time detection step (insightface + embedding match against confirmed identity centroids) is intentionally postponed until everything else in the spec is built. When it lands it integrates as another bundled step inside the existing TAG / CONVERT+RENAME+TAG action; no new top-level operation.
+- [nas-app.md](nas-app.md) — the architecture: sacred originals, sidecars, the
+  derived tiers, the app, ingest, identity
+- [clips.md](clips.md) — clips: video splitting and stills from video
+- [import.md](import.md) — the device import loop `pix import` is built on
+- [roadmap.md](roadmap.md) — designed-but-unbuilt features
+- [perf-backlog.md](perf-backlog.md) — performance ideas against built code

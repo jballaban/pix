@@ -9,7 +9,7 @@ set -e
 
 fail() {
     echo "=============================================================="
-    echo "pix2 cannot start: $1"
+    echo "pix cannot start: $1"
     echo
     echo "$2"
     echo "=============================================================="
@@ -19,7 +19,7 @@ fail() {
     exit 1
 }
 
-SHARE="${PIX2_SHARE:-/volume1/pix2}"
+SHARE="${PIX_SHARE:-${PIX2_SHARE:-/volume1/pix2}}"
 
 # The archive mount is required — everything the app serves lives there.
 [ -d "$SHARE" ] || fail \
@@ -42,10 +42,10 @@ exists. Copying the repo's src folder *into* src gives
 which fails exactly like this.
 
 Or simply remove the /app/src mount: the image already contains the app."
-    echo "pix2: using mounted source at /app/src"
+    echo "pix: using mounted source at /app/src"
 else
-    echo "pix2: using built-in source"
+    echo "pix: using built-in source"
 fi
 
-echo "pix2: archive at $SHARE"
+echo "pix: archive at $SHARE"
 exec "$@"

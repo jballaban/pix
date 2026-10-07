@@ -1,9 +1,4 @@
-"""`pix2` — the NAS architecture's console script (spec/nas-app.md).
-
-A second entry point so the existing `pix` keeps working untouched until seeding
-is proven. When the old architecture is amputated, this package is promoted to
-`src/pix/` and `pix2` disappears.
-"""
+"""`pix` — the console script (spec/nas-app.md)."""
 
 from __future__ import annotations
 
@@ -24,7 +19,7 @@ from pix.nas.upload import run_upload
 from pix.progress import LiveProgress
 
 app: typer.Typer = typer.Typer(
-    name="pix2",
+    name="pix",
     help="Personal media archive: import, upload, process. See spec/nas-app.md.",
     add_completion=False,
     no_args_is_help=True,
@@ -176,7 +171,7 @@ def upload() -> None:
         typer.echo("")
         typer.echo(
             "Cancelled. Staging is intact and nothing was deleted - "
-            "re-run `pix2 upload` to continue into the same master folder."
+            "re-run `pix upload` to continue into the same master folder."
         )
         raise typer.Exit(code=130)
     if failed:
@@ -222,7 +217,7 @@ def process() -> None:
 
     if summary.cancelled:
         typer.echo("")
-        typer.echo("Cancelled. Re-run `pix2 process` to continue where it left off.")
+        typer.echo("Cancelled. Re-run `pix process` to continue where it left off.")
         raise typer.Exit(code=130)
     if summary.failed:
         raise typer.Exit(code=1)
