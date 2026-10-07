@@ -37,5 +37,7 @@ running in a container on the NAS, does everything else.
   derived tiers, the app, ingest, identity
 - [clips.md](clips.md) — clips: video splitting and stills from video
 - [import.md](import.md) — the device import loop `pix import` is built on
+- [metadata-cleanup.md](metadata-cleanup.md) — what downloads hand out, and the
+  old pix's tags in originals (parked: open questions)
 - [roadmap.md](roadmap.md) — designed-but-unbuilt features
 - [perf-backlog.md](perf-backlog.md) — performance ideas against built code

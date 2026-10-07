@@ -24,6 +24,7 @@ Active codebase. The implementation lives in `src/pix/`; tests in `tests/`. **Co
 - [`spec/nas-app.md`](spec/nas-app.md) — the architecture: sacred originals, sidecars, derived tiers, the app, ingest, identity
 - [`spec/clips.md`](spec/clips.md) — clips: video splitting + stills from video, `archived` audience (built; distributions pending)
 - [`spec/import.md`](spec/import.md) — the device import loop `pix import` runs on (written for the removed CLI; read with nas-app §9)
+- [`spec/metadata-cleanup.md`](spec/metadata-cleanup.md) — stripping metadata from downloads + the old pix's tags in originals (parked: open questions, not designed)
 - [`spec/roadmap.md`](spec/roadmap.md) — designed-but-unbuilt features
 - [`spec/perf-backlog.md`](spec/perf-backlog.md) — performance ideas against already-implemented code
 

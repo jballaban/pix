@@ -28,6 +28,16 @@ effective date written into the copy; and because its footage can change when
 its range does, its delivered copy is replaced in place, under the same name,
 so anything that refers to it by path keeps the entry.
 
+## Metadata — downloads and the old pix's tags (parked)
+
+Two linked problems, discussed 2026-10-07 and parked at open questions: what a
+download or video stream hands out (location, names, the old pix's tags — it
+should carry nothing identifying beyond an opaque pix reference), and the old
+pix's custom tags in seeded originals, with more years still to seed. Findings,
+thinking and the questions to answer are in
+[metadata-cleanup.md](metadata-cleanup.md). **Settle it before seeding more
+years**, or the retro cleanup grows with every one.
+
 ## Near-duplicate grouping — image perceptual hashing
 
 Most of a burst is one photo shot eight times; grouping them is the biggest
