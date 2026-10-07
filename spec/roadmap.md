@@ -28,14 +28,12 @@ effective date written into the copy; and because its footage can change when
 its range does, its delivered copy is replaced in place, under the same name,
 so anything that refers to it by path keeps the entry.
 
-## Clean downloads — videos
+## Clean downloads — what is left
 
-Downloads carry nothing identifying ([metadata-cleanup.md](metadata-cleanup.md)).
-Photos are built; **video downloads are designed, not built** — metadata boxes
-relabelled `free` and zeroed at the same length, non-audio/video tracks
-(GoPro telemetry and its GPS trace) hidden and their sample bytes zeroed, a
-download hash recorded when the data changed. Also pending there: playback
-(`/media`), other formats, and *Original path* in the details panel.
+Photo and video downloads carry nothing identifying
+([metadata-cleanup.md](metadata-cleanup.md)). Still open there (§8): video
+playback (`/media`), keeping HDR gain maps, other formats (PNG, `.insv`,
+HEIC), *Original path* in the details panel, and distributions.
 
 ## Near-duplicate grouping — image perceptual hashing
 

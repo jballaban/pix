@@ -38,6 +38,6 @@ running in a container on the NAS, does everything else.
 - [clips.md](clips.md) — clips: video splitting and stills from video
 - [import.md](import.md) — the device import loop `pix import` is built on
 - [metadata-cleanup.md](metadata-cleanup.md) — clean downloads: what a copy
-  keeps, cleaned on the fly (photos built; videos designed)
+  keeps, cleaned on the fly (photos and videos built)
 - [roadmap.md](roadmap.md) — designed-but-unbuilt features
 - [perf-backlog.md](perf-backlog.md) — performance ideas against built code

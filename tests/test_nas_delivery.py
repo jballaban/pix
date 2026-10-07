@@ -321,3 +321,220 @@ def test_a_zip_holds_clean_photographs(client: TestClient,
         got = zf.read("2026-08-30_153455.jpg")
     assert b"Ballabans" not in got
     assert _pixels(got) == _pixels(_photo())
+
+
+# --- videos --------------------------------------------------------------
+
+def _ffmpeg() -> None:
+    if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
+        pytest.skip("ffmpeg is not installed")
+
+
+#: A subtitle track stands in for telemetry: a track that is neither picture
+#: nor sound, whose samples carry something that must not leave.
+TELEMETRY = "GPS 51.1784N 115.5708W"
+
+
+def _video(path: Path, *, telemetry: bool = True, faststart: bool = False,
+           extra: tuple[str, ...] = ()) -> Path:
+    """Two seconds of picture and sound, tagged the way a phone tags them."""
+    _ffmpeg()
+    args = ["ffmpeg", "-v", "error", "-y",
+            "-f", "lavfi", "-i", "testsrc=s=64x48:r=10:d=2",
+            "-f", "lavfi", "-i", "sine=d=2"]
+    if telemetry:
+        srt = path.with_suffix(".srt")
+        srt.write_text(f"1\n00:00:00,000 --> 00:00:02,000\n{TELEMETRY}\n",
+                       encoding="utf-8")
+        args += ["-i", str(srt)]
+    args += ["-map", "0:v", "-map", "1:a"] + (["-map", "2:s"] if telemetry else [])
+    args += ["-c:v", "libx264", "-c:a", "aac"] + (
+        ["-c:s", "mov_text"] if telemetry else [])
+    flags = "+use_metadata_tags" + ("+faststart" if faststart else "")
+    args += ["-metadata", "location=+51.1784-115.5708/",
+             "-metadata", "make=Apple", "-metadata", "model=iPhone 15",
+             "-metadata", "comment=Banff Skiing - Ballabans",
+             "-metadata", "creation_time=2026-08-30T15:34:55Z",
+             "-movflags", flags, *extra, str(path)]
+    subprocess.run(args, check=True, timeout=120)
+    return path
+
+
+def _clean_video(src: Path, dst: Path, *, shift: int = 0,
+                 source_id: str | None = "m:abc") -> delivery.VideoPlan:
+    from blake3 import blake3
+
+    digest = blake3()
+    with src.open("rb") as fh:
+        plan = delivery.plan_video(fh, src.stat().st_size, shift=shift,
+                                   source_id=source_id)
+        dst.write_bytes(b"".join(delivery.stream_video(fh, plan, digest,
+                                                       chunk=4096)))
+    # What was hashed on the way out is what the file says it is.
+    assert "m:" + digest.hexdigest() == identity.content_hash(dst)
+    return plan
+
+
+def _streams(path: Path) -> list[str]:
+    return subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type",
+         "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True, check=True).stdout.split()
+
+
+def _plays(path: Path) -> bool:
+    got = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path),
+                          "-f", "null", "-"], capture_output=True, text=True)
+    return got.returncode == 0 and not got.stderr.strip()
+
+
+@pytest.mark.parametrize("faststart", [False, True])
+def test_a_video_keeps_only_picture_and_sound(tmp_path: Path,
+                                              faststart: bool) -> None:
+    """Movie header before the data or after it, as phones and GoPros differ."""
+    src = _video(tmp_path / "src.mp4", faststart=faststart)
+    dst = tmp_path / "out.mp4"
+    plan = _clean_video(src, dst)
+
+    source, clean = src.read_bytes(), dst.read_bytes()
+    for secret in (TELEMETRY.encode(), b"Ballabans", b"iPhone 15", b"Apple",
+                   b"+51.1784", b"Lavf", b"VideoHandler"):
+        assert secret in source, secret
+        assert secret not in clean, secret
+    assert _streams(src) == ["video", "audio", "subtitle"]
+    assert _streams(dst) == ["video", "audio"]
+    assert _plays(dst)
+    assert len(clean) == len(source) + len(plan.tail)
+    assert plan.zeroed
+    assert identity.content_hash(dst) != identity.content_hash(src)
+
+
+def test_a_plain_video_keeps_its_content_hash(tmp_path: Path) -> None:
+    """Nothing in the coded data changed, so to the hash the copy is the
+    master — and there is no download hash to record."""
+    src = _video(tmp_path / "src.mp4", telemetry=False)
+    dst = tmp_path / "out.mp4"
+    plan = _clean_video(src, dst)
+
+    assert not plan.zeroed
+    assert identity.content_hash(dst) == identity.content_hash(src)
+    assert b"Ballabans" not in dst.read_bytes()
+    assert _plays(dst)
+
+
+def test_exiftool_finds_nothing_in_a_video(tmp_path: Path) -> None:
+    if shutil.which("exiftool") is None:
+        pytest.skip("exiftool is not installed")
+    src = _video(tmp_path / "src.mp4")
+    dst = tmp_path / "out.mp4"
+    _clean_video(src, dst, source_id="m:abc")
+
+    tags = json.loads(subprocess.run(
+        ["exiftool", "-j", "-a", "-G1", "-ee", str(dst)],
+        capture_output=True, text=True, check=True).stdout)[0]
+
+    # What kind of track and codec is fine to say; what made it is not.
+    found = {k: v for k, v in tags.items()
+             if any(w in k for w in ("GPS", "Location", "Make", "Model",
+                                     "Comment", "Encoder", "HandlerDescription",
+                                     "CompressorName", "Text"))
+             and v not in ("", 0)}
+    assert not found, found
+    assert tags["XMP-pix:SourceId"] == "m:abc"
+
+
+def test_a_corrected_date_moves_the_video_own_date(tmp_path: Path) -> None:
+    src = _video(tmp_path / "src.mp4")
+    dst = tmp_path / "out.mp4"
+    _clean_video(src, dst, shift=-365 * 86400)
+
+    when = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format_tags=creation_time",
+         "-of", "csv=p=0", str(dst)],
+        capture_output=True, text=True, check=True).stdout.strip()
+    assert when.startswith("2025-08-30T15:34:55"), when
+
+
+def test_a_returning_video_is_recognised_by_its_stamp(tmp_path: Path) -> None:
+    """The stamp is at the end, past the head the check used to read."""
+    src = _video(tmp_path / "src.mp4")
+    dst = tmp_path / "out.mp4"
+    _clean_video(src, dst, source_id="m:0123abcd")
+    padded = tmp_path / "big.mp4"
+    padded.write_bytes(bytes(roundtrip.HEAD) + dst.read_bytes())
+
+    assert roundtrip.returned(dst) == "m:0123abcd"
+    assert roundtrip.returned(padded) == "m:0123abcd"
+
+
+def test_junk_after_the_last_box_is_not_sent(tmp_path: Path) -> None:
+    src = _video(tmp_path / "src.mp4")
+    junky = tmp_path / "junky.mp4"
+    junky.write_bytes(src.read_bytes() + b"\x01\x02serial 12345 trailer")
+    dst = tmp_path / "out.mp4"
+    _clean_video(junky, dst)
+
+    assert b"serial 12345" not in dst.read_bytes()
+    assert _plays(dst)
+
+
+def test_a_fragmented_video_is_refused(tmp_path: Path) -> None:
+    """Its samples are described fragment by fragment; until that is read,
+    nothing can say which bytes are telemetry."""
+    src = _video(tmp_path / "src.mp4",
+                 extra=("-movflags", "+frag_keyframe+empty_moov"))
+    with src.open("rb") as fh, pytest.raises(delivery.Uncleanable):
+        delivery.plan_video(fh, src.stat().st_size, source_id=None)
+
+
+def test_something_that_is_not_a_movie_is_refused(tmp_path: Path) -> None:
+    bad = tmp_path / "bad.mp4"
+    bad.write_bytes(b"\x00\x00\x00\x10ftypisom\x00\x00\x00\x00junk")
+    with bad.open("rb") as fh, pytest.raises(delivery.Uncleanable):
+        delivery.plan_video(fh, bad.stat().st_size, source_id=None)
+
+
+def _index_video(app_env: dict[str, Path], src: Path) -> None:
+    """Give `b.mp4` the date and content hash `process` would have."""
+    meta = app_env["share"] / "meta" / "init_2026" / "b.mp4.json"
+    record = json.loads(meta.read_text(encoding="utf-8"))
+    record["exif"]["QuickTime:CreateDate"] = "2026:08:30 15:34:55"
+    record["content_hash"] = identity.content_hash(src)
+    meta.write_text(json.dumps(record), encoding="utf-8")
+    ix.build(app_env["db"], meta_dir=app_env["share"] / "meta",
+             master_dir=src.parent.parent)
+
+
+def test_a_video_downloads_clean(client: TestClient, writable: Path,
+                                 app_env: dict[str, Path],
+                                 tmp_path: Path) -> None:
+    src = _video(writable / "b.mp4")
+    _index_video(app_env, src)
+
+    r = client.get("/download/init_2026/b.mp4")
+
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "video/mp4"
+    assert int(r.headers["content-length"]) == len(r.content)
+    assert b"Ballabans" not in r.content
+    assert TELEMETRY.encode() not in r.content
+    assert b'pix:SourceId="m:' in r.content
+    assert "2026-08-30_153455.mp4" in r.headers["content-disposition"]
+    # Telemetry zeroed, so the copy hashes differently, and that is recorded.
+    got = tmp_path / "got.mp4"
+    got.write_bytes(r.content)
+    assert delivery.recorded(webroots.DELIVERED_FILE) == {
+        identity.content_hash(got): "init_2026/b.mp4"}
+
+
+def test_a_zip_holds_clean_videos(client: TestClient, writable: Path,
+                                  app_env: dict[str, Path]) -> None:
+    _index_video(app_env, _video(writable / "b.mp4"))
+
+    r = client.post("/download.zip", data={"files": json.dumps([
+        {"folder": "init_2026", "name": "b.mp4"}])})
+
+    with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+        got = zf.read("2026-08-30_153455.mp4")
+    assert b"Ballabans" not in got
+    assert TELEMETRY.encode() not in got

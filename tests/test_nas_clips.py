@@ -700,7 +700,9 @@ def test_a_clip_is_cut_from_a_keyframe_and_a_viewer_can_then_see_it(
     assert clip in kid.get("/browse").text
     assert kid.get(f"/media/init_2026/{clip}").content == made.read_bytes()
     r = kid.get(f"/download/init_2026/{clip}?original=1")
-    assert r.content == made.read_bytes()
+    # The cut, cleaned on the way out: the same coded data, without the
+    # path it was cut from (spec/metadata-cleanup.md).
+    assert _same_cut(r.content, made)
     # Named by its date, never by the master's (spec/metadata-cleanup.md §4).
     assert "2026-08-30_150001.mp4" in r.headers["content-disposition"]
 
@@ -1211,7 +1213,22 @@ def test_a_clip_of_hevc_is_seen_once_it_has_a_render(
     assert kid.get(f"/media/init_2026/{clip}").content == play.read_bytes()
     # The original is still the lossless cut, in its own codec.
     original = kid.get(f"/download/init_2026/{clip}?original=1").content
-    assert original == _cuts(clip)[0].read_bytes()
+    assert _same_cut(original, _cuts(clip)[0])
+
+
+def _same_cut(sent: bytes, cut: Path) -> bool:
+    """`sent` is `cut` cleaned: the same coded data, and no stamp naming the
+    file it was cut from."""
+    from pix.nas import identity
+
+    got = cut.with_name("sent.mp4")
+    got.write_bytes(sent)
+    try:
+        return (identity.content_hash(got) == identity.content_hash(cut)
+                and b"pix:SourceFile" in cut.read_bytes()
+                and b"pix:SourceFile" not in sent)
+    finally:
+        got.unlink()
 
 
 def test_moving_a_clip_throws_away_its_render(

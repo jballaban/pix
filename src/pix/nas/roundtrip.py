@@ -46,6 +46,10 @@ from typing import Callable
 #: its first segments — so the head is enough, and reading only it keeps the
 #: check free beside the copy it sits next to.
 HEAD: int = 1 << 20
+#: And the end: a downloaded video's stamp is a box appended after everything
+#: else (spec/metadata-cleanup.md), since a box added anywhere earlier would
+#: move the data every offset in the file points at.
+TAIL: int = 1 << 16
 
 #: `pix:SourceFile` as XMP writes it — attribute or element — for saying which
 #: master a returned file came from. An MP4 keeps its keys apart from their
@@ -67,6 +71,10 @@ def returned(path: Path) -> str | None:
     try:
         with path.open("rb") as fh:
             head = fh.read(HEAD)
+            if len(head) == HEAD:
+                fh.seek(0, 2)
+                fh.seek(max(HEAD, fh.tell() - TAIL))
+                head += fh.read()
     except OSError:
         return None
     if not any(stamp in head for stamp in _STAMPS):

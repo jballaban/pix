@@ -1,6 +1,6 @@
 # Metadata — clean downloads
 
-**Status: decided 2026-10-07. Photos built; videos designed, not built.**
+**Status: decided and built 2026-10-07** — photos and videos.
 Extends [nas-app.md](nas-app.md) and amends its
 [§15 round trips](nas-app.md#round-trips): downloads are now stamped as they
 leave, not when the copy is made.
@@ -102,26 +102,46 @@ Other formats (PNG, `.insv`, future HEIC) go out unchanged for now — see §8.
 The whole file is read into memory (a few MB) and the result is sent with a
 known length.
 
-### Videos (MP4/MOV) — designed, not built
+### Videos (MP4/MOV/M4V) — built (`delivery.plan_video`, `stream_video`)
 
 A video's metadata lives in boxes inside `moov`; removing them would shift the
-chunk offsets the file uses to find its data. Instead, in place and **at the
-same length**:
+chunk offsets the file uses to find its data. Instead `moov` is read (a few KB
+to a few MB, wherever it sits — phones put it first, GoPros last) and a list
+of **same-length edits** is applied as the file streams past:
 
-- every metadata box (`udta`, `meta`, `uuid` XMP, …) is relabelled `free` and
-  zeroed; `pix:SourceId` is written into that freed space;
+- every metadata box — top-level `uuid` (the old pix's XMP) and anything else
+  not `ftyp`/`moov`/`mdat`, and inside `moov` everything but `mvhd`, `trak`,
+  `iods` (`udta` with location/make/model, `meta` with a phone's keys) — is
+  relabelled `free` and zeroed; existing `free`/`skip`/`wide` are zeroed;
 - **only video and audio tracks are kept.** Every other track — GoPro
-  telemetry (GPMF, with its GPS trace), timecode, camera-data tracks, iPhone
-  timed metadata — has its `trak` relabelled `free`, **and the bytes of its
-  samples zeroed**: the track's sample tables (`stco`/`co64`, `stsz`, `stsc`)
-  give each sample's exact position, so those ranges are overwritten as the
-  file streams past. Hiding the track alone would leave the GPS readable to
-  anyone who digs.
-- the date stays in `mvhd`/`tkhd`, rotation in the track matrix.
+  telemetry (`gpmd`, with its GPS trace), timecode, `fdsc`, subtitles, a
+  phone's timed metadata — has its `trak` relabelled `free`, **and the bytes
+  of its samples zeroed**: its sample tables (`stco`/`co64`, `stsc`,
+  `stsz`/`stz2`) give each chunk's exact range. Hiding the track alone would
+  leave the GPS readable to anyone who digs;
+- in kept tracks, `tref` (it may point at a freed track) and any
+  `udta`/`meta` are freed, and the **handler names** (*GoPro AVC*, *Core Media
+  Video*) and the video's **compressor name** are blanked;
+- the dates stay in `mvhd`/`tkhd`/`mdhd` — moved by the curator's correction
+  if there is one (effective − capture, in seconds; those times are UTC);
+  rotation stays in the track matrix.
 
-Same length means `Range` requests and seeking still work, and nothing but the
-header is parsed. Verified with `exiftool -ee` (embedded telemetry) and a play
-test against real GoPro masters.
+**`pix:SourceId` is appended** as a top-level XMP `uuid` box after the last
+box — written anywhere earlier it would move data that offsets point at.
+A last box that declares *to the end of the file* (or more than the file
+holds) gets its true size first. `roundtrip.returned` reads a file's last
+64KB as well as its first MB to find it. A video the index has no content
+hash for yet goes unstamped: finding one would read the whole file first.
+
+Junk after the last box (a trailer, a serial number) is not sent. A
+**fragmented** file (`moof`) or a compressed `moov` is refused, as is
+anything that cannot be walked. The response has a known length (the source
+less any junk, plus the stamp); `Range` is not offered for downloads.
+
+Measured on real masters (2026-10-07): 14 videos, 4 of them GoPro — exiftool
+`-ee` finds no GPS, make, model, serial or handler names; GoPro `GPS5`/`GPSU`
+FourCCs 18 → 0 in the bytes; audio kept where there was any; every copy
+decodes cleanly in full; phone videos keep their content hash.
 
 ## 6. Recognising a copy that comes home
 
@@ -160,10 +180,10 @@ home.
 
 ## 8. Not covered yet
 
-- **Video downloads** — §5, next.
 - **Video playback** (`/media`) sends the whole file, so a viewer can save it
-  from the browser. Treated as not a deliberate copy for now; the same
-  same-length video cleaning could be applied there later.
+  from the browser. Treated as not a deliberate copy for now. The video
+  edits are same-length except the appended stamp, so playback could apply
+  them without the stamp and keep `Range` working.
 - **HDR is lost for about a quarter of photos.** A sample of 160 real masters
   (2026-10-07): 84 carry a second image after the primary — 42 an Apple HDR
   gain map, 40 a large preview, 2 something else. All are dropped, so those

@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, cast, Iterator, Sequence
 
+from blake3 import blake3
 from fastapi import Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, Response, StreamingResponse
 
@@ -223,6 +224,17 @@ class Outgoing:
     called: str
     taken: datetime | None
     source_id: str | None
+    #: Seconds a curator's date correction moved this file, for a video's
+    #: own times — which are UTC, where the dates here are local.
+    shift: int = 0
+
+
+@dataclass(frozen=True)
+class Video:
+    """A video to stream cleaned: the file, and what to change in it."""
+
+    out: Outgoing
+    plan: delivery.VideoPlan
 
 
 def outgoing(folder: str, name: str, original: bool,
@@ -245,26 +257,35 @@ def outgoing(folder: str, name: str, original: bool,
             reader.close()
     effective = row["effective_date"] if row is not None else None
     taken = datestr.parse_pix(effective) if effective else None
+    captured = row["capture_date"] if row is not None else None
     source_id = row["content_hash"] if row is not None else None
     return Outgoing(folder=folder, name=name, path=target,
                     called=delivery.name_for(taken, Path(called).suffix,
                                              source_id),
-                    taken=taken, source_id=source_id)
+                    taken=taken, source_id=source_id,
+                    shift=delivery.date_shift(
+                        datestr.parse_exiftool(captured) if captured else None,
+                        taken))
 
 
-def payload(out: Outgoing) -> bytes | Path:
-    """The bytes to send: a photograph cleaned, anything else as it is.
-
-    Videos and the formats nothing here can clean yet go out unchanged
-    (spec/metadata-cleanup.md §8).
+def payload(out: Outgoing) -> bytes | Path | Video:
+    """What to send: a photograph cleaned, a video planned for cleaning as it
+    streams, anything else as it is (spec/metadata-cleanup.md §8).
 
     **The download hash.** A clean copy has the same content hash as its
-    source — unless something after the image's end (an HDR gain map) was
-    dropped. Then the copy's own hash is recorded, once, so it is still
-    recognised if it comes home.
+    source — unless something after a photograph's end (an HDR gain map) was
+    dropped, or a video's telemetry zeroed. Then the copy's own hash is
+    recorded, once, so it is still recognised if it comes home.
     """
     with out.path.open("rb") as fh:
-        head = fh.read(3)
+        head = fh.read(12)
+        if (head[4:8] == b"ftyp"
+                and out.path.suffix.lower() in delivery.VIDEO_SUFFIXES):
+            # Unstamped where the index has no hash yet: finding one would
+            # read the whole video before sending a byte of it.
+            return Video(out, delivery.plan_video(
+                fh, out.path.stat().st_size, shift=out.shift,
+                source_id=out.source_id))
     if not delivery.is_jpeg(head):
         return out.path
     data = out.path.read_bytes()
@@ -281,6 +302,24 @@ def payload(out: Outgoing) -> bytes | Path:
             # a reason to refuse the download.
             pass
     return clean
+
+
+def video_chunks(video: Video) -> Iterator[bytes]:
+    """A video, cleaned as it streams; its hash recorded once it has all gone.
+
+    Hashed only where telemetry was zeroed, since otherwise the coded data is
+    the source's and so is its hash. A download abandoned halfway records
+    nothing — the next one will.
+    """
+    digest = blake3() if video.plan.zeroed else None
+    with video.out.path.open("rb") as fh:
+        yield from delivery.stream_video(fh, video.plan, digest)
+    if digest is not None:
+        try:
+            delivery.record(webroots.DELIVERED_FILE, "m:" + digest.hexdigest(),
+                            video.out.folder, video.out.name)
+        except OSError:
+            pass
 
 
 @app.get("/download/{folder}/{name}")
@@ -312,11 +351,16 @@ def download(folder: str, name: str,
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR,
                             "this file could not be prepared for download"
                             ) from None
+    disposition = f'attachment; filename="{out.called}"'
     if isinstance(sent, Path):
         return FileResponse(sent, filename=out.called,
                             media_type=mime(out.called))
-    return Response(sent, media_type=mime(out.called), headers={
-        "Content-Disposition": f'attachment; filename="{out.called}"'})
+    if isinstance(sent, Video):
+        return StreamingResponse(video_chunks(sent), media_type=mime(out.called),
+                                 headers={"Content-Disposition": disposition,
+                                          "Content-Length": str(sent.plan.length)})
+    return Response(sent, media_type=mime(out.called),
+                    headers={"Content-Disposition": disposition})
 
 
 @app.post("/download.zip")
@@ -405,6 +449,12 @@ class Sink:
         return out
 
 
+def file_chunks(path: Path) -> Iterator[bytes]:
+    with path.open("rb") as src:
+        while chunk := src.read(1 << 20):
+            yield chunk
+
+
 def zipped(picked: Sequence[tuple[str, Outgoing]]) -> Iterator[bytes]:
     """The zip, a chunk at a time, each file cleaned as its turn comes."""
     sink = Sink()
@@ -426,12 +476,16 @@ def zipped(picked: Sequence[tuple[str, Outgoing]]) -> Iterator[bytes]:
                 if got:
                     yield got
                 continue
+            chunks = (video_chunks(sent) if isinstance(sent, Video)
+                      else file_chunks(sent))
+            size = (sent.plan.length if isinstance(sent, Video)
+                    else sent.stat().st_size)
             try:
-                with zf.open(arcname, "w") as into, sent.open("rb") as src:
-                    while True:
-                        chunk = src.read(1 << 20)
-                        if not chunk:
-                            break
+                # Told up front when a file will pass 4GB, since `zipfile`
+                # cannot go back and widen an entry it has started.
+                with zf.open(arcname, "w",
+                             force_zip64=size >= zipfile.ZIP64_LIMIT) as into:
+                    for chunk in chunks:
                         into.write(chunk)
                         got = sink.drain()
                         if got:
