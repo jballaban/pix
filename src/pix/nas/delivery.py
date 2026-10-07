@@ -775,6 +775,19 @@ def _uuid_box(source_id: str) -> bytes:
     return (len(body) + 8).to_bytes(4, "big") + b"uuid" + body
 
 
+def ready(kind: str | None, content_hash: str | None) -> bool:
+    """Whether a file may be downloaded yet.
+
+    A video goes out only once `process` has given it a content hash — a clip
+    just cut, a video just uploaded. Without one it could not be stamped, and
+    a copy with no stamp and no recorded hash is one that is not recognised
+    if it comes home. Finding the hash at download time would read the whole
+    video before sending a byte of it. A photograph's is found from the bytes
+    already in hand, so a photograph is always ready.
+    """
+    return kind != "video" or bool(content_hash)
+
+
 def date_shift(captured: datetime | None, effective: datetime | None) -> int:
     """Seconds a curator's correction moved a file's date — what a video's own
     times are moved by, since those are UTC and the dates here are local."""

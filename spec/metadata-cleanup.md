@@ -130,8 +130,16 @@ of **same-length edits** is applied as the file streams past:
 box — written anywhere earlier it would move data that offsets point at.
 A last box that declares *to the end of the file* (or more than the file
 holds) gets its true size first. `roundtrip.returned` reads a file's last
-64KB as well as its first MB to find it. A video the index has no content
-hash for yet goes unstamped: finding one would read the whole file first.
+64KB as well as its first MB to find it.
+
+**A video `process` has not been over yet is not downloadable**
+(`delivery.ready`) — a clip just cut, a video just uploaded. It has no content
+hash to stamp it with, and finding one would read the whole video before
+sending a byte. A single download answers 409 *not ready to download yet*; the
+grid marks such a cell `data-unready`, and the page leaves it out of a
+selection, says how many were left out, and downloads the rest. A zip on the
+server skips them too, and answers 409 if nothing else was asked for.
+Photographs are always ready: their hash comes from the bytes in hand.
 
 Junk after the last box (a trailer, a serial number) is not sent. A
 **fragmented** file (`moof`) or a compressed `moov` is refused, as is

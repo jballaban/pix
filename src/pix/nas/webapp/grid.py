@@ -10,7 +10,7 @@ from itertools import groupby
 from typing import cast, Sequence
 
 from pix import datestr
-from pix.nas import clips, decisions, index as ix, paths, webroots
+from pix.nas import clips, decisions, delivery, index as ix, paths, webroots
 from pix.nas.webapp.app import Principal, usual
 from pix.nas.webapp.marks import mark
 from pix.nas.webapp.permissions import may
@@ -444,6 +444,9 @@ def cell(row: sqlite3.Row, view: ix.Filters | None = None, *,
         f'data-splice="{h(splices(row))}" '
         f'data-clips="{row["clips"] if "clips" in row.keys() else 0}" '
         f'data-copy="{"1" if has_render(row) else ""}" '
+        # A video `process` has not been over yet cannot be downloaded
+        # (`delivery.ready`); the page leaves it out of a selection and says so.
+        f'data-unready="{"" if delivery.ready(row["kind"], row["content_hash"]) else "1"}" '
         f'data-behind="{row["behind"] or 0}" '
         f'data-proposed="{guessed(row, view or ix.Filters())}">'
         f'<img loading="lazy" src="/thumb/{q(row["folder"])}/{q(row["name"])}">'

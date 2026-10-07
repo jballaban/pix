@@ -13,14 +13,34 @@ if(COARSE&&CAN_SHARE&&actions){
   if(b) b.textContent='Save';
 }
 
+// A video `process` has not been over yet cannot be downloaded: it has no
+// content hash to stamp it with (`delivery.ready`). Left out of a selection
+// rather than failing it, and said — the rest of what was chosen is still
+// wanted.
+const NOT_READY='not ready to download yet — it has not been processed';
+function leftOut(n){
+  return (n===1?'1 file is':n.toLocaleString()+' files are')
+    +' not ready to download yet, so '+(n===1?'it was':'they were')
+    +' left out — downloading the rest';
+}
+
 async function downloadMenu(anchorEl){
-  const cs=await acting();
-  if(!cs) return;
+  const all=await acting();
+  if(!all) return;
   // Closed either way: a download is the browser's job from here, and on a
   // desktop it shows nothing of its own to take the takeover's place.
   workClose();
-  if(!cs.length){say('nothing selected');return;}
-  if(!cs.some(c=>c.dataset.copy)){closeMenu();getFiles(cs,false);return;}
+  if(!all.length){say('nothing selected');return;}
+  const cs=all.filter(c=>!c.dataset.unready);
+  const waiting=all.length-cs.length;
+  if(!cs.length){
+    say(waiting===1?NOT_READY:'none of these are ready to download yet — '
+        +'they have not been processed',true);
+    return;
+  }
+  // After the download has said its own piece, so this is what stays.
+  const go=orig=>{getFiles(cs,orig); if(waiting) say(leftOut(waiting),true);};
+  if(!cs.some(c=>c.dataset.copy)){closeMenu();go(false);return;}
   const key='download';
   if(menuCtx&&menuCtx.key===key&&!menu.hidden){closeMenu();return;}
   menu.innerHTML='<div id="menulist"></div>';
@@ -33,7 +53,7 @@ async function downloadMenu(anchorEl){
     const d=document.createElement('div');
     d.className='opt';
     d.innerHTML=`<span>${esc(label)}</span>`;
-    d.onclick=e=>{e.stopPropagation();closeMenu();getFiles(cs,orig);};
+    d.onclick=e=>{e.stopPropagation();closeMenu();go(orig);};
     list.appendChild(d);
   }
   placeMenu(anchorEl);

@@ -110,8 +110,16 @@ function drawGet(c){
     : (c.dataset.copy
        ? 'The H.264 copy. Hold shift for the original off the camera.'
        : 'The file as it came off the camera.');
+  if(c.dataset.unready){
+    viewGet.title='Not ready to download yet — it has not been processed.';
+  }
   viewGet.onclick=e=>{
     e.stopPropagation();
+    if(c.dataset.unready){
+      e.preventDefault();
+      say(NOT_READY,true);
+      return;
+    }
     if(touch){
       // **The playable copy, where there is one.** Everywhere else in the app
       // the original is the thing to want, and from the grid it still is — but

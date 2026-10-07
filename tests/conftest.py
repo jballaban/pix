@@ -151,6 +151,9 @@ def app_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
         "file": "b.mp4", "folder": "init_2026", "size": 20, "mtime_ns": 1,
         "exif": {"QuickTime:Duration": "75 s",
                  "XMP:EventAuto": "Italy - Sicily"},
+        # Processed, as a video has to be before it can be downloaded
+        # (`delivery.ready`).
+        "content_hash": "m:0123456789abcdef",
     }), encoding="utf-8")
 
     for tier in (thumb, preview):

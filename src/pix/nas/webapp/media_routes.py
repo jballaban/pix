@@ -210,6 +210,10 @@ def to_send(folder: str, name: str, original: bool) -> tuple[Path, str]:
     return media, name
 
 
+#: What a video `process` has not been over yet answers (`delivery.ready`).
+NOT_READY: str = "not ready to download yet — it has not been processed"
+
+
 @dataclass(frozen=True)
 class Outgoing:
     """One file on its way out: what is sent, and what it says about itself.
@@ -255,10 +259,15 @@ def outgoing(folder: str, name: str, original: bool,
     finally:
         if conn is None:
             reader.close()
+    source_id = row["content_hash"] if row is not None else None
+    kind = (row["kind"] if row is not None
+            else "video" if target.suffix.lower() in delivery.VIDEO_SUFFIXES
+            else None)
+    if not delivery.ready(kind, source_id):
+        raise HTTPException(status.HTTP_409_CONFLICT, NOT_READY)
     effective = row["effective_date"] if row is not None else None
     taken = datestr.parse_pix(effective) if effective else None
     captured = row["capture_date"] if row is not None else None
-    source_id = row["content_hash"] if row is not None else None
     return Outgoing(folder=folder, name=name, path=target,
                     called=delivery.name_for(taken, Path(called).suffix,
                                              source_id),
@@ -398,6 +407,9 @@ async def download_zip(
     # Flat, and numbered where two share a second: a folder inside the zip
     # would hand out the master folder's name, which is the old library's.
     used: set[str] = set()
+    # Left out and carried on without: the page has already said which are
+    # not ready, and the rest of the selection is still wanted.
+    waiting = 0
     conn = db()
     try:
         for item in wanted:
@@ -405,12 +417,17 @@ async def download_zip(
             allowed(user, folder, name)
             try:
                 out = outgoing(folder, name, original, conn)
-            except HTTPException:
+            except HTTPException as e:
+                waiting += e.status_code == status.HTTP_409_CONFLICT
                 continue
             picked.append((delivery.unique(out.called, used), out))
     finally:
         conn.close()
     if not picked:
+        if waiting:
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                "none of these are ready to download yet — "
+                                "they have not been processed")
         raise HTTPException(status.HTTP_404_NOT_FOUND, "nothing to send")
 
     stamp = time.strftime("%Y-%m-%d")

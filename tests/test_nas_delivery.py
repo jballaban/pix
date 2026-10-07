@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import shutil
 import subprocess
 import zipfile
@@ -307,7 +308,7 @@ def test_a_photograph_that_cannot_be_cleaned_is_not_sent(
         {"folder": "init_2026", "name": "a.jpg"},
         {"folder": "init_2026", "name": "b.mp4"}])})
     with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
-        assert zf.namelist() == ["pix.mp4"]
+        assert zf.namelist() == ["pix_01234567.mp4"]
 
 
 def test_a_zip_holds_clean_photographs(client: TestClient,
@@ -538,3 +539,68 @@ def test_a_zip_holds_clean_videos(client: TestClient, writable: Path,
         got = zf.read("2026-08-30_153455.mp4")
     assert b"Ballabans" not in got
     assert TELEMETRY.encode() not in got
+
+
+# --- not processed yet ---------------------------------------------------
+
+def _unprocessed(app_env: dict[str, Path], writable: Path) -> None:
+    """`b.mp4` as a video `process` has not been over: no content hash."""
+    (writable / "b.mp4").write_bytes(b"a clip")
+    meta = app_env["share"] / "meta" / "init_2026" / "b.mp4.json"
+    record = json.loads(meta.read_text(encoding="utf-8"))
+    record.pop("content_hash", None)
+    meta.write_text(json.dumps(record), encoding="utf-8")
+    ix.build(app_env["db"], meta_dir=app_env["share"] / "meta",
+             master_dir=writable.parent)
+
+
+def test_a_video_not_processed_yet_is_not_downloaded(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """No hash to stamp it with, so a copy of it could not be recognised if
+    it came home."""
+    _unprocessed(app_env, writable)
+
+    r = client.get("/download/init_2026/b.mp4")
+
+    assert r.status_code == 409
+    assert "not ready to download yet" in r.text
+
+
+def test_a_zip_leaves_out_what_is_not_ready(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    _unprocessed(app_env, writable)
+
+    r = client.post("/download.zip", data={"files": json.dumps([
+        {"folder": "init_2026", "name": "a.jpg"},
+        {"folder": "init_2026", "name": "b.mp4"}])})
+
+    with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+        assert zf.namelist() == ["2026-08-30_153455.jpg"]
+
+
+def test_a_zip_of_nothing_ready_says_so(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    _unprocessed(app_env, writable)
+
+    r = client.post("/download.zip", data={"files": json.dumps([
+        {"folder": "init_2026", "name": "b.mp4"}])})
+
+    assert r.status_code == 409
+    assert "ready to download yet" in r.text
+
+
+def test_the_grid_marks_what_is_not_ready(
+    client: TestClient, writable: Path, app_env: dict[str, Path]
+) -> None:
+    """So the page can leave it out of a selection, and say so, before
+    asking for anything."""
+    _unprocessed(app_env, writable)
+
+    page = client.get("/browse").text
+
+    marks = dict(re.findall(r'data-name="([^"]+)"[^>]*?data-unready="(1?)"',
+                            page))
+    assert marks == {"a.jpg": "", "b.mp4": "1"}, marks

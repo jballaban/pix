@@ -517,6 +517,39 @@ function run() {
         went === '/download/f/a.jpg', String(went));
   check('and the sheet is never involved', shared === null);
 
+  // --- a video not processed yet ----------------------------------------------
+  // It has no hash to stamp a copy with, so it is left out of a selection —
+  // and said, while everything else still comes.
+  {
+    went = null; document.submitted = [];
+    cells[2].dataset.unready = '1';
+    cells[1].querySelector('.pick').click();
+    cells[2].querySelector('.pick').click();   // a.jpg, b.heic and c.jpg
+    actBtn('download').click();
+    await settled();
+    const form = document.submitted[0];
+    const sent = form && JSON.parse(form.children
+      .find(i => i.name === 'files').value).map(f => f.name);
+    check('the rest of the selection still downloads, as one zip',
+          sent && sent.join(',') === 'a.jpg,b.heic', sent && sent.join(','));
+    check('and the page says what was left out and why',
+          /1 file is not ready to download yet/.test(document.byId.note.textContent),
+          document.byId.note.textContent);
+
+    // Nothing else chosen: nothing to start, and the reason.
+    document.submitted = [];
+    cells[0].querySelector('.pick').click();
+    cells[1].querySelector('.pick').click();   // c.jpg alone
+    actBtn('download').click();
+    await settled();
+    check('a selection of only what is not ready starts nothing',
+          document.submitted.length === 0 && went === null, String(went));
+    check('and says so', /not ready to download yet/.test(
+          document.byId.note.textContent), document.byId.note.textContent);
+    cells[2].querySelector('.pick').click();
+    delete cells[2].dataset.unready;
+  }
+
   if (failures.length) {
     failures.forEach(f => console.log('FAIL ' + f));
     process.exit(1);

@@ -683,7 +683,8 @@ def test_the_keyframes_are_read_without_decoding(real: Path) -> None:
 
 def test_a_clip_is_cut_from_a_keyframe_and_a_viewer_can_then_see_it(
     client: TestClient, real: Path, app_env: dict[str, Path],
-    add_user: Callable[..., None], sign_in: Callable[[str, str], TestClient]
+    add_user: Callable[..., None], sign_in: Callable[[str, str], TestClient],
+    monkeypatch: pytest.MonkeyPatch
 ) -> None:
     [clip] = _make(client, (1.3, 3.2))
 
@@ -699,9 +700,14 @@ def test_a_clip_is_cut_from_a_keyframe_and_a_viewer_can_then_see_it(
     kid = sign_in("kid", "pw")
     assert clip in kid.get("/browse").text
     assert kid.get(f"/media/init_2026/{clip}").content == made.read_bytes()
+    # Watchable at once, but not downloadable until `process` has hashed it:
+    # without a hash a copy cannot be stamped (spec/metadata-cleanup.md).
+    r = kid.get(f"/download/init_2026/{clip}?original=1")
+    assert r.status_code == 409, r.text
+    _process_clip(real / clip, monkeypatch)
     r = kid.get(f"/download/init_2026/{clip}?original=1")
     # The cut, cleaned on the way out: the same coded data, without the
-    # path it was cut from (spec/metadata-cleanup.md).
+    # path it was cut from.
     assert _same_cut(r.content, made)
     # Named by its date, never by the master's (spec/metadata-cleanup.md §4).
     assert "2026-08-30_150001.mp4" in r.headers["content-disposition"]

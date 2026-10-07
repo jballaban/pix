@@ -366,7 +366,7 @@ def test_a_file_with_no_date_is_named_for_nothing_about_it(
 
     r = client.get("/download/init_2026/b.mp4")
 
-    assert 'filename="pix.mp4"' in r.headers["content-disposition"]
+    assert 'filename="pix_01234567.mp4"' in r.headers["content-disposition"]
 
 
 def test_a_clip_downloads_as_the_copy_that_plays(
@@ -474,8 +474,8 @@ def test_a_selection_comes_back_as_one_zip(
     assert r.headers["content-type"] == "application/zip"
     assert ".zip" in r.headers["content-disposition"]
     with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
-        assert zf.namelist() == ["2026-08-30_153455.jpg", "pix.mp4"]
-        assert zf.read("pix.mp4") == b"a clip"
+        assert zf.namelist() == ["2026-08-30_153455.jpg", "pix_01234567.mp4"]
+        assert zf.read("pix_01234567.mp4") == b"a clip"
 
 
 def test_a_zip_is_flat_and_numbers_what_would_collide(
