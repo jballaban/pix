@@ -33,7 +33,7 @@ so anything that refers to it by path keeps the entry.
 Photo and video downloads carry nothing identifying
 ([metadata-cleanup.md](metadata-cleanup.md)). Still open there (§8): video
 playback (`/media`), keeping HDR gain maps, other formats (PNG, `.insv`,
-HEIC), *Original path* in the details panel, and distributions.
+HEIC), and distributions.
 
 ## Near-duplicate grouping — image perceptual hashing
 

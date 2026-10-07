@@ -201,6 +201,8 @@ home.
 - **Other formats** — PNG, `.insv`, future HEIC (ISO base-media, like MP4,
   with orientation outside EXIF) go out unchanged.
 - **The details panel** shows *Original path* to every signed-in user
-  (`webapp/api.py`), and that path can contain names. Should be admin-only.
+  (`webapp/api.py`), and that path can contain names. **Accepted for now**
+  (2026-10-07): it is seen inside the app, by people the photo is shared
+  with, and does not leave in a download.
 - **Distributions** ([nas-app.md §7](nas-app.md#7-distributions)) were to bake
   events and people *into* household copies — they need their own rule.
