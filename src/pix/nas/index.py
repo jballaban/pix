@@ -916,9 +916,13 @@ def refresh(conn: sqlite3.Connection, folder: str, name: str, *,
     master_root = master_dir if master_dir is not None else MASTER_DIR
 
     of = clips.source_of(name)
-    if of is not None and record is None:
+    # A clip's own record is only the note of its files' hashes, never its
+    # facts — so one handed in is that note. Built into an ordinary row it
+    # made a clip with no kind, size, date or source.
+    if of is not None and (record is None or record.get("clip")):
         source_record = _record(meta_root / folder / f"{of}.json")
-        noted = _record(meta_root / folder / f"{name}.json")
+        noted = (record if record is not None
+                 else _record(meta_root / folder / f"{name}.json"))
         if commit:
             with conn:
                 done = _refresh_clip(conn, folder, name, of,

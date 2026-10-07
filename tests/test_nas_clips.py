@@ -1226,6 +1226,28 @@ def test_the_index_carries_a_clips_hashes(
     assert row["clip_of"] == "b.mp4", "the note became a row of its own"
 
 
+def test_a_bulk_edit_keeps_a_processed_clip_a_clip(
+    client: TestClient, video: Path, app_env: dict[str, Path]
+) -> None:
+    """A bulk edit fetches its targets' meta records up front, and a clip's
+    is the note of its own files. Taken as the clip's facts it made a row
+    with no kind, size or date, and no source — an undated *other* in the
+    grid until the next rebuild."""
+    made = _make(client, (0, 10), (20, 30))
+    for clip in made:
+        (app_env["share"] / "meta" / "init_2026" / f"{clip}.json").write_text(
+            json.dumps({"file": clip, "folder": "init_2026", "clip": True,
+                        "content_hash": "m:cut"}), encoding="utf-8")
+    r = client.post("/api/decide/bulk", json={"add_audience": ["family"],
+        "files": [{"folder": "init_2026", "name": n} for n in made]})
+    assert r.status_code == 200, r.text
+    for clip in made:
+        row = _have(app_env, clip)
+        assert row["clip_of"] == "b.mp4", "the note became the clip's row"
+        assert row["kind"] == "video" and row["effective_date"]
+        assert row["content_hash"] == "m:cut"
+
+
 # --- what Type says about clips and stills ------------------------------------
 
 def _kinds(app_env: dict[str, Path], view: ix.Filters) -> set[str]:
