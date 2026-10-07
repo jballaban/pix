@@ -43,5 +43,8 @@ services:
       start_period: 10s
 
     # The Atom has four cores and the NAS has other jobs; leave it headroom.
+    # A weight, not a cap: Synology's kernel has no CFS quota, so `cpus:` is
+    # refused outright ("NanoCPUs can not be set"). Half the default share
+    # yields to the NAS's own work only when the processor is contended.
     mem_limit: 1g
-    cpus: 2.0
+    cpu_shares: 512
