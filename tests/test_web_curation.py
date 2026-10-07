@@ -346,17 +346,27 @@ def test_a_tagged_file_is_findable_by_that_tag(client: TestClient,
 
 # --- taking a copy away ---------------------------------------------------
 
-def test_a_photograph_downloads_as_itself(
+def test_a_download_is_named_by_its_date_not_its_path(
     client: TestClient, writable: Path
 ) -> None:
-    """There is nothing to convert: the original is the file anything opens,
-    so *original or copy* is not a question about it."""
+    """A seeded master is named for the old library's path — a folder, an
+    event, sometimes a person — so none of it goes out with the copy."""
     r = client.get("/download/init_2026/a.jpg")
 
     assert r.status_code == 200
-    assert r.content == (writable / "a.jpg").read_bytes()
     assert "attachment" in r.headers["content-disposition"]
-    assert "a.jpg" in r.headers["content-disposition"]
+    assert "2026-08-30_153455.jpg" in r.headers["content-disposition"]
+    assert "a.jpg" not in r.headers["content-disposition"]
+
+
+def test_a_file_with_no_date_is_named_for_nothing_about_it(
+    client: TestClient, writable: Path
+) -> None:
+    (writable / "b.mp4").write_bytes(b"clip")
+
+    r = client.get("/download/init_2026/b.mp4")
+
+    assert 'filename="pix.mp4"' in r.headers["content-disposition"]
 
 
 def test_a_clip_downloads_as_the_copy_that_plays(
@@ -464,20 +474,23 @@ def test_a_selection_comes_back_as_one_zip(
     assert r.headers["content-type"] == "application/zip"
     assert ".zip" in r.headers["content-disposition"]
     with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
-        assert zf.namelist() == ["init_2026/a.jpg", "init_2026/b.mp4"]
-        assert zf.read("init_2026/b.mp4") == b"a clip"
+        assert zf.namelist() == ["2026-08-30_153455.jpg", "pix.mp4"]
+        assert zf.read("pix.mp4") == b"a clip"
 
 
-def test_a_zip_holds_the_folder_each_file_came_from(
+def test_a_zip_is_flat_and_numbers_what_would_collide(
     client: TestClient, writable: Path
 ) -> None:
-    """Two master folders can hold the same name, and a flat zip would quietly
-    keep one of them."""
+    """A folder inside the zip would hand out the master folder's name. Flat,
+    two photographs from the same second would be one file — so the second
+    is numbered."""
     r = client.post("/download.zip", data={"files": json.dumps([
+        {"folder": "init_2026", "name": "a.jpg"},
         {"folder": "init_2026", "name": "a.jpg"}])})
 
     with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
-        assert zf.namelist() == ["init_2026/a.jpg"]
+        assert zf.namelist() == ["2026-08-30_153455.jpg",
+                                 "2026-08-30_153455_2.jpg"]
 
 
 def test_a_zip_is_stored_rather_than_deflated(

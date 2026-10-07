@@ -6,15 +6,19 @@ only to somebody the file has been shared with.
 from __future__ import annotations
 
 import json
+import sqlite3
 import time
 import zipfile
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, cast, Iterator, Sequence
 
 from fastapi import Depends, HTTPException, Query, Request, status
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 
-from pix.nas import clips, index as ix, paths, webroots
+from pix import datestr
+from pix.nas import clips, delivery, identity, index as ix, paths, webroots
 from pix.nas.webapp.app import app, db, Principal, require_user
 from pix.nas.webapp.clipping import clip_file
 from pix.nas.webapp.session import read_form
@@ -205,14 +209,92 @@ def to_send(folder: str, name: str, original: bool) -> tuple[Path, str]:
     return media, name
 
 
+@dataclass(frozen=True)
+class Outgoing:
+    """One file on its way out: what is sent, and what it says about itself.
+
+    Everything but the bytes, which a zip of five hundred photographs must not
+    hold at once — `payload` makes them when the file's turn comes.
+    """
+
+    folder: str
+    name: str
+    path: Path
+    called: str
+    taken: datetime | None
+    source_id: str | None
+
+
+def outgoing(folder: str, name: str, original: bool,
+             conn: sqlite3.Connection | None = None) -> Outgoing:
+    """The file to hand over, named by its date (spec/metadata-cleanup.md).
+
+    The date is the *effective* one — a curator's correction applied — since
+    that is the day the copy should be filed under wherever it lands. The
+    source id is the master's content hash, from the index; a file the index
+    has no hash for yet gets its own, from `payload`.
+    """
+    target, called = to_send(folder, name, original)
+    if not target.is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such file")
+    reader = conn if conn is not None else db()
+    try:
+        row = ix.one(reader, folder, name)
+    finally:
+        if conn is None:
+            reader.close()
+    effective = row["effective_date"] if row is not None else None
+    taken = datestr.parse_pix(effective) if effective else None
+    source_id = row["content_hash"] if row is not None else None
+    return Outgoing(folder=folder, name=name, path=target,
+                    called=delivery.name_for(taken, Path(called).suffix,
+                                             source_id),
+                    taken=taken, source_id=source_id)
+
+
+def payload(out: Outgoing) -> bytes | Path:
+    """The bytes to send: a photograph cleaned, anything else as it is.
+
+    Videos and the formats nothing here can clean yet go out unchanged
+    (spec/metadata-cleanup.md §8).
+
+    **The download hash.** A clean copy has the same content hash as its
+    source — unless something after the image's end (an HDR gain map) was
+    dropped. Then the copy's own hash is recorded, once, so it is still
+    recognised if it comes home.
+    """
+    with out.path.open("rb") as fh:
+        head = fh.read(3)
+    if not delivery.is_jpeg(head):
+        return out.path
+    data = out.path.read_bytes()
+    source_hash = identity.jpeg_hash(data)
+    clean = delivery.clean_jpeg(data, taken=out.taken,
+                                source_id=out.source_id or source_hash)
+    sent_hash = identity.jpeg_hash(clean)
+    if sent_hash and sent_hash != source_hash:
+        try:
+            delivery.record(webroots.DELIVERED_FILE, sent_hash,
+                            out.folder, out.name)
+        except OSError:
+            # Costs recognising this one copy if it comes back, which is not
+            # a reason to refuse the download.
+            pass
+    return clean
+
+
 @app.get("/download/{folder}/{name}")
 def download(folder: str, name: str,
              user: Annotated[Principal, Depends(require_user)],
-             original: Annotated[str | None, Query()] = None) -> FileResponse:
+             original: Annotated[str | None, Query()] = None) -> Response:
     """One file, as a download rather than as something to look at.
 
     The same access check as every other byte-serving route: a grid that omits
     a photograph while this hands it over is not access control.
+
+    **Cleaned and named by its date** (spec/metadata-cleanup.md): somebody
+    taking a copy gets the picture, not where it was taken or whose path it
+    lived under.
 
     **Named as what it is, and still an attachment.** `filename=` sets a
     `Content-Disposition: attachment`, which outranks the type in every browser
@@ -221,10 +303,20 @@ def download(folder: str, name: str,
     `_mime`.
     """
     allowed(user, folder, name)
-    target, called = to_send(folder, name, bool(original))
-    if not target.is_file():
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such file")
-    return FileResponse(target, filename=called, media_type=mime(called))
+    out = outgoing(folder, name, bool(original))
+    try:
+        sent = payload(out)
+    except delivery.Uncleanable:
+        # Never sent as it is: a file that cannot be walked is one whose
+        # metadata nobody has checked.
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            "this file could not be prepared for download"
+                            ) from None
+    if isinstance(sent, Path):
+        return FileResponse(sent, filename=out.called,
+                            media_type=mime(out.called))
+    return Response(sent, media_type=mime(out.called), headers={
+        "Content-Disposition": f'attachment; filename="{out.called}"'})
 
 
 @app.post("/download.zip")
@@ -258,15 +350,22 @@ async def download_zip(
             f"{len(wanted):,} files in one download — "
             f"take at most {ZIP_LIMIT:,} at a time")
 
-    picked: list[tuple[str, Path]] = []
-    for item in wanted:
-        folder, name = str(item.get("folder", "")), str(item.get("name", ""))
-        allowed(user, folder, name)
-        target, called = to_send(folder, name, original)
-        if target.is_file():
-            # Foldered inside the zip, because two master folders can hold the
-            # same name and a flat zip would quietly keep one of them.
-            picked.append((f"{folder}/{called}", target))
+    picked: list[tuple[str, Outgoing]] = []
+    # Flat, and numbered where two share a second: a folder inside the zip
+    # would hand out the master folder's name, which is the old library's.
+    used: set[str] = set()
+    conn = db()
+    try:
+        for item in wanted:
+            folder, name = str(item.get("folder", "")), str(item.get("name", ""))
+            allowed(user, folder, name)
+            try:
+                out = outgoing(folder, name, original, conn)
+            except HTTPException:
+                continue
+            picked.append((delivery.unique(out.called, used), out))
+    finally:
+        conn.close()
     if not picked:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "nothing to send")
 
@@ -306,15 +405,29 @@ class Sink:
         return out
 
 
-def zipped(picked: Sequence[tuple[str, Path]]) -> Iterator[bytes]:
-    """The zip, a chunk at a time."""
+def zipped(picked: Sequence[tuple[str, Outgoing]]) -> Iterator[bytes]:
+    """The zip, a chunk at a time, each file cleaned as its turn comes."""
     sink = Sink()
     # `zipfile` wants a file; `_Sink` is one in every way it uses — write,
     # tell, flush — and in none of the ways the type says.
     with zipfile.ZipFile(cast("Any", sink), "w", zipfile.ZIP_STORED) as zf:
-        for arcname, path in picked:
+        for arcname, out in picked:
             try:
-                with zf.open(arcname, "w") as into, path.open("rb") as src:
+                # Before the entry is opened, so a file that cannot be
+                # cleaned leaves no half-written entry behind it.
+                sent = payload(out)
+            except (OSError, delivery.Uncleanable):
+                # One unreadable file does not cost the other four hundred,
+                # and one that cannot be cleaned is left out, not sent as is.
+                continue
+            if isinstance(sent, bytes):
+                zf.writestr(arcname, sent)
+                got = sink.drain()
+                if got:
+                    yield got
+                continue
+            try:
+                with zf.open(arcname, "w") as into, sent.open("rb") as src:
                     while True:
                         chunk = src.read(1 << 20)
                         if not chunk:

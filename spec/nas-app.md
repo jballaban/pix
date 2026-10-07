@@ -1480,9 +1480,14 @@ it is a different encode, so its content hash differs from the master's by
 design. Nothing links it back except what pix chooses to write.
 
 So renders and delivery copies are stamped when they are **made** — by `process`
-and by the bake in [§7](#7-distributions), never at download time. Stamping on
-the way out would mean rewriting metadata per request on the Atom, and would
-stop *download the original* from returning quite the original.
+and by the bake in [§7](#7-distributions).
+
+**Amended 2026-10-07: downloads are cleaned and stamped on the way out**
+([metadata-cleanup.md](metadata-cleanup.md)). A download carries nothing
+identifying — `pix:SourceFile`, a path, included — only `pix:SourceId` and what
+the file needs to display. Rewriting the header per request turned out cheap:
+it copies the coded data under a new header, decoding nothing. *Download the
+original* is no longer the exact bytes; SMB is.
 
 - **`pix:SourceId`** — the content hash of the master it came from. An identity
   rather than a path, so it survives any later reorganisation.

@@ -28,15 +28,14 @@ effective date written into the copy; and because its footage can change when
 its range does, its delivered copy is replaced in place, under the same name,
 so anything that refers to it by path keeps the entry.
 
-## Metadata — downloads and the old pix's tags (parked)
+## Clean downloads — videos
 
-Two linked problems, discussed 2026-10-07 and parked at open questions: what a
-download or video stream hands out (location, names, the old pix's tags — it
-should carry nothing identifying beyond an opaque pix reference), and the old
-pix's custom tags in seeded originals, with more years still to seed. Findings,
-thinking and the questions to answer are in
-[metadata-cleanup.md](metadata-cleanup.md). **Settle it before seeding more
-years**, or the retro cleanup grows with every one.
+Downloads carry nothing identifying ([metadata-cleanup.md](metadata-cleanup.md)).
+Photos are built; **video downloads are designed, not built** — metadata boxes
+relabelled `free` and zeroed at the same length, non-audio/video tracks
+(GoPro telemetry and its GPS trace) hidden and their sample bytes zeroed, a
+download hash recorded when the data changed. Also pending there: playback
+(`/media`), other formats, and *Original path* in the details panel.
 
 ## Near-duplicate grouping — image perceptual hashing
 

@@ -7,12 +7,14 @@ put a second copy of something already in the archive into master. Two checks,
 at the two places a file passes on its way in:
 
 - **At import, by stamp.** Everything pix makes carries `pix:SourceFile` — the
-  master it came from — and a clip `pix:ClipId` besides. A file carrying either
-  is not landed; its record says it returned, so a device never offers it
+  master it came from — and a clip `pix:ClipId` besides; a download carries
+  `pix:SourceId`, the master's content hash, in their place
+  (spec/metadata-cleanup.md). A file carrying any of them is not landed; its record says it returned, so a device never offers it
   again. This is the cheap check, and it is the one a messaging app defeats by
   stripping metadata.
 - **By content hash**, against everything the index holds — every master,
-  every render, every clip's files. What the stamp misses, the hash does not,
+  every render, every clip's files — and every download that hashed
+  differently from its source (`delivery.record`). What the stamp misses, the hash does not,
   for as long as the coded image is untouched; and it catches a copy of an
   original that pix never touched as well, which is §15's duplicate.
 
@@ -27,7 +29,7 @@ and leaves the hash to `upload`, which reads every file anyway to copy it.
 is not in it, so a copy of that is an import like any other; the stamp is
 what does not wait.
 
-**Only these two stamps.** The seeded library carries older `pix:` tags of its
+**Only these stamps.** The seeded library carries older `pix:` tags of its
 own (`EventAuto`, `OriginalPath`, …) because the old pipeline wrote them into
 every file, and those are originals — seeding them is the whole point. Neither
 of these names was ever written by it.
@@ -51,17 +53,27 @@ HEAD: int = 1 << 20
 _VALUE = re.compile(
     rb'pix:SourceFile(?:="|>)([^"<\x00]{1,400})')
 
+#: `pix:SourceId` as a download writes it: the content hash of its master,
+#: which says which file without saying anything about anyone.
+_SOURCE_ID = re.compile(rb'pix:SourceId="([a-z]:[0-9a-f]{1,128})"')
+
+_STAMPS: tuple[bytes, ...] = (b"pix:SourceFile", b"pix:ClipId", b"pix:SourceId")
+
 
 def returned(path: Path) -> str | None:
     """What `path` says pix made it from, if pix made it — `folder/name`
-    where that can be read, `pix` where only the stamp can — else None."""
+    where that can be read, the master's content hash from a download, `pix`
+    where only the stamp can — else None."""
     try:
         with path.open("rb") as fh:
             head = fh.read(HEAD)
     except OSError:
         return None
-    if b"pix:SourceFile" not in head and b"pix:ClipId" not in head:
+    if not any(stamp in head for stamp in _STAMPS):
         return None
+    source_id = _SOURCE_ID.search(head)
+    if source_id:
+        return source_id.group(1).decode("ascii")
     found = _VALUE.search(head)
     if found:
         try:
@@ -84,11 +96,16 @@ def stamp_args(source_file: str, *, clip_id: str | None = None,
     return args
 
 
-def known_hashes(index_db: Path) -> dict[str, str] | None:
+def known_hashes(index_db: Path,
+                 delivered: Path | None = None) -> dict[str, str] | None:
     """Content hash -> `folder/name` for everything the index holds: masters,
-    renders, and clips' own files. None if the index cannot be read — which
-    is not a reason to refuse an import, only to catch less in it."""
+    renders, and clips' own files — plus the downloads recorded in
+    `delivered` (the share's, unless given) that hash differently from what
+    they were cleaned from. None if the index cannot be read — which is not a
+    reason to refuse an import, only to catch less in it."""
     import sqlite3
+
+    from pix.nas import const, delivery
 
     if not index_db.is_file():
         return None
@@ -118,6 +135,11 @@ def known_hashes(index_db: Path) -> dict[str, str] | None:
         for digest in (content, render):
             if digest:
                 known.setdefault(str(digest), f"{folder}/{name}")
+    # Looked up here rather than as a default: the test guard redirects the
+    # module's attribute, not a value already captured in a signature.
+    ledger = delivered if delivered is not None else const.DELIVERED_FILE
+    for digest, where in delivery.recorded(ledger).items():
+        known.setdefault(digest, where)
     return known
 
 

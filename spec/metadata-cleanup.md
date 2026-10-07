@@ -1,209 +1,178 @@
-# Metadata — what leaves, and what the old pix left behind
+# Metadata — clean downloads
 
-**Status: parked, undecided.** Discussed 2026-10-07 and stopped at the open
-questions in [§5](#5-open-questions) on purpose; nothing here is built or
-agreed. Pick up from [§6](#6-to-pick-this-up). Extends
-[nas-app.md](nas-app.md), and would amend its §1 (sacred originals), §14
-(seeding) and §15 (round trips) if adopted.
+**Status: decided 2026-10-07. Photos built; videos designed, not built.**
+Extends [nas-app.md](nas-app.md) and amends its
+[§15 round trips](nas-app.md#round-trips): downloads are now stamped as they
+leave, not when the copy is made.
 
-Two problems surfaced together, and they are related but separable:
-
-- **A. What a download hands out.** Everything leaving the app should carry
-  no identifying metadata — no location, no people, no tags, no access —
-  except an opaque pix reference so a returning copy can still be
-  recognised.
-- **B. What the old pix wrote into the originals.** Seeded files carry the
-  old CLI's custom tags, names and paths. The old library is **not fully
-  seeded yet**, so more of these files are still to come.
+**The rule:** a download is someone deliberately making a copy, so it carries
+nothing identifying — no location, no camera, no people, no tags, none of the
+old pix's paths — only what the file needs to display correctly and an opaque
+pix id so a copy that comes home can be recognised. The archive itself is left
+alone.
 
 ---
 
-## 1. What leaks today (measured 2026-10-07)
+## 1. What leaked (measured 2026-10-07)
 
-A download (`/download`, `/download.zip`) hands over the stored bytes
-unchanged — the master, its render, or a clip's cut. **Video playback
-(`/media`) sends the same whole file** to the browser, so a viewer can save it
-from there too; downloads are not the only way out.
+A download (`/download`, `/download.zip`) handed over the stored bytes
+unchanged — the master, its render, or a clip's cut.
 
 | File | What it carries |
 |---|---|
-| Seeded master JPG | full GPS (position, altitude, heading, speed), make/model/software, Apple `PhotoIdentifier`, embedded thumbnail, face regions, old `pix:` tags (`EventOverride: Banff Skiing - Ballabans`, `OriginalPath: G:\pix\raw\tmp\mtp\james\…`), a `UserComment` with that path |
+| Seeded master JPG | full GPS, make/model/software, Apple `PhotoIdentifier`, embedded thumbnail, face regions, old `pix:` tags (`EventOverride`, `OriginalPath: G:\pix\raw\tmp\mtp\james\…`), a `UserComment` with that path |
 | Seeded master MP4 | GPS, make/model, `pix:ImportId` (phone serial), `pix:OriginalPath` |
-| GoPro master | camera and lens serial numbers, firmware; a GPMF telemetry track (on GoPros this normally carries a GPS track) stored as data samples inside `mdat` |
-| **Render** (the default download) | GPS location, and a comment with the old path, a person's name and a USB device id — `process` copied the source's metadata across |
-| Clip cut | `pix:SourceFile` (folder/name), `pix:ClipId`, `pix:ClipRange`; the GoPro telemetry track is already dropped |
+| GoPro master | camera and lens serials, firmware, a telemetry track with a GPS trace in `mdat` |
+| Render (the default download) | GPS, and a comment with the old path, a person's name and a USB device id — `process` copied the source's metadata across |
+| Clip cut | `pix:SourceFile` (folder/name), `pix:ClipId`, `pix:ClipRange` |
 | Thumb / large / preview | clean |
 
-**Names leak too.** Seeded masters are named for their old path —
+**Names leaked too.** Seeded masters are named for their old path —
 `G_pix_2026_Banff Skiing - Ballabans_2026-03-20_110149.jpg` — and a download
-uses that name. A zip puts each file inside a folder named after its master
-folder.
+used that name; a zip put each file in a folder named after its master folder.
 
-### Embedded legacy tags across master
+## 2. Decided: the originals are left alone
 
-From every meta record (16,195 masters; all in the three `init_*` folders, i.e.
-the 2026 year — about 106 GB of a library of ~62k files / ~2.5 TB):
+The seeded library carries the old pix's own tags (`EventAuto`,
+`EventOverride`, `OriginalPath`, `DateAuto`, `MergeEvent`, `ImportId`,
+`Rating`, `NORMALIZE_*` comments). Rewriting ~16k seeded masters (and every
+year still to seed) to remove them was considered and **declined**: the tags
+are not that sensitive, they are visible only to the administrator (admin
+views, SMB, backups), and once downloads are cleaned nothing carries them out
+of the app. [Rule #1](nas-app.md#1-why-sacred-originals-and-not-self-describing-files)
+stays absolute and seeding is not held up.
 
-| Embedded | Files | What it is |
-|---|---|---|
-| `pix:DateAuto`, `pix:OriginalPath` | 16,005 | old derived date; the pre-seed path |
-| `pix:EventAuto` / `pix:EventOverride` | 12,578 / 5,881 | the event, from the old folder name / set by hand |
-| `pix:MergeEvent` / `pix:MergeDate` | 2,474 / 430 | old dedupe bookkeeping |
-| `pix:ImportId` | 4,613 | phone serial + object id, from the old importer |
-| `pix:Rating` | 906 | old 1–5 rating (592 are 1s, 217 are 2s) |
-| `NORMALIZE_*` comment | 3,077 | an older tool's paths, names, USB ids |
-| GPS / face regions / serial numbers | 8,478 / 4,041 / 190 | the camera's own (the face regions are Apple's — old pix never detected faces) |
+The camera's own data (GPS, make/model, serials, face regions) stays in master
+too — it is the genuine original, and future phone imports carry the same.
 
-No file carries an embedded `pix:DateOverride`.
+Still true, and fine: the index reads a seeded file's event through to its
+embedded tags when no sidecar names one (`index.inherited_event`).
 
-## 2. What depends on the embedded tags
+## 3. What a download keeps
 
-1. **Events.** The index reads a file's event through to its embedded tags
-   when no sidecar names one (`index.inherited_event`) — that is how seeding
-   skipped writing sidecars. **6,236 files have their event only there.**
-   Stripping before moving it into a sidecar would lose them.
-2. **The seeding safety check.** [nas-app.md §14](nas-app.md#14-seeding-the-existing-library)
-   step 1 verifies `raw/` is covered by `OriginalPath` lineage before `raw/`
-   (+3.4 TB) is archived and deleted. It is not known whether that has run.
-3. **The details panel** shows `OriginalPath` and the old event fields
-   (`webapp/api.py`).
-4. **Not** device import: its skip set comes from the ledgers, not
-   `pix:ImportId`.
+Everything else is dropped.
 
-**Anything kept has to go into the master tier** — a sidecar or a ledger —
-never the meta tier alone. Meta is regenerated from master, so a value that
-lives only there is gone the next time `process` runs after a strip.
+- **The date** — the *effective* date (override applied), as
+  `DateTimeOriginal` and `DateTimeDigitized`, so a phone files it under the
+  right day. No time-zone offset (it says roughly where), no sub-seconds.
+- **Orientation**, or iPhone photos turn sideways.
+- **The colour profile** (ICC, and EXIF `ColorSpace`), or colours shift.
+- **Decoding markers** — JFIF (without its thumbnail) and Adobe `APP14`, which
+  says how to read the colour channels.
+- **`pix:SourceId`** — the master's content hash (`j:…` / `m:…`). Opaque
+  outside the library; the index resolves it instantly. Replaces
+  `pix:SourceFile` on everything that leaves, which was a `folder/name` path.
 
-## 3. Thinking so far — A, delivery
+Dropped, for example: GPS, make/model/lens/serials/software, face regions,
+embedded thumbnails, all XMP (old `pix:` tags included), IPTC, comments, MPF
+and anything after the image's end — **the HDR gain map goes with it**, so an
+iPhone HDR photo downloads as standard range.
 
-**The content hash is already the reference id.** It covers the coded image
-only (JPEG tables and scan; the MP4's `mdat` bytes), so stripping metadata
-does not change it, and a stripped download that comes home still matches its
-master or its render. An embedded id is a bonus, not the mechanism: one opaque
-`pix:SourceId` (the master's content hash) would name the source of a render,
-cut or still, whose own hashes differ, and would tell an untouched return from
-an edited one. It would replace `pix:SourceFile`, which is a path. Messaging
-apps strip it anyway.
+## 4. Names
 
-**What has to stay, or the file breaks:** orientation (or iPhone photos turn
-sideways); the ICC profile (or colours shift); a date (or phones file it under
-the day it was downloaded). Video rotation is in the track header, not the
-metadata, and survives. The HDR gain map — extra images after the JPEG's
-end — would be lost; HDR photos would then show as standard range.
+A download is named by its effective date: `2026-03-20_110149.jpg` (the
+extension of what is sent, lower-cased). With no date, `pix_<8 hex of the
+source id>`. A zip is **flat**, clashes numbered `_2`, `_3`, … — master folder
+names never appear.
 
-**The date is the one decision that would go out.** Writing the effective
-date (override applied) into the copy is the only "write on the fly" this
-needs, and it is cheap below.
+## 5. How — rewritten on the fly, no second copy
 
-**Candidate mechanism — redaction maps, applied while streaming:**
+Metadata sits in blocks beside the coded image, not inside it, so cleaning is
+copying the image data under a new header. Nothing is decoded or re-encoded;
+the NAS does it in plain Python with no exiftool. No sanitised copy is stored.
 
-- `process`, which already reads every file, records in the meta record a
-  short list of byte ranges to overwrite, each with replacement bytes **of
-  the same length**: MP4 metadata boxes renamed `free` and zeroed; JPEG EXIF
-  rewritten to a minimal one (orientation, date) padded to its old length;
-  XMP blanked; data after the JPEG's end zeroed; the date fields' positions
-  noted for filling in.
-- The app applies the list as it streams. The output is the **same length**,
-  so Range requests, video seeking, zips and `/media` all keep working, and
-  the NAS does no parsing, decoding or encoding.
-- Renders, cuts and stills are made clean to begin with, carrying only the
-  date and `pix:SourceId`.
+The administrator's *original* (master rather than render) is cleaned the same
+way. The exact bytes are reachable over SMB.
 
-Rejected: a sanitised copy of every file (doubles storage); `exiftool` or
-`ffmpeg` per request on the NAS (a temporary copy of every multi-GB video,
-and the image has no exiftool).
+### Photos (JPEG) — built (`pix.nas.delivery.clean_jpeg`)
 
-Consequences noted:
-- a file with no map yet cannot be served to a viewer;
-- one `process` pass gives every existing master and render a map;
-- zeroing GoPro telemetry samples changes `mdat`, so its hash no longer
-  matches — `process` would record a *delivered hash* beside `render_hash`;
-- HEIC/MOV from future phone imports are ISO base-media too, and HEIC keeps
-  orientation outside EXIF;
-- [§7 distributions](nas-app.md#7-distributions) were to bake events and
-  people *into* copies for household devices — that needs its own rule.
+The segments are walked from the start:
 
-## 4. Thinking so far — B, the originals
+- a new minimal `APP1` Exif — orientation, `ColorSpace`, the date;
+- a new `APP1` XMP holding only `pix:SourceId`;
+- `APP0` JFIF (thumbnail cut), `APP2` ICC chunks, `APP14` Adobe — kept;
+- every other `APPn` and `COM` — dropped;
+- tables, frame header, every scan (progressive files have several) — copied
+  verbatim, in order, up to the first end-of-image; anything after it dropped.
 
-[Rule #1](nas-app.md#1-why-sacred-originals-and-not-self-describing-files)
-says master bytes are never modified. The counter-argument: seeded files are
-not device originals — the old pix already converted them and wrote these
-tags — so removing pix's own writes reverts pix, not the camera. The
-metadata-blind content hash can prove, per file, that the image is untouched.
+A file that starts like a JPEG but cannot be walked is **refused**, never sent
+as-is: an unparseable file is exactly the one whose metadata nobody checked.
+Other formats (PNG, `.insv`, future HEIC) go out unchanged for now — see §8.
 
-Sorting what is there:
+The whole file is read into memory (a few MB) and the result is sent with a
+known length.
 
-- **Decisions → sidecar:** the event (override, else auto). Ratings: a tag,
-  or dropped — the current model has no rating.
-- **Provenance → ledger, admin-only:** `OriginalPath`, if kept beyond the
-  lineage check.
-- **Drop:** `DateAuto`, `MergeEvent`, `MergeDate`, `ImportId`, `NORMALIZE_*`,
-  `XMPToolkit`.
-- **Camera data** (GPS, make/model, serials, face regions): the genuine
-  original — useful for maps and faces later — and A keeps it from leaving.
-  Leaning keep.
+### Videos (MP4/MOV) — designed, not built
 
-Options:
+A video's metadata lives in boxes inside `moov`; removing them would shift the
+chunk offsets the file uses to find its data. Instead, in place and **at the
+same length**:
 
-- **Leave master alone.** Move decisions to sidecars, stop reading embedded
-  tags, rely on A for everything outbound. No risk, rule #1 absolute; but
-  names and paths stay in the archive — visible in admin *original*
-  downloads, backups, and over SMB.
-- **Strip on the way in, for the years still to seed.** `upload` already
-  streams each staged file to a temp path on the NAS, hashes, verifies and
-  renames it. For a legacy file, ExifTool would write the cleaned copy to that
-  temp path in the same single pass. Never edit staging: folder import
-  hardlinks from `G:\pix`, so an edit there would land in the old library.
-  - verification adds *content hash of the clean copy = content hash of the
-    source*; the blake3 check still covers what was written;
-  - the sidecar (event, rating?) is written in the same step;
-  - the ledger line keeps the **source** size — it is the folder-import skip
-    key (`ledger.committed_folder_keys`), so recording the cleaned size would
-    re-import the year as duplicates — and gains `original_path`.
-- **A one-off rewrite of the 16k already seeded**, the same cleaner,
-  hash-verified per file (temp, verify, swap). About 106 GB. Btrfs snapshots
-  keep the old copies until they age out; Hyper Backup treats every file as
-  changed; size and mtime change, so meta goes stale — confirm `process` then
-  re-probes and does not regenerate every thumbnail.
+- every metadata box (`udta`, `meta`, `uuid` XMP, …) is relabelled `free` and
+  zeroed; `pix:SourceId` is written into that freed space;
+- **only video and audio tracks are kept.** Every other track — GoPro
+  telemetry (GPMF, with its GPS trace), timecode, camera-data tracks, iPhone
+  timed metadata — has its `trak` relabelled `free`, **and the bytes of its
+  samples zeroed**: the track's sample tables (`stco`/`co64`, `stsz`, `stsc`)
+  give each sample's exact position, so those ranges are overwritten as the
+  file streams past. Hiding the track alone would leave the GPS readable to
+  anyone who digs.
+- the date stays in `mvhd`/`tkhd`, rotation in the track matrix.
 
-Leaning: one shared *legacy cleaner* → seed the rest through it → run it over
-the 16k → drop the index's read-through → amend rule #1 to exactly *pix's own
-legacy tags are removed from seeded files, once, on the way in, with the
-content hash proving the image is unchanged*. Doing this **before seeding any
-more years** keeps the problem from growing.
+Same length means `Range` requests and seeking still work, and nothing but the
+header is parsed. Verified with `exiftool -ee` (embedded telemetry) and a play
+test against real GoPro masters.
 
-Master **filenames** are a separate question. Renaming is allowed by rule #1,
-but names key sidecars, renders, clips, history and the index; naming
-downloads by date fixes the leak far more cheaply.
+## 6. Recognising a copy that comes home
 
-## 5. Open questions
+**The content hash already does most of it.** It covers the coded data only
+([nas-app.md §15](nas-app.md#15-identity--when-two-files-are-the-same-photograph)),
+so:
 
-1. Has the §14 step 1 `raw/` lineage check run? If not, `OriginalPath` must
-   survive until it has.
-2. `OriginalPath` afterwards: keep it in the ledger as hidden provenance, or
-   drop it?
-3. The 906 old ratings: a tag such as `rating:2`, or drop them?
-4. Camera data in master (GPS, serials, Apple's face regions): keep it and
-   redact on the way out, or strip it from the archive too?
-5. Originals: leave master alone, or strip on the way in plus a one-off
-   rewrite of the 16k? Amend rule #1?
-6. Downloads by an administrator: should *original* still be the exact bytes,
-   as a backup path, with everyone else given the redacted copy?
-7. Write the effective date into downloads? Drop the time-zone offset, which
-   says roughly where a photo was taken?
-8. Name downloads by effective date (`2026-03-20_110149.jpg`) and flatten zip
-   folders?
-9. GoPro telemetry: zero it in downloads, at the cost of a delivered-hash
-   column?
-10. Distributions: same rule as downloads, or do household copies keep events
-    and people baked in?
+- a cleaned **photo** has the same content hash as what it was cleaned from —
+  unless trailing data (a gain map) was dropped;
+- a cleaned **video** whose data was untouched has the same hash too.
 
-## 6. To pick this up
+**The download hash** covers the rest: when what is sent hashes differently
+from its source — a photo with a dropped gain map, a video with zeroed
+telemetry — that hash is recorded, on the first download, in an append-only
+`app/delivered.jsonl` on the share (`{"hash", "folder", "name"}`), once per
+hash. It is computed from bytes already in hand (photos) or as the data
+streams past (videos), so it costs nothing extra. The output is deterministic,
+so one record per file is enough. It lives beside `users.json` rather than in
+the index, which a rebuild drops.
 
-- [ ] Answer §5 — at least 1, 4, 5 and 6, which decide the shape.
-- [ ] Check the numbers are still current (the survey reads every meta record;
-      more years may have been seeded since).
-- [ ] Write the decision into nas-app.md §1, §14 and §15, and turn this file
-      into a design.
-- [ ] Hold further seeding until the cleaner exists, or accept a larger
-      retro rewrite.
+`roundtrip.known_hashes` reads it alongside the index's masters, renders and
+clips, and `roundtrip.returned` recognises `pix:SourceId` as well as the old
+`pix:SourceFile` / `pix:ClipId`, so copies handed out before this still come
+home.
+
+## 7. Considered and rejected
+
+- **Stripping the originals** (on the way in for unseeded years, plus a
+  one-off rewrite of the ~16k seeded) — §2.
+- **A sanitised copy of every file** — doubles storage.
+- **`exiftool` / `ffmpeg` per request on the NAS** — a temporary copy of
+  every multi-GB video, and the image has no exiftool.
+- **Precomputed redaction maps** (byte ranges recorded by `process`, applied
+  while streaming) — it existed to make video *playback* clean too; for
+  downloads the header can simply be read at request time.
+
+## 8. Not covered yet
+
+- **Video downloads** — §5, next.
+- **Video playback** (`/media`) sends the whole file, so a viewer can save it
+  from the browser. Treated as not a deliberate copy for now; the same
+  same-length video cleaning could be applied there later.
+- **HDR is lost for about a quarter of photos.** A sample of 160 real masters
+  (2026-10-07): 84 carry a second image after the primary — 42 an Apple HDR
+  gain map, 40 a large preview, 2 something else. All are dropped, so those
+  downloads hash differently and get a download hash. Keeping the gain map
+  would mean cleaning its own segments and rewriting the MPF index's offsets,
+  which move when the primary's header shrinks.
+- **Other formats** — PNG, `.insv`, future HEIC (ISO base-media, like MP4,
+  with orientation outside EXIF) go out unchanged.
+- **The details panel** shows *Original path* to every signed-in user
+  (`webapp/api.py`), and that path can contain names. Should be admin-only.
+- **Distributions** ([nas-app.md §7](nas-app.md#7-distributions)) were to bake
+  events and people *into* household copies — they need their own rule.

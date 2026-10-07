@@ -96,6 +96,12 @@ ACCOUNTS_FILE: Path = MASTER_SHARE / "app" / "users.json"
 OPERATIONS_FILE: Path = MASTER_SHARE / "app" / "operations.jsonl"
 #: The web app's own logs — activity and errors, rotating (`webapp.logs`).
 LOG_DIR: Path = MASTER_SHARE / "app" / "logs"
+#: The content hash of each download that hashes differently from the file it
+#: was cleaned from — a photo whose gain map was dropped, a video whose
+#: telemetry was zeroed — so a copy that comes home is still recognised.
+#: Append-only. Beside the accounts rather than in the index, which a rebuild
+#: drops; every line can be made again by downloading the file again.
+DELIVERED_FILE: Path = MASTER_SHARE / "app" / "delivered.jsonl"
 
 #: Per-folder download ledger, written during upload. Its first line is a
 #: header describing the source, which is what makes the known-device registry

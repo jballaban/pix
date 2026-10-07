@@ -118,7 +118,12 @@ def _jpeg(fh: BinaryIO) -> str | None:
     decoder needs and nothing a tagger touches.
     """
     fh.seek(0)
-    data = fh.read()
+    return jpeg_hash(fh.read())
+
+
+def jpeg_hash(data: bytes) -> str | None:
+    """`content_hash` of a JPEG already in memory — what a download compares
+    the copy it is about to send with the file it was cleaned from."""
     if not data.startswith(b"\xff\xd8"):
         return None
 

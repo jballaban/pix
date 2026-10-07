@@ -701,7 +701,8 @@ def test_a_clip_is_cut_from_a_keyframe_and_a_viewer_can_then_see_it(
     assert kid.get(f"/media/init_2026/{clip}").content == made.read_bytes()
     r = kid.get(f"/download/init_2026/{clip}?original=1")
     assert r.content == made.read_bytes()
-    assert clip + ".mp4" in r.headers["content-disposition"]
+    # Named by its date, never by the master's (spec/metadata-cleanup.md §4).
+    assert "2026-08-30_150001.mp4" in r.headers["content-disposition"]
 
 
 def test_a_cut_says_what_it_is(real: Path, client: TestClient) -> None:
@@ -1109,7 +1110,8 @@ def _process_clip(clip: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
 
 def test_a_still_becomes_a_photograph_a_viewer_can_have(
     client: TestClient, real: Path, monkeypatch: pytest.MonkeyPatch,
-    add_user: Callable[..., None], sign_in: Callable[[str, str], TestClient]
+    add_user: Callable[..., None], sign_in: Callable[[str, str], TestClient],
+    tmp_path: Path
 ) -> None:
     import subprocess
 
@@ -1130,8 +1132,22 @@ def test_a_still_becomes_a_photograph_a_viewer_can_have(
 
     assert still in kid.get("/browse").text
     r = kid.get(f"/download/init_2026/{still}?original=1")
-    assert r.content == shot.read_bytes()
-    assert still + ".jpg" in r.headers["content-disposition"]
+    # The same picture, cleaned: its date kept, the path it was made from not
+    # (spec/metadata-cleanup.md).
+    from pix.nas import identity
+
+    got = tmp_path / "got.jpg"
+    got.write_bytes(r.content)
+    assert identity.content_hash(got) == identity.content_hash(shot)
+    tags = json.loads(subprocess.run(
+        ["exiftool", "-j", "-G1", "-DateTimeOriginal", "-XMP:all", str(got)],
+        capture_output=True, text=True).stdout)[0]
+    assert tags["ExifIFD:DateTimeOriginal"] == "2026:08:30 15:00:01", tags
+    # `SourceFile` bare is exiftool naming the file it read; grouped, it
+    # would be the stamp that says which folder this came from.
+    assert not any(k.endswith(":SourceFile") for k in tags), tags
+    assert str(tags.get("XMP-pix:SourceId", "")).startswith("j:"), tags
+    assert "2026-08-30_150001.jpg" in r.headers["content-disposition"]
 
 
 @pytest.fixture
