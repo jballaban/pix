@@ -31,9 +31,13 @@ COPY --from=ffmpeg /ffmpeg /ffprobe /usr/local/bin/
 
 # uvicorn's standard extra pulls uvloop/httptools, which matter more here than
 # usual: the Atom has little headroom, and the app is I/O-bound on SMB reads.
+# `blake3` because a download is cleaned on the way out and hashed to see
+# whether its coded data changed (spec/metadata-cleanup.md). It picks its SIMD
+# path at run time, so the Atom's lack of AVX costs speed, not a crash.
 RUN pip install --no-cache-dir \
         "fastapi>=0.115" \
         "uvicorn[standard]>=0.30" \
+        "blake3>=0.4" \
     && rm -rf /root/.cache
 
 # The baked application source.
