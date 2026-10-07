@@ -13,13 +13,24 @@ image work.
 
 ---
 
+## Where things live
+
+| | NAS | From the desktop |
+|---|---|---|
+| The app: compose file, image tars, the `src/` it runs | `/volume1/apps/pix` | `\\nas\apps\pix` |
+| The archive, and the app's own state in `app/` (accounts, undo log, logs, download hashes) | `/volume1/pix2` | `\\nas\pix2` |
+
+The app folder is code and images, which can always be made again from the
+repo. Everything that cannot — the photographs, the decisions, the logins —
+is on the archive share, which is the one that has to be backed up.
+
 ## 1. Build the image, on the desktop
 
 Docker Desktop running, from the repo root:
 
 ```
-docker build -f deploy/Dockerfile -t pix2-app:latest .
-docker save pix2-app:latest -o pix2-app.tar
+docker build -f deploy/Dockerfile -t pix:latest .
+docker save pix:latest -o \\nas\apps\pix\pix-<version>.tar
 ```
 
 ~170 MB, most of it the static `ffmpeg` and `ffprobe` that cut clips
@@ -29,37 +40,35 @@ Python dependencies or those two binaries change —
 
 ## 2. Import it
 
-Copy `pix2-app.tar` to the NAS, then Container Manager → **Image** → **Add** →
-**Add From File** → pick the tar. It appears as `pix2-app:latest`.
+Container Manager → **Image** → **Add** → **Add From File** → pick the tar in
+`/apps/pix`. It appears as `pix:latest`, replacing the one before.
 
-## 3. Create the container
+## 3. Create the project
 
-Container Manager → **Container** → **Create** → `pix2-app:latest`.
+The first time only. Put the files it needs in place, from the repo root:
 
-- **General**: enable *Auto-restart*
-- **Port settings**: local `8000` → container `8000`
-- **Volume settings** — add **two** folder mounts:
+```powershell
+copy deploy\docker-compose.yml \\nas\apps\pix\
+robocopy src \\nas\apps\pix\src /MIR /XD __pycache__
+```
 
-  | Mount path | Container path | Access |
-  |---|---|---|
-  | `/pix2` | `/volume1/pix2` | **Read/Write** |
-  | `/pix2/app/src` | `/app/src` | Read-only |
+Then Container Manager → **Project** → **Create**: name `pix`, path
+`/volume1/apps/pix`, and *Use the existing docker-compose.yml*. It creates the
+`pix` container — port `8000`, the archive mounted read/write, `src/` mounted
+read-only over the baked copy, auto-restart — and starts it. The app is on
+`http://<nas>:8000`.
 
-  Read/write on the archive because curation will write `.xmp` decisions into
-  master. It is the only writer there besides `upload`.
-
-  The second mount is what makes every later deployment a file copy rather than
-  a rebuild — see [Shipping a change](#shipping-a-change). Nothing breaks
-  without it; you simply pay an image rebuild for every code change, which is
-  how the NAS fell a long way behind the desktop once already.
-
-- **Environment**: nothing required. Accounts are managed in the app.
-
-Start it. The app is on `http://<nas>:8000`.
+Read/write on the archive because curation writes `.xmp` decisions into master;
+it is the only writer there besides `upload`.
 
 If it will not start, the log says why in plain words — Container Manager →
-`pix2` → **Log**. The two things it checks are the archive mount and, if you
-mounted source, whether it is the right directory.
+**Container** → `pix` → **Log**. The two things it checks are the archive
+mount and whether the mounted source is the right directory.
+
+**A new image** (after §1-2): **Project** → `pix` → **Action** → **Build**,
+which re-creates the container on `pix:latest`. Nothing is lost by that — the
+index, accounts, operations log and archive all live on the share, not in the
+container.
 
 ## 4. Build the index, from the desktop
 
@@ -129,14 +138,14 @@ Build an image only when a change is ready to live on the NAS.
 ## Shipping a change
 
 With the source mount in place it is a copy and a restart, measured at 1.4s
-from restart to serving the new code:
+from restart to serving the new code. From the repo root:
 
 ```powershell
-robocopy F:\code\pix\src \\nas\pix2\app\src /MIR /XD __pycache__
-Select-String '\\nas\pix2\app\src\pix\__init__.py' -Pattern '__version__'
+robocopy src \\nas\apps\pix\src /MIR /XD __pycache__
+Select-String '\\nas\apps\pix\src\pix\__init__.py' -Pattern '__version__'
 ```
 
-then **Restart** in Container Manager. `PYTHONPATH` puts `/app/src` ahead of the
+then **Restart** the `pix` container. `PYTHONPATH` puts `/app/src` ahead of the
 baked copy, so the mount wins whenever it is present.
 
 `/MIR` rather than a plain copy, because it mirrors: a module you rename or
@@ -146,12 +155,12 @@ nothing is indistinguishable from a deploy that did not take, and the version
 in the footer is the only thing that tells them apart. Check it before you
 restart, not after you are confused.
 
-**Rebuild the image only when the Python dependencies change** — when `fastapi`
-or `uvicorn` themselves move, or the static `ffmpeg` it carries. Then it is build, save, import, and *recreate* the
-container: Container Manager can edit a container's ports and volumes but not
-its image, so pointing it at a new one means deleting it and creating it again.
-That costs nothing, since the index, `users.json`, the operations log and the
-archive all live on the share rather than in the container.
+**Rebuild the image only when its dependencies change** — the Python packages
+the Dockerfile installs (`fastapi`, `uvicorn`, `blake3`) or the static
+`ffmpeg` it carries. **A change that imports something new is one of those**:
+mirroring source that needs a package the running image lacks takes the app
+down at its next restart. Then it is §1-2 and the project's **Build**, and the
+source mirror after the new image is running.
 
 ## Accounts
 

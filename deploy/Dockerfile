@@ -22,7 +22,7 @@
 # libraries Debian's package would bring.
 #
 # Build from the repo root, so `src/` is in context:
-#     docker build -f deploy/Dockerfile -t pix2-app:latest .
+#     docker build -f deploy/Dockerfile -t pix:latest .
 FROM mwader/static-ffmpeg:7.1 AS ffmpeg
 
 FROM python:3.12-slim
