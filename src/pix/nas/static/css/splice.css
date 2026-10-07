@@ -67,6 +67,9 @@
 .sctl .btn { display:inline-flex; align-items:center; padding:0 12px;
              border:1px solid var(--line); border-radius:6px;
              color:var(--fg); text-decoration:none; }
+/* Its `display` outweighs the `hidden` attribute's, which offered Open on a
+   clip not saved yet — a link to a file that does not exist. */
+.sctl .btn[hidden] { display:none; }
 .sctl button.primary { background:var(--accent); color:#0d0f12;
                        border-color:var(--accent); font-weight:600; }
 .sctl button.danger { color:var(--gone); }
@@ -126,3 +129,18 @@
 .sctl select.rate { min-height:40px; padding:0 8px; background:var(--panel);
                     color:var(--fg); border:1px solid var(--line);
                     border-radius:6px; font:inherit; }
+/* The clips, one row each, in the order they play. A row is a toolbar of its
+   own: what the clip is, where it stands, and what can be done to it alone. */
+.cliplist { display:flex; flex-direction:column; gap:6px; margin:8px 0; }
+.cliplist[hidden] { display:none; }
+.cliplist .crow { margin:0; padding:4px 8px; border:1px solid var(--line);
+                  border-radius:6px; cursor:pointer; }
+.crow .cwhat { font-variant-numeric:tabular-nums; }
+.crow .cstate { color:var(--dim); font-size:12px; }
+.crow .spacer { flex:1; }
+.crow.on { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
+.crow.draft { border-color:var(--top); }
+.crow.draft .cstate { color:var(--top); }
+.crow.gone { cursor:default; }
+.crow.gone .cwhat { text-decoration:line-through; color:var(--dim); }
+.crow button:disabled { opacity:.45; cursor:not-allowed; }

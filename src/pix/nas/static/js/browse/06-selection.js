@@ -118,6 +118,7 @@ function drawSel(){
   actions.dataset.state = !picked.size ? 'none'
     : picked.size===cells.length ? 'all' : 'some';
   if(selcount) selcount.textContent = `${picked.size} selected`;
+  fitActions();
 }
 // The index is looked up **at click time**, never captured when the handler is
 // bound. Cells leave the grid when an edit pushes them out of the filters, and
@@ -213,3 +214,87 @@ if(selall) selall.onclick=e=>{
   else go();
 };
 
+// **One line of actions, and a `+` for what does not fit.** Which actions are
+// on the bar is the selection's business (`drawSel`): only the ones that
+// apply to these files. This is only about room — once that is decided, the
+// ones that do not fit on the line fold away from the end, behind a `+`, the
+// same gesture as the filters'. The bar sits over the grid, so a second line
+// would push every thumbnail down the moment you tick one.
+//
+// No chevron, unlike the filters: an action has no value to read, so the
+// list behind the `+` is everything there is to see.
+const spillBtn=actions&&(()=>{
+  const b=document.createElement('button');
+  b.className='addchip spillbtn';
+  b.textContent='+';
+  b.title='More actions';
+  b.setAttribute('aria-label',b.title);
+  b.hidden=true;
+  b.onclick=e=>{e.stopPropagation(); spillMenu();};
+  actions.appendChild(b);
+  return b;
+})();
+function onBar(b){ return !b.hidden&&!b.classList.contains('spill')
+                          &&!(b.closest('.grp')||{}).hidden; }
+// Whether a row is one line and runs no further than its own width — the
+// action groups do not wrap inside themselves, so too many of them overflow
+// the row rather than starting a line of their own.
+function rowFits(el){
+  return oneLine(el)&&(el.scrollWidth||0)<=(el.clientWidth||0)+1;
+}
+// A rule between two clusters, with nothing on the bar after it, is a rule
+// beside nothing.
+function tidySeps(){
+  actions.querySelectorAll('.sep').forEach(sep=>{
+    let n=sep.nextElementSibling, after=false;
+    for(;n;n=n.nextElementSibling) if(n.dataset&&n.dataset.act&&onBar(n)) after=true;
+    sep.classList.toggle('spill',!after);
+  });
+}
+function fitActions(){
+  if(!actions||!spillBtn) return;
+  actions.querySelectorAll('.spill').forEach(b=>b.classList.remove('spill'));
+  spillBtn.hidden=true;
+  tidySeps();
+  if(rowFits(actions)) return;
+  const shown=[...actions.querySelectorAll('[data-act]')].filter(onBar);
+  spillBtn.hidden=!shown.length;
+  for(let i=shown.length-1;i>=0;i--){
+    shown[i].classList.add('spill');
+    tidySeps();
+    if(rowFits(actions)) return;
+  }
+}
+// The folded-away actions, drawing beside name — the same list the bar would
+// have shown, in the same order.
+function spillMenu(){
+  const key='spill';
+  if(menuCtx&&menuCtx.key===key&&!menu.hidden){closeMenu();return;}
+  menu.classList.remove('over');
+  menu.innerHTML='<div id="menulist"></div>';
+  const list=menu.querySelector('#menulist');
+  for(const b of actions.querySelectorAll('[data-act].spill')){
+    if(b.hidden||(b.closest('.grp')||{}).hidden) continue;
+    const svg=b.querySelector('svg');
+    const word=b.querySelector('.word');
+    const d=document.createElement('div');
+    d.className='opt'+(b.classList.contains('danger')?' danger':'');
+    d.innerHTML=`<i class="mark">${svg?svg.outerHTML:''}</i>`
+               +`<span>${esc(word?word.textContent.replace('…','').trim():b.title)}</span>`;
+    d.onclick=e=>{e.stopPropagation(); closeMenu(); barAct(b.dataset.act,spillBtn);};
+    list.appendChild(d);
+  }
+  placeMenu(spillBtn);
+  menuCtx={key};
+}
+if(actions&&typeof ResizeObserver!=='undefined'){
+  let wide=-1;
+  new ResizeObserver(es=>{
+    const w=Math.round(es[0].contentRect.width);
+    if(w!==wide){ wide=w; requestAnimationFrame(fitActions); }
+  }).observe(actions);
+}
+// A measurement taken before the typeface arrived is a measurement of a
+// different bar: the words come in wider or narrower than the fallback's.
+if(document.fonts&&document.fonts.ready)
+  document.fonts.ready.then(()=>{ fitChips(); fitActions(); });

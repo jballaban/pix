@@ -1842,3 +1842,22 @@ def test_picks_and_only() -> None:
     assert ix.picks(("a", "b")) == ("a", "b")
     assert ix.only("a") == "a" and ix.only(("a", "b")) is None
     assert ix.only(None) is None
+
+
+def test_the_clip_counts_are_lookups_not_scans(tmp_path: Path) -> None:
+    """Each row on a page counts the clips cut from it, three ways. Without
+    planner statistics SQLite read `deleted = 0` as selective and answered
+    every count by walking every living file through `files_del` — 2.2s of a
+    2.3s page on the real index, ~6s on the NAS. They must use `files_clip`."""
+    conn = ix.connect(tmp_path / "index.db")
+    stmts: list[str] = []
+    conn.set_trace_callback(stmts.append)
+    ix.files(conn, ix.Filters(event="x"), groups=("day",))
+    ix.files(conn, ix.Filters(viewer=frozenset({"ana"})))
+    conn.set_trace_callback(None)
+    for sql in stmts:
+        plan = [str(r[3]) for r in conn.execute("EXPLAIN QUERY PLAN " + sql)]
+        clip_lookups = [p for p in plan if p.startswith("SEARCH c ")]
+        assert clip_lookups, plan
+        for p in clip_lookups:
+            assert "files_clip" in p, plan

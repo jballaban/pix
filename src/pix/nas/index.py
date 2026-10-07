@@ -769,6 +769,11 @@ def _publish(built: Path, db_path: Path) -> None:
             live.execute(f"INSERT INTO main.{table} SELECT * FROM built.{table}")
         live.commit()
         live.execute("DETACH DATABASE built")
+        # Statistics for the query planner, from the rows just published. A
+        # few tens of milliseconds; without them SQLite guesses every index is
+        # selective, and `deleted = 0` — true of nearly every row — looks
+        # like the best way into the table.
+        live.execute("ANALYZE")
     finally:
         live.close()
 
@@ -794,6 +799,13 @@ def update(db_path: Path, wanted: Sequence[tuple[str, str]], *,
 
     conn = open_rw(db_path)
     try:
+        # An index published before `_publish` took statistics has none, and
+        # the steady state is this path rather than a rebuild — so the first
+        # update takes them. Once; a handful of rows does not move them.
+        if conn.execute("SELECT 1 FROM sqlite_master "
+                        "WHERE name = 'sqlite_stat1'").fetchone() is None:
+            conn.execute("ANALYZE")
+            conn.commit()
         with ThreadPoolExecutor(max_workers=READERS) as pool:
             todo = sorted(set(wanted) | set(_unindexed(conn, pool, meta_root)))
             if tick is not None:
@@ -1724,7 +1736,7 @@ def _source_seen(filters: Filters) -> tuple[str, dict[str, Any]]:
     holes = ",".join(f":{k}" for k in names)
     return ("EXISTS (SELECT 1 FROM files s "
             "WHERE s.folder = files.folder AND s.name = files.clip_of "
-            "AND s.deleted = 0 "
+            "AND +s.deleted = 0 "
             "AND NOT EXISTS (SELECT 1 FROM file_audience sh "
             "  WHERE sh.folder = s.folder AND sh.name = s.name "
             f"  AND sh.who = '{decisions.ARCHIVED}') "
@@ -1901,8 +1913,13 @@ def _cuts_cols(view: Filters) -> tuple[str, dict[str, Any]]:
         seen = ("AND c.size IS NOT NULL AND EXISTS (SELECT 1 FROM "
                 "file_audience cva WHERE cva.folder = c.folder "
                 f"AND cva.name = c.name AND cva.who IN ({holes})) ")
+    # `+c.deleted`: the unary plus keeps SQLite off `files_del`. Without
+    # statistics it reads `deleted = 0` as selective and picks that index over
+    # `files_clip` — scanning every living file in the library for each row
+    # on the page, three times a row: 2.2s of a 2.3s page, measured on the
+    # real index. The same in `_CLIPS_COL` and `_source_seen`.
     base = ("(SELECT COUNT(*) FROM files c WHERE c.folder = files.folder "
-            "AND c.clip_of = files.name AND c.deleted = 0 "
+            "AND c.clip_of = files.name AND +c.deleted = 0 "
             "AND NOT EXISTS (SELECT 1 FROM file_audience cx "
             "WHERE cx.folder = c.folder AND cx.name = c.name "
             f"AND cx.who = '{decisions.ARCHIVED}') " + seen)
@@ -1912,7 +1929,7 @@ def _cuts_cols(view: Filters) -> tuple[str, dict[str, Any]]:
 
 _CLIPS_COL: str = (
     "(SELECT COUNT(*) FROM files c WHERE c.folder = files.folder "
-    " AND c.clip_of = files.name AND c.deleted = 0) AS clips")
+    " AND c.clip_of = files.name AND +c.deleted = 0) AS clips")
 
 _AHEAD_COL: str = (
     "(SELECT COUNT(*) FROM files g "

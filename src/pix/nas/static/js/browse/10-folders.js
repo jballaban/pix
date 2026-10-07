@@ -167,6 +167,7 @@ function drawFolderSel(){
   for(const g of actions.querySelectorAll('.grp')) g.hidden=!n;
   actions.dataset.state = !n ? 'none' : n===tiles.length ? 'all' : 'some';
   if(selcount) selcount.textContent = `${n} selected`;
+  fitActions();
 }
 
 // A chip on a card opens the folder narrowed to itself: the card's own link

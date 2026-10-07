@@ -26,3 +26,4 @@ PREVIEW_DIR: Path = const.PREVIEW_DIR
 LARGE_DIR: Path = const.LARGE_DIR
 RENDER_DIR: Path = const.RENDER_DIR
 STRIP_DIR: Path = const.STRIP_DIR
+LOG_DIR: Path = const.LOG_DIR

@@ -37,6 +37,7 @@ from pix.nas import (
 )
 from pix.nas.assets import asset
 from pix.nas.decisions import Decision
+from pix.nas.webapp import logs
 from pix.nas.webapp.app import app, db, Principal, require_admin, write_lock
 from pix.nas.webapp.marks import mark
 from pix.nas.webapp.shell import page
@@ -46,7 +47,8 @@ from pix.nas.webapp.writes import Change, decide, did, master_file, recorded
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
-    """Pick up cuts a restart interrupted, then serve."""
+    """Open the logs, pick up cuts a restart interrupted, then serve."""
+    logs.install()
     threading.Thread(target=resume_cuts, name="pix-resume-cuts",
                      daemon=True).start()
     yield
