@@ -943,6 +943,12 @@ h2.year span { font-size:13px; font-weight:400; }
 .memenu .sizerow { display:flex; align-items:center;
                    justify-content:space-between; gap:12px; padding:5px 10px; }
 .memenu .rowlab { color:var(--dim); }
+/* The Administrator switch: a row like the size control's, whose password
+   field drops onto a line of its own once *On* is pressed. */
+.memenu .adminrow { flex-wrap:wrap; }
+.memenu .adminrow .rowlab { color:var(--fg); }
+.memenu .adminpw { flex:1 0 100%; min-width:0; }
+.memenu .adminbad { flex:1 0 100%; color:var(--gone); font-size:12px; }
 /* A heading over the facts, so six rows read as a size and then a list. */
 .memenu .rowhead { display:block; padding:9px 10px 2px; color:var(--dim);
                    font-size:11px; font-weight:700; letter-spacing:.06em;

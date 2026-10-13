@@ -7,7 +7,7 @@ import json
 import re
 import urllib.parse
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, cast
 
@@ -16,6 +16,25 @@ from fastapi.testclient import TestClient
 from pix.nas import decisions
 from pix.nas import index as ix
 from pix.nas.webapp import shell as w_shell
+
+
+#: The administrator the tests act as, and the shipped password that both signs
+#: them in and switches Administrator on until either is changed.
+ADMIN_NAME: str = "james"
+SHIPPED: str = "admin"
+
+
+def administrator(sign_in: Callable[[str, str], TestClient],
+                  password: str = SHIPPED,
+                  switch: str = SHIPPED) -> TestClient:
+    """Signed in as the administrator, with Administrator switched on —
+    what curating is done as."""
+    client = sign_in(ADMIN_NAME, password)
+    r = client.post("/admin/on", data={"password": switch, "next": "/"},
+                    follow_redirects=False)
+    assert r.status_code == 303 and "adminbad" not in r.headers["location"], \
+        r.headers.get("location")
+    return client
 
 
 #: What an action is a decision *about*, for the orderings below. The same

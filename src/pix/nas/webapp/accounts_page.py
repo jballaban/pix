@@ -44,9 +44,26 @@ def accounts_page(user: Annotated[Principal, Depends(require_admin)],
         for a in sorted(book.users.values(), key=lambda a: a.name))
 
     note = f'<p class="note">{h(msg)}</p>' if msg else ""
-    warn = ("" if not accounts.admin_password_is_initial(book) else
-            '<p class="note">The admin account still has its shipped password. '
+    shipped = [w for w, initial in (
+        ("the administrator password",
+         accounts.elevation_is_initial(book)),
+        (f"{user.name}'s sign-in password",
+         accounts.login_is_initial(book, user.name))) if initial]
+    warn = ("" if not shipped else
+            f'<p class="note">{h(" and ".join(shipped)).capitalize()} '
+            + ("is still the shipped one. " if len(shipped) == 1
+               else "are still the shipped ones. ") +
             'Change it below.</p>')
+    # An administrator signing in on the shipped password has no row to
+    # change it from until they have one, so they always do.
+    if not any(a.name == user.name for a in book.users.values()):
+        rows += (f'<tr><td>{h(user.name)}</td><td class="dim">&mdash;</td>'
+                 f'<td><form method="post" action="/accounts/save">'
+                 f'<input type="hidden" name="name" value="{h(user.name)}">'
+                 f'<input name="password" type="password" '
+                 f'placeholder="new password" size="14" '
+                 f'autocomplete="new-password">'
+                 f'<button>Save</button></form></td><td></td></tr>')
     return page("Accounts", f"""{note}{warn}
 <h2 class="year">People</h2>
 <table class="acct"><thead><tr><th>Name</th><th>Groups</th>
@@ -78,13 +95,14 @@ apart, so sharing with <b>family</b> reaches everyone in it.
        placeholder="family, parents, tv">
 <button>Save groups</button></form>
 
-<h2 class="year">The admin account</h2>
-<p class="dim">Built in, cannot be removed, sees everything, and is never
-something to share with.</p>
-<form method="post" action="/accounts/save" class="acct">
-<input type="hidden" name="name" value="{accounts.ADMIN}">
-<input name="password" type="password" placeholder="new admin password"
-       size="20" autocomplete="new-password">
+<h2 class="year">The administrator password</h2>
+<p class="dim">What switches <b>Administrator</b> on, from the account menu
+— separate from anybody's sign-in, so a signed-in tablet is not the
+archive's keys. Changing it switches Administrator off everywhere
+else.</p>
+<form method="post" action="/accounts/elevation" class="acct">
+<input name="password" type="password" placeholder="new administrator password"
+       size="24" autocomplete="new-password">
 <button>Change</button></form>
 <style>{ACCOUNTS_CSS}</style>""", user=user)
 
@@ -104,9 +122,12 @@ async def accounts_save(request: Request,
     if who == decisions.ARCHIVED:
         return back_with(f"{who} is reserved — it is how a file is kept out of "
                      "every view")
+    if who in accounts.RESERVED:
+        return back_with(f"{who} is reserved — Administrator is switched on "
+                         "from the account menu, not signed in as")
 
     existing = book.users.get(who)
-    if existing is None and not password:
+    if existing is None and not password and who not in accounts.ADMINISTRATORS:
         return back_with(f"{who} needs a password to sign in with")
 
     hashed = auth.hash_password(password) if password else (
@@ -139,11 +160,36 @@ async def accounts_delete(
     name = (await read_form(request)).get("name", "")
     name = accounts.canonical(name)
     book = store()
-    if name == accounts.ADMIN:
-        return back_with("the admin account is built in")
+    # Removing an administrator's account would not remove them — they are
+    # hard-coded — it would put their login back to the shipped password.
+    if name in accounts.ADMINISTRATORS:
+        return back_with(f"{name} is an administrator and cannot be removed")
     book.users.pop(name, None)
     accounts.save(book)
     return back_with(f"removed {name}")
+
+
+@app.post("/accounts/elevation")
+async def accounts_elevation(
+    request: Request,
+    user: Annotated[Principal, Depends(require_admin)],
+) -> Response:
+    """Change the administrator password — and with it, switch every
+    Administrator off but this one (`accounts.mint_elevated`)."""
+    password = (await read_form(request)).get("password", "")
+    if not password:
+        return back_with("the administrator password cannot be empty")
+    book = store()
+    book.elevation = auth.hash_password(password)
+    accounts.save(book)
+    response = back_with("changed the administrator password")
+    # Re-minted against the new hash, or changing it would throw the person
+    # who just changed it out of the page they changed it on.
+    response.set_cookie(
+        accounts.ELEVATED_COOKIE, accounts.mint_elevated(book, user.name),
+        max_age=accounts.ELEVATED_HOURS * 3600,
+        httponly=True, samesite="lax", path="/")
+    return response
 
 
 @app.post("/accounts/usual")

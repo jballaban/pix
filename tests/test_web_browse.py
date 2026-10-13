@@ -14,6 +14,8 @@ from typing import cast
 
 from fastapi.testclient import TestClient
 from web_helpers import (
+    ADMIN_NAME,
+    administrator,
     as_columns,
     burst,
     card_of,
@@ -1783,7 +1785,7 @@ def test_a_missing_index_says_what_to_run(tmp_path: Path, monkeypatch: pytest.Mo
     monkeypatch.setattr(webroots, "DB_PATH", tmp_path / "nope.db")
     monkeypatch.setattr(accounts, "ACCOUNTS_FILE", tmp_path / "users.json")
 
-    r = sign_in(accounts.ADMIN, "admin").get("/")
+    r = administrator(sign_in).get("/")
 
     assert r.status_code == 503
     assert "pix index" in r.text
@@ -1796,7 +1798,7 @@ def test_master_video_is_streamable(master: Path, app_env: dict[str, Path], sign
 
     The seeded library is MP4 throughout, so master *is* the playable copy.
     """
-    r = sign_in(accounts.ADMIN, "admin").get("/media/init_2026/b.mp4")
+    r = administrator(sign_in).get("/media/init_2026/b.mp4")
 
     assert r.status_code == 200
     assert r.content.startswith(bytes([0, 0, 0, 0x18]) + b"ftyp")
@@ -1804,12 +1806,12 @@ def test_master_video_is_streamable(master: Path, app_env: dict[str, Path], sign
 
 def test_media_advertises_range_support(master: Path, app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
     """Without ranges a browser cannot seek, only play from the start."""
-    r = sign_in(accounts.ADMIN, "admin").get("/media/init_2026/b.mp4")
+    r = administrator(sign_in).get("/media/init_2026/b.mp4")
     assert r.headers.get("accept-ranges") == "bytes"
 
 
 def test_media_serves_a_byte_range(master: Path, app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
-    r = sign_in(accounts.ADMIN, "admin").get("/media/init_2026/b.mp4",
+    r = administrator(sign_in).get("/media/init_2026/b.mp4",
                                 headers={"Range": "bytes=8-15"})
     assert r.status_code == 206
     assert len(r.content) == 8
@@ -1824,7 +1826,7 @@ def test_media_refuses_traversal(master: Path, app_env: dict[str, Path]) -> None
 
 
 def test_media_is_missing_for_an_unknown_file(master: Path, app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
-    assert sign_in(accounts.ADMIN, "admin").get("/media/init_2026/nope.mp4").status_code == 404
+    assert administrator(sign_in).get("/media/init_2026/nope.mp4").status_code == 404
 
 
 def test_grid_marks_which_cells_are_video(client: TestClient) -> None:
@@ -2067,7 +2069,7 @@ def test_what_is_about_you_lives_under_your_name(client: TestClient) -> None:
     menu = account[account.index('class="memenu"'):]
     for item in ("/history", "/accounts", "Sign out"):
         assert item in menu, f"{item} is not under the name"
-    assert "admin" in account[:account.index('class="memenu"')], \
+    assert ADMIN_NAME in account[:account.index('class="memenu"')], \
         "the name is hidden"
 
 

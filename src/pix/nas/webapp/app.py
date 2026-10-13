@@ -110,6 +110,10 @@ class Principal:
     """
 
     name: str
+
+    #: Acting as the administrator **now** — one of `accounts.ADMINISTRATORS`
+    #: with the switch on. Everything that asks *may this person* asks this,
+    #: so an administrator with it off is exactly a household member.
     is_admin: bool
 
     #: Every name this person's access can be granted to — themselves, and the
@@ -117,15 +121,23 @@ class Principal:
     #: tell them apart, which is what keeps roles from being a second mechanism.
     grants: frozenset[str] = frozenset()
 
+    #: Whether this person may switch Administrator on at all — what puts the
+    #: switch in their menu. Grants nothing by itself.
+    may_elevate: bool = False
+
     @property
     def scope(self) -> frozenset[str] | None:
         """What to restrict queries to, or None for an admin (no restriction)."""
         return None if self.is_admin else (self.grants | {self.name})
 
 
-def principal(book: accounts.Store, name: str) -> Principal:
-    return Principal(name, is_admin=(name == accounts.ADMIN),
-                     grants=book.grants(name))
+def principal(book: accounts.Store, name: str, *,
+              elevated: bool = False) -> Principal:
+    """Who `name` is, with Administrator on if `elevated` — which only an
+    administrator's switch can be."""
+    may = name in accounts.ADMINISTRATORS
+    return Principal(name, is_admin=may and elevated,
+                     grants=book.grants(name), may_elevate=may)
 
 
 def signed_in(
@@ -140,12 +152,19 @@ def signed_in(
     accepted for scripting, but never challenged for: with no
     `WWW-Authenticate` header a browser will not start caching one, so the
     cookie stays the only thing it holds.
+
+    **Administrator only through the cookie.** The switch is a second
+    cookie beside the session, minted by `/admin/on` against the
+    administrator password and good only for the person it was minted for
+    (`accounts.elevated`). Basic carries no switch, so a script is whoever it
+    signs in as, with Administrator off.
     """
     book = store()
     name = accounts.identify(book, request.cookies.get(accounts.COOKIE))
     who: Principal | None = None
-    if name and (name == accounts.ADMIN or name in book.users):
-        who = principal(book, name)
+    if name and accounts.exists(book, name):
+        who = principal(book, name, elevated=accounts.elevated(
+            book, request.cookies.get(accounts.ELEVATED_COOKIE), name))
     elif credentials and accounts.check(book, credentials.username,
                                         credentials.password):
         who = principal(book, accounts.canonical(credentials.username))
@@ -165,10 +184,14 @@ def require_user(
 
 
 def require_admin(user: Annotated[Principal, Depends(require_user)]) -> Principal:
-    """Only an administrator may change who can see what."""
+    """Only an administrator may change who can see what — with the switch
+    on. Off, they are refused like anybody: that is what *off* means."""
     if not user.is_admin:
         raise HTTPException(status.HTTP_403_FORBIDDEN,
-                            "only an administrator can change decisions")
+                            "only an administrator can do this — "
+                            "switch Administrator on first"
+                            if user.may_elevate else
+                            "only an administrator can do this")
     return user
 
 

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import cast
 
 from fastapi.testclient import TestClient
-from web_helpers import has_rule
+from web_helpers import ADMIN_NAME, SHIPPED, administrator, has_rule
 
 from pix.nas import accounts, decisions, index as ix, web
 from pix.nas.webapp import vocab as w_vocab
@@ -38,15 +38,16 @@ def test_an_api_call_gets_json_not_a_redirect(app_env: dict[str, Path]) -> None:
     assert "www-authenticate" not in r.headers
 
 
-def test_the_admin_account_is_built_in(app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
-    """Hard-coded, so there is no way to lock yourself out by editing a file —
-    and no way to delete the only account that can grant access."""
-    assert sign_in(accounts.ADMIN, "admin").get("/").status_code == 200
+def test_an_administrator_can_always_sign_in(app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
+    """Hard-coded, so there is no way to lock yourself out by editing a file:
+    with no account in the store, the shipped password still lets them in."""
+    assert ADMIN_NAME not in accounts.load().users
+    assert administrator(sign_in).get("/").status_code == 200
 
 
 def test_a_wrong_password_does_not_sign_in(app_env: dict[str, Path]) -> None:
     client = TestClient(web.app)
-    r = client.post("/login", data={"name": "admin", "password": "wrong"},
+    r = client.post("/login", data={"name": ADMIN_NAME, "password": "wrong"},
                     follow_redirects=False)
 
     assert r.status_code == 303
@@ -69,7 +70,7 @@ def test_the_form_does_not_say_which_half_was_wrong(
 
 def test_signing_out_forgets_the_session(app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
     """The thing HTTP Basic cannot do, and the reason this exists."""
-    client = sign_in(accounts.ADMIN, "admin")
+    client = administrator(sign_in)
     assert client.get("/api/files").status_code == 200
 
     client.post("/logout")
@@ -77,15 +78,15 @@ def test_signing_out_forgets_the_session(app_env: dict[str, Path], sign_in: Call
 
 
 def test_a_tampered_cookie_is_not_a_session(app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
-    client = sign_in(accounts.ADMIN, "admin")
+    client = administrator(sign_in)
     token = client.cookies[accounts.COOKIE]
-    client.cookies.set(accounts.COOKIE, token.replace("admin", "kid", 1))
+    client.cookies.set(accounts.COOKIE, token.replace(ADMIN_NAME, "kid", 1))
 
     assert client.get("/api/files").status_code == 401
 
 
 def test_an_account_is_created_and_can_sign_in(app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
-    admin = sign_in(accounts.ADMIN, "admin")
+    admin = administrator(sign_in)
     admin.post("/accounts/save",
                data={"name": "kid", "password": "pw", "groups": "family"})
 
@@ -95,7 +96,7 @@ def test_an_account_is_created_and_can_sign_in(app_env: dict[str, Path], sign_in
 def test_a_removed_account_stops_working(app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
     """Read per request, not cached — a stale cache here means a removed
     account still works, the one staleness an access system cannot have."""
-    admin = sign_in(accounts.ADMIN, "admin")
+    admin = administrator(sign_in)
     admin.post("/accounts/save", data={"name": "kid", "password": "pw"})
     kid = sign_in("kid", "pw")
     assert kid.get("/api/files").status_code == 200
@@ -104,21 +105,25 @@ def test_a_removed_account_stops_working(app_env: dict[str, Path], sign_in: Call
     assert kid.get("/api/files").status_code == 401
 
 
-def test_the_admin_account_cannot_be_removed(app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
-    admin = sign_in(accounts.ADMIN, "admin")
-    admin.post("/accounts/delete", data={"name": accounts.ADMIN})
+def test_an_administrators_account_cannot_be_removed(app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
+    """Removing it would not remove them — they are hard-coded — it would put
+    their login back to the shipped password."""
+    admin = administrator(sign_in)
+    admin.post("/accounts/save", data={"name": ADMIN_NAME, "password": "better"})
+    admin.post("/accounts/delete", data={"name": ADMIN_NAME})
 
-    assert sign_in(accounts.ADMIN, "admin").get("/").status_code == 200
+    assert ADMIN_NAME in accounts.load().users
+    assert sign_in(ADMIN_NAME, "better").get("/").status_code == 200
 
 
-def test_changing_the_admin_password_takes_effect(app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
-    admin = sign_in(accounts.ADMIN, "admin")
+def test_changing_an_administrators_login_takes_effect(app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
+    admin = administrator(sign_in)
     admin.post("/accounts/save",
-               data={"name": accounts.ADMIN, "password": "better"})
+               data={"name": ADMIN_NAME, "password": "better"})
 
-    assert sign_in(accounts.ADMIN, "better").get("/").status_code == 200
+    assert sign_in(ADMIN_NAME, "better").get("/").status_code == 200
     bad = TestClient(web.app).post(
-        "/login", data={"name": "admin", "password": "admin"},
+        "/login", data={"name": ADMIN_NAME, "password": SHIPPED},
         follow_redirects=False)
     assert "bad=1" in bad.headers["location"]
 
@@ -126,13 +131,17 @@ def test_changing_the_admin_password_takes_effect(app_env: dict[str, Path], sign
 def test_the_shipped_admin_password_is_called_out(app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
     """A default password nobody is told about is a default password nobody
     changes."""
-    admin = sign_in(accounts.ADMIN, "admin")
+    admin = administrator(sign_in)
     assert "shipped password" in admin.get("/").text
+    # Called out with Administrator off too: off is most of the day.
+    assert "shipped password" in sign_in(ADMIN_NAME, SHIPPED).get("/").text
 
     admin.post("/accounts/save",
-               data={"name": accounts.ADMIN, "password": "better"})
-    assert "shipped password" not in sign_in(
-        accounts.ADMIN, "better").get("/").text
+               data={"name": ADMIN_NAME, "password": "better"})
+    assert "shipped password" in admin.get("/").text,         "the administrator password is still the shipped one"
+    admin.post("/accounts/elevation", data={"password": "best"})
+    assert "shipped password" not in administrator(
+        sign_in, "better", "best").get("/").text
 
 
 def test_only_an_admin_manages_accounts(app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient], add_user: Callable[..., None]) -> None:
@@ -147,7 +156,7 @@ def test_only_an_admin_manages_accounts(app_env: dict[str, Path], sign_in: Calla
 def test_a_group_reaches_what_was_shared_with_it(app_env: dict[str, Path], writable: Path, sign_in: Callable[[str, str], TestClient], add_user: Callable[..., None]) -> None:
     """A grant names a person or a group and the check cannot tell them apart."""
     add_user("kid", "pw", ("family",))
-    admin = sign_in(accounts.ADMIN, "admin")
+    admin = administrator(sign_in)
     admin.post("/api/decide", json={"folder": "init_2026", "name": "a.jpg",
                                     "add_audience": ["family"]})
 
@@ -157,7 +166,7 @@ def test_a_group_reaches_what_was_shared_with_it(app_env: dict[str, Path], writa
 
 def test_losing_a_group_loses_the_access(app_env: dict[str, Path], writable: Path, sign_in: Callable[[str, str], TestClient], add_user: Callable[..., None]) -> None:
     add_user("kid", "pw", ("family",))
-    admin = sign_in(accounts.ADMIN, "admin")
+    admin = administrator(sign_in)
     admin.post("/api/decide", json={"folder": "init_2026", "name": "a.jpg",
                                     "add_audience": ["family"]})
     admin.post("/accounts/save", data={"name": "kid", "groups": ""})
@@ -170,7 +179,7 @@ def test_the_login_page_never_leaves_the_app(app_env: dict[str, Path]) -> None:
     wearing this app's address."""
     client = TestClient(web.app)
     r = client.post("/login",
-                    data={"name": "admin", "password": "admin",
+                    data={"name": ADMIN_NAME, "password": SHIPPED,
                           "next": "//evil.example/"},
                     follow_redirects=False)
 
@@ -290,21 +299,21 @@ def test_granted_nothing_sees_nothing(app_env: dict[str, Path]) -> None:
 # --- names are case-insensitive -------------------------------------------
 
 def test_signing_in_ignores_case(app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
-    assert sign_in("ADMIN", "admin").get("/").status_code == 200
-    assert sign_in("Admin", "admin").get("/").status_code == 200
+    assert sign_in(ADMIN_NAME.upper(), SHIPPED).get("/").status_code == 200
+    assert sign_in(ADMIN_NAME.title(), SHIPPED).get("/").status_code == 200
 
 
 def test_a_password_is_still_case_sensitive(app_env: dict[str, Path]) -> None:
     """Folding the name is a convenience; folding the secret is a weakness."""
     r = TestClient(web.app).post(
-        "/login", data={"name": "admin", "password": "ADMIN"},
+        "/login", data={"name": ADMIN_NAME, "password": SHIPPED.upper()},
         follow_redirects=False)
 
     assert "bad=1" in r.headers["location"]
 
 
 def test_one_person_cannot_become_two_accounts(app_env: dict[str, Path], sign_in: Callable[[str, str], TestClient]) -> None:
-    admin = sign_in(accounts.ADMIN, "admin")
+    admin = administrator(sign_in)
     admin.post("/accounts/save", data={"name": "Kid", "password": "pw"})
     admin.post("/accounts/save", data={"name": "KID", "password": "pw2"})
 
@@ -316,7 +325,7 @@ def test_one_person_cannot_become_two_accounts(app_env: dict[str, Path], sign_in
 def test_a_grant_reaches_whatever_case_signed_in(app_env: dict[str, Path], writable: Path, sign_in: Callable[[str, str], TestClient]) -> None:
     """The failure this prevents looks exactly like a correctly-kept secret:
     signed in as `Kid`, a photo shared with `kid` simply is not there."""
-    admin = sign_in(accounts.ADMIN, "admin")
+    admin = administrator(sign_in)
     admin.post("/accounts/save", data={"name": "kid", "password": "pw"})
     admin.post("/api/decide", json={"folder": "init_2026", "name": "a.jpg",
                                     "add_audience": ["KID"]})
@@ -326,7 +335,7 @@ def test_a_grant_reaches_whatever_case_signed_in(app_env: dict[str, Path], writa
 
 
 def test_a_group_matches_regardless_of_case(app_env: dict[str, Path], writable: Path, sign_in: Callable[[str, str], TestClient]) -> None:
-    admin = sign_in(accounts.ADMIN, "admin")
+    admin = administrator(sign_in)
     admin.post("/accounts/save",
                data={"name": "kid", "password": "pw", "groups": "Family"})
     admin.post("/api/decide", json={"folder": "init_2026", "name": "a.jpg",
@@ -360,10 +369,10 @@ def test_the_access_list_is_seeded_from_the_accounts(app_env: dict[str, Path], s
     """Sharing has to be possible on the very first file, before any decision
     exists to draw a suggestion from — and only real accounts and roles are
     offered, because a grant to anything else reaches nobody."""
-    add_user("james", "pw", ("family",))
-    html = sign_in(accounts.ADMIN, "admin").get("/browse").text
+    add_user("alina", "pw", ("family",))
+    html = administrator(sign_in).get("/browse").text
 
-    assert '"james"' in html
+    assert '"alina"' in html
     assert '"family"' in html
 
 
@@ -372,7 +381,7 @@ def test_the_admin_is_never_offered_as_an_audience(
 ) -> None:
     """An administrator sees everything already, so sharing with one is a
     no-op dressed as a decision."""
-    assert accounts.ADMIN not in w_vocab.audience_names()
+    assert accounts.ADMINISTRATOR not in w_vocab.audience_names()
 
 
 def test_an_action_asks_for_the_column_it_edits(client: TestClient) -> None:

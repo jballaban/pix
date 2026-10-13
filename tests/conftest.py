@@ -240,10 +240,11 @@ def add_user() -> "Callable[..., None]":
 @pytest.fixture
 def client(app_env: dict[str, Path],
            sign_in: "Callable[[str, str], TestClient]") -> "TestClient":
-    """Signed in as the built-in admin, which is what curating is done as."""
-    from pix.nas import accounts
+    """Signed in as the administrator with Administrator switched on, which
+    is what curating is done as."""
+    from web_helpers import administrator
 
-    return sign_in(accounts.ADMIN, "admin")
+    return administrator(sign_in)
 
 
 # --- shared by the web app's tests ----------------------------------------
@@ -251,11 +252,11 @@ def client(app_env: dict[str, Path],
 @pytest.fixture
 def household(app_env: dict[str, Path], writable: Path, sign_in: Callable[[str, str], TestClient], add_user: Callable[..., None]) -> dict[str, object]:
     """One shared photo and one that is not, with an admin and a viewer."""
-    from pix.nas import accounts
+    from web_helpers import administrator
 
     (writable / "b.mp4").write_bytes(b"fake")
     add_user("kid", "pw")
-    admin = sign_in(accounts.ADMIN, "admin")
+    admin = administrator(sign_in)
     admin.post("/api/decide", json={
         "folder": "init_2026", "name": "a.jpg", "add_audience": ["kid"]})
     return {"admin": admin, "kid": sign_in("kid", "pw")}

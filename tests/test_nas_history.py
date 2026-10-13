@@ -15,8 +15,9 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from web_helpers import ADMIN_NAME, administrator
 
-from pix.nas import accounts, decisions, history
+from pix.nas import decisions, history
 from pix.nas.decisions import Decision
 from pix.nas.history import Before
 
@@ -189,7 +190,7 @@ def test_what_is_already_undone_is_asked_of_the_whole_log(log: Path) -> None:
 def curating(app_env: dict[str, Path], writable: Path,
              log: Path, sign_in: Callable[[str, str], TestClient], add_user: Callable[..., None]) -> TestClient:
     (writable / "b.mp4").write_bytes(b"fake")
-    return sign_in(accounts.ADMIN, "admin")
+    return administrator(sign_in)
 
 
 def _targets(*names: str) -> list[dict[str, str]]:
@@ -782,15 +783,15 @@ def test_a_revert_comes_back_to_the_list_you_were_reading(
     history.record("james", "shared", [Before("init_2026", "a.jpg", None)])
     curating.post("/api/decide/bulk", json={
         "add_tags": ["x"], "files": _targets("a.jpg")})
-    op = history.recent(who=accounts.ADMIN)[0]
+    op = history.recent(who=ADMIN_NAME)[0]
 
-    html = curating.get(f"/history?who={accounts.ADMIN}").text
+    html = curating.get(f"/history?who={ADMIN_NAME}").text
     form = html[html.index('action="/history/revert"'):]
-    assert f'name="who" value="{accounts.ADMIN}"' in form[:400], form[:400]
+    assert f'name="who" value="{ADMIN_NAME}"' in form[:400], form[:400]
 
     r = curating.post("/history/revert",
-                      data={"id": op.id, "who": accounts.ADMIN},
+                      data={"id": op.id, "who": ADMIN_NAME},
                       follow_redirects=False)
     assert r.status_code == 303
-    assert f"who={accounts.ADMIN}" in r.headers["location"], \
+    assert f"who={ADMIN_NAME}" in r.headers["location"], \
         r.headers["location"]

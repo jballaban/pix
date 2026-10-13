@@ -11,7 +11,7 @@ from fastapi import Depends, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from pix.nas import accounts
-from pix.nas.webapp.app import app, Principal, signed_in, store
+from pix.nas.webapp.app import app, Principal, require_user, signed_in, store
 from pix.nas.webapp.marks import logo_mark
 from pix.nas.webapp.shell import LOGIN_CSS, page
 from pix.nas.webapp.text import h, q
@@ -26,9 +26,13 @@ def login_form(request: Request,
     if user is not None and not bad:
         return RedirectResponse(safe_next(next), status_code=303)
     warn = ('<p class="note">That did not match.</p>' if bad else "")
-    hint = ("" if not accounts.admin_password_is_initial(store()) else
+    book = store()
+    first = sorted(n for n in accounts.ADMINISTRATORS
+                   if accounts.login_is_initial(book, n))
+    hint = ("" if not first else
             '<p class="dim" style="margin-top:14px">First run: sign in as '
-            '<b>admin</b> with the password <b>admin</b>, then change it.</p>')
+            f'<b>{h(first[0])}</b> with the password <b>admin</b>, then '
+            'change it.</p>')
     return page("Sign in", f"""<div class="gate">
 <div class="logo">{logo_mark(34)}<span class="word">pi<b>x</b></span></div>
 <h2>Sign in</h2>{warn}
@@ -82,10 +86,66 @@ async def login(request: Request) -> Response:
 
 @app.post("/logout")
 def logout() -> Response:
-    """Forget the session. The reason the cookie exists at all."""
+    """Forget the session — and the Administrator switch with it, or the
+    next person to sign in on this browser would find it waiting."""
     response = RedirectResponse("/login", status_code=303)
     response.delete_cookie(accounts.COOKIE, path="/")
+    response.delete_cookie(accounts.ELEVATED_COOKIE, path="/")
     return response
+
+
+@app.post("/admin/on")
+async def admin_on(
+    request: Request,
+    user: Annotated[Principal, Depends(require_user)],
+) -> Response:
+    """Switch Administrator on, against the administrator password.
+
+    Not the login password: the point of a second one is that a signed-in
+    session is not enough. Refused the same way whether this person may not
+    be an administrator at all or typed it wrong — the form is one place to
+    ask both questions, and it answers neither.
+    """
+    form = await read_form(request)
+    back = safe_next(form.get("next", "/"))
+    book = store()
+    if not (user.may_elevate
+            and accounts.check_elevation(book, form.get("password", ""))):
+        # In the fragment, which never reaches the server: a query flag
+        # would be copied into every link the next page builds from its own
+        # address, and following one would say it all over again.
+        return RedirectResponse(back + "#" + ADMIN_BAD_MARK, status_code=303)
+    response = RedirectResponse(back, status_code=303)
+    response.set_cookie(
+        accounts.ELEVATED_COOKIE, accounts.mint_elevated(book, user.name),
+        max_age=accounts.ELEVATED_HOURS * 3600,
+        # As the session's, and for the same reasons (see `login`).
+        httponly=True, samesite="lax", path="/")
+    return response
+
+
+@app.post("/admin/off")
+async def admin_off(request: Request) -> Response:
+    """Switch Administrator off: back to what is shared with you.
+
+    Needs nothing — turning a power off is never something to refuse. From
+    a page that is an administrator's alone, it lands on the front door
+    instead of on that page refusing them.
+    """
+    back = safe_next((await read_form(request)).get("next", "/"))
+    if back.startswith(ADMIN_PAGES):
+        back = "/"
+    response = RedirectResponse(back, status_code=303)
+    response.delete_cookie(accounts.ELEVATED_COOKIE, path="/")
+    return response
+
+
+#: The pages only an administrator is shown at all.
+ADMIN_PAGES: tuple[str, ...] = ("/accounts", "/history", "/splice/")
+
+
+#: The fragment a refused switch comes back with (`shell.ADMIN_BAD`).
+ADMIN_BAD_MARK: str = "adminbad"
 
 
 def safe_next(target: str) -> str:

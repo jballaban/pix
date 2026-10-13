@@ -141,11 +141,17 @@ def home(request: Request,
               for kind in (("audience", "people", "tags") if user.is_admin
                            else ("people", "tags"))}
 
-    open_note = ("" if not (user.is_admin
-                            and accounts.admin_password_is_initial(store()))
+    # To an administrator, switched on or not: the shipped passwords are
+    # theirs to change either way, and *off* is how they spend most of the day.
+    book = store()
+    open_note = ("" if not (user.may_elevate and (
+                     accounts.elevation_is_initial(book)
+                     or accounts.login_is_initial(book, user.name)))
                  else
-                 '<span class="warn">&middot; admin still has its shipped '
-                 'password</span>')
+                 '<span class="warn">&middot; a shipped password is still in '
+                 'use — change it under Accounts'
+                 + ("" if user.is_admin else ", with Administrator on")
+                 + '</span>')
     # Only an admin sees undecided files at all, so only an admin has a backlog
     # to report. For anyone else the count is trivially complete, and saying so
     # would be noise pretending to be progress.

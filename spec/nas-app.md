@@ -606,18 +606,32 @@ nothing sees nothing, and conflating the two is the classic way an access
 check becomes an access grant.
 
 **Sessions, not HTTP Basic.** Basic cannot log out — browsers cache the
-credentials and offer no way to clear them — which makes *switch to the
-admin account and back* impossible, and that switch is the normal way this
-app is used. So there is a login form and a signed cookie. Basic is still
-*accepted* for scripting but never *challenged* for: with no
-`WWW-Authenticate` header a browser never starts caching one.
+credentials and offer no way to clear them. So there is a login form and a
+signed cookie. Basic is still *accepted* for scripting but never
+*challenged* for: with no `WWW-Authenticate` header a browser never starts
+caching one.
 
-**`admin` is built in and hard-coded**, so there is no way to lock yourself
-out by editing a file and no way to delete the only account that can grant
-access. It is never an audience: an administrator sees everything already.
-Its password ships as a hash of a known initial value rather than as
-plaintext — the repository has a remote, and a password committed to one is
-a published password — and the app says so until it is changed.
+**Administrator is a switch, not an account** (2026-10-12; there was a
+built-in `admin` until then). Signing out of yourself and into `admin` and
+back was the normal way the app was used, and each switch was a chance to
+act as the wrong one. Now the administrators — **hard-coded** in
+`accounts.ADMINISTRATORS`, so no edit to a file makes somebody one and no
+deletion leaves nobody able to be one — sign in as themselves and see what is
+shared with them, like anybody. **Administrator**, at the top of their
+account menu, switches the rest on: everything visible, every action. Off,
+they are exactly a household member.
+
+Turning it on asks for **the administrator password**, separate from any
+login, so a signed-in tablet left on the table is a household session and
+not the archive's keys. The switch is a cookie of its own, signed, bound to
+the person, good for twelve hours, and signed over the administrator
+password's hash — changing the password switches it off everywhere else.
+Signing out turns it off; Basic never turns it on. An administrator's login,
+while they have none stored, and the administrator password both ship as a
+hash of a known initial value rather than as plaintext — the repository has
+a remote, and a password committed to one is a published password — and the
+app says so until each is changed. A store from before keeps the old
+`admin` account's password, as the switch's.
 
 **People and roles are managed in the app**, in `app/users.json` on the
 share. Adding a person is a household event, not a deployment: it should not

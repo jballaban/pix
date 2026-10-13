@@ -113,8 +113,8 @@ def test_the_real_app_names_who_asked(logged: Path, client: TestClient) -> None:
     client.get("/browse")
     client.post("/api/clips/free", json={"folder": "init_2026",
                                          "source": "b.mp4"})
-    assert " admin GET /browse 200 " in _read(logged, "activity.log")
-    assert "admin POST /api/clips/free 404 not in master" in _read(
+    assert " james GET /browse 200 " in _read(logged, "activity.log")
+    assert "james POST /api/clips/free 404 not in master" in _read(
         logged, "errors.log")
 
 

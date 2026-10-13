@@ -319,11 +319,67 @@ def whoami(user: Principal | None, extra: str = "",
         f'<span class="whoami"><b>{h(user.name)}</b>'
         f'<span class="role">'
         f'{"Administrator" if user.is_admin else "Household"}</span></span>'
-        f'{view}{admin}'
+        f'{admin_switch(user)}{view}{admin}'
         f'<span class="info">{info}'
         f'<span class="line ver">v{_PIX_VERSION}</span></span>'
         f'<form method="post" action="/logout">'
         f'<button>Sign out</button></form></div></details>')
+
+
+#: Fills the form's `next` with where the page is, so switching lands back on
+#: it — filters and all — rather than on the front door.
+_HERE: str = "this.next.value=location.pathname+location.search"
+
+
+def admin_switch(user: Principal) -> str:
+    """**Administrator**, Off / On — for the people who may be one, and
+    nobody else.
+
+    Directly under who you are, because it *is* who you are: on, everything
+    is visible and every action is offered; off, exactly what is shared with
+    you. Turning it on asks for the administrator password — not the login —
+    in a field that appears when *On* is pressed, and Enter sends it. Turning
+    it off asks for nothing.
+    """
+    if not user.may_elevate:
+        return ""
+    head = ('<span class="rowlab">Administrator</span>'
+            '<input type="hidden" name="next" value="/">')
+    if user.is_admin:
+        return (f'<form class="sizerow adminrow" method="post" '
+                f'action="/admin/off" onsubmit="{_HERE}">{head}'
+                '<span class="sizeset" role="group" aria-label="Administrator">'
+                '<button class="showopt adminopt" aria-pressed="false">Off'
+                '</button><button type="button" class="showopt adminopt" '
+                'aria-pressed="true">On</button></span></form>')
+    reveal = ("var f=this.form.password;f.hidden=false;f.focus();"
+              "this.setAttribute('aria-pressed','true');"
+              "this.previousElementSibling.setAttribute('aria-pressed',"
+              "'false')")
+    return (f'<form class="sizerow adminrow" method="post" action="/admin/on" '
+            f'onsubmit="{_HERE}">{head}'
+            '<span class="sizeset" role="group" aria-label="Administrator">'
+            '<button type="button" class="showopt adminopt" '
+            'aria-pressed="true">Off</button>'
+            '<button type="button" class="showopt adminopt" '
+            f'aria-pressed="false" onclick="{reveal}">On</button></span>'
+            '<input class="adminpw" name="password" type="password" hidden '
+            'placeholder="Administrator password" '
+            'autocomplete="current-password" aria-label="Administrator '
+            'password"></form>' + ADMIN_BAD)
+
+
+#: A wrong administrator password comes back as `#adminbad` on the page it
+#: was typed on (`session.admin_on`). The menu reopens where it was, the
+#: field ready again, with the reason under it — and the address loses the
+#: mark, so a reload does not say it twice.
+ADMIN_BAD: str = """<script>(()=>{if(location.hash!=='#adminbad')return;
+history.replaceState(null,'',location.pathname+location.search);
+addEventListener('DOMContentLoaded',()=>{const f=document.querySelector(
+'form.adminrow input[name=password]');if(!f)return;
+const me=f.closest('details');if(me)me.open=true;f.hidden=false;
+f.insertAdjacentHTML('afterend','<span class="adminbad">That was not the '
++'administrator password.</span>');f.focus();});})();</script>"""
 
 
 def infoset(key: str, label: str, default: str) -> str:

@@ -16,6 +16,7 @@ from typing import cast
 
 from fastapi.testclient import TestClient
 from web_helpers import (
+    administrator,
     as_columns,
     burst,
     pix,
@@ -715,7 +716,7 @@ def test_a_household_member_can_see_inside_a_stack(
     """
     burst(app_env, writable, "x.jpg", "y.jpg")
     add_user("kid", "pw")
-    admin = sign_in(accounts.ADMIN, "admin")
+    admin = administrator(sign_in)
     admin.post("/api/decide/bulk", json={
         "add_audience": ["kid"],
         "files": [{"folder": "init_2026", "name": "x.jpg"},
@@ -745,7 +746,7 @@ def test_a_household_member_can_reach_every_action_they_are_offered(
     """
     burst(app_env, writable, "x.jpg", "y.jpg")
     add_user("kid", "pw")
-    sign_in(accounts.ADMIN, "admin").post("/api/decide/bulk", json={
+    administrator(sign_in).post("/api/decide/bulk", json={
         "add_audience": ["kid"],
         "files": [{"folder": "init_2026", "name": "x.jpg"},
                   {"folder": "init_2026", "name": "y.jpg"}]})

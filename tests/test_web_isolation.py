@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import cast
 
 from fastapi.testclient import TestClient
-from web_helpers import three_files
+from web_helpers import administrator, three_files
 
 from pix.nas import accounts, decisions, index as ix
 from pix.nas.decisions import Decision
@@ -167,7 +167,7 @@ def test_a_stack_counts_only_what_the_viewer_may_see(
     assert 'data-behind="0"' in html
     assert "c.jpg" not in html and "d.jpg" not in html
     # And the administrator's count is untouched.
-    admin = sign_in(accounts.ADMIN, "admin")
+    admin = administrator(sign_in)
     top = [r for r in admin.get("/api/files").json() if r["name"] == "a.jpg"]
     assert top[0]["behind"] == 2
 

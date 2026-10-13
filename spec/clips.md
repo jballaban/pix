@@ -108,7 +108,7 @@ side, and the curator archives whatever they like. An automatic rule (*C is
 archived while it has clips*) was considered first; it forced questions — does a still archive C? what
 of a stack C speaks for? — that an explicit act simply does not raise.
 
-**`archived` is a built-in audience value**, reserved like `admin`. It was
+**`archived` is a built-in audience value**, reserved like `administrator`. It was
 `hidden` until 2026-10-01; every sidecar and log line was rewritten when it was
 renamed, so there is no alias:
 

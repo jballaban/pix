@@ -321,8 +321,11 @@ def passwd(name: str) -> None:
     """Print a hashed credential pair for hand-editing `app/users.json`.
 
     Accounts are normally managed in the app, under **Accounts**. This is
-    the way back in if that is not reachable — a forgotten admin password
-    with the container unable to serve the page it would be changed on.
+    the way back in if that is not reachable — a forgotten password with the
+    container unable to serve the page it would be changed on. The hash goes
+    in a person's `password`, or — for a forgotten administrator password,
+    the one that switches Administrator on — in `elevation`. Emptying either
+    of an administrator's puts the shipped one back.
     """
     banner()
     from pix.nas.auth import hash_password
