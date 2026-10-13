@@ -129,7 +129,8 @@ container reads, so what you see is what the NAS will serve. Only the path prefi
 differs — `\\nas\pix2` here, `/volume1/pix2` there — and `PIX2_SHARE` is the
 one knob that abstracts it.
 
-Sign in as `admin` / `admin` the first time, the same as on the NAS. The
+Sign in as yourself, the same as on the NAS, and switch **Administrator** on
+from the account menu when you need it (see [Accounts](#accounts)). The
 accounts file it reads is the one on the share, so the household you see
 locally is the real one.
 
@@ -164,13 +165,18 @@ source mirror after the new image is running.
 
 ## Accounts
 
-Nothing to configure. The app ships with a built-in **`admin`** account whose
-initial password is `admin`; sign in with it, then **Accounts** in the header to
-change that password and add everyone else.
+Nothing to configure. **Administrator is a switch, not an account.** The
+administrators are hard-coded in `accounts.ADMINISTRATORS` (`james`); they sign
+in as themselves and see what is shared with them, and turn **Administrator**
+on at the top of the account menu to see everything and do anything. Turning
+it on asks for the **administrator password**, separate from any login. Both
+it and an administrator's login (while none is stored) ship as `admin`;
+change them under **Accounts**, which is also where everyone else is added.
 
-`admin` is hard-coded, so there is no way to lock yourself out by editing a file
-and no way to delete the only account that can grant access. It is also never
-something to share *with* — an administrator sees everything by definition.
+Hard-coded, so there is no way to lock yourself out by editing a file and no
+way to delete the only person who can grant access. A store from before kept
+an `admin` account: its password became the administrator password and the
+account was dropped.
 
 People and roles live in `/volume1/pix2/app/users.json`. That is configuration,
 not archive: lose it and you lose the logins, not a photograph or a single
@@ -209,7 +215,7 @@ a relative path and its session cookie is host-only, so it needs no
 forward. `http://<nas>:8000` keeps working as the bypass for when the proxy
 itself is what you are debugging.
 
-**Change the admin password first**, and give everyone their own account. The
+**Change the shipped passwords first**, and give everyone their own account. The
 reverse proxy routes, and terminates TLS if you give it a certificate — it does
 not authenticate — so the app's own login is the only thing in front of your
 photographs.
