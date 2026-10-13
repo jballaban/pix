@@ -58,6 +58,7 @@ from pix.nas.webapp.writes import (
     records_for,
     summary,
     Target,
+    top_allowed,
     writable,
 )
 
@@ -124,6 +125,11 @@ def api_suggest(user: Annotated[Principal, Depends(require_user)],
                       "band", "camera", "source", "stacks", "deleted"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             f"cannot suggest values for {column!r}")
+    # The bin is an administrator's (`address.both_sides` drops it for anybody
+    # else), so its counts are too: how many files are deleted is a number
+    # about files nobody else may see.
+    if column == "deleted" and not user.is_admin:
+        return JSONResponse([])
     conn = db()
     if column in FIXED:
         return JSONResponse(fixed_counts(conn, column, view))
@@ -349,6 +355,10 @@ def api_behind(folder: str, name: str,
     from this one, and the first thing to go would be whichever fact was added
     last.
     """
+    # The stack has to be one this person may see. Its takes are scoped like
+    # any listing, but answering at all for a top they cannot open would say
+    # that a photograph by that name is there, with these behind it.
+    allowed(user, folder, name)
     conn = db()
     key = f"{folder}/{name}"
     rows = [r for r in ix.files(conn, replace(view, within=key, chosen=None),
@@ -391,11 +401,15 @@ def api_decide(user: Annotated[Principal, Depends(require_user)],
     try:
         view = ix.Filters()
         named = Target(folder=body.folder, name=body.name)
+        top_allowed(user, conn, change)
         targets = only_mine(user, conn, behind(
             conn, view, [named],
             members=isinstance(change.stacked_under, Unset)))
         one_kind(conn, change, targets)
-        targets = clip_rules(conn, change, targets)
+        # Again after: restoring a clip brings its source along, and that is
+        # one more file nobody checked was theirs.
+        targets = only_mine(user, conn, clip_rules(conn, change, targets,
+                                                   user.scope))
         was, decision, indexed = decide(body.folder, body.name, change,
                                          conn=conn)
         undo = [history.Before(body.folder, body.name, was,
@@ -555,11 +569,22 @@ def api_decide_bulk(user: Annotated[Principal, Depends(require_user)],
     # **After the expansion, not before it.** `_behind` adds files the request
     # never named — the rest of a stack — so checking what was sent would let
     # a household member reach the others through it.
+    top_allowed(user, conn, change)
     targets = only_mine(user, conn, behind(
         conn, view, body.files,
         members=isinstance(change.stacked_under, Unset)))
     one_kind(conn, change, targets)
-    targets = clip_rules(conn, change, targets)
+    # Again after: restoring a clip brings its source along, and that is one
+    # more file nobody checked was theirs.
+    targets = only_mine(user, conn, clip_rules(conn, change, targets,
+                                               user.scope))
+    # What this person may hear about. A stack's members follow its top
+    # (`cascade`) whether or not they were shared with whoever moved it —
+    # leaving them behind would strand them — but the reply lists only the
+    # files that were theirs before anything was written. A name in `dropped`
+    # is a name, and one they were never given is a photograph they now know
+    # is there.
+    theirs = {(t.folder, t.name) for t in targets}
     done: list[tuple[str, str]] = []
     undo: list[history.Before] = []
     dropped: list[dict[str, str]] = []
@@ -617,12 +642,15 @@ def api_decide_bulk(user: Annotated[Principal, Depends(require_user)],
             if conn is not None and done:
                 stays = ix.matching(conn, view, done)
                 dropped = [{"folder": f, "name": n}
-                           for f, n in done if (f, n) not in stays]
+                           for f, n in done if (f, n) not in stays
+                           and (user.is_admin or (f, n) in theirs)]
                 total = ix.count(conn, view)
                 # The header's standing count. It is rendered with the page, so
                 # without this it stays at whatever it said when the page loaded —
                 # which is wrong the instant anything is deleted or restored.
-                binned = ix.count(conn, ix.Filters(deleted="only"))
+                # An administrator's alone, like the bin it counts.
+                binned = (ix.count(conn, ix.Filters(deleted="only"))
+                          if user.is_admin else None)
     finally:
         if conn is not None:
             conn.close()

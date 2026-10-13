@@ -1855,9 +1855,14 @@ def test_the_clip_counts_are_lookups_not_scans(tmp_path: Path) -> None:
     ix.files(conn, ix.Filters(event="x"), groups=("day",))
     ix.files(conn, ix.Filters(viewer=frozenset({"ana"})))
     conn.set_trace_callback(None)
-    for sql in stmts:
+    # The listings; a viewer's also reads the table's columns first.
+    for sql in [s for s in stmts if s.lstrip().upper().startswith("WITH")]:
         plan = [str(r[3]) for r in conn.execute("EXPLAIN QUERY PLAN " + sql)]
         clip_lookups = [p for p in plan if p.startswith("SEARCH c ")]
         assert clip_lookups, plan
         for p in clip_lookups:
             assert "files_clip" in p, plan
+        # A viewer's stack head is found by its key, not by walking the library.
+        for p in plan:
+            if p.startswith(("SCAN hd", "SEARCH hd ")):
+                assert "PRIMARY KEY" in p or "autoindex" in p, plan

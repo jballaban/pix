@@ -267,7 +267,11 @@ def stack_page(folder: str, name: str,
     conn = db()
     key = f"{folder}/{name}"
     view = ix.Filters(within=key, viewer=user.scope)
-    rows = ix.files(conn, view, limit=PAGE_LIMIT)
+    # The top first: takes shared with somebody can sit behind one that is
+    # not, and to them that is no stack (`ix._unstacked`) — a page of them
+    # under this address would confirm the top is there.
+    seen = ix.sees(conn, user.scope, folder, name)
+    rows = ix.files(conn, view, limit=PAGE_LIMIT) if seen else []
     # Not a stack, or not one this person may see — the same answer either
     # way, and deliberately: which of the two it is would say whether a
     # photograph they cannot see exists.
@@ -371,7 +375,7 @@ def browse(request: Request,
 <div id="menu" hidden></div>
 {WORKING}""",
         tools=('<div class="chips" id="chips"></div>'
-               + from_link(op, stale, len(rows))
+               + (from_link(op, stale, len(rows)) if user.is_admin else "")
                + cuts_link(view, total)),
         # Away from the filters, at the end of the row with the account. It is
         # a view control rather than a filter — nothing it does changes which

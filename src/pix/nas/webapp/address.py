@@ -193,7 +193,12 @@ def filters(
                                               for v in date or []) if d]),
                       tag=pick(tag), person=pick(person),
                       audience=pick(audience),
-                      chosen=from_operation(op, stale),
+                      # The log is an administrator's (`/history`), and so
+                      # is a link into it: an operation is somebody's edit,
+                      # its id can be one the page chose, and its summary
+                      # names what was done to files this person may not see.
+                      chosen=(from_operation(op, stale) if user.is_admin
+                              else None),
                       within=within, cuts=cuts or None,
                       stacks=picked,
                       apart=apart == "1" or legacy_apart,

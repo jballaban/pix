@@ -138,7 +138,11 @@ class Store:
         """
         who = canonical(name)
         account = self.users.get(who)
-        return frozenset({who, *(account.groups if account else ())})
+        # Never a reserved name, whatever the file says. The page refuses to
+        # write one, but `users.json` is a file on a share and can be edited
+        # by hand — and a person who answered to `archived` would be granted
+        # exactly the files nobody is meant to see.
+        return frozenset({who, *(account.groups if account else ())}) - RESERVED
 
     def audiences(self) -> list[str]:
         """Everything that can be shared with — people and groups, never

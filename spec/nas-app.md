@@ -585,6 +585,19 @@ is not access control, it is a tidier index — anyone can type a URL. An
 unshared file answers **404**, the same as one that does not exist: 403 would
 confirm there is something there to ask for.
 
+**Nor anything said about it.** A count, a name or an offset is a way of
+being told a photograph is there: the *3* on a stack whose other two takes
+were never shared, the top a shared take defers to, the source a clip was cut
+from, the files a write moved, the size of the bin. So everything a listing
+says about a file it does not list — a stack's top and takes, a clip's source
+and cuts — asks the same question the listing does, from one definition
+(`index._visible`): living, not archived, shared with this viewer, and for a
+clip a file of its own. A take whose top is not shared with somebody is no
+stack to them; it stands on its own. **Archived binds whatever else a file is
+shared with** — a sidecar written by something else can say both — and the
+index applies it, and the living-only rule, to every viewer's query whatever
+the filters ask, so a `Filters` built anywhere cannot reach either.
+
 The viewer's scope comes from the credentials and rides on every query. It is
 deliberately **not** one of the URL filters, so a viewer cannot widen their
 own view by editing the address bar — the one thing a URL-shaped filter model

@@ -713,6 +713,23 @@ def test_a_clip_is_cut_from_a_keyframe_and_a_viewer_can_then_see_it(
     assert "2026-08-30_150001.mp4" in r.headers["content-disposition"]
 
 
+def test_a_clip_whose_file_is_gone_never_plays_as_its_source_for_a_viewer(
+    client: TestClient, real: Path, add_user: Callable[..., None],
+    sign_in: Callable[[str, str], TestClient]
+) -> None:
+    """The index says the clip has a file of its own, which is what lets a
+    viewer reach it — but the file being swept away, or not yet remade, must
+    not fall through to the source. Sharing a clip never shared the video it
+    was cut from; only an administrator plays a clip as its source."""
+    clip, kid = _shared_clip(client, add_user, sign_in, source_too=False)
+    assert kid.get(f"/media/init_2026/{clip}").status_code == 200
+    for made in _cuts(clip):
+        made.unlink()
+
+    assert kid.get(f"/media/init_2026/{clip}").status_code == 404
+    assert client.get(f"/media/init_2026/{clip}").status_code == 200
+
+
 def test_a_cut_says_what_it_is(real: Path, client: TestClient) -> None:
     import subprocess
 

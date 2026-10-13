@@ -27,6 +27,17 @@ from pix.nas.webapp.vocab import mime, ZIP_LIMIT
 from pix.nas.webapp.writes import master_file
 
 
+#: A picture is kept for the person it was served to, and no one else.
+#:
+#: **`private`**, so nothing between here and the browser keeps a copy to hand
+#: the next person who asks. **`Vary: Cookie`**, so the browser's own copy is
+#: good only while the same session holds: a family tablet signed out of one
+#: account and into another, or somebody turning Administrator off, asks the
+#: server again — and meets the access check — rather than being shown a day
+#: of thumbnails from a sign-in that could see more.
+PER_PERSON: dict[str, str] = {"Vary": "Cookie"}
+
+
 @app.get("/thumb/{folder}/{name}")
 def thumb(folder: str, name: str,
           user: Annotated[Principal, Depends(require_user)]) -> FileResponse:
@@ -105,15 +116,21 @@ def media(folder: str, name: str,
     """
     allowed(user, folder, name)
     # A clip plays as its source, clamped by the page to its range
-    # (spec/clips.md §7). Only a curator gets here: `_allowed` has already
-    # refused a viewer, who would otherwise be handed all of the source.
+    # (spec/clips.md §7) — for an administrator, and nobody else. `allowed`
+    # lets a viewer through only to a clip with a file of its own, but the
+    # index saying so is not the file being there: one swept away or not yet
+    # remade would fall through to here, and the viewer would be handed all
+    # of the source, which sharing a clip never shared.
     source = clips.source_of(name)
     if source is not None and not (webroots.MASTER_DIR / folder / name).is_file():
         own = clip_file(folder, name, playable=True)
         if own is not None:
             return FileResponse(own, media_type="video/mp4",
                                 headers={"Cache-Control": "private, max-age=3600",
-                                         "Accept-Ranges": "bytes"})
+                                         "Accept-Ranges": "bytes",
+                                         **PER_PERSON})
+        if not user.is_admin:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "not found")
         name = source
     # Prefer the render: for an HEVC master it is the only playable copy, and
     # where both exist they are the same footage.
@@ -127,7 +144,8 @@ def media(folder: str, name: str,
     elif not target.is_file():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "not found")
     return FileResponse(target, headers={"Cache-Control": "private, max-age=3600",
-                                         "Accept-Ranges": "bytes"})
+                                         "Accept-Ranges": "bytes",
+                                         **PER_PERSON})
 
 
 def serve(root: Path, folder: str, name: str,
@@ -165,9 +183,9 @@ def serve(root: Path, folder: str, name: str,
         raise HTTPException(status.HTTP_404_NOT_FOUND, "not derived yet")
     # A stand-in is not kept: the clip's own picture replaces it, and a day
     # of cache would go on showing the source's after it had.
-    cache = "no-store" if stand_in is not None else "public, max-age=86400"
+    cache = "no-store" if stand_in is not None else "private, max-age=86400"
     return FileResponse(target, media_type="image/jpeg",
-                        headers={"Cache-Control": cache})
+                        headers={"Cache-Control": cache, **PER_PERSON})
 
 
 def may_see(user: Principal | None, folder: str, name: str) -> bool:

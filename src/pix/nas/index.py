@@ -173,6 +173,38 @@ GROUPINGS: dict[str, str | None] = {
               "                   files.folder || '/' || files.name) END"),
 }
 
+
+def _keys(groups: Sequence[str], viewer: frozenset[str] | None) -> list[str]:
+    """The SQL for each grouping named, as this viewer may have it.
+
+    All but one are a fact about the file itself. **By stack** names the file
+    a stack speaks through — its key is the top's `folder/name`, and it is a
+    section only because other files defer to it — so for a viewer it counts
+    only the stacks they may see: a top that is not shared with them is not
+    the name of their section, and takes they may not see do not make a
+    photograph a stack (`_unstacked`). The parameters are the viewer's names,
+    which `_scope` binds for every listing.
+    """
+    out: list[str] = []
+    for g in groups:
+        key = GROUPINGS.get(g)
+        if not key:
+            continue
+        if g == "stack" and viewer is not None:
+            under, _ = _head_seen("files.stacked_under", viewer)
+            guess, _ = _head_seen("files.suggested_under", viewer)
+            m, _ = _visible("m", viewer)
+            me = "files.folder || '/' || files.name"
+            key = (f"CASE WHEN (files.stacked_under IS NOT NULL AND {under})"
+                   f"  OR (files.suggested_under IS NOT NULL AND {guess})"
+                   "   OR EXISTS (SELECT 1 FROM files m"
+                   f"   WHERE (m.stacked_under = {me}"
+                   f"          OR m.suggested_under = {me}) AND {m})"
+                   f" THEN COALESCE(CASE WHEN {under} THEN files.stacked_under END,"
+                   f"   CASE WHEN {guess} THEN files.suggested_under END, {me}) END")
+        out.append(key)
+    return out
+
 #: Where *small/short*, *medium* and *large/long* fall. One filter whose
 #: meaning follows the file: for a clip the question is length, for a photo
 #: it is weight, and asking it as two controls would mean picking the right
@@ -1506,9 +1538,15 @@ def _clauses(filters: Filters) -> dict[str, tuple[str, dict[str, Any]]]:
         out["stacks"] = ("(" + " OR ".join(asked) + ")", {})
     if filters.cuts:
         folder, _, name = filters.cuts.partition("/")
+        # Only to somebody who may see the source (`_source_seen`). To anyone
+        # else these are videos like any other, and a link that gathered them
+        # under a name would answer *was this cut from that?* — for any name
+        # they cared to type.
+        seen, seen_params = _source_seen(filters)
         out["cuts"] = ("(files.folder = :f_cuts_folder "
-                       "AND files.clip_of = :f_cuts_name)",
-                       {"f_cuts_folder": folder, "f_cuts_name": name})
+                       f"AND files.clip_of = :f_cuts_name AND {seen})",
+                       {"f_cuts_folder": folder, "f_cuts_name": name,
+                        **seen_params})
     if filters.chosen is not None:
         # One parameter rather than one per file: a single event edit can run
         # to seventeen hundred files, and a placeholder each would be an
@@ -1626,9 +1664,12 @@ def _scope(filters: Filters) -> tuple[str, dict[str, Any]]:
         return "0", {}
     names = {f"scope{i}": who for i, who in enumerate(sorted(filters.viewer))}
     holes = ",".join(f":{k}" for k in names)
+    # With `_visible`'s names as well, for the clauses `_always` writes about
+    # other files — the stack a file defers to — which bind nothing of their own.
+    _, also = _visible("files", filters.viewer)
     return ("EXISTS (SELECT 1 FROM file_audience fv "
             "WHERE fv.folder = files.folder AND fv.name = files.name "
-            f"AND fv.who IN ({holes}))", dict(names))
+            f"AND fv.who IN ({holes}))", {**names, **also})
 
 
 def _where(filters: Filters) -> tuple[str, dict[str, Any]]:
@@ -1671,10 +1712,16 @@ def _always(filters: Filters) -> list[str]:
     can see and once for the one you cannot.
     """
     out: list[str] = []
-    if filters.deleted == "only":
-        out.append("files.deleted = 1")
-    elif filters.deleted != "with":
+    # **A viewer gets the living, whatever the filters say.** The address
+    # drops `deleted` for anybody but an administrator (`address.both_sides`),
+    # but a `Filters` is built in more places than the address — a dropdown's
+    # counts build their own — and the one that forgot would hand a household
+    # member the bin. Held here, where every query passes, it cannot be
+    # forgotten.
+    if filters.viewer is not None or filters.deleted not in ("only", "with"):
         out.append("files.deleted = 0")
+    elif filters.deleted == "only":
+        out.append("files.deleted = 1")
     # Hidden is the third (spec/clips.md §3), and it binds the administrator
     # too — that is the whole difference between it and sharing with nobody.
     # Asking for it by name is the way back, as the bin is for the deleted —
@@ -1696,14 +1743,36 @@ def _always(filters: Filters) -> list[str]:
     # Grouping by stack is the other exception, and a wider one: it opens every
     # stack in the view at once, each as its own section. That is a listing of
     # *photographs* rather than of what speaks for them, so nothing is hidden.
+    #
+    # **Behind something this viewer may see.** A stack can hold files with
+    # different audiences, and one whose top is not shared with somebody is
+    # no stack to them: folded behind a file they cannot open, its shared
+    # takes would vanish from their grid with nothing left to click — and
+    # the badge, the link, the name it defers to, would all be about a
+    # photograph they were never given. So to them those takes are ordinary
+    # photographs, standing on their own.
     if not filters.within and not filters.unfold:
-        out.append("files.stacked_under IS NULL")
+        out.append(_unstacked("files.stacked_under", filters.viewer))
         # A guessed group behaves like a stack — one photograph on screen and
         # the rest behind it — because a suggestion you have to read as eight
         # separate files is not a suggestion, it is the pile you already had.
         if filters.folds_guesses:
-            out.append("files.suggested_under IS NULL")
+            out.append(_unstacked("files.suggested_under", filters.viewer))
     return out
+
+
+def _unstacked(column: str, viewer: frozenset[str] | None) -> str:
+    """A file that stands on its own: behind nothing, or — for a viewer —
+    behind nothing they may see (`_head_seen`).
+
+    `_always` hands back bare SQL, so the head clause's parameters — the
+    viewer's names — are bound by `_scope`, which every caller of `_always`
+    applies alongside it.
+    """
+    if viewer is None:
+        return f"{column} IS NULL"
+    seen, _ = _head_seen(column, viewer)
+    return f"({column} IS NULL OR NOT {seen})"
 
 
 #: A lookup on `file_audience`'s primary key, so it costs a seek per row. The
@@ -1730,19 +1799,69 @@ def _source_seen(filters: Filters) -> tuple[str, dict[str, Any]]:
     """
     if filters.viewer is None:
         return "1", {}
-    if not filters.viewer:
-        return "0", {}
-    names = {f"seen{i}": who for i, who in enumerate(sorted(filters.viewer))}
-    holes = ",".join(f":{k}" for k in names)
+    seen, params = _visible("s", filters.viewer)
     return ("EXISTS (SELECT 1 FROM files s "
             "WHERE s.folder = files.folder AND s.name = files.clip_of "
-            "AND +s.deleted = 0 "
-            "AND NOT EXISTS (SELECT 1 FROM file_audience sh "
-            "  WHERE sh.folder = s.folder AND sh.name = s.name "
-            f"  AND sh.who = '{decisions.ARCHIVED}') "
-            "AND EXISTS (SELECT 1 FROM file_audience sv "
-            "  WHERE sv.folder = s.folder AND sv.name = s.name "
-            f"  AND sv.who IN ({holes})))", dict(names))
+            f"AND {seen})", params)
+
+
+def _visible(alias: str, viewer: frozenset[str] | None
+             ) -> tuple[str, dict[str, Any]]:
+    """Whether a viewer may see the row `alias` names, as SQL — **the one
+    definition**, for every file a listing does not list but still says
+    something about: the photograph a stack defers to, the takes behind one,
+    the source a clip was cut from, the clips cut from a video.
+
+    Each of those used to spell its own version, and each version is a place
+    to forget a clause. A count of what is behind a stack that forgot the
+    scope tells somebody how many photographs they were not shown; a stack
+    head that forgot `archived` names a file nobody is meant to know is there.
+
+    Four things, the same four `_always` and `_scope` ask of a listed file:
+    **living**, **not archived** (which binds whatever else the file is shared
+    with — a sidecar can say both, and archived wins), **shared** with one of
+    the names this viewer answers to, and for a clip, **a file of its own**.
+    An administrator sees everything; somebody granted nothing sees nothing.
+
+    The parameters are named for the viewer, not for the use, so the same
+    clause can appear any number of times in one statement and bind once.
+    """
+    if viewer is None:
+        return "1", {}
+    if not viewer:
+        return "0", {}
+    names = {f"vw{i}": who for i, who in enumerate(sorted(viewer))}
+    holes = ",".join(f":{k}" for k in names)
+    a = alias
+    # `+deleted`: the unary plus keeps SQLite off `files_del` — see `_cuts_cols`.
+    return (f"(+{a}.deleted = 0 "
+            f"AND ({a}.clip_of IS NULL OR {a}.size IS NOT NULL) "
+            f"AND NOT EXISTS (SELECT 1 FROM file_audience {a}_x "
+            f"  WHERE {a}_x.folder = {a}.folder AND {a}_x.name = {a}.name "
+            f"  AND {a}_x.who = '{decisions.ARCHIVED}') "
+            f"AND EXISTS (SELECT 1 FROM file_audience {a}_v "
+            f"  WHERE {a}_v.folder = {a}.folder AND {a}_v.name = {a}.name "
+            f"  AND {a}_v.who IN ({holes})))", names)
+
+
+def _head_seen(column: str, viewer: frozenset[str] | None
+               ) -> tuple[str, dict[str, Any]]:
+    """Whether the `folder/name` in `column` — a stack the file defers to, or
+    one the app guesses it belongs behind — is a file this viewer may see.
+
+    The key is split on its **last** slash, because a folder can hold slashes
+    and a name cannot: `rtrim(k, replace(k, '/', ''))` strips every trailing
+    character that is not a slash, leaving `folder/`. That makes it a seek on
+    the primary key rather than a scan comparing every row's joined name.
+    """
+    if viewer is None:
+        return "1", {}
+    seen, params = _visible("hd", viewer)
+    head = f"rtrim({column}, replace({column}, '/', ''))"
+    return ("EXISTS (SELECT 1 FROM files hd "
+            f"WHERE hd.folder = substr({head}, 1, length({head}) - 1) "
+            f"AND hd.name = substr({column}, length({head}) + 1) "
+            f"AND {seen})", params)
 
 
 def sees(conn: sqlite3.Connection, viewer: frozenset[str] | None,
@@ -1828,7 +1947,7 @@ def files(conn: sqlite3.Connection, filters: Filters | None = None, *,
     """
     view = filters or Filters()
     where, bound = _where(view)
-    keys = [GROUPINGS[g] for g in groups if GROUPINGS.get(g)]
+    keys = _keys(groups, view.viewer)
     params: dict[str, Any] = {**bound, "limit": limit, "offset": offset}
     seen, seen_params = _source_seen(view)
     params.update(seen_params)
@@ -1871,16 +1990,65 @@ def files(conn: sqlite3.Connection, filters: Filters | None = None, *,
     inner_keys = "".join(f", {key} AS grp{i}" for i, key in enumerate(keys))
     outer_keys = ("".join(f", page.grp{i} AS grp{i}" for i in range(len(keys)))
                   or ", NULL AS grp0")
+    own, own_params = _own_cols(conn, view.viewer)
+    params.update(own_params)
     return list(conn.execute(
         "WITH page AS (SELECT files.rowid AS rid" + inner_keys
         + " FROM files " + (f"WHERE {where} " if where else "")
         + "ORDER BY " + order + " LIMIT :limit OFFSET :offset) "
-        "SELECT files.*, " + _TAGS_COL + ", " + _PEOPLE_COL + ", "
-        + _AUDIENCE_COL + ", " + _BEHIND_COL + ", " + _AHEAD_COL + ", "
-        + _CLIPS_COL + cuts_sql + outer_keys + f", {seen} AS source_seen "
+        "SELECT " + own + ", " + _TAGS_COL + ", " + _PEOPLE_COL + ", "
+        + _AUDIENCE_COL + cuts_sql + outer_keys + f", {seen} AS source_seen "
         "FROM page JOIN files ON files.rowid = page.rid "
         "ORDER BY " + order, params
     ))
+
+
+def _own_cols(conn: sqlite3.Connection, viewer: frozenset[str] | None
+              ) -> tuple[str, dict[str, Any]]:
+    """A listed row's own columns and the counts about its neighbours, as
+    this viewer may have them.
+
+    For an administrator, all of it as stored. For anyone else, **nothing
+    about a file they may not see**: what is behind a stack counts only the
+    takes shared with them, the stack it defers to — and the one the app
+    guesses it belongs to — is named only if they may see that, and a clip
+    names its source and where in it it was cut only to somebody who may see
+    the source. Each of those is a photograph they were not given, and a
+    count, a name or an offset is a way of being told about it.
+
+    Listed column by column for a viewer, because `files.*` cannot be told to
+    leave one out, and a second column under the same name is one whichever
+    reader happens to look first.
+    """
+    if viewer is None:
+        return ("files.*, " + _BEHIND_COL + ", " + _AHEAD_COL + ", "
+                + _CLIPS_COL), {}
+    # Every one of these binds the same names — the viewer's (`_visible`).
+    under, params = _head_seen("files.stacked_under", viewer)
+    guess, _ = _head_seen("files.suggested_under", viewer)
+    source, _ = _source_seen(Filters(viewer=viewer))
+    m, _ = _visible("m", viewer)
+    g, _ = _visible("g", viewer)
+    c, _ = _visible("c", viewer)
+    redacted = {
+        "stacked_under": f"CASE WHEN {under} THEN files.stacked_under END",
+        "suggested_under": f"CASE WHEN {guess} THEN files.suggested_under END",
+        "clip_of": f"CASE WHEN {source} THEN files.clip_of END",
+        "clip_in": f"CASE WHEN {source} THEN files.clip_in END",
+        "clip_out": f"CASE WHEN {source} THEN files.clip_out END",
+    }
+    cols = [str(r[1]) for r in conn.execute("PRAGMA table_info(files)")]
+    own = ", ".join(f"{redacted[col]} AS {col}" if col in redacted
+                    else f"files.{col}" for col in cols)
+    return (own + ", "
+            "(SELECT COUNT(*) FROM files m "
+            f" WHERE m.stacked_under = files.folder || '/' || files.name "
+            f" AND {m}) AS behind, "
+            "(SELECT COUNT(*) FROM files g "
+            f" WHERE g.suggested_under = files.folder || '/' || files.name "
+            f" AND {g}) AS proposed, "
+            "(SELECT COUNT(*) FROM files c WHERE c.folder = files.folder "
+            f" AND c.clip_of = files.name AND {c}) AS clips"), params
 
 
 #: How many files defer to this one. Read per row so the grid can badge a stack
@@ -1904,15 +2072,8 @@ def _cuts_cols(view: Filters) -> tuple[str, dict[str, Any]]:
     only what is shared with them and has a file of its own — so the number
     on the photograph is the number that opens.
     """
-    params: dict[str, Any] = {}
-    seen = ""
-    if view.viewer is not None:
-        names = {f"cv{i}": who for i, who in enumerate(sorted(view.viewer))}
-        params.update(names)
-        holes = ",".join(f":{k}" for k in names) or "NULL"
-        seen = ("AND c.size IS NOT NULL AND EXISTS (SELECT 1 FROM "
-                "file_audience cva WHERE cva.folder = c.folder "
-                f"AND cva.name = c.name AND cva.who IN ({holes})) ")
+    seen, params = _visible("c", view.viewer)
+    seen = f"AND {seen} "
     # `+c.deleted`: the unary plus keeps SQLite off `files_del`. Without
     # statistics it reads `deleted = 0` as selective and picks that index over
     # `files_clip` — scanning every living file in the library for each row
@@ -2264,7 +2425,7 @@ def sections(conn: sqlite3.Connection, filters: Filters | None = None, *,
     """
     view = filters or Filters()
     where, bound = _where(view)
-    keys = [GROUPINGS[g] for g in groups if GROUPINGS.get(g)]
+    keys = _keys(groups, view.viewer)
     params: dict[str, Any] = {**bound, "limit": limit, "offset": offset,
                               "day": datestr.DAY}
     selected = "".join(f"{key} AS grp{i}, " for i, key in enumerate(keys))
@@ -2333,7 +2494,7 @@ def spread(conn: sqlite3.Connection, filters: Filters | None = None, *,
     table, col = _SPREAD[column]
     view = filters or Filters()
     where, bound = _where(view)
-    keys = [GROUPINGS[g] for g in groups if GROUPINGS.get(g)]
+    keys = _keys(groups, view.viewer)
     selected = "".join(f"{key} AS grp{i}, " for i, key in enumerate(keys))
     grouped = ", ".join(f"grp{i}" for i in range(len(keys)))
     params: dict[str, Any] = {**bound, "limit": limit}

@@ -124,7 +124,8 @@ def test_the_share_is_of_the_card_that_prints_it() -> None:
     import inspect
 
     body = inspect.getsource(ix.spread)
-    assert "GROUPINGS[g]" in body and "_where(view)" in body
+    assert "_keys(groups, view.viewer)" in body and "_where(view)" in body
+    assert "_keys(groups, view.viewer)" in inspect.getsource(ix.sections)
 
 
 def test_every_page_that_writes_can_say_it_is_writing(

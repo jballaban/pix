@@ -51,6 +51,31 @@ def writable(user: Principal, change: Change) -> None:
             f"not yours to change: {', '.join(refused)}")
 
 
+def top_allowed(user: Principal, conn: sqlite3.Connection | None,
+                change: Change) -> None:
+    """Refuse a stack onto a file this person may not see — as though it
+    were not there, because to them it is not.
+
+    `only_mine` keeps a write off the files that are not theirs, but the file
+    a stack is made *onto* is not a target: it is named in the change. Left
+    unchecked it was a way to ask about any name — the refusal for mixing
+    kinds counted it, the promotion wrote to it, and the reply listed it
+    among the files that left the view.
+    """
+    top = change.stacked_under
+    if user.scope is None or isinstance(top, Unset) or not top:
+        return
+    folder, _, name = str(top).rpartition("/")
+    look = conn if conn is not None else db()
+    try:
+        seen = ix.sees(look, user.scope, folder, name)
+    finally:
+        if conn is None:
+            look.close()
+    if not seen:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "not found")
+
+
 def one_kind(conn: sqlite3.Connection | None, change: Change,
               targets: Sequence[Target]) -> None:
     """Refuse a stack that would mix photographs with video — or hold video
@@ -107,7 +132,8 @@ def one_kind(conn: sqlite3.Connection | None, change: Change,
 
 
 def clip_rules(conn: sqlite3.Connection | None, change: Change,
-                targets: Sequence[Target]) -> list[Target]:
+                targets: Sequence[Target],
+                viewer: frozenset[str] | None = None) -> list[Target]:
     """What binning and restoring mean where clips are involved
     (spec/clips.md §5).
 
@@ -121,6 +147,11 @@ def clip_rules(conn: sqlite3.Connection | None, change: Change,
     **Restoring a clip restores its source**, because it cannot exist without
     it — and is refused if it would come back over footage another clip has
     taken since.
+
+    `viewer` is who is asking. The refusal is theirs whatever clips there
+    are, but it counts only the ones they may see: a number that took in the
+    rest would be a way of being told how much footage was cut and kept from
+    them.
     """
     out = list(targets)
     if conn is None or isinstance(change.deleted, Unset):
@@ -133,7 +164,14 @@ def clip_rules(conn: sqlite3.Connection | None, change: Change,
             live = [c for c in ix.clips_of(conn, t.folder, t.name)
                     if not c["deleted"] and (t.folder, c["name"]) not in named]
             if live:
-                n = len(live)
+                shown = live if viewer is None else [
+                    c for c in live if ix.sees(conn, viewer, t.folder,
+                                               str(c["name"]))]
+                if not shown:
+                    raise HTTPException(
+                        status.HTTP_409_CONFLICT,
+                        f"{t.name} cannot be binned — ask an administrator")
+                n = len(shown)
                 them = "it" if n == 1 else "them"
                 raise HTTPException(
                     status.HTTP_409_CONFLICT,

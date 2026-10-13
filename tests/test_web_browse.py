@@ -1163,7 +1163,9 @@ def test_what_is_behind_a_stack_is_still_scoped_to_the_viewer(
         "files": [{"folder": "init_2026", "name": "c.jpg"}]})
 
     kid = sign_in("kid", "pw")
-    assert kid.get("/api/behind/init_2026/a.jpg").json()["cells"] == ""
+    # Not even an empty stack: the top is not theirs, so to them it is not
+    # there — the same answer as a name that does not exist.
+    assert kid.get("/api/behind/init_2026/a.jpg").status_code == 404
 
 
 def test_promoting_a_file_does_not_leave_it_behind_itself(
